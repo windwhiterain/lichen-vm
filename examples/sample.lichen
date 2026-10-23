@@ -7,8 +7,8 @@
     comparisons, additions and multiplications of integers under `4`, and there is no `exp`, no \
     `sqrt`, no `ln` and no division anywhere in the fold. The scores are `3 9 4 9 / 5 1 5 2 / 7 7 7 \
     7 / 8 6 4 2 / 1 2 3 4` and the answer is `[3, 2, 3, 0, 3]`, derived by hand at the end.\n\n\
-    **The fold carries a pair, and the pair is not the answer.** The state is three slots — the \
-    counter, the best value seen, the position of that value — so the pair travels through the \
+    **The fold carries an expr, and the expr is not the answer.** The state is three slots — the \
+    counter, the best value seen, the position of that value — so the expr travels through the \
     recursion exactly as `examples/attention.lichen`'s `acc` carries its row maximum in `s(2)`. \
     **What this ladder had not had is a fold whose result is a selection**, and here is what the \
     surface allows about it: **the base arm may return one slot of the state, and one only.** A base \
@@ -53,7 +53,7 @@
     the last equal element. What decides it is the conjunction of two independently motivated \
     choices — the countdown order of `@loop` and a strict comparison — and a sampler wanting the \
     lowest position writes `>=` and means something else. **Rows 0, 1 and 2 are tie rows on \
-    purpose** — a pair at `1` and `3`, a pair at `0` and `2`, four equal values — and row 3 \
+    purpose** — an expr at `1` and `3`, an expr at `0` and `2`, four equal values — and row 3 \
     (`8 6 4 2`) is the control: its maximum is at position `0`, which the fold visits **last**, \
     and it still stands.\n\n\
     **One kernel, one launch, and the extent rule fixes both shapes.** The launch is over the \
@@ -70,7 +70,7 @@
     **Chaining, measured both ways.** This kernel takes `examples/decode.lichen`'s row verbatim — \
     `.n 1, .w 2` over `[8.888384, 10.773098]` — and answers `[1.0]`, so a decode step's output feeds \
     it with nothing changed, and nothing about the operator is tied to the integer data above. The \
-    pair answer also agrees with the **two-`plrun`** spelling — `examples/softmax.lichen`'s \
+    expr answer also agrees with the **two-`plrun`** spelling — `examples/softmax.lichen`'s \
     `rowmax` kernel, per row, then a position kernel reading the maximum — **but not by itself**. \
     `>=` alone makes every maximum overwrite the last one and answers `[1.0, 0.0, 0.0, 0.0, 3.0]`, \
     the lowest position. Add the guard `(read >= max) * (p == 0)` — `first writer wins`, written \

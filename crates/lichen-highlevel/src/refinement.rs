@@ -49,7 +49,7 @@ where
     /// # Invariant
     /// The comparison is of the two slots' **value** nodes
     /// ([`slot_value_node`]), not of the slots: the predicate is a slot's `[value,
-    /// type]` pair's element 0, and comparing slots would unify that pair against
+    /// type]` expr's element 0, and comparing slots would unify that expr against
     /// the predicate's own self-referential `[Function(fid), ↺]` type, so the
     /// descent walks into the cycle and refuses a refinement that should pass.
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
@@ -68,12 +68,12 @@ where
     /// channel requires to be `1`.
     ///
     /// # Invariant
-    /// The slot is the predicate expression's `[value, type]` pair, so element 0
+    /// The slot is the predicate expression's `[value, type]` expr, so element 0
     /// is the predicate's own value node — no re-wrapping, and the apply's
     /// subject is the very function the user wrote.
-    fn constraint(&self, ctx: &mut dyn Ctx<P>, value_pair: NodeId, slot: NodeId) -> Option<NodeId> {
-        let pair = ctx.node_value(slot)?;
-        let Some(LowValue::Array(items)) = pair.as_enum() else {
+    fn constraint(&self, ctx: &mut dyn Ctx<P>, value_expr: NodeId, slot: NodeId) -> Option<NodeId> {
+        let expr = ctx.node_value(slot)?;
+        let Some(LowValue::Array(items)) = expr.as_enum() else {
             return None;
         };
         // SAFETY: `items` is the payload of a value read from this build's
@@ -86,17 +86,17 @@ where
             AnyNodeId::Static(_) => return None,
         };
         let result = ctx.fresh();
-        let operands = ctx.array_node(&[predicate, value_pair, result]);
+        let operands = ctx.array_node(&[predicate, value_expr, result]);
         let apply = ctx.op_node(P::Operator::from(LowOperator::Apply), Some(operands));
-        // An apply node **is** its `[value, type]` pair: the value is element
-        // 0, the pair is neither `1` nor *lazy*.
+        // An apply node **is** its `[value, type]` expr: the value is element
+        // 0, the expr is neither `1` nor *lazy*.
         let zero = ctx.value_node(P::Value::from(LowValue::USize(0)));
         let read = ctx.array_node(&[apply, zero]);
         Some(ctx.op_node(P::Operator::from(LowOperator::Index), Some(read)))
     }
 
     /// The refinement spells `! <the predicate's name>`, found by the general
-    /// [`pair_label`] search.
+    /// [`expr_label`] search.
     fn render(
         &self,
         module: &Module<P>,
@@ -105,7 +105,7 @@ where
     ) -> Option<String> {
         Some(format!(
             "! {}",
-            crate::attr::pair_label(module, slot, attrs)?
+            crate::attr::expr_label(module, slot, attrs)?
         ))
     }
 }

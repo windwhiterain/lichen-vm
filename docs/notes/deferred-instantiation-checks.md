@@ -56,8 +56,8 @@ path.
 
 ## 2. Why the checker cannot check it where it stands
 
-- The written form's checks are **syntactic**: `check_element_pair_attributes` and
-  `check_element_pair_values` pair `ExprId`s of the written `struct{…}` and the
+- The written form's checks are **syntactic**: `check_element_expr_attributes` and
+  `check_element_expr_values` expr `ExprId`s of the written `struct{…}` and the
   argument list. When the callee is a parameter there is no written field list; the
   field slot exists only as a lazy read out of the callee's type, undecided until the
   apply binds it.
@@ -78,7 +78,7 @@ path.
 ## 3. What the engine can and cannot do
 
 The engine (`lichen-lowlevel`) is **generic over the program**: it knows `LowValue`,
-`LowOperator` and the `[value, type, attribute…]` pair layout, and nothing about
+`LowOperator` and the `[value, type, attribute…]` expr layout, and nothing about
 `Perspective`, `Refinement` or any other attribute's semantics — those are
 `AttrExt` in `lichen-highlevel`, and the engine may not call them. So an
 engine-side check can compare **values** (its `key_eq`/`value_eq`, the wildcard

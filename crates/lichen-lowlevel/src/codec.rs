@@ -108,7 +108,7 @@ pub fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) ->
 /// `len * size_of::<Item>()` bytes there are inside `owner_arena` — the
 /// freeze layout, so every artifact the writer emits satisfies it. The
 /// bound is made in bytes with every step checked, so a crafted
-/// `(offset, len)` pair is a clean `Err`, never a wrap, a panic, or a
+/// `(offset, len)` expr is a clean `Err`, never a wrap, a panic, or a
 /// pointer outside the arena.
 ///
 /// # Safety

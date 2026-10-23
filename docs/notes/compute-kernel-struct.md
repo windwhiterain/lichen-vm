@@ -85,7 +85,7 @@ resolve correctly:
    `program.rs`; decided for the highlevel in `lichen-highlevel/src/shape.rs`): a pending
    `Index` field/positional read over an undecided container, unified against a *type value*,
    joins the classes (defers) instead of recording a false "expected X, found Y". "Holds a
-   type" is a fact about the highlevel's pair encoding, so the rule lives with the encoding
+   type" is a fact about the highlevel's expr encoding, so the rule lives with the encoding
    authority; the lowlevel itself merges only what is a generic graph fact (a pending
    computation against an all-undecided skeleton, and two pending `Index` reads). Targeted to
    `Index` reads and type values only, so real errors (a pending computation against a
@@ -154,7 +154,7 @@ renders `(raw Kernel, Int, raw none)` with type
 `struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}` — `.I` is decided and `.O` is not. The path:
 the lambda's codomain is the launch apply's result cell, and `check_app` gives every apply a
 **fresh** result-type cell (`self.state[e].ty = Some(c)`, `checker/lambda.rs`) that the *runtime*
-apply binds to the returned pair; `jit`'s `f: I -> O` then unifies that cell with the cloned `O`
+apply binds to the returned expr; `jit`'s `f: I -> O` then unifies that cell with the cloned `O`
 placeholder. Three readings narrow it:
 
 * a direct launch of a decided kernel types: `compute.jit (y : Int => y + y)` then
@@ -209,14 +209,14 @@ wrong; the launch apply runs, and its result cell is what stays open.)
 (`unify(cell, codomain)` after evaluating the codomain) to `function_apply` **decides the jit `.O`**
 — `k` renders `(raw Kernel, Int, Int)` with `.O Type` — but it breaks
 `a_call_result_annotation_is_checked_against_the_return_type`: the annotation conflict is reported
-**twice** (the explicit unify and the pair sync each record it). Guarding the unify to a still-open
+**twice** (the explicit unify and the expr sync each record it). Guarding the unify to a still-open
 cell keeps the diagnostic count but **loses the `.O` fix**, so the merge is needed even when the cell
 already holds a value.
 
 **The quiet structural unify is the working shape, and one case limits it.** `Module::try_unify`
 returns the range of `unify_errors` its call produced and its own doc allows the caller to truncate
 that range to suppress them, so `function_apply` can merge the cell with the codomain structurally and
-then `unify_errors.truncate(recorded.start)` — the pair sync still owns the verdict. Measured with
+then `unify_errors.truncate(recorded.start)` — the expr sync still owns the verdict. Measured with
 that: the jit `.O` is decided (`(raw Kernel, Int, Int)`), the annotation-conflict test keeps its one
 diagnostic, and the **whole language-server suite goes 22/0** — the LSP witness is green. But it
 breaks `a_nested_function_value_captures_the_applied_outer_parameter` (highlevel and language both):

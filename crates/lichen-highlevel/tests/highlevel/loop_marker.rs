@@ -75,8 +75,8 @@ fn tuple_state(marked: bool) -> Program {
     let branches = w.tuple("branches", &[recursive, second]);
     let body = w.field("body", branches, condition);
     let int_ty = w.int_type("int_ty");
-    let pair_ty = w.type_tuple("pair_ty", &[int_ty, int_ty]);
-    let sum_to = w.close_binding_typed(sum_to, s, pair_ty, body, marked);
+    let expr_ty = w.type_tuple("expr_ty", &[int_ty, int_ty]);
+    let sum_to = w.close_binding_typed(sum_to, s, expr_ty, body, marked);
     let argument = w.hole("argument");
     let root = w.app("root", sum_to, argument);
     w.finish(root)

@@ -95,7 +95,7 @@ where
 ///
 /// # Invariant
 ///
-/// Keyed by the binding's **pair**: a hover resolves the name to that frozen node, so
+/// Keyed by the binding's **expr**: a hover resolves the name to that frozen node, so
 /// the type must be the one this build checked (`docs/notes/core-prelude.md` §5). The
 /// printer carries the vocabulary's leaf names; the prelude's exports hold no element
 /// attribute slot for the registry to spell.
@@ -144,12 +144,12 @@ where
         .collect()
 }
 
-/// The `(name, term)` pairs [`CORE_SOURCE`] exposes directly.
+/// The `(name, term)` exprs [`CORE_SOURCE`] exposes directly.
 ///
 /// # Invariant
 ///
 /// The names come from the source in the same order as the build's statements,
-/// so a mismatch is reported rather than quietly truncated; the pairs are read
+/// so a mismatch is reported rather than quietly truncated; the exprs are read
 /// before the module moves into the freeze, and mapped to static refs after.
 fn core_terms<P>(build: &Build<P>) -> Result<Vec<(String, NodeId)>, String>
 where
@@ -173,13 +173,13 @@ where
                 .state
                 .get(statement.0 as usize)
                 .and_then(|state| state.term)
-                .ok_or_else(|| format!("the core binding `{name}` has no pair"))?;
+                .ok_or_else(|| format!("the core binding `{name}` has no expr"))?;
             Ok((name, term))
         })
         .collect()
 }
 
-/// Map [`core_terms`] through a freeze: each binding's pair becomes the static
+/// Map [`core_terms`] through a freeze: each binding's expr becomes the static
 /// ref `direct` binds the name to.
 fn core_direct(
     terms: Vec<(String, NodeId)>,
@@ -666,7 +666,7 @@ where
     ///
     /// # Invariant
     ///
-    /// The recorded meta carries what a handle needs: the exported pair and the
+    /// The recorded meta carries what a handle needs: the exported expr and the
     /// directly-exposed names.
     fn registered_builtin(&mut self, path: &str) -> Option<PackageHandle> {
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(path));
@@ -690,7 +690,7 @@ where
     ///
     /// Its `direct` list is what makes it a prelude rather than a package: every
     /// top-level name it binds becomes a base-scope name, and the record value
-    /// holds its fields in definition order, so the source-order names pair with
+    /// holds its fields in definition order, so the source-order names expr with
     /// the frozen field nodes positionally.
     fn register_core(&mut self) -> Result<PackageHandle, String> {
         // Reuse when the registry already holds the module: one key, one artifact.
@@ -725,7 +725,7 @@ where
                 .join("\n"));
         }
         let build = report.build.unwrap();
-        // Read the names' pairs and the nodes' positions before the freeze.
+        // Read the names' exprs and the nodes' positions before the freeze.
         let terms = core_terms(&build)?;
         let located = located_nodes(&build, report.span_index.as_ref());
         let spellings = rendered_assert_spellings(&build);
@@ -1326,7 +1326,7 @@ where
                         .state
                         .get(root.0 as usize)
                         .and_then(|state| state.term)
-                        .ok_or_else(|| format!("the wrapper binding `{name}` has no pair"))?;
+                        .ok_or_else(|| format!("the wrapper binding `{name}` has no expr"))?;
                     Ok((name.clone(), term))
                 })
                 .collect::<Result<_, String>>()?

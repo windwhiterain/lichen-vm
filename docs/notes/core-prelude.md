@@ -62,8 +62,8 @@ the prelude adds, not a second module).
   `direct` list is its `(name, export)` bindings, bound as base-scope names
   alongside the import's own name; the prelude's list is one entry per top-level
   binding. A record's *value* holds its fields' **values** (their types live in
-  the struct's kind), so a field's `[value, type]` pair is not recoverable from
-  the frozen struct: `core_terms` reads each binding's pair from the **checked
+  the struct's kind), so a field's `[value, type]` expr is not recoverable from
+  the frozen struct: `core_terms` reads each binding's expr from the **checked
   build** and `core_direct` maps it through the freeze. A name/binding count
   mismatch is an error, not a truncation, so an edit to `core.lichen` cannot
   silently lose a name.
@@ -159,9 +159,9 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   completion item for a prelude name name the built-in's file, and the hover now
   renders the export's type beside its definition line. The type is not recomputed by
   the editor: the built-in's build renders each exported binding's type with its own
-  module's printer, `PackageSource` carries it keyed by the frozen export pair (beside
+  module's printer, `PackageSource` carries it keyed by the frozen export expr (beside
   the positions and the assert spellings), and the analysis resolves a name through
-  the import's `direct` list to that pair. Measured: hovering `add` reads
+  the import's `direct` list to that expr. Measured: hovering `add` reads
   `` `add` — `array{raw[?b, ?c], 2} -> raw[?b, ?c]` — defined at line `3` of `core.lichen` ``.
 - **What the jump and the publish are verified against.** `Doc`'s unit tests hold
   the in-memory case; the integration test runs the real binary, so the file path

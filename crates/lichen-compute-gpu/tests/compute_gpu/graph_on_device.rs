@@ -596,7 +596,7 @@ fn a_two_step_per_lane_fold_carries_on_the_device() {
     assert_eq!(answer[1], 1, "lane 1 folds two steps and answers their sum");
 }
 
-/// The one-seam pair: a loop whose exit value is its own step counter, seeded two ways.
+/// The one-seam expr: a loop whose exit value is its own step counter, seeded two ways.
 ///
 /// # Invariant
 /// Both bodies are the same loop and differ only in where the carried state's initial value comes

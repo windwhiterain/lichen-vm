@@ -367,7 +367,7 @@ const HALF_PI_HEAD: f32 = 3217.0 / 2048.0;
 /// What the head leaves of `π/2`.
 ///
 /// # Invariant
-/// **Rounded once from the real `π/2`, not from this class's own `π/2`**, so the pair
+/// **Rounded once from the real `π/2`, not from this class's own `π/2`**, so the expr
 /// sums to `π/2` rather than to the `1.2 × 10^-8` above it that `f32`'s `π/2` states.
 const HALF_PI_TAIL: f32 = (std::f64::consts::FRAC_PI_2 - HALF_PI_HEAD as f64) as f32;
 

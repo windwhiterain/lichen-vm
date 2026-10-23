@@ -185,7 +185,7 @@ pub enum Expr {
     ///
     /// # Invariant
     /// A **mark** is the one annotation that is not an attribute: its payloads are text,
-    /// never expressions, so no reader evaluates one and none reaches the pair layout.
+    /// never expressions, so no reader evaluates one and none reaches the expr layout.
     Annotation {
         value: Box<Expr>,
         r#type: Option<Box<Expr>>,

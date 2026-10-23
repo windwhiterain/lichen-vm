@@ -25,7 +25,7 @@
 
 The depth arm registers `(type_apply, self.state[el].ty)` — the call's **own declared
 type node**, which is also, by `wrap_shallow`'s construction, the **type slot of the
-marked pair**. For the one program in the tree
+marked expr**. For the one program in the tree
 (`crates/lichen-language/tests/language/pipeline.rs:2426`) the probe printed:
 
 ```
@@ -33,7 +33,7 @@ PROBE n arm: el=ExprId(6) depth=1 ty=Some(NodeId(35)) type_applies=true wrapped=
              wrapped_items=[(NodeId(42), true), (NodeId(35), false)]
 ```
 
-So the marked node `43` is the pair `[42, 35]` `wrap_shallow` builds — `42` is the call's
+So the marked node `43` is the expr `[42, 35]` `wrap_shallow` builds — `42` is the call's
 value and is the **shallow-marked** position, and **`35` is the type slot**, unwrapped and
 undecided. The cell the closure is pointed at and the cell a read of the mark must go
 through are **the same node**. That identity is the mechanism.
@@ -72,11 +72,11 @@ element nodes directly:
 
 | | `dev` | with the registration |
 |---|---|---|
-| `[0]` = `inf(1)(0)` | `[USize(1), <lazy pair>]` | `[USize(1), <lazy pair>]` |
+| `[0]` = `inf(1)(0)` | `[USize(1), <lazy expr>]` | `[USize(1), <lazy expr>]` |
 | `[1]` = `inf(1)(1)(0)` | **`NodeId(124)` has no value** | a two-slot type structure |
 | `[2]` = `inf(1)(1)(1)(0)` | **`NodeId(177)` has no value** | `TypeValue(TypeTuple)` |
 
-An empty result, not a `raw` marker and not an error: with `35` empty the marked pair
+An empty result, not a `raw` marker and not an error: with `35` empty the marked expr
 `43 = [42, 35]` has **no shape**, so a projection through it selects no slot and yields
 **no value at all** — and `node_value` answers `None`. Once the walk fills `35`, the same
 projection resolves and every element node comes to hold a value, so `array_values` stops
@@ -85,7 +85,7 @@ panicking and the test reaches its assertion.
 ## 4 What this does **not** establish
 
 1. **The reads are still not the program's arithmetic answer.** The three elements hold
-   `[1, <lazy pair>]`, a two-slot **type** structure, and the `TypeTuple` **kind marker**,
+   `[1, <lazy expr>]`, a two-slot **type** structure, and the `TypeTuple` **kind marker**,
    where the bare-mark control on the same program holds `USize(1)`, `USize(2)`,
    `USize(3)`. The change restores *a value per element* — which is all the test asserts,
    `.len() == 3` — and not the numbers. Whether the depth mark *should* answer `2` and `3`
@@ -94,7 +94,7 @@ panicking and the test reaches its assertion.
    slice was asked.
 2. **The two spellings still differ in what their reads return**, and P1 narrows the gap
    without closing it: it makes the depth mark's tail cell decided like the bare mark's,
-   but the bare mark's element slot is the call's own pair and the depth mark's is a
+   but the bare mark's element slot is the call's own expr and the depth mark's is a
    rebuilt one, whose resolved reads come off the type side.
 3. **`close_shallow_tail` remains dead code for `@shallow(n)`.** This measurement is the
    evidence that the *registration* is what the depth form needs; the closure that reads

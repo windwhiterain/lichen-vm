@@ -4,7 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue,
-    FunctionIdentity, LowShape, LowValue, Module, Node, NodeId, PAIR_ATTR_BASE, Program,
+    EXPR_ATTR_BASE, FunctionIdentity, LowShape, LowValue, Module, Node, NodeId, Program,
     StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
@@ -578,7 +578,7 @@ impl<P: Program> Module<P> {
             })
     }
 
-    /// The parameter pair and return type cell a function itself states, or `None`
+    /// The parameter expr and return type cell a function itself states, or `None`
     /// when the template states neither.
     ///
     /// # Invariant
@@ -619,7 +619,7 @@ impl<P: Program> Module<P> {
                     return None;
                 }
                 Some((
-                    AnyNodeId::Dynamic(self.pair_type_half(function.parameter)?),
+                    AnyNodeId::Dynamic(self.expr_type_half(function.parameter)?),
                     AnyNodeId::Dynamic(function.return_type),
                 ))
             }
@@ -700,7 +700,7 @@ impl<P: Program> Module<P> {
     /// Unify two structural arrays, wiring the attribute slots by **canonical index**.
     ///
     /// # Invariant
-    /// Positions below [`PAIR_ATTR_BASE`] compare positionally; a side whose layout omits
+    /// Positions below [`EXPR_ATTR_BASE`] compare positionally; a side whose layout omits
     /// an attribute is a hole and constrains nothing, so two arrays that spell different
     /// tails still meet attribute to attribute. See `docs/notes/array-attribute-view.md`.
     #[stacksafe]
@@ -729,7 +729,7 @@ impl<P: Program> Module<P> {
         let leading = if plain {
             left.len()
         } else {
-            left.len().min(right.len()).min(PAIR_ATTR_BASE)
+            left.len().min(right.len()).min(EXPR_ATTR_BASE)
         };
         let mut ok = true;
         let mut descend =
@@ -741,7 +741,7 @@ impl<P: Program> Module<P> {
                 {
                     return true;
                 }
-                // A pair already on the descent is one structure: the frame
+                // An expr already on the descent is one structure: the frame
                 // comparing it owns its interior.
                 let guarded =
                     matches!(na, AnyNodeId::Static(_)) || matches!(nb, AnyNodeId::Static(_));
@@ -781,7 +781,7 @@ impl<P: Program> Module<P> {
             }
         }
         // The two layouts are sorted, so their union is merged in place: the walk
-        // allocates nothing per array pair.
+        // allocates nothing per array expr.
         let (mut position_a, mut position_b) = (0usize, 0usize);
         let (len_a, len_b) = (self.layout_len(&a), self.layout_len(&b));
         loop {
@@ -800,17 +800,17 @@ impl<P: Program> Module<P> {
                 (Some(entry), Some(_)) => (entry, true, true),
             };
             let na = from_a
-                .then(|| left.get(PAIR_ATTR_BASE + position_a).map(|item| item.node))
+                .then(|| left.get(EXPR_ATTR_BASE + position_a).map(|item| item.node))
                 .flatten();
             let nb = from_b
-                .then(|| right.get(PAIR_ATTR_BASE + position_b).map(|item| item.node))
+                .then(|| right.get(EXPR_ATTR_BASE + position_b).map(|item| item.node))
                 .flatten();
             position_a += usize::from(from_a);
             position_b += usize::from(from_b);
             let (Some(na), Some(nb)) = (na, nb) else {
                 continue;
             };
-            descend(self, PAIR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
+            descend(self, EXPR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
             if !ok {
                 return false;
             }
@@ -818,7 +818,7 @@ impl<P: Program> Module<P> {
         ok
     }
 
-    /// Recursive core of [`Self::unify`]; `path` guards class pairs, `depth` the node-less ones.
+    /// Recursive core of [`Self::unify`]; `path` guards class exprs, `depth` the node-less ones.
     #[stacksafe]
     fn unify_inner(
         &mut self,
@@ -873,8 +873,8 @@ impl<P: Program> Module<P> {
                     self.unify_array_items(pa, pb, path, depth, steps, any_path, root)
                 }
                 // Two functions are one when their identities resolve to one
-                // logical function — the frozen/static pair included.
-                _ if self.value_pair_equal(x, y) => true,
+                // logical function — the frozen/static expr included.
+                _ if self.value_expr_equal(x, y) => true,
                 _ => {
                     self.record_value_error(root, Some(x), Some(y));
                     false
@@ -884,7 +884,7 @@ impl<P: Program> Module<P> {
         if ra == rb {
             return true;
         }
-        // A pair already on the descent is one structure, not a disagreement.
+        // An expr already on the descent is one structure, not a disagreement.
         if path.contains(ra, rb) {
             return true;
         }
@@ -905,7 +905,7 @@ impl<P: Program> Module<P> {
             (Some(x), Some(y)) => {
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                        // A plain pair of arrays still disagrees on arity; an array pair
+                        // A plain expr of arrays still disagrees on arity; an array expr
                         // wires attributes and takes a hole for an absent one.
                         if pa.layout() == 0
                             && pb.layout() == 0
@@ -985,7 +985,7 @@ impl<P: Program> Module<P> {
     }
 
     /// Whether two decided leaf values are one: functions by identity, else full value equality.
-    fn value_pair_equal(&self, a: P::Value, b: P::Value) -> bool {
+    fn value_expr_equal(&self, a: P::Value, b: P::Value) -> bool {
         match (a.as_enum(), b.as_enum()) {
             // Functions by resolved identity, before the generic comparison that reads them by kind.
             (Some(LowValue::Function(x)), Some(LowValue::Function(y))) => {

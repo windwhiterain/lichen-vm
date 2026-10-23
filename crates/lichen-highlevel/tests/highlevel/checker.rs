@@ -78,7 +78,7 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
         .collect()
 }
 
-/// Whether the given ids form the int type — a `[int, Type]` pair.
+/// Whether the given ids form the int type — a `[int, Type]` expr.
 ///
 /// # Invariant
 /// The two slots are matched differently on purpose: element 0 is the marker,
@@ -94,7 +94,7 @@ fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[Nod
         && ids[1] == b.type_expr
 }
 
-/// A pair's width in the checked program: the value and type slots plus one
+/// An expr's width in the checked program: the value and type slots plus one
 /// per attribute.
 fn width() -> usize {
     lichen_highlevel::shape::slot_width::<ProgramImpl>()
@@ -105,7 +105,7 @@ fn is_int_type(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId) 
     is_int_type_ids(b, &array_ids(b, node))
 }
 
-/// Whether an evaluated value is the int type pair `[int, Type]`.
+/// Whether an evaluated value is the int type expr `[int, Type]`.
 fn is_int_type_value(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     value: HighProgramValue,
@@ -171,14 +171,14 @@ fn the_type_universe_is_self_referential() {
 
 #[test]
 fn an_error_block_is_skipped_and_never_cascades() {
-    // A recovered-error region is a pair of fresh cells: it carries no
+    // A recovered-error region is an expr of fresh cells: it carries no
     // grammar, so nothing inside it is checked.
     let w = Writer::new();
     let e = w.error_block("e");
     let b = build(e, w);
     assert!(b.ok, "a masked error region is not a check failure");
-    // The skip path records the pair's slots, so downstream reads still work.
-    assert!(b.state[e].term.is_some(), "the skip path records the pair");
+    // The skip path records the expr's slots, so downstream reads still work.
+    assert!(b.state[e].term.is_some(), "the skip path records the expr");
     assert!(
         b.state[e].val.is_some(),
         "the skip path records the value slot"
@@ -214,7 +214,7 @@ fn an_error_block_as_a_child_does_not_cascade() {
     assert!(b.ok, "a tuple with an error block checks");
     assert!(
         b.state[e].term.is_some(),
-        "the embedded error block still records its pair"
+        "the embedded error block still records its expr"
     );
 }
 
@@ -245,7 +245,7 @@ fn lambda_has_arrow_type() {
     assert_eq!(
         ids.len(),
         width(),
-        "a function-type node is a pair [func, self]"
+        "a function-type node is an expr [func, self]"
     );
     assert_eq!(
         ids[1], ftype,
@@ -293,7 +293,7 @@ fn annotating_a_lambda_with_a_tuple_type_fails() {
 
 #[test]
 fn typed_tuple_is_a_kinded_tuple() {
-    // [1, 2] — the pair [[1, 2], [[int, int], [TupleType, Type]]].
+    // [1, 2] — the expr [[1, 2], [[int, int], [TupleType, Type]]].
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
@@ -305,7 +305,7 @@ fn typed_tuple_is_a_kinded_tuple() {
     assert_eq!(
         ids.len(),
         width(),
-        "a type expression is a pair [shape, kind]"
+        "a type expression is an expr [shape, kind]"
     );
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
@@ -365,7 +365,7 @@ fn real_array_type_is_type_and_length() {
         ),
         "instance[1] is the length"
     );
-    // The pair is [shape, kind].
+    // The expr is [shape, kind].
     let ids = array_ids(&b, b.state[arr].term.unwrap());
     assert_eq!(ids.len(), width());
     assert_eq!(ids[0], shape);
@@ -433,7 +433,7 @@ fn array_literal_is_homogeneous() {
     assert_eq!(
         ids.len(),
         width(),
-        "a type expression is a pair [shape, kind]"
+        "a type expression is an expr [shape, kind]"
     );
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
@@ -770,7 +770,7 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     // The requirement names the container's **kind**: the expected side is the
     // array kind, not the container's own type.
     let requirement = array_ids(&b, diags[0].b);
-    assert_eq!(requirement.len(), width(), "a kind is a [marker, K] pair");
+    assert_eq!(requirement.len(), width(), "a kind is a [marker, K] expr");
     assert!(
         matches!(
             b.module.node_value(AnyNodeId::Dynamic(requirement[0])),
@@ -865,7 +865,7 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
 #[test]
 fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
     // (\id. id 5) (\x. x) — the call's result cell is a lazy record, synced
-    // to the return pair by the apply's evaluation.
+    // to the return expr by the apply's evaluation.
     let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
@@ -886,7 +886,7 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
 #[test]
 fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     // a = \x. (1, Int)[x]; (a 0, a 1) — the element types are the calls'
-    // lazy result cells, synced with their return pairs.
+    // lazy result cells, synced with their return exprs.
     let w = Writer::new();
     let x = w.param("x");
     let one = w.int("one", 1);
@@ -904,9 +904,9 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     assert!(b.diagnostics().is_empty());
     // The resolved root type is the tuple type `tuple{Int, Type}`; each element's
     // type is its slot's type position.
-    let pair = array_ids(&b, b.root_ty);
-    assert_eq!(pair.len(), width());
-    let shape = array_ids(&b, pair[0]);
+    let expr = array_ids(&b, b.root_ty);
+    assert_eq!(expr.len(), width());
+    let shape = array_ids(&b, expr[0]);
     let e0 = array_ids(&b, shape[0]);
     assert!(is_int_type(&b, e0[1]), "element 0's cell syncs to int");
     let e1 = array_ids(&b, shape[1]);
@@ -942,7 +942,7 @@ fn tuple_length_mismatch_reports_both_sides() {
 // A call's result type cell is a lazy record, so an annotation on a call
 // result only *binds* the cell at check time.
 
-// The apply's evaluation later syncs the cell with the callee's return pair,
+// The apply's evaluation later syncs the cell with the callee's return expr,
 // and a disagreement is a reported failure.
 
 #[test]
@@ -1234,7 +1234,7 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct{.f Int, .t Type} — the pair [[int, Type], [[TypeId(0), names,
+    // struct{.f Int, .t Type} — the expr [[int, Type], [[TypeId(0), names,
     // names_in_order], TypeStruct]].
     let w = Writer::new();
     let t1 = w.int_type("t1");
@@ -1256,7 +1256,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         t_slot[1], b.type_expr,
         "the `.t` field's type is the universe"
     );
-    // the kind slot is a standard [marker, K] pair; see `lichen_highlevel::shape`.
+    // the kind slot is a standard [marker, K] expr; see `lichen_highlevel::shape`.
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), width());
@@ -1266,7 +1266,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     assert_eq!(
         marker_ids.len(),
         width(),
-        "the marker is a [value, type] pair"
+        "the marker is a [value, type] expr"
     );
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
@@ -1286,7 +1286,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),
         Some(HighProgramValue::LowValue(LowValue::Table(_)))
     ));
-    // The tag is what makes it a struct marker: a same-payload pair whose
+    // The tag is what makes it a struct marker: a same-payload expr whose
     // type slot is the universe is not one.
     let block = b.module.node_block(marker);
     let tagless_items = b.module.alloc_array(
@@ -1305,7 +1305,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     );
     assert!(
         !lichen_highlevel::shape::is_struct_marker_any(&b.module, AnyNodeId::Dynamic(tagless)),
-        "a marker-shaped pair without the TypeStruct tag is not a struct marker"
+        "a marker-shaped expr without the TypeStruct tag is not a struct marker"
     );
     let tagless_kind_items = b.module.alloc_array(
         &[
@@ -1415,8 +1415,8 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let f = w.int_type("f");
     let s1 = w.struct_type("s1", &[(f, Some("f"))]);
     let s2 = w.struct_type("s2", &[(f, Some("f"))]);
-    let pair = w.tuple("pair", &[s1, s2]);
-    let b = build(pair, w);
+    let expr = w.tuple("expr", &[s1, s2]);
+    let b = build(expr, w);
     assert!(b.ok);
     // the nominal id is the marker payload's slot 0; see `lichen_highlevel::shape`.
     let id1 = array_ids(
@@ -1444,8 +1444,8 @@ fn two_struct_type_occurrences_do_not_unify() {
     let f = w.int_type("f");
     let s1 = w.struct_type("s1", &[(f, Some("f"))]);
     let s2 = w.struct_type("s2", &[(f, Some("f"))]);
-    let pair = w.tuple("pair", &[s1, s2]);
-    let b = build(pair, w);
+    let expr = w.tuple("expr", &[s1, s2]);
+    let b = build(expr, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s1].term.unwrap(), b.state[s2].term.unwrap());
@@ -1467,8 +1467,8 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
     let t = w.type_tuple("t", &[f]);
-    let pair = w.tuple("pair", &[s, t]);
-    let b = build(pair, w);
+    let expr = w.tuple("expr", &[s, t]);
+    let b = build(expr, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
@@ -1950,15 +1950,15 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
         .module
         .evaluate_node_deep(b.state[arr].ty.unwrap(), None)
         .unwrap();
-    let HighProgramValue::LowValue(LowValue::Array(ty_pair)) = ty_val else {
-        panic!("expected a type pair");
+    let HighProgramValue::LowValue(LowValue::Array(ty_expr)) = ty_val else {
+        panic!("expected a type expr");
     };
     let kind_val = b
         .module
         .evaluate_node_deep(
-            // SAFETY: `ty_pair` is the value just evaluated by the build under
+            // SAFETY: `ty_expr` is the value just evaluated by the build under
             // test, whose block has not been dropped.
-            dyn_node(unsafe { ty_pair.items() }[1].node),
+            dyn_node(unsafe { ty_expr.items() }[1].node),
             None,
         )
         .unwrap();

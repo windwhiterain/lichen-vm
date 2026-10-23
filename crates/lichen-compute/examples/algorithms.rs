@@ -268,13 +268,13 @@ a = (compute.plrun k0 ((compute.A In1)(.n 16, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
-pair = (k : Par2) => {
+expr = (k : Par2) => {
   i = compute.range k.n
   x = (compute.read ((compute.Read _)(.from k.in.s, .at i * 2)) : Int)
   y = (compute.read ((compute.Read _)(.from k.in.s, .at i * 2 + 1)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value x + y))
 }
-kp = compute.parallel pair "BACKEND" Out2
+kp = compute.parallel expr "BACKEND" Out2
 b = (compute.plrun kp ((compute.A In2)(.n 8, .I In2(.s a.z))) : Out2)
 c = (compute.plrun kp ((compute.A In2)(.n 4, .I In2(.s b.z))) : Out2)
 d = (compute.plrun kp ((compute.A In2)(.n 2, .I In2(.s c.z))) : Out2)

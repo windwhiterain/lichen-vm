@@ -100,7 +100,7 @@ ns = (nats 0 : tuple{Int, tuple{Int, tuple{Int, tuple{Int, tuple{Int, _}}}}})
 
 `nats 0` is the array `[0, @shallow nats 1]`. Reading `ns(1)` gets the
 element at position 1 — the marked call — and reading `(0)` of that gets
-its first element, `1`; one more `(1)(0)` pair walks one step further.
+its first element, `1`; one more `(1)(0)` expr walks one step further.
 The stream has no end, and every read walks only as far as it needs.
 
 Without the marker the same definition does not check: the checker

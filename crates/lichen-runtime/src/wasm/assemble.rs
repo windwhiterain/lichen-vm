@@ -24,7 +24,7 @@ use super::{buffer_import_name, param_classes};
 /// wasm has no 16-bit float, so `BFloat16` has no type of its own and takes `F32` as a
 /// placeholder: a body that computes in the class is refused by name in
 /// [`super::lower::binary_operator`], and `run_parallel_range` links only the `i64`/`f32`
-/// import pair, so no module this builds is ever run with that type in it.
+/// import expr, so no module this builds is ever run with that type in it.
 pub(super) fn value_type(class: ScalarClass) -> Type {
     match class {
         ScalarClass::Int => Type::I64,
@@ -127,7 +127,7 @@ fn lower_into<'a>(
     Ok(builder)
 }
 
-/// Declare one `read`/`write` import pair per class, the reads first.
+/// Declare one `read`/`write` import expr per class, the reads first.
 ///
 /// # Invariant
 /// The order is the ABI's, because it decides the import indices, and
@@ -194,7 +194,7 @@ fn declare_import(module: &mut Module, signature: Signature, name: String) -> Fu
 /// that calls neither.
 ///
 /// # Invariant
-/// One pair per class the set uses, so a class nobody reads or writes costs no import — which
+/// One expr per class the set uses, so a class nobody reads or writes costs no import — which
 /// is what lets one module hold fragments of different classes. Every instruction is walked,
 /// transfers included: a read or write inside a branch still needs its import declared.
 fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {

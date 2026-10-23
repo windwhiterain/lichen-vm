@@ -40,7 +40,7 @@ for the readers that reach it while its own frame is still computing it — the
 coinductive step that lets a cyclic value be proven at all. The assumption fills a
 missing verdict and never overrides one, and is cleared where the real verdict is
 written. `evaluate_pattern_argument` instead keeps a `seen` set of `(pattern,
-argument)` pairs, because a typed pattern's spine reaches the universe twice and must
+argument)` exprs, because a typed pattern's spine reaches the universe twice and must
 be walked once. Cloning the universe per apply is a unification *conflict* rather
 than a slowdown, which is why the checker refuses it outright instead of paying for
 it.
@@ -50,7 +50,7 @@ it.
 `compute.jit`'s `.sig` field — the standard library's `type_of f` read in a
 struct field's type position — rendered `TypeStruct` instead of the signature.
 **The graph was correct**: the field-type node's committed value is the arrow
-pair `[[Int, Int], [TypeFunction, K]]`, with `K` the *static* universe (the gate
+expr `[[Int, Int], [TypeFunction, K]]`, with `K` the *static* universe (the gate
 `f : _ -> _` builds the arrow inside the frozen module). Nothing pinned anything
 wrong; the printer misclassified it.
 
@@ -126,9 +126,9 @@ pass `is_self_referential`. **No such cut exists.** `is_self_referential` has no
 caller in `unify_inner`; its only callers are itself (recursing into a static
 item), `function_type_function`, and `shape::struct_term_parts`. What the walk
 actually does is honest throughout: an array's element 0 is compared
-`value_pair_equal`, so two different kind markers are a recorded conflict. The
+`value_expr_equal`, so two different kind markers are a recorded conflict. The
 "two absences" branch is reached only where at least one side names no node, and a
-class pair of two valueless nodes takes the `(None, None)` merge — correct for a
+class expr of two valueless nodes takes the `(None, None)` merge — correct for a
 cell that is genuinely undecided.
 
 Traced, the `==` check is `check_unify a=NodeId(34v1) b=NodeId(52v1) kind=BinOp`,
@@ -165,7 +165,7 @@ real types, the existing array descent runs, and the markers conflict.
 **The rendered message** is `expected TypeTuple, found Int -> Int`, not
 `expected TypeTuple, found TypeFunction`: `DiagKind::BinOp` renders the *root* type
 nodes (`printer.node(d.b)` / `printer.node(d.a)`), and a function kind prints as
-its arrow. The underlying `UnifyError` pair is `TypeFunction` vs `TypeTuple`, which
+its arrow. The underlying `UnifyError` expr is `TypeFunction` vs `TypeTuple`, which
 is the comparison §3.1 called for.
 
 ### 3.4 The three compute tests do not break

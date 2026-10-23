@@ -4,14 +4,14 @@ use lichen_highlevel::shape;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
 use lichen_utils::extend::AsEnum;
 
-/// The canonical attribute order is the pair layout a compiled artifact encodes.
+/// The canonical attribute order is the expr layout a compiled artifact encodes.
 ///
 /// # Invariant
 ///
 /// The refinement was appended, so the slots below `4` keep their numbers and
-/// no persisted pair is renumbered. See docs/notes/attributes.md.
+/// no persisted expr is renumbered. See docs/notes/attributes.md.
 #[test]
-fn the_canonical_order_is_the_persisted_pair_layout() {
+fn the_canonical_order_is_the_persisted_expr_layout() {
     assert_eq!(
         LANG_ATTR_ORDER,
         [

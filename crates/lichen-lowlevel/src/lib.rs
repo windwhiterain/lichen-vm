@@ -167,7 +167,7 @@ impl ArrayItem {
 /// # Invariant
 ///
 /// The layout id is mandatory and never inferred: its `i`-th element names the canonical
-/// attribute in the value's `PAIR_ATTR_BASE + i`-th slot, and id `0` is the empty layout
+/// attribute in the value's `EXPR_ATTR_BASE + i`-th slot, and id `0` is the empty layout
 /// [`Self::new`] picks. `Deref` keeps every `unsafe { array.items() }` read as it was; the
 /// layout is read through [`Self::layout`], never through the payload.
 /// See `docs/notes/array-attribute-view.md`.
@@ -212,15 +212,15 @@ impl std::ops::Deref for ArrayValue {
     }
 }
 
-/// The slot an array's attributes begin at: canonical attribute `i` at `PAIR_ATTR_BASE + i`.
+/// The slot an array's attributes begin at: canonical attribute `i` at `EXPR_ATTR_BASE + i`.
 ///
 /// # Invariant
 ///
 /// This is the arithmetic the module's attribute-layout registry and
 /// [`Module::array_attribute`] both read, so a layout's `i`-th entry names the value's
-/// `PAIR_ATTR_BASE + i`-th slot and the default's `PAIR_ATTR_BASE + canonical`-th slot. It
-/// mirrors `lichen_highlevel::shape::PAIR_ATTR_BASE`; neither crate depends on the other.
-pub const PAIR_ATTR_BASE: usize = 2;
+/// `EXPR_ATTR_BASE + i`-th slot and the default's `EXPR_ATTR_BASE + canonical`-th slot. It
+/// mirrors `lichen_highlevel::shape::EXPR_ATTR_BASE`; neither crate depends on the other.
+pub const EXPR_ATTR_BASE: usize = 2;
 
 /// One entry of a structural table value: key node, value node, and the key's hash.
 ///
@@ -498,7 +498,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     ///
     /// # Invariant
     /// Only the program knows which of its values are callable, because a structural array
-    /// is the same shape for a struct instance and a kernel's `[native, sig]` pair. The
+    /// is the same shape for a struct instance and a kernel's `[native, sig]` expr. The
     /// policy reads the module and must not mutate it; the default refuses.
     fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
         let _ = (module, callee);
@@ -977,12 +977,12 @@ pub struct Module<P: Program> {
     /// correspondence when it builds the slot, so a reader holding only the value node
     /// reaches the type node that is its shape authority.
     pub element_types: HashMap<NodeId, AnyNodeId>,
-    /// The clone's return pair of each type-side apply, keyed by the apply node.
-    pub applied_pairs: HashMap<NodeId, NodeId>,
+    /// The clone's return expr of each type-side apply, keyed by the apply node.
+    pub applied_exprs: HashMap<NodeId, NodeId>,
     /// The clone's parameter of each type-side apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
     /// The value-side apply of a call, keyed by its type-side apply.
-    pub apply_pairs: HashMap<NodeId, NodeId>,
+    pub apply_exprs: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant
@@ -1088,7 +1088,7 @@ pub struct Module<P: Program> {
     /// # Invariant
     /// [`Module::unify`] takes both with [`std::mem::take`] and puts them back on every
     /// exit, so the struct never holds a buffer a walk is using, and each walk starts
-    /// from the empty state the recursion requires: the path holds no pair and the step
+    /// from the empty state the recursion requires: the path holds no expr and the step
     /// stack is empty. Capacity is what is kept, never content.
     unify_path: crate::ancestors::AncestorPairs<NodeId>,
     unify_steps: Vec<UnifyStep>,
@@ -1096,8 +1096,8 @@ pub struct Module<P: Program> {
     ///
     /// # Invariant
     /// [`Module::unify`] and [`Module::write_node_answer`] take it and put it back, so
-    /// the struct never holds one a walk is using. It carries exactly the pairs a
-    /// `Static` ref names, because a pair of two dynamic ids is already the class-level
+    /// the struct never holds one a walk is using. It carries exactly the exprs a
+    /// `Static` ref names, because an expr of two dynamic ids is already the class-level
     /// `path` guard's, and a frozen ref has no class to name it.
     unify_any_path: crate::ancestors::AncestorPairs<AnyNodeId>,
     /// The member snapshots class-first reads iterate, kept between reads.
@@ -1145,7 +1145,7 @@ pub struct Module<P: Program> {
     /// # Invariant
     ///
     /// It is full width over the canonical attribute order, so attribute `i` reads at
-    /// [`PAIR_ATTR_BASE`] + `i`; `None` is a module that has declared none, and every hole
+    /// [`EXPR_ATTR_BASE`] + `i`; `None` is a module that has declared none, and every hole
     /// then reads as absent. See `docs/notes/array-attribute-view.md`.
     pub(crate) default_attributes: Option<AnyHandle<[ArrayItem]>>,
 }

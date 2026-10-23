@@ -98,7 +98,7 @@ process start.
 | `fusion_bridge`, `kernel_ir`, `language_server`, `registry`, `utils` (8514f2d1) | 20 binaries | 5 | 10, 22, 46, 22, 8 — unchanged |
 | `lichen-serve` | 54 binaries | 1 | 77 → 77, all 54 areas listed by `--list` |
 
-For `lichen-compute-gpu` the measured pair is the one the workspace rule quotes:
+For `lichen-compute-gpu` the measured expr is the one the workspace rule quotes:
 **relinked executables 9 → 2**, and the full run's median **9.96 s → 3.23 s**, because
 nine process launches each paid the driver's DLL load and became one.
 

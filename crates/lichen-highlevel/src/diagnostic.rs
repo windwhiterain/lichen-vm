@@ -97,12 +97,12 @@ pub enum DiagKind {
     /// A read states its requirement from the container's type; an undecided
     /// container states none, and the apply that later binds it applies the
     /// value and type slots separately, so a requirement deferred there can
-    /// leave a pair whose value and type disagree. The read is refused where it
+    /// leave an expr whose value and type disagree. The read is refused where it
     /// stands, and the read's form is carried in [`DiaryEntry::field`]
     /// (`docs/notes/undecided-reads.md`).
     UndecidedContainer,
 
-    /// An imported package whose export is not the `[value, type]` pair the
+    /// An imported package whose export is not the `[value, type]` expr the
     /// importer reads.
     ImportExport,
     /// A read whose **runtime subscript** is not an index: the lowlevel's
@@ -122,7 +122,7 @@ pub enum DiagKind {
     /// [`DiaryEntry::field`].
     ///
     /// # Invariant
-    /// The three `NativeApply` records must name one `[value, type]` pair —
+    /// The three `NativeApply` records must name one `[value, type]` expr —
     /// exactly two slots, element 1 the returned `ty`, element 0 the returned
     /// `val` when the value is a decided node — built in the block the call is
     /// compiled into.  Every downstream read of the term reads those two slots,
@@ -619,7 +619,7 @@ where
     /// # Invariant
     /// The order is **the node's own entry, then its origin's registered edge,
     /// then the apply that cloned it, then the origin's compiled slot**.  An
-    /// apply node *is* the call expression's own pair, so `apply_edges` has to
+    /// apply node *is* the call expression's own expr, so `apply_edges` has to
     /// outrank the slot layout there: a frozen-template clone names the caller's
     /// argument, not the call.
     ///
@@ -679,7 +679,7 @@ where
     ///
     /// # Invariant
     /// The apply-time parameter check reads `apply_edges` itself rather than
-    /// [`Self::node_loc`]: the apply node is the call expression's own pair slot,
+    /// [`Self::node_loc`]: the apply node is the call expression's own expr slot,
     /// so the slot layout would answer with the call, and the apply edge alone
     /// names the argument without the unify's descent into it.
     fn mismatch(&self, i: usize, index: &UnifyErrorIndex) -> Diag<P> {
@@ -721,7 +721,7 @@ where
             Some(entry) => (entry.a, entry.b),
             None => (err.a, err.b),
         };
-        // The error's own pair and values are what the engine compared; a diary entry refines the
+        // The error's own expr and values are what the engine compared; a diary entry refines the
         // location, never the values.
         let value_a = err.value_a;
         let value_b = err.value_b;

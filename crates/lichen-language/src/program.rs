@@ -104,7 +104,7 @@ macro_rules! lang_compose_vocabulary {
         /// # Invariant
         ///
         /// The declaration order is the canonical attribute order and the single
-        /// authority for the pair-slot layout. See docs/notes/attributes.md.
+        /// authority for the expr-slot layout. See docs/notes/attributes.md.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         pub enum LangAttr {
             $( $attr_name($attr) ),*
@@ -120,16 +120,16 @@ macro_rules! lang_compose_vocabulary {
         }
 
         impl ::lichen_highlevel::attr::AttrSet for LangAttr {
-            /// The canonical order as data — the pair layout itself.
+            /// The canonical order as data — the expr layout itself.
             const ORDER: &'static [Self] = LANG_ATTR_ORDER;
 
-            /// The attribute's index in the canonical order — its pair slot.
+            /// The attribute's index in the canonical order — its expr slot.
             fn order_index(&self) -> usize {
                 self.order_index_of()
             }
         }
 
-        /// The canonical attribute order as data: the pair-slot layout itself.
+        /// The canonical attribute order as data: the expr-slot layout itself.
         pub const LANG_ATTR_ORDER: &[LangAttr] = &[ $( LangAttr::$attr_name($attr) ),* ];
 
         // A hand-edited index fails the build here, not a runtime mis-pairing.

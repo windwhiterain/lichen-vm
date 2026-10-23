@@ -2,7 +2,7 @@
 //! Run with `cargo run -p lichen-language --example fusion_numbers`.
 //!
 //! # Invariant
-//! Every column derives from one element function and one pair of declared reductions, and
+//! Every column derives from one element function and one expr of declared reductions, and
 //! every host number is [`lichen_fusion::evaluate`] over a tree the engine or this file
 //! built, never a second implementation: the columns are the two-pass form, the emitted
 //! rolling update, and the same chain as unfused `compute.parallel` kernels.

@@ -180,14 +180,14 @@ fn std_sort_is_reusable_and_length_preserving() {
 ---
 (std.sort [4, 1, 3, 2], std.sort [9, 7])
 "#);
-    let pair = array_values(&module, &value);
+    let expr = array_values(&module, &value);
     assert_eq!(
-        usize_array(&module, &pair[0]),
+        usize_array(&module, &expr[0]),
         vec![1, 2, 3, 4],
         "the first result keeps its four sorted elements"
     );
     assert_eq!(
-        usize_array(&module, &pair[1]),
+        usize_array(&module, &expr[1]),
         vec![7, 9],
         "the second result keeps its two sorted elements"
     );

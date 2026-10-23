@@ -425,7 +425,7 @@ fn materialized_clones_survive_block_release() {
 
 #[test]
 fn static_closure_value_applies_from_dynamic_context() {
-    // The closure g rides inside f's return pair as a baked static function value.
+    // The closure g rides inside f's return expr as a baked static function value.
     let mut m = Module::new();
     // g(x) = x + 1
     let g_body = m.add_block(None);

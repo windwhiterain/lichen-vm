@@ -56,9 +56,9 @@ pub(super) fn unclosed_delimiter(
 ) -> Option<Unclosed> {
     e.expected()
         .map(|label| label.to_string())
-        .filter_map(|label| closer_pair(&label))
-        .filter_map(|pair| {
-            let (closer, opener, printed) = pair;
+        .filter_map(|label| closer_expr(&label))
+        .filter_map(|expr| {
+            let (closer, opener, printed) = expr;
             unmatched_opener(tokens, e.span().start, opener, closer).map(|span| (span, printed))
         })
         .min_by_key(|(span, _)| span.0)
@@ -70,7 +70,7 @@ pub(super) fn unclosed_delimiter(
 
 /// The opener and closer a closer label belongs to, as the `(closer, opener,
 /// printed opener)` a scan needs.
-fn closer_pair(label: &str) -> Option<(TokenKind, TokenKind, &'static str)> {
+fn closer_expr(label: &str) -> Option<(TokenKind, TokenKind, &'static str)> {
     match label {
         "')'" => Some((TokenKind::RParen, TokenKind::LParen, "'('")),
         "'}'" => Some((TokenKind::RBrace, TokenKind::LBrace, "'{'")),

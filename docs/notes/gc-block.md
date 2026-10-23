@@ -134,8 +134,8 @@ terminates, and a table entry's nodes move.
 surviving structure names, and the contract is: a referrer may name its own block, an
 ancestor (the ancestor outlives it), a parentless block (a function body or the module root,
 never released), or a child scope's **declared root**. The front end holds it by
-construction: `check_gc` gives the parent `Index(pair, 0)` and `Index(pair, 1)` reads of the
-scope's pair, so the parent names the declared root only, and reading that handle is what
+construction: `check_gc` gives the parent `Index(expr, 0)` and `Index(expr, 1)` reads of the
+scope's expr, so the parent names the declared root only, and reading that handle is what
 collects the scope. The `block_boundary` test scans every payload and operand of a language
 corpus and measures **0** violations. The engine does not validate the contract, by decision,
 so a hand-built module can still break it — the `#[ignore]`d repro in `gc_safety.rs` records
@@ -162,7 +162,7 @@ Two builds, each against its own unmarked twin:
 
 So `@gc` over a **block** frees the block record and its arena and **no nodes**,
 and `@gc` over a **call** frees the nine nodes the answer's class does not reach
-— the operand array, the argument pair, and the cells nothing binds. That is the
+— the operand array, the argument expr, and the cells nothing binds. That is the
 honest shape of the feature today: the per-call case is the one that pays, which
 is the case the call-site idiom exists for.
 

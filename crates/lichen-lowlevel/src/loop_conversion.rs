@@ -110,7 +110,7 @@ pub struct LoopExit {
     ///
     /// # Invariant
     ///
-    /// A consumer builds the apply's result pair `[value, type]` from this
+    /// A consumer builds the apply's result expr `[value, type]` from this
     /// node, never by evaluating the function's return: the *untaken* step
     /// arm would otherwise stay in the graph for the next deep pass to walk
     /// (and unroll — see `loop_run.rs`).
@@ -156,8 +156,8 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// Read from the **value side**: the chain alternates element positions with the
-    /// slot's value position (`0`), so the pair peel and every slot peel are dropped
-    /// and a pair's type or attribute position ends the match rather than naming a
+    /// slot's value position (`0`), so the expr peel and every slot peel are dropped
+    /// and an expr's type or attribute position ends the match rather than naming a
     /// state element (`docs/notes/compound-element-slots.md`). The frozen position
     /// and the clone are one reading: `docs/notes/loop-conversion.md` §8.2.
     pub fn parameter_value_path(&self, function: FunctionId, node: NodeId) -> Option<Vec<usize>> {
@@ -169,7 +169,7 @@ impl<P: Program> Module<P> {
             return Some(path);
         }
         let parameter = self.functions[function].parameter;
-        let value_cell = self.pair_value_half(parameter).unwrap_or(parameter);
+        let value_cell = self.expr_value_half(parameter).unwrap_or(parameter);
         let value_class = self.class_root(value_cell);
         let mut path = Vec::new();
         let mut current = node;
@@ -241,7 +241,7 @@ impl<P: Program> Module<P> {
             let position = self.read_position(operands.get(1)?.node)?;
             let target = operands.first()?.node.dynamic()?;
             if target == state {
-                // The argument **pair**'s value position is the state itself.
+                // The argument **expr**'s value position is the state itself.
                 return if position == 0 {
                     Self::state_path(collected)
                 } else {
@@ -417,7 +417,7 @@ impl<P: Program> Spine<'_, P> {
     /// anything else that recurses is not a tail call.
     fn walk(&mut self) -> Result<(), LoopRefusal> {
         let ret = self.module.functions[self.function].r#return;
-        let value = self.module.pair_value_half(ret).unwrap_or(ret);
+        let value = self.module.expr_value_half(ret).unwrap_or(ret);
         let roots = self
             .module
             .value_leaves(value)
@@ -536,7 +536,7 @@ impl<P: Program> Spine<'_, P> {
             .operands_of(apply)
             .map_err(|_| LoopRefusal::StateShape)?;
         let argument = operands[1];
-        let value = self.module.pair_value_half(argument).unwrap_or(argument);
+        let value = self.module.expr_value_half(argument).unwrap_or(argument);
         // SAFETY: `value` is a live node of the module.
         let next: Vec<NodeId> = match unsafe { self.module.array_items(value) } {
             Some(items) => items

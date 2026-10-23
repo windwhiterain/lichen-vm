@@ -105,9 +105,9 @@ read as consuming *"the value another node produced"* — while in all three pro
 question first raised for `gemv`, now measured on three operators with nothing in common beyond the
 claim, so it is the floor's model of a reduction and not one program's spelling.
 
-The floor's accepted shape is still a producer→consumer **pair**. A single operator is outside it
+The floor's accepted shape is still a producer→consumer **expr**. A single operator is outside it
 whether or not it is claimed: without a claim it does not get in, and with one it gets in only as half
-of a pair it does not have.
+of an expr it does not have.
 
 ## What the family needs next
 

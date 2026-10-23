@@ -29,7 +29,7 @@ It contributes, in any combination:
   host program `$program`, expands to a `NativeOps` value (the host invokes it
   to build its private per-module registry);
 - **an attribute** — an `AttrSpec` marker + `AttrExt<P>` provider, listed in
-  the host composition's `attrs` manifest, which is also where its pair slot
+  the host composition's `attrs` manifest, which is also where its expr slot
   comes from (the manifest's declaration order *is* the canonical attribute
   order — see [attributes.md](attributes.md));
 - **a `GlobalExt` component** — composed by the host with

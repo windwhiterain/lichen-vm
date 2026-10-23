@@ -20,12 +20,12 @@ and returns strictly more.
 
 `Build::lowerings() -> &HashMap<NodeId, Loc>`: every node this build compiled,
 mapped to the expression it lowered from and the position inside that
-expression's `[value, type, attrs…]` pair. `Loc` is the type the crate already
+expression's `[value, type, attrs…]` expr. `Loc` is the type the crate already
 uses for this — an expression plus a recursive path through its spine — so the
 map introduces no vocabulary of its own and a diagnostic's `Loc` and a node's
 answer are the same thing.
 
-The map is **total over the compiled slots**: for every expression, the pair
+The map is **total over the compiled slots**: for every expression, the expr
 node, the value node and the type node are all present, whether or not a check
 failed. It comes from data the checker already records (`ExprState`), so it is
 *derived* rather than recorded, and it is held in a `OnceLock`: a build pays
@@ -36,7 +36,7 @@ nothing for a map only a failing diagnostic or a test reads.
 The attribution is assembled from what each site knows, and `node_edges` stays
 the authority wherever it knows more:
 
-- **`ExprState`** — an expression's pair, value and type. Total, and exact about
+- **`ExprState`** — an expression's expr, value and type. Total, and exact about
   the slot. Its **attribute** slot is the one entry it cannot place, because
   `ExprState::attr` records one node without its index in the merged tail;
   `check_ann` stamps that node itself where it does know the index.

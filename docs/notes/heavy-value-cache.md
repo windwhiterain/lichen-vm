@@ -442,7 +442,7 @@ Three readings:
   mode choice; the knob matters only where an operand chain exists.
 
 **The caveat, stated because the probe is a lower bound**: the module built here has no type
-side. A real `@cache out = …` binding carries a `[value, type]` pair, and the type graph is
+side. A real `@cache out = …` binding carries a `[value, type]` expr, and the type graph is
 where the classes are; so a language-level buffer cell's closure is larger than one node. The
 claim measured here is about the value, not about the whole cell.
 
@@ -638,12 +638,12 @@ Two things the experiment established, and one it refuted:
   is a requirement the design did not have until it was built.
 - **A cell artifact is self-contained.** Its refs are absolute from birth, so the empty
   registry needed nothing but the cell itself — no dependency map, no retargeting.
-- **Comparing the pair values directly is meaningless**, and the first version of the probe did
-  it: a pair is an array, and array equality is *allocation identity*, so two artifacts can
+- **Comparing the expr values directly is meaningless**, and the first version of the probe did
+  it: an expr is an array, and array equality is *allocation identity*, so two artifacts can
   never compare equal that way. The check has to be the compile's answer, which is what the
   probe now measures. Worth recording because it is the obvious wrong test.
 
-What persistence still needs: a save sink inside `freeze_cells` (the pair node is only reachable
+What persistence still needs: a save sink inside `freeze_cells` (the expr node is only reachable
 there), the on-disk layout, and the judge arm that compares a **stored** key against the
 computed one on the first compile of a process — §13.
 
@@ -842,7 +842,7 @@ persists and all thirteen survive; the numbers here are `ReadOnly`'s, as they we
 
 **The reading that was not chased, and what it was.** A reused cell printed `(raw Buffer, raw
 Int)` where the fresh build printed `(raw Buffer, Int)`. The **type** was never lost: it prints
-correctly in both arms. The reused binding's `[value, type]` pair is the artifact's own, so the
+correctly in both arms. The reused binding's `[value, type]` expr is the artifact's own, so the
 type is a **static** node, and `ValuePrinter` had no static path — `element_any` dumped every
 frozen cell through `raw_any`, which is why the value's cells came out raw. `ValuePrinter::value_any`
 now takes an `AnyNodeId` type exactly as the type printer's `static_elements` already did, and

@@ -144,7 +144,7 @@ the label is rounded, and `k = 2589` is the index to quote from now on.
 
 ### 2.4 The Iris Xe's own rewriting, where it differs from the RTX 3060's
 
-**Measured**, one body per spelling over 4096 `(q, residual)` pairs with `q` over `[0, 5216)`,
+**Measured**, one body per spelling over 4096 `(q, residual)` exprs with `q` over `[0, 5216)`,
 scored against six readings of the reduction: `split` (`(m − q·H) − q·T`), `recombined`
 (`m − q·(H+T)`), `fused` (`fma(−q, H+T, m)`), `head-fused`, `tail-fused`, and `summed`
 (`m − (q·H + q·T)`).
@@ -279,7 +279,7 @@ compared:
 | RTX 3060 | 52.55 ms | **51.86 ms** | 52.09 ms | **51.79 ms** |
 | Iris Xe | 53.18 ms | **52.53 ms** | 52.63 ms | **52.55 ms** |
 
-**No measurable time cost: the decorated run is 0.3–1.3% *faster* on all four pairs, which is
+**No measurable time cost: the decorated run is 0.3–1.3% *faster* on all four exprs, which is
 run-to-run spread rather than a gain** — and the sign is the point, because a control that cost
 throughput would not come out ahead on either device. Nothing else about the module changes: no
 capability, no execution mode, no `OpExtInst`, no `Fma`. `spirv-dis` shows the decoration
@@ -428,9 +428,9 @@ one line each, and what it decided:
 4096-point contraction cells across two devices and two spellings; §2.2's eight model rows and
 the `exp` row; §2.3's sixteen buckets and both 5200-crossing sweeps; §2.4's four spellings ×
 six readings × two devices; §3.1's three candidates with their validator and driver verdicts;
-§3.2's sixteen rows; §3.3's five word counts and four timing pairs; §4's twenty-seven modules.
+§3.2's sixteen rows; §3.3's five word counts and four timing exprs; §4's twenty-seven modules.
 Every bit-exact count is read off the two backends' own bit patterns at the same point, and
-every ulp figure off that same pair.
+every ulp figure off that same expr.
 
 **Inferred, and not re-derived here.** That `NoContraction` is *why* the decorated modules are
 bit-exact rather than some accident of the insertion — the decoration count matches the float

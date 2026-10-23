@@ -8,7 +8,7 @@ with their own type forms.
 
 ## Tables
 
-A table is a constant mapping written with `==>` pairs:
+A table is a constant mapping written with `==>` exprs:
 
 ```lichen
 t = table(1 ==> 10, 2 ==> 20)
@@ -39,12 +39,12 @@ t = table([1, 2] ==> 10, [3, 4] ==> 20)
 equal to `k`:
 
 ```lichen
-t = table((1, 2) ==> "pair", (3, 4) ==> "other")
+t = table((1, 2) ==> "expr", (3, 4) ==> "other")
 (t <== (1, 2), t <== (3, 4))
 ```
 
 ```text
-("pair", "other"): tuple{string, string}
+("expr", "other"): tuple{string, string}
 ```
 
 The read needs the table's type decided at the read: a literal table or an

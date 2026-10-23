@@ -378,7 +378,7 @@ test asserts; it no longer fires (`graph_jit.rs:303`).
 
 ### 6.3 `graph_structure::a_body_dispatches_through_an_apply_whose_callee_holds_the_operator`
 
-6 writes; the two that matter are the last pair, and they are **different sanctioned
+6 writes; the two that matter are the last expr, and they are **different sanctioned
 sites**:
 
 | node | epoch | write path | sanctioned site |
@@ -396,7 +396,7 @@ operator and refuses the whole program.
 ### 6.4 `graph_structure::the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct`
 
 Identical shape: 110v1 (epoch 28), 491v1 (112), 1082v1 (249), 1085v1 (250), and the
-last pair **312v1** (epoch 1589) and **313v1** (epoch 1594) from
+last expr **312v1** (epoch 1589) and **313v1** (epoch 1594) from
 `static_module/apply.rs:90` — the apply codomain bind. Same `graph_structure.rs:32`
 failure.
 
@@ -460,7 +460,7 @@ one move.
 > it contradicts a landed decision — [eval-before-unify](eval-before-unify.md) §7.1
 > records the checker-side bind being deleted for exactly this reason.
 
-**Second: the capture edge (the `graph_jit` pair).** Same mechanism, but the writer
+**Second: the capture edge (the `graph_jit` expr).** Same mechanism, but the writer
 is `apply_parameter_check` (`apply.rs:78`) merging a free variable's class. A
 capture is a *free variable*, so under "the checker does the initial unify" it
 belongs at check time; the capture edge exists there already — `check_lam`
@@ -647,7 +647,7 @@ The brief's Part 2 was to move `module.unify(cell, codomain)` to the moment the
 function is born. It is not done, and the reason is not effort:
 
 1. **The codomain is minted by the apply, so at function birth it does not exist.**
-   `static_module/apply.rs:84` reads `pair_type_item(applied)` where `applied =
+   `static_module/apply.rs:84` reads `expr_type_item(applied)` where `applied =
    static_node_apply(r#return, …)` — the **clone** the call minted
    (`static_module/apply.rs:40`, `:286`). Hoisting to the template's `return_type` is
    a *different unify against a different node*.

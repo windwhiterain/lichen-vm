@@ -159,7 +159,7 @@ pub(super) fn sums_a_staged_tile(space: Space, count: u32) -> KernelFragment {
             values: vec![folded],
         },
     );
-    // **One pair, not one per read**: one barrier serves every read after the first.
+    // **One expr, not one per read**: one barrier serves every read after the first.
     body.barriers.push(Barrier {
         write,
         read: first_read.expect("a tile of one element is read"),
@@ -220,7 +220,7 @@ fn first_slice_access_at(fragment: &KernelFragment) -> (ValueId, usize) {
     (access, at)
 }
 
-/// The same body with its recorded pair dropped, which is what makes the pair **owed** rather than
+/// The same body with its recorded expr dropped, which is what makes the expr **owed** rather than
 /// already spent.
 ///
 /// # Invariant
@@ -267,7 +267,7 @@ fn a_warp_exchange_answers_what_the_shared_exchange_answers() {
         assert_eq!(
             owed,
             vec![fragment.body.barriers[0]],
-            "{what}: the pair the body records is the one the scan owes, so the \
+            "{what}: the expr the body records is the one the scan owes, so the \
              barrier cannot be left out"
         );
         let resident = context
@@ -396,7 +396,7 @@ fn a_cross_warp_read_keeps_shared_memory_and_a_workgroup_barrier() {
 /// A `Warp` slice carries its own narrow barrier, and the module still validates.
 ///
 /// # Invariant
-/// The scope a pair is ordered at follows the placement rather than the body: a subgroup-scoped
+/// The scope an expr is ordered at follows the placement rather than the body: a subgroup-scoped
 /// barrier is what makes each lane's register visible to its siblings, and it is legal precisely
 /// because every reader of the slice is inside the writing lane's subgroup.
 #[test]
@@ -418,7 +418,7 @@ fn a_warp_exchange_is_ordered_by_a_subgroup_barrier_and_validates() {
     assert_eq!(
         barrier_scopes(&words),
         vec![SCOPE_SUBGROUP],
-        "the one recorded pair is ordered inside the subgroup, not the workgroup"
+        "the one recorded expr is ordered inside the subgroup, not the workgroup"
     );
     let seen = instructions(&words);
     let opcodes = seen.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>();

@@ -57,12 +57,12 @@ where
 ///
 /// # Invariant
 ///
-/// `tail` and `pair` are the schema-tail/pair pair [`render_attributes`] reads,
+/// `tail` and `expr` are the schema-tail/expr expr [`render_attributes`] reads,
 /// and the label is looked for the same way: one spelling per *present*
 /// attribute, first answer wins.  `None` means the expression prints as before.
 pub fn value_label<P: HighProgram>(
     module: &Module<P>,
-    pair: NodeId,
+    expr: NodeId,
     tail: &[P::Attr],
     attr_ext: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
 ) -> Option<String>
@@ -72,7 +72,7 @@ where
     if tail.is_empty() {
         return None;
     }
-    let value = module.node_value(AnyNodeId::Dynamic(pair))?;
+    let value = module.node_value(AnyNodeId::Dynamic(expr))?;
     let value = value.as_enum()?;
     for marker in tail {
         let Some(AnyNodeId::Dynamic(slot)) =
@@ -89,7 +89,7 @@ where
 }
 
 /// Render the attributes an expression carries, from its schema tail and runtime
-/// pair, space-separated.
+/// expr, space-separated.
 ///
 /// # Invariant
 ///
@@ -98,7 +98,7 @@ where
 /// only attributes that are genuinely there appear.
 pub fn render_attributes<P: HighProgram>(
     module: &Module<P>,
-    pair: NodeId,
+    expr: NodeId,
     tail: &[P::Attr],
     attr_ext: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
 ) -> String
@@ -108,7 +108,7 @@ where
     if tail.is_empty() {
         return String::new();
     }
-    let Some(value) = module.node_value(AnyNodeId::Dynamic(pair)) else {
+    let Some(value) = module.node_value(AnyNodeId::Dynamic(expr)) else {
         return String::new();
     };
     let Some(value) = value.as_enum() else {
@@ -311,11 +311,11 @@ where
     }
 }
 
-/// Whether a value is a struct marker, the pair `[payload, TypeStruct]`.
+/// Whether a value is a struct marker, the expr `[payload, TypeStruct]`.
 ///
 /// # Invariant
 ///
-/// The test is the tag: the marker is a two-element `[value, type]` pair whose
+/// The test is the tag: the marker is a two-element `[value, type]` expr whose
 /// type slot holds the `TypeStruct` atom; anything else is not a struct marker.
 fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
@@ -331,7 +331,7 @@ where
             == Some(P::Value::type_struct_marker())
 }
 
-/// Whether `kind_items` describe a struct kind: a standard `[marker, K]` pair
+/// Whether `kind_items` describe a struct kind: a standard `[marker, K]` expr
 /// whose marker carries the `TypeStruct` tag.
 fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
 where
@@ -342,7 +342,7 @@ where
         && marker_is_struct(module, kind_items[0].node)
 }
 
-/// The per-field names of a struct type, read from the marker pair's payload.
+/// The per-field names of a struct type, read from the marker expr's payload.
 ///
 /// # Invariant
 ///
@@ -369,7 +369,7 @@ where
     let Some(marker_items) = marker_items else {
         return out;
     };
-    // The marker pair's value slot is the payload `[TypeId, names,
+    // The marker expr's value slot is the payload `[TypeId, names,
     // names_in_order]`.
     let Some(payload_item) = marker_items.get(shape::STRUCT_MARKER_PAYLOAD_SLOT) else {
         return out;
@@ -415,7 +415,7 @@ where
     out
 }
 
-/// The named-field list of a struct type term, read from its kind marker pair.
+/// The named-field list of a struct type term, read from its kind marker expr.
 ///
 /// # Invariant
 ///

@@ -144,7 +144,7 @@ where
     /// # Invariant
     ///
     /// Both are always the latest mapping: an edit moves bytes, not `(line, col)`
-    /// pairs, so a reuse that moves them writes both back, or the next reuse
+    /// exprs, so a reuse that moves them writes both back, or the next reuse
     /// would shift an already-shifted position.
     span_index: Option<Arc<SpanIndex>>,
     span_bytes: Vec<Option<u32>>,
@@ -914,7 +914,7 @@ fn view_line_starts(code: &str, base: u32, line_starts: &[usize]) -> Vec<usize> 
 ///
 /// `a` is a byte position valid in both sources (every byte before it is
 /// identical) and `b` is the position in `new` where the unchanged tail begins,
-/// which is the coordinate pair `lex::lex_resume` expects.
+/// which is the coordinate expr `lex::lex_resume` expects.
 fn edit_span(old: &str, new: &str) -> (usize, usize, isize) {
     let delta = new.len() as isize - old.len() as isize;
     let ob = old.as_bytes();

@@ -53,7 +53,7 @@ A minimal language built over highlevel.
     - Complex value replaced by fake value. 
 - Then run lichen program
 
-Since lichen-highlevel preserve the consistancy of `value : type` pair, as long as input `value : type` pairs are consistant, any evaluated `value : type` pair are.
+Since lichen-highlevel preserve the consistancy of `value : type` expr, as long as input `value : type` exprs are consistant, any evaluated `value : type` expr are.
 
 Warning: lichen has no subtyping, and a compound type is typed by its kind rather than by `Type` (`array{Int, 3} : Type` does not check), so what `Type : Type` buys is that types are ordinary values and a recursive type is an ordinary cyclic one — the cost is that the decidability of a lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
 
@@ -411,7 +411,7 @@ compute.launch k_outer 3
   compute = import "compute.lichen"
   doc = "RMSNorm: y[i] = x[i] / sqrt(mean(x²) + eps) * w[i], the entry of a transformer
   block. It is two kernels because the surface wants two — a row-wise `Σ x²` reduction, then a
-  per-index rescale — and the two claims are what lets the floor see the pair as one region.
+  per-index rescale — and the two claims are what lets the floor see the expr as one region.
   array-to-buffer conversion (`docs/notes/kernel-buffer-declarations.md`).
   The row is `7, 3, 1, 2`, whose squares sum to `63`, so the mean is `63 / 4 = 15.75` and
   `15.75 + 0.25 = 16`: `sqrt` answers `4`, and every division below divides by it exactly. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
@@ -483,7 +483,7 @@ five # 4
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder.  The parameter is a
-pair, so the recursion carries both numbers.  A function's type is the function
+expr, so the recursion carries both numbers.  A function's type is the function
 itself (`f : f`), and an annotation states one by binding that function's own two
 cells — so `: tuple{Int, Int} -> Int` *is* the constraint rather than a check beside it,
 and the self-recursive result's type follows from it (`6: Int`).  Nothing carries
@@ -537,7 +537,7 @@ half = int2float 1 + 2.0
   order = "16"
   compute = import "compute.lichen"
   doc = "SwiGLU's gate half: `y[i] = silu(g[i]) * u[i]`, where `silu(x) = x / (1 + exp(-x))`.
-  It is two kernels because the surface fuses a **pair**, and one kernel would have claimed the
+  It is two kernels because the surface fuses a **expr**, and one kernel would have claimed the
   whole of `silu(g) * u` and fused with nothing. The split puts the quotient in the producer and
   leaves a plain product to the consumer, which is also where a reader looking for the operator
   looks first. `g = 0, 1, -1, 2` and `u = 3, 1, 0.5, 4`, so lane 0 is `0 / (1 + exp(0)) = 0`
@@ -601,7 +601,7 @@ compute.collect out.y : array{Float, 4}
   doc = "Row softmax: y[i] = exp(x[i] - max(x)) / sum_j exp(x[j] - max(x)), the entry of attention. It \
    is two kernels because the surface wants two — a `max` reduction over the row, then one kernel \
    that folds `sum exp` and divides by that fold on the way out — and the two claims are what lets \
-   the floor see the pair as one region. The `max` kernel seeds its fold with `((0.0 - 1.0) / 0.0)`, \
+   the floor see the expr as one region. The `max` kernel seeds its fold with `((0.0 - 1.0) / 0.0)`, \
    which **is** the unit of `max`: the language has no unary minus, so `−∞` is written as a \
    literal over a zero literal. A finite stand-in for it is a claim that holds only for rows above \
    it. The row is `1, 2, 3, 4`, so the row's maximum is `4` and the exponents are `-3, -2, -1, 0`; \
@@ -657,12 +657,12 @@ compute.collect out.y : array{Float, 4}
   order = "18"
   compute = import "compute.lichen"
   doc = "Rotary position embedding: `y[2i] = x[2i]·cos θ − x[2i+1]·sin θ` and \
-   `y[2i+1] = x[2i]·sin θ + x[2i+1]·cos θ`, the per-pair rotation that carries a position \
+   `y[2i+1] = x[2i]·sin θ + x[2i+1]·cos θ`, the per-expr rotation that carries a position \
    into an attention score. It is **three** kernels because the surface wants one kernel per \
-   output buffer and this operator has three of them — a cosine per pair, a sine per pair, \
+   output buffer and this operator has three of them — a cosine per expr, a sine per expr, \
    and the rotation — and their claims are what let the floor see the chain. The rotation \
-   runs **one lane per element**, not per pair, because a lane may write only one position: \
-   lane `j` is in pair `(j - j % 2) / 2`, its partner is `j + 1 - 2 * (j % 2)`, and the sign of \
+   runs **one lane per element**, not per expr, because a lane may write only one position: \
+   lane `j` is in expr `(j - j % 2) / 2`, its partner is `j + 1 - 2 * (j % 2)`, and the sign of \
    the cross term is `1.0 - 2.0 * int2float (j % 2)` — so the whole pairwise rotation is \
    one expression rather than two. **`sin` and `cos` did not exist in this language at all \
    until now, and they are range-reduced polynomials rather than IEEE's**, so the declared \
@@ -698,16 +698,16 @@ sin_raw = (k : ParS) => {
   ((OutS)(.s (compute.write ((compute.Write _)(.to b_s, .at i, .value (sin angle ~ "element"))))))
 }
 sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" OutS
-Pair  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .c (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Expr  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .c (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
 OutY  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-ParR  = struct{.n Int, .in Pair}
+ParR  = struct{.n Int, .in Expr}
 rotate_raw = (k : ParR) => {
   j = compute.range k.n
   odd = j % 2
-  pair = (j - odd) / 2
+  expr = (j - odd) / 2
   partner = j + 1 - 2 * odd
-  c = (compute.read ((compute.Read _)(.from k.in.c, .at pair)) : Float)
-  s = (compute.read ((compute.Read _)(.from k.in.s, .at pair)) : Float)
+  c = (compute.read ((compute.Read _)(.from k.in.c, .at expr)) : Float)
+  s = (compute.read ((compute.Read _)(.from k.in.s, .at expr)) : Float)
   here = (compute.read ((compute.Read _)(.from k.in.x, .at j)) : Float)
   other = (compute.read ((compute.Read _)(.from k.in.x, .at partner)) : Float)
   turned = here * c - (1.0 - 2.0 * int2float odd) * other * s
@@ -745,7 +745,7 @@ fill_x = compute.parallel fill_x_raw "cpu" xBuf
 x = (compute.plrun fill_x ((Fill)(.n 8)) : xBuf).x
 cosines = (compute.plrun cosine ((compute.A Turn)(.n 4, .I Turn(.position position, .inverse_frequency inverse_frequency))) : OutC)
 sines = (compute.plrun sine ((compute.A Turn)(.n 4, .I Turn(.position position, .inverse_frequency inverse_frequency))) : OutS)
-out = (compute.plrun rotate ((compute.A Pair)(.n 8, .I Pair(.x x, .c cosines.c, .s sines.s))) : OutY)
+out = (compute.plrun rotate ((compute.A Expr)(.n 8, .I Expr(.x x, .c cosines.c, .s sines.s))) : OutY)
 compute.collect out.y : array{Float, 8}
 ```
 
@@ -783,7 +783,7 @@ compute.collect out.y : array{Float, 8}
    `compute.row`/`compute.col` divide by — so `K` has to sit **after** `cols`, not between `.n` and it.
    Putting it between them does not refuse: `[.n, .k, .cols]` answered `[58.0, 64.0, 31.0, 139.0]`
    instead of `[58.0, 64.0, 139.0, 154.0]`, because the coordinates then divided by `k = 3` and every
-   lane took its row and column from the wrong pair. An `@loop` fold
+   lane took its row and column from the wrong expr. An `@loop` fold
    counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
    the last addend is the `k = 0` product; over exact integers the order changes nothing, and it is
    stated here because it is the order the body actually has.
@@ -1046,7 +1046,7 @@ compute.collect out.y : array{Float, 4}
    That is the ladder's *small lie the surface forces* arriving at attention: both kernels claim \
    `Reduction(combine,identity,element)`, and each one's `element` **is** a whole fold, so there is \
    no element expression left for a producer to flow into. The grouping is no longer the wall; \
-   the **claim** is. A pair whose consumer's `element` genuinely reads the producer's value would \
+   the **claim** is. An expr whose consumer's `element` genuinely reads the producer's value would \
    be a different shape, and this one is not.\n\n\
    **The device leg, measured.** The `attend` kernel **runs on the RTX 3060** through \
    `compute.plrun` on `gpu`, fed the same scores, and answers \
@@ -1438,11 +1438,11 @@ out = (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, 
     fusion floor. **(b) The device leg** used to refuse a GEMV whose \
     reduction is shorter than its output; that rule is gone and this program runs on the device \
     (4 of 4, bit-exact), so the decode shape is not blocked by a length. **(c) A position to advance.** \
-    A GEMV carries no position of its own — `t` belongs to the cache kernel — but the pair needs \
+    A GEMV carries no position of its own — `t` belongs to the cache kernel — but the expr needs \
     one to advance, and the language holds no mutable state between calls. Beyond those three, \
     nothing: the arithmetic, the layout and the chaining are all expressible today, as measured.\n\n\
     **One workaround, and it is a preference.** The lane enumerates the outputs directly, `m` \
-    being the lane index, and never takes a coordinate pair. It could have enumerated `M × 1` and \
+    being the lane index, and never takes a coordinate expr. It could have enumerated `M × 1` and \
     taken `m` from `compute.row k`, which is the spelling `examples/matmul.lichen` and \
     `examples/attention.lichen` use and which would have exercised the second extent — but `m` is \
     the row of a one-row matrix, and asking for it costs an instruction per lane to learn \
@@ -1505,7 +1505,7 @@ compute.collect out.y : array{Float, 4}
     score, `examples/softmax.lichen`'s normalise, and `examples/attention.lichen`'s weighted \
     values, in that order, each reading the buffer the last one wrote. **Four stages, five \
     kernels, one query, `capacity = 4`, `dim = 2`, `t = 2`.** Every example below this one on \
-    the ladder in `docs/notes/llm-operators.md` is one operator or one operator's pair, and the \
+    the ladder in `docs/notes/llm-operators.md` is one operator or one operator's expr, and the \
     two slices before this one each measured a wall in the **hand-off** between two. This file \
     is the first program here whose subject is the hand-off itself, and what it found is that \
     the hand-off is cheap — the transposed half is not.\n\n\
@@ -2359,8 +2359,8 @@ products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights
     comparisons, additions and multiplications of integers under `4`, and there is no `exp`, no \
     `sqrt`, no `ln` and no division anywhere in the fold. The scores are `3 9 4 9 / 5 1 5 2 / 7 7 7 \
     7 / 8 6 4 2 / 1 2 3 4` and the answer is `[3, 2, 3, 0, 3]`, derived by hand at the end.\n\n\
-    **The fold carries a pair, and the pair is not the answer.** The state is three slots — the \
-    counter, the best value seen, the position of that value — so the pair travels through the \
+    **The fold carries an expr, and the expr is not the answer.** The state is three slots — the \
+    counter, the best value seen, the position of that value — so the expr travels through the \
     recursion exactly as `examples/attention.lichen`'s `acc` carries its row maximum in `s(2)`. \
     **What this ladder had not had is a fold whose result is a selection**, and here is what the \
     surface allows about it: **the base arm may return one slot of the state, and one only.** A base \
@@ -2405,7 +2405,7 @@ products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights
     the last equal element. What decides it is the conjunction of two independently motivated \
     choices — the countdown order of `@loop` and a strict comparison — and a sampler wanting the \
     lowest position writes `>=` and means something else. **Rows 0, 1 and 2 are tie rows on \
-    purpose** — a pair at `1` and `3`, a pair at `0` and `2`, four equal values — and row 3 \
+    purpose** — an expr at `1` and `3`, an expr at `0` and `2`, four equal values — and row 3 \
     (`8 6 4 2`) is the control: its maximum is at position `0`, which the fold visits **last**, \
     and it still stands.\n\n\
     **One kernel, one launch, and the extent rule fixes both shapes.** The launch is over the \
@@ -2422,7 +2422,7 @@ products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights
     **Chaining, measured both ways.** This kernel takes `examples/decode.lichen`'s row verbatim — \
     `.n 1, .w 2` over `[8.888384, 10.773098]` — and answers `[1.0]`, so a decode step's output feeds \
     it with nothing changed, and nothing about the operator is tied to the integer data above. The \
-    pair answer also agrees with the **two-`plrun`** spelling — `examples/softmax.lichen`'s \
+    expr answer also agrees with the **two-`plrun`** spelling — `examples/softmax.lichen`'s \
     `rowmax` kernel, per row, then a position kernel reading the maximum — **but not by itself**. \
     `>=` alone makes every maximum overwrite the last one and answers `[1.0, 0.0, 0.0, 0.0, 3.0]`, \
     the lowest position. Add the guard `(read >= max) * (p == 0)` — `first writer wins`, written \
@@ -2759,8 +2759,8 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel2(.x sco
     the state tuple**, with the counter at slot zero — so the marker is where an undecided trip \
     count is given its type. **Without it the second declared entry would not be a fact about \
     the loop at all, only a `raw` cell**, and this file would have no observable length.\n\n\
-    **What bounds the loop, measured, and it is not the pair of constants the ladder records.** \
-    The checker's budget is a tuned pair — `apply_depth_limit = 500` and `apply_total_limit = \
+    **What bounds the loop, measured, and it is not the expr of constants the ladder records.** \
+    The checker's budget is a tuned expr — `apply_depth_limit = 500` and `apply_total_limit = \
     2_000` (`crates/lichen-highlevel/src/checker.rs:384-389`) — and both refusals are worded as \
     **non-termination** rather than as a stop condition that was not met. Four minimal recursions \
     with a buffers-derived guard that never fires, each its own program, at `dev@c2c04546`: with \
@@ -3044,7 +3044,7 @@ final = (generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank)) : tuple{Int, KVOu
     answered `2`, so the readings are `3 1 0 0 1 3` against `2 1 0 0 1 2` — and the difference is \
     visible as a **conserved total**: both start at `8`, the ring ends at `8` (the Laplacian sums to \
     zero over a ring, so a step with any `alpha` leaves the total alone) and the Dirichlet step ends \
-    at `6`, having lost `2` through the two zero edges. `examples/torus.lichen` shows the same pair \
+    at `6`, having lost `2` through the two zero edges. `examples/torus.lichen` shows the same expr \
     in two dimensions, where the masked grid loses three and the torus holds.\n\n\
     **A solver is a loop, and it can be typed.** The third chain does not unroll: it seeds the kernel's \
     buffer with the ring's first step and runs two more through a top-level `@loop`, handing the beam \
@@ -3158,7 +3158,7 @@ solved = march (2, seed)
     contributes to exactly two taps and the Laplacian sums to zero over the torus. The plane sums to \
     `8`; the masked chain's step sums to `5`, having lost three through its four zero edges; the \
     wrapped step sums to `8`, and so does the wrapped answer after one more step through the loop. \
-    That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
+    That expr is what makes a boundary a *choice*, and it is the closest this language comes to a \
     conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
     in the declared output but not stated as an invariant.\n\n\
     **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is the \

@@ -65,7 +65,7 @@ where
                 &[
                     shape::TYPE_SHAPE_SLOT,
                     shape::ARRAY_TYPE_ELEMENT_SLOT,
-                    shape::PAIR_TYPE_SLOT,
+                    shape::EXPR_TYPE_SLOT,
                 ],
             ),
         };
@@ -111,13 +111,13 @@ where
         } else {
             elem_cell
         };
-        let pair = self.element_pair(value_node, read_ty, element);
-        self.state[e].term = Some(pair);
+        let expr = self.element_expr(value_node, read_ty, element);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(read_ty);
         // The element's attributes are the read's: the slot is the field's own.
         self.state[e].attr = self.stated_element_slot(element);
-        pair
+        expr
     }
 
     /// Whether the container type names a **tuple or struct**: its elements are
@@ -160,7 +160,7 @@ where
         let value_slot = self.element_slot(None, Some(value_cell), None);
         let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let table_ty = self.slot_pair(self.current_block, shape, kind);
+        let table_ty = self.slot_expr(self.current_block, shape, kind);
         self.check_unify(
             container_ty,
             table_ty,
@@ -176,11 +176,11 @@ where
             P::Operator::from(LowOperator::TableGet),
             Some(ops),
         );
-        let pair = self.pair_of(value_node, value_cell);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(value_node, value_cell);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(value_cell);
-        pair
+        expr
     }
 
     /// An array instance `[v1, …, vn]`:
@@ -196,7 +196,7 @@ where
         let element_ty = self.fresh_cell();
         for &el in &elements {
             self.check_expr(el);
-            // An element is a complete slot: the term is the value pair.
+            // An element is a complete slot: the term is the value expr.
             vals.push(self.state[el].term.expect("an element is compiled"));
             // Found = the element's type, expected = the shared cell: the first
             // binds it, a later one that differs conflicts.
@@ -217,12 +217,12 @@ where
         let element = self.element_slot(None, Some(element_ty), None);
         let shape = self.array_node(self.current_block, &[element, length]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let ty_node = self.slot_pair(self.current_block, shape, kind);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
+        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        pair
+        expr
     }
 
     /// A set `set(a, b, …)` typed by the **set kind**, not by `array{T, n}`.
@@ -237,7 +237,7 @@ where
         let element_ty = self.fresh_cell();
         for &member in &members {
             self.check_expr(member);
-            // An element is a complete slot: the term is the value pair.
+            // An element is a complete slot: the term is the value expr.
             vals.push(self.state[member].term.expect("a member is compiled"));
             // Found = the member's type, expected = the shared cell: a set is
             // homogeneous, exactly like an array.
@@ -253,12 +253,12 @@ where
         let element = self.element_slot(None, Some(element_ty), None);
         let shape = self.array_node(self.current_block, &[element]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let ty_node = self.slot_pair(self.current_block, shape, kind);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
+        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        pair
+        expr
     }
 
     /// A constant table literal `table(k1 ==> v1, …)`, typed by
@@ -273,14 +273,14 @@ where
         let entries = self.range_children(e);
         let key_ty = self.fresh_cell();
         let value_ty = self.fresh_cell();
-        let mut pairs = Vec::with_capacity(entries.len() / 2);
+        let mut exprs = Vec::with_capacity(entries.len() / 2);
         for chunk in entries.chunks(2) {
             let (key, value) = (chunk[0], chunk[1]);
             self.check_expr(key);
             self.check_expr(value);
             let key_node = self.value_of(key);
             self.node_edges.insert(key_node, self.loc(key, 0));
-            pairs.push((
+            exprs.push((
                 AnyNodeId::Dynamic(key_node),
                 AnyNodeId::Dynamic(self.value_of(value)),
             ));
@@ -297,7 +297,7 @@ where
                 DiagKind::TableValue,
             );
         }
-        let table = self.module.build_table(&pairs, self.current_block);
+        let table = self.module.build_table(&exprs, self.current_block);
         let value = self.alloc_node(
             self.current_block,
             None,
@@ -308,12 +308,12 @@ where
         let value_ty = self.element_slot(None, Some(value_ty), None);
         let shape = self.array_node(self.current_block, &[key, value_ty]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let ty_node = self.slot_pair(self.current_block, shape, kind);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
+        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        pair
+        expr
     }
 
     /// A shallow array `[v1, @shallow v2, @shallow(2) v3]`: per-element type
@@ -335,7 +335,7 @@ where
             self.check_expr(el);
             match depths[i] {
                 0 => {
-                    // An element is a complete slot: the term is the value pair.
+                    // An element is a complete slot: the term is the value expr.
                     vals.push(self.state[el].term.expect("an element is compiled"));
                     tys.push(self.state[el].ty.unwrap());
                 }
@@ -358,7 +358,7 @@ where
                     }
                     let ty = self.fresh_cell();
                     let element = self.state[el].term.expect("an element is compiled");
-                    vals.push(self.element_pair(wrapped, ty, element));
+                    vals.push(self.element_expr(wrapped, ty, element));
                     tys.push(ty);
                 }
             }
@@ -373,12 +373,12 @@ where
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.slot_pair(self.current_block, shape, kind);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
+        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        pair
+        expr
     }
 
     /// Close an open `@shallow` tail on the type its application decided.
@@ -409,20 +409,20 @@ where
     /// levels of its type spine stays shallow.
     ///
     /// # Invariant
-    /// Each level is a fresh pair carrying the `shallow=[true, false]` mask, so
+    /// Each level is a fresh expr carrying the `shallow=[true, false]` mask, so
     /// a shared subexpression is never itself marked. The descent follows slot
-    /// 1 only while the spine is a concrete pair at check time; an undecided
+    /// 1 only while the spine is a concrete expr at check time; an undecided
     /// slot ends it, and the wraps above the stop still apply.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
-        // Level 1 is the element's own pair; a call's is built from the
-        // extracted value and type, the apply pair being virtual.
+        // Level 1 is the element's own expr; a call's is built from the
+        // extracted value and type, the apply expr being virtual.
 
         // Each deeper level is the previous level's type slot.
         let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
         let mut current = self.state[e].term.unwrap();
         if self.module.node_operation(current).is_some() {
-            // A call's pair is the apply node, so the wrapper's first item is the
-            // pair a read dereferences.
+            // A call's expr is the apply node, so the wrapper's first item is the
+            // expr a read dereferences.
             levels.push((current, self.state[e].ty.unwrap()));
         } else {
             while levels.len() < depth {
@@ -465,7 +465,7 @@ where
     /// # Invariant
     /// The element type is checked in type position and the length in term
     /// position; both compile identically, because a type expression is a
-    /// first-class value and the array type *is* its pair.
+    /// first-class value and the array type *is* its expr.
     pub(super) fn check_array_type(
         &mut self,
         e: ExprId,
@@ -479,11 +479,11 @@ where
         let element = self.element_slot_of(element_type);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let pair = self.slot_pair(self.current_block, shape, kind);
-        self.state[e].term = Some(pair);
+        let expr = self.slot_expr(self.current_block, shape, kind);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
-        pair
+        expr
     }
 
     /// The set type `set{E}`: the shape is the element **slot** alone.
@@ -498,11 +498,11 @@ where
         let slot = self.element_slot_of(element);
         let shape = self.array_node(self.current_block, &[slot]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let pair = self.slot_pair(self.current_block, shape, kind);
-        self.state[e].term = Some(pair);
+        let expr = self.slot_expr(self.current_block, shape, kind);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
-        pair
+        expr
     }
 
     /// The table type `table{K, V}`: the key and value **slots**.
@@ -516,10 +516,10 @@ where
         let value = self.element_slot_of(elements[1]);
         let shape = self.array_node(self.current_block, &[key, value]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let pair = self.slot_pair(self.current_block, shape, kind);
-        self.state[e].term = Some(pair);
+        let expr = self.slot_expr(self.current_block, shape, kind);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
-        pair
+        expr
     }
 }

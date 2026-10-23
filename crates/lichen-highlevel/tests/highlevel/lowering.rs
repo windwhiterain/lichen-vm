@@ -30,16 +30,16 @@ fn a_node_answers_the_expression_it_lowered_from() {
 #[test]
 fn the_three_slots_of_one_expression_are_three_attributions() {
     let probe = identity_applied();
-    let pair = probe.pair_of("five");
+    let expr = probe.slot_of("five");
     let value = probe.node_of("five");
     let ty = probe.type_of("five");
     assert!(
-        (pair != value) && (value != ty) && (pair != ty),
-        "a pair, its value and its type are three distinct nodes"
+        (expr != value) && (value != ty) && (expr != ty),
+        "an expr, its value and its type are three distinct nodes"
     );
     assert!(
         probe
-            .explain(pair)
+            .explain(expr)
             .ends_with("`five` (the expression itself)")
     );
     assert!(probe.explain(value).ends_with("`five` (value)"));
@@ -65,16 +65,16 @@ fn every_named_expression_answers_the_node_it_lowered_to() {
 /// A parameter has no separate value node.
 ///
 /// # Invariant
-/// Its value is `Index(pair, 0)`, built on demand, so the attribution a probe
-/// can reach is the pair.
+/// Its value is `Index(expr, 0)`, built on demand, so the attribution a probe
+/// can reach is the expr.
 #[test]
-fn a_parameter_is_attributed_through_the_pair_it_compiled_to() {
+fn a_parameter_is_attributed_through_the_expr_it_compiled_to() {
     let probe = identity_applied();
-    let pair = probe.pair_of("x");
+    let expr = probe.slot_of("x");
     assert!(
-        probe.explain(pair).ends_with("`x` (the expression itself)"),
+        probe.explain(expr).ends_with("`x` (the expression itself)"),
         "got {}",
-        probe.explain(pair)
+        probe.explain(expr)
     );
     assert!(
         probe.checked().state[probe.expr_named("x").unwrap()]

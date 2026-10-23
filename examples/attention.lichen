@@ -71,7 +71,7 @@
    That is the ladder's *small lie the surface forces* arriving at attention: both kernels claim \
    `Reduction(combine,identity,element)`, and each one's `element` **is** a whole fold, so there is \
    no element expression left for a producer to flow into. The grouping is no longer the wall; \
-   the **claim** is. A pair whose consumer's `element` genuinely reads the producer's value would \
+   the **claim** is. An expr whose consumer's `element` genuinely reads the producer's value would \
    be a different shape, and this one is not.\n\n\
    **The device leg, measured.** The `attend` kernel **runs on the RTX 3060** through \
    `compute.plrun` on `gpu`, fed the same scores, and answers \

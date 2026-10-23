@@ -27,13 +27,13 @@ enum Body {
     Recorded,
 }
 
-/// What the kernel is written against: the compute pair, and the prelude's `add`.
+/// What the kernel is written against: the compute expr, and the prelude's `add`.
 ///
 /// # Invariant
 /// `add` is the prelude's own `add` rather than a `BinOp`: a source `+` is routed to the
 /// prelude binding, so the written program routes it the same way or it is not the same program.
 struct Imports {
-    pair: ExprId,
+    expr: ExprId,
     add: ExprId,
 }
 
@@ -44,7 +44,7 @@ struct Kernel {
     kg: ExprId,
 }
 
-/// One name of the compute package, read off its exported pair.
+/// One name of the compute package, read off its exported expr.
 fn bundled(
     w: &Writer<LangAttr, HighProgramLiteral>,
     package: ExprId,
@@ -63,11 +63,11 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let int = w.int_type("Int");
     let in0 = w.statement(w.struct_type("In0", &[(int, Some("a"))]));
 
-    let buf = bundled(w, imports.pair, "Buf");
+    let buf = bundled(w, imports.expr, "Buf");
     let out0 = w.app("Buf_of_element", buf, w.hole("z_element"));
     let out0 = w.statement(w.struct_type("Out0", &[(out0, Some("z"))]));
 
-    let kt = bundled(w, imports.pair, "KT");
+    let kt = bundled(w, imports.expr, "KT");
     let kt = w.app("KT_of_element", kt, w.hole("kt_element"));
     let kt = w.instantiate(
         "KT_of_fields",
@@ -75,17 +75,17 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
         fields(w, "Par0_fields", &[in0, out0]),
         &[Some("I"), Some("O")],
     );
-    let par0 = w.statement(w.app("Par0", bundled(w, imports.pair, "P"), kt));
+    let par0 = w.statement(w.app("Par0", bundled(w, imports.expr, "P"), kt));
 
     let k = w.param("k");
     let i = w.app(
         "i",
-        bundled(w, imports.pair, "range"),
+        bundled(w, imports.expr, "range"),
         w.named_field("k_n", k, "n"),
     );
     let write_type = w.app(
         "Write_of_element",
-        bundled(w, imports.pair, "Write"),
+        bundled(w, imports.expr, "Write"),
         w.hole("write_element"),
     );
     let ten = w.app(
@@ -107,13 +107,13 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
         ),
         &[Some("to"), Some("at"), Some("value")],
     );
-    let body = w.app("write_call", bundled(w, imports.pair, "write"), write);
+    let body = w.app("write_call", bundled(w, imports.expr, "write"), write);
     // A block is a tuple of its statements read positionally, and its last statement is the one
     // the block answers with.
     let body = w.field("g_last", w.tuple("g_stmts", &[i, body]), w.int("last", 1));
     let g = w.statement(w.lam_typed("g", k, Some(par0), body, false));
 
-    let parallel = w.app("parallel_g", bundled(w, imports.pair, "parallel"), g);
+    let parallel = w.app("parallel_g", bundled(w, imports.expr, "parallel"), g);
     let parallel = w.app("parallel_backend", parallel, w.string("gpu", "gpu"));
     let kg = w.statement(w.app("kg", parallel, out0));
 
@@ -133,7 +133,7 @@ fn launch_argument(
         fields(w, "In0_fields", &[w.int("a", 0)]),
         &[Some("a")],
     );
-    let argument = w.app("A_of_In0", bundled(w, imports.pair, "A"), kernel.in0);
+    let argument = w.app("A_of_In0", bundled(w, imports.expr, "A"), kernel.in0);
     w.instantiate(
         "launch_argument",
         argument,
@@ -149,7 +149,7 @@ fn dispatch(
     kernel: &Kernel,
     n: ExprId,
 ) -> ExprId {
-    let plrun = w.app("plrun_kg", bundled(w, imports.pair, "plrun"), kernel.kg);
+    let plrun = w.app("plrun_kg", bundled(w, imports.expr, "plrun"), kernel.kg);
     let argument = launch_argument(w, imports, kernel, n);
     w.app("dispatch", plrun, argument)
 }
@@ -167,7 +167,7 @@ fn write_plain(
     ));
     w.app(
         "collected",
-        bundled(w, imports.pair, "collect"),
+        bundled(w, imports.expr, "collect"),
         w.named_field("out_z", out, "z"),
     )
 }
@@ -195,14 +195,14 @@ fn write_recorded(
         ),
         false,
     ));
-    let built = w.statement(w.app("built", bundled(w, imports.pair, "graph"), step));
+    let built = w.statement(w.app("built", bundled(w, imports.expr, "graph"), step));
     let run = w.app(
         "graphrun_built",
-        bundled(w, imports.pair, "graphrun"),
+        bundled(w, imports.expr, "graphrun"),
         built,
     );
     let run = w.app("run_at_zero", run, w.int("zero", 0));
-    w.app("collected", bundled(w, imports.pair, "collect"), run)
+    w.app("collected", bundled(w, imports.expr, "collect"), run)
 }
 
 /// What the runner renders for `body`, or how it refused.
@@ -225,7 +225,7 @@ fn rendered(body: Body) -> String {
 
     let w = Writer::<LangAttr, HighProgramLiteral>::new();
     let imports = Imports {
-        pair: w.static_ref("compute", package.export),
+        expr: w.static_ref("compute", package.export),
         add: w.static_ref("add", add),
     };
     let kernel = write_kernel(&w, &imports);

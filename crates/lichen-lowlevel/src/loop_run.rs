@@ -13,7 +13,7 @@ enum Iteration {
     /// The test chose a step: go round again with this next state, whose
     /// nodes belong to the instantiation that made them.
     Step(Vec<NodeId>),
-    /// The test chose a base: the result is the pair resolving the base's
+    /// The test chose a base: the result is the expr resolving the base's
     /// value half, or the bare value for a bare return.
     Exit {
         value: NodeId,
@@ -71,8 +71,8 @@ impl<P: Program> Module<P> {
                         self.write_node_value_if_absent(node, decided);
                         return decided;
                     };
-                    let pair = self.slot_pair(value, r#type, block);
-                    let Some(result) = self.node_value(Dyn(pair)) else {
+                    let expr = self.slot_expr(value, r#type, block);
+                    let Some(result) = self.node_value(Dyn(expr)) else {
                         return None;
                     };
                     self.write_node_value_if_absent(node, Some(result.clone()));
@@ -146,7 +146,7 @@ impl<P: Program> Module<P> {
                     // The type half is the function's own return type,
                     // resolved into this instantiation: the slot the apply binds.
                     let r#type = self
-                        .pair_type_half(self.functions[function].r#return)
+                        .expr_type_half(self.functions[function].r#return)
                         .map(|r#type| instantiation.node_of(r#type));
                     return Iteration::Exit {
                         value: instantiation.node_of(conversion.exits[exit].value),
@@ -187,21 +187,21 @@ impl<P: Program> Module<P> {
         // A bare parameter — a hand-built graph, or anything outside the
         // `[value, type]` convention — takes the value alone.
         if self
-            .pair_value_half(self.functions[function].parameter)
+            .expr_value_half(self.functions[function].parameter)
             .is_none()
         {
             return value;
         }
-        let r#type = self.pair_type_half(entering).unwrap_or_else(|| {
+        let r#type = self.expr_type_half(entering).unwrap_or_else(|| {
             // No entering type to re-state: a fresh cell leaves the shape
             // unchecked rather than pinning the template's own cell.
             self.add_node(block, None, None)
         });
-        self.slot_pair(value, r#type, block)
+        self.slot_expr(value, r#type, block)
     }
 
-    /// A `[value, type, wildcards…]` pair at the module's full attribute width.
-    fn slot_pair(&mut self, value: NodeId, r#type: NodeId, block: BlockId) -> NodeId {
+    /// A `[value, type, wildcards…]` expr at the module's full attribute width.
+    fn slot_expr(&mut self, value: NodeId, r#type: NodeId, block: BlockId) -> NodeId {
         let attributes = match self.slot_width() {
             Some(width) => width,
             None => 0,

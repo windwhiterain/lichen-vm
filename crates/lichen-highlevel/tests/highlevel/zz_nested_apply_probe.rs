@@ -6,10 +6,10 @@ use lichen_lowlevel::{AnyNodeId, LowValue};
 use lichen_testkit::{Probe, Writer};
 use lichen_utils::extend::AsEnum;
 
-/// The named expression's answer: its pair's own value slot.
+/// The named expression's answer: its expr's own value slot.
 fn answer(probe: &mut Probe<ProgramImpl>, name: &str) -> Option<LowValue> {
-    let pair = probe.pair_of(name);
-    let value = probe.checked_mut().module.evaluate_node_deep(pair, None);
+    let expr = probe.slot_of(name);
+    let value = probe.checked_mut().module.evaluate_node_deep(expr, None);
     let decoded: Option<LowValue> = value.and_then(|value| value.as_enum());
     let Some(LowValue::Array(array)) = decoded else {
         return None;
@@ -71,10 +71,10 @@ fn report(label: &str, mut probe: Probe<ProgramImpl>) {
             println!("    {name}: not written");
             continue;
         }
-        let pair = probe.pair_of(&name);
+        let expr = probe.slot_of(&name);
         let value_slot = probe.try_node_of(&name);
-        println!("    {name}: pair={pair:?} value_slot={value_slot:?}");
-        println!("        {}", probe.explain(pair));
+        println!("    {name}: expr={expr:?} value_slot={value_slot:?}");
+        println!("        {}", probe.explain(expr));
     }
 }
 

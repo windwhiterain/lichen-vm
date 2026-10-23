@@ -3,7 +3,7 @@
   compute = import "compute.lichen"
   doc = "RMSNorm: y[i] = x[i] / sqrt(mean(x²) + eps) * w[i], the entry of a transformer
   block. It is two kernels because the surface wants two — a row-wise `Σ x²` reduction, then a
-  per-index rescale — and the two claims are what lets the floor see the pair as one region.
+  per-index rescale — and the two claims are what lets the floor see the expr as one region.
   array-to-buffer conversion (`docs/notes/kernel-buffer-declarations.md`).
   The row is `7, 3, 1, 2`, whose squares sum to `63`, so the mean is `63 / 4 = 15.75` and
   `15.75 + 0.25 = 16`: `sqrt` answers `4`, and every division below divides by it exactly. The host's data is built by **fill kernels**: the surface has no array-to-buffer \

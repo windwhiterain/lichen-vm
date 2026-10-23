@@ -122,13 +122,13 @@ each is a way the attribute slot was the wrong one:
 - **A mark never unifies.** An attribute slot is padded, propagated and
   meet-combined; a mark must stay pinned to one expression, so it has no slot to
   combine over. The checked form is the type, not a convention: the mark's payload is
-  **text**, and a table of text has no path to the pair layout at all.
+  **text**, and a table of text has no path to the expr layout at all.
 - **The interface check is structural, not a lattice.** Whether a claim's roles are
   covered is a question about *which expressions the body marks*, answered by table
   lookups over the IR — never a compare-and-combine over values.
-- **A label's pair is unreachable from its own value.** The checker makes an
-  annotated expression's *value node* the pair's element 0, so no graph edge points at
-  the pair and a reader holding the value cannot find the pair. That is why the
+- **A label's expr is unreachable from its own value.** The checker makes an
+  annotated expression's *value node* the expr's element 0, so no graph edge points at
+  the expr and a reader holding the value cannot find the expr. That is why the
   attribute channel needed a side table of its own (`Module::stamp_label`, the
   clone-travel in `node_apply`, the GC retention) — all of which is gone with it.
 
@@ -172,8 +172,8 @@ word `matmul` in an operator registry.
 The first spike built the channel over attributes and measured where it stopped. The
 five findings, and what this one did with each:
 
-- **A label's pair is reachable from nothing** — *closed, by not riding a pair at
-  all*. A mark's payload is text, so there is no slot node for the unreachable-pair
+- **A label's expr is reachable from nothing** — *closed, by not riding an expr at
+  all*. A mark's payload is text, so there is no slot node for the unreachable-expr
   problem to exist in; the side table, the `node_apply` clone-travel and the GC
   retention that worked around it are deleted.
 - **The kernel emitter reads the marks** — *kept, and it is now the only reader*.
@@ -186,7 +186,7 @@ five findings, and what this one did with each:
   clone's origin chain to the template node the checker anchored, which is the one
   lookup both paths share. The lesson recorded from the first attempt: the anchor must
   be **the node the reader walks**, never a node synthesized to read it. Anchoring on
-  `Checker::value_of` — which mints a fresh `Index(pair, 0)` — published marks on a
+  `Checker::value_of` — which mints a fresh `Index(expr, 0)` — published marks on a
   node no emitter ever lowers, and every body mark was silently lost. The anchor is
   the expression's own value node, or its term for the kinds whose value is decided
   only at the apply, and a **function** template's parameter node for a claim.
@@ -195,7 +195,7 @@ five findings, and what this one did with each:
   is two marks and a `@loop` recurrence carries three (`combine`, `accumulator`,
   `identity` in the spike's example) with no interaction with the `if`-sugar. The
   payload is still a string rather than a record: text is what keeps the mark out of
-  the pair layout, so a record payload is a later decision, not a smaller one.
+  the expr layout, so a record payload is a later decision, not a smaller one.
 - **A scalar element kernel's class is its body's** — *unchanged, and not the mark
   channel's business*. `(p : tuple{Float, Float}) => p(0) * p(1)` lowers its leaves in
   `Int`, because the body states no concrete float operand, so the bridge refuses the
@@ -220,10 +220,10 @@ The ordering constraint the measurement establishes, with the code path:
    `Module::loop_conversion`, and calls `apply_loop`
    (`crates/lichen-lowlevel/src/function.rs`, `loop_run.rs`), which **writes the value
    the host loop answered onto the apply node** (`write_node_value`). The apply therefore
-   carries both its `Apply` operation and a concrete `[value, type]` pair.
-2. **The emitter's value resolution prefers the pair.** Walking the write's `.value`
-   reaches the recorder through the peel `Index(pair, 0)`; `value_of_node` and
-   `pair_value_half` (`crates/lichen-compute/src/compute.rs`) resolve that to the pair's
+   carries both its `Apply` operation and a concrete `[value, type]` expr.
+2. **The emitter's value resolution prefers the expr.** Walking the write's `.value`
+   reaches the recorder through the peel `Index(expr, 0)`; `value_of_node` and
+   `expr_value_half` (`crates/lichen-compute/src/compute.rs`) resolve that to the expr's
    element 0 — the exit value the host loop accumulated — instead of the `Apply`
    operation. The walk therefore descends the *unrolled* chain of state and arithmetic
    nodes. `Lower::apply` is never entered, so `Lower::lower_loop`
@@ -291,7 +291,7 @@ measured — it is the runtime extent now, and reaches each twice for that reaso
 each **zero times**. So the constraint is exactly: *the emitter converts a kernel body's
 `@loop` only if the definition pass has not already run it.*
 
-**Why the obvious patch is the wrong one.** Preferring the operation over the pair in
+**Why the obvious patch is the wrong one.** Preferring the operation over the expr in
 `value_of_node` does not reach the emitter's `apply`: the write's `.value` is not the
 apply node, it is a node the unrolled chain derived, whose class already holds the
 decided scalar. Publishing the mark from the deciding pass instead — reaching back from
@@ -311,7 +311,7 @@ here rather than attempted. Until it lands, the fix is in the loop conversion an
 nest is still live in the module — `write_node_value` sets only the apply node's `value`, never
 clears its `Apply` operation, and `Module::loop_conversion` re-derives the whole conversion
 read-only — so nothing would have to be recorded a second time. A peel that declined to resolve
-`Index(pair, 0)` (and `pair_value_half`) off a target that still carries an `Apply` whose callee
+`Index(expr, 0)` (and `expr_value_half`) off a target that still carries an `Apply` whose callee
 is a `looping` function would let `Lower::apply`/`lower_loop`/`loop_state` build the nest, and
 the literal case would then read like the runtime one. The cost is not free and is recorded
 with it: every literal-bound `@loop` in a kernel would stop being constant-folded into
@@ -760,7 +760,7 @@ position, the absorbed node is gone, later values are renumbered and `returns()`
 values and `returns [2]`; the answer is element for element the answer the same program gives without
 the pass; and a **counterfactual** closes the question the equal answer cannot — swapping the operands
 inside the composed body moves the answer from `−28` to `35`, so the composed node is what the device
-dispatched, rather than a rewrite nobody ran. Legality is refused by name: a region that is not a pair,
+dispatched, rather than a rewrite nobody ran. Legality is refused by name: a region that is not an expr,
 an edge that is not one input, a produced value the graph **returns** or reads elsewhere (deleting a
 returned value is a wrong answer, not a refusal), extents that do not correspond, a read address the
 survivor cannot compute, disagreeing classes, and **ports that do not correspond** — that last one is
@@ -840,7 +840,7 @@ subsumes it, and `region_merge.rs` shed 78 lines. One clause survives, as a clas
 producer never wrote is still unservable (`WriteIsNotIndexed`). Device numbers, each with its
 counterfactual: `e[i] = d[i]·2` feeding a *reduction* consumer that reads `e` at a loop-carried address
 (recorded `80`, mutated `152`), `z[i] = e[i + 1] + 1` (recorded `5 7 9 …`, mutated `14 … 26`), and
-`78131b5a`'s pair.
+`78131b5a`'s expr.
 
 **Recomputation is a trade, and that is why the machine decides it.** Copies are made per **(address,
 block)**, not hoisted out of a consumer's loop body, so the growth is O(reads × cone size) per block where
@@ -908,7 +908,7 @@ plan, and what the engine does with it.
   pack by construction rather than by a harness. **And the check is a comparison rather
   than a second
   derivation**, because the automatic scan and a declared `sync` produce the *same
-  artifact*: both are a set of `(write, read)` pairs, named by mark in a plan and by
+  artifact*: both are a set of `(write, read)` exprs, named by mark in a plan and by
   `ValueId` in a fragment, and the fragment resolves one to the other (below).
 - **The automatic plan is the fallback, and it must be derivable with no pack at
   all.** For a region no pack covers, the emitter places a value in the cheapest
@@ -1324,7 +1324,7 @@ about shrinks exactly where fusion fires.
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
-| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
+| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided expr instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-compute/tests/lichen_compute/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-runtime/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
@@ -1338,7 +1338,7 @@ Staging, each stage independently useful:
   the compiler derives and prints schemas, the run report exists. Packs can
   already be authored against printed hashes.
 2. **The engine, split-K as two dispatches.** The full repair-function
-  pipeline emitting local+global node pairs. This stage is done when it
+  pipeline emitting local+global node exprs. This stage is done when it
   derives online softmax from §7's annotated code, custom slope included.
 3. **One-dispatch split-K**, after axis C lands — an emitter change behind
   the same engine, invisible to logic and packs alike.
@@ -1361,7 +1361,7 @@ Settled by the superior's review of the first draft:
   kernels, so a claim about a kernel should ride the kernel.
 - **A mark is a primitive, not an attribute** (§3). The carrier was the attribute slot
   until it was measured: slots unify and the interface check is structural, and the
-  slot's pair is unreachable from the value it annotates. `~` is a side table beside
+  slot's expr is unreachable from the value it annotates. `~` is a side table beside
   the expression tree, and the one thing that crosses into the lowlevel is its
   position — the anchor, written once.
 - **The memory plan is a pack's, and the engine validates it** (§5). A body that is
@@ -1383,7 +1383,7 @@ Still open, cheapest to settle before the interface syntax is written:
   `UnverifiableInstance` is where a second tier would slot in.
 - **The mark payload's richness, and with it mark *paths* — measured, and deferred.** The
   spike's payload is one string literal, because text is exactly what keeps a mark out of the
-  pair layout, and the channel is positioned for a record: a mark's payload is a *list* of
+  expr layout, and the channel is positioned for a record: a mark's payload is a *list* of
   fields, so a reader that wants "the mark's own text" reads the unnamed field rather than a
   second variant. Keying a mark by the **path** of the marks enclosing it, rooted at the
   fragment's interface, is what would let a plan name a value durably — and it is blocked by a

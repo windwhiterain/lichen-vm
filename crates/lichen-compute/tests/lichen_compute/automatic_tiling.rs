@@ -333,7 +333,7 @@ fn raise_seed(body: &mut KernelBody) {
 /// Under the floor, the tiling stage still tiles a kernel the merge stage declined.
 ///
 /// # Invariant
-/// One program, whose recording holds **one** claimed kernel: the merge stage has no pair to
+/// One program, whose recording holds **one** claimed kernel: the merge stage has no expr to
 /// merge and says so by name, and the chain hands the tiling stage the graph the merge left,
 /// because a stage's `None` means "leave it as it was" (`graph_pass.rs`).
 ///
@@ -382,7 +382,7 @@ fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
         report
             .iter()
             .all(|line| !line.contains("merged into one node")),
-        "and nothing merged, because the recording holds one claimed kernel and no pair: {report:?}"
+        "and nothing merged, because the recording holds one claimed kernel and no expr: {report:?}"
     );
 
     // **The counterfactual**: the raised seed is part of the tiled body.

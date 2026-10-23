@@ -263,7 +263,7 @@ not written by hand. That splits the problem cleanly:
   (`Float => f32`, `Int => usize`) and which entry points the surface exposes.
   This is real knowledge the lichen program does not carry: `Float` does not say
   `f32`.
-- **Derived** is the *set* — which of those (surface entry, kind) pairs the
+- **Derived** is the *set* — which of those (surface entry, kind) exprs the
   program actually uses. A recorder reads it off the built program, and the
   generator emits exactly those instantiations.
 
@@ -537,7 +537,7 @@ The seam is the applied clone, not the source:
 
 - every `External` node names its family (`library`, `instance`);
 - the node's owner function is the clone of the wrapper's inner lambda, and its
-  parameter is the `x` pair;
+  parameter is the `x` expr;
 - the parameter's type slot holds the applied type expression, whose first item
   is the kind marker; `TypeValue::name()` spells it ("float", "int", …).
 
@@ -674,7 +674,7 @@ Two findings from wiring it:
 
 §10 recorded the symptom. The mechanism is a chain of three facts:
 
-1. `value_of` on a parameter builds `Index([pair, 0])`, a **projection**, and an
+1. `value_of` on a parameter builds `Index([expr, 0])`, a **projection**, and an
    aggregate operand holds those projections.
 2. The definition pass (`Mode::Evaluate` runs every body) evaluates the wrapper's
    body with the template's open cells. An **array operand evaluates to a value**
@@ -696,7 +696,7 @@ The fix has three parts:
   value is a seed, and the clone's operator runs.
 
 Measured with a native package (the same engine path a linked wrapper takes),
-wrapper `twice = (x : Int) => { r = $pair(x, x); r : Int; r }`:
+wrapper `twice = (x : Int) => { r = $expr(x, x); r : Int; r }`:
 
 ```text
 before:  item 31 -> None            # the definition pass answered anyway
@@ -775,7 +775,7 @@ turn.
 lichen has **no multi-parameter lambda**, and its documented multi-argument
 idiom is **one parameter holding a tuple** — `docs/language-spec.md` §442–448
 (`add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }`,
-"one argument rather than a curried pair because lichen has no multi-parameter
+"one argument rather than a curried expr because lichen has no multi-parameter
 lambda"; the repository README's "No Curry"). The documented family shape is
 therefore a type argument beside **one** parameter:
 
@@ -840,15 +840,15 @@ Those two were the instrument, and they are what the fix is measured on.
 
 ### The join
 
-The pair nodes say it directly. Every operand item is an `Index([pair, 0])` read
-whose target is a `[value, type]` pair; printing the `NodeId` of the pair the read
-targets and of the pair `apply_parameter_check` writes, per application:
+The expr nodes say it directly. Every operand item is an `Index([expr, 0])` read
+whose target is a `[value, type]` expr; printing the `NodeId` of the expr the read
+targets and of the expr `apply_parameter_check` writes, per application:
 
 ```text
 spliced, three 1 2 3, FAILING          spliced, two 1 2, PASSING
   item 1: read 889 -> target 737         item 0: read 783 -> target 688
   apply_parameter_check cloned_param=844  apply_parameter_check cloned_param=688
-  844 is a *clone* of 737                 688 is the pair the read names
+  844 is a *clone* of 737                 688 is the expr the read names
 ```
 
 `737` is the **enclosing closure's own parameter node**; `844` is the per-call
@@ -879,12 +879,12 @@ template's lexical chain never names a clone — so two links were missing:
    so a nested closure the body mints captures *this call's* parameter clone
    rather than the node the call is about to clone away from.
 4. **The frozen mirror stamps its own shell** (`static_module/apply.rs`,
-   `static_clone_function`): a re-homed closure's return pair and parameter were
+   `static_clone_function`): a re-homed closure's return expr and parameter were
    left under the enclosing owner's tag, so its apply read a template fact in
    place and its parameter check never ran.
 
 `regroup_clones`/`unify_clone_groups`, `wire_apply_result` and `Index`'s
-`alias_read` are **not** the join: the pair a read targets and the pair a check
+`alias_read` are **not** the join: the expr a read targets and the expr a check
 writes are different nodes in different classes, which no order of unify repairs.
 One candidate from the earlier reading was also measured and stays rejected:
 `regroup_clones` (`apply.rs:186`) documents that "a group's clones keep the walk's
@@ -927,7 +927,7 @@ rehome sref=StaticFunctionId(3) fresh=FunctionId(3) branch_top=Some(FunctionId(2
   rehome fresh=FunctionId(2) ret=NodeId(149) owner=Some(FunctionId(2)) param=NodeId(166) owner=Some(FunctionId(2))
 ```
 
-The nested re-home finds the first one's return pair and parameter already in the
+The nested re-home finds the first one's return expr and parameter already in the
 **shared** `ctx.remap` and reuses them; each then re-stamps them with its own fresh
 id, and the last writer wins. So the two closures **share one shell**, whose owner
 tag names one of them only, and the other reads its own parameter **in place**:
@@ -972,9 +972,9 @@ in one process):
 | the same probe, seven shapes, both paths | two shapes flip per module | **ten of ten processes identical on every shape** |
 
 The probe reads the node ids the answer turns on
-(`crates/lichen-language/tests/language/link_arity.rs`, `frozen_readings`): the pair
+(`crates/lichen-language/tests/language/link_arity.rs`, `frozen_readings`): the expr
 an operand item reads, the parameter the apply's check writes, the closure the
-apply read, and the owner tag on the return pair — now always the re-home's own
+apply read, and the owner tag on the return expr — now always the re-home's own
 id.
 
 ### What §11 does and does not claim

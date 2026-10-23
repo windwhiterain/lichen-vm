@@ -2,9 +2,9 @@
 //! See docs/language-spec.md.
 //!
 //! # Invariant
-//! Every expression compiles to the recursive pair `[value, type]` whose type
-//! slot is itself such a pair, and every type spine bottoms out at the
-//! self-referential universe `K = [Type, ↺]`. A parameter is such a pair, so
+//! Every expression compiles to the recursive expr `[value, type]` whose type
+//! slot is itself such an expr, and every type spine bottoms out at the
+//! self-referential universe `K = [Type, ↺]`. A parameter is such an expr, so
 //! the apply-time unify is the function-parameter check.
 
 use std::collections::{HashMap, HashSet};
@@ -36,7 +36,7 @@ pub enum Mode {
     Check,
 }
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
-use crate::shape::{PAIR_ATTR_BASE, for_each_kind_marker, slot_width};
+use crate::shape::{EXPR_ATTR_BASE, for_each_kind_marker, slot_width};
 
 mod annotations;
 mod asserts;
@@ -97,10 +97,10 @@ macro_rules! define_value_node_dispatch {
     };
 }
 
-/// A parameter in scope: its `[value, type]` pair and its type cell.
+/// A parameter in scope: its `[value, type]` expr and its type cell.
 ///
 /// # Invariant
-/// A use references the pair, so the apply's clone always includes it — the
+/// A use references the expr, so the apply's clone always includes it — the
 /// lowlevel runs the argument unify only when the parameter was cloned.
 #[derive(Clone, Copy)]
 struct Binding {
@@ -171,10 +171,10 @@ where
     /// only compared with it where the apply supplies one
     /// (`docs/notes/array-attribute-view.md`).
     deferred_requirements: HashMap<FunctionId, Vec<(P::Attr, NodeId)>>,
-    /// The attribute each pair's **attribute slot node** belongs to.
+    /// The attribute each expr's **attribute slot node** belongs to.
     ///
     /// # Invariant
-    /// Recorded where the pair is built, so a failed unify names its own attribute and
+    /// Recorded where the expr is built, so a failed unify names its own attribute and
     /// the order consulted for it is that attribute's and no other
     /// (`docs/notes/array-attribute-view.md`).
     attribute_nodes: HashMap<NodeId, P::Attr>,
@@ -247,7 +247,7 @@ where
     force_failed: bool,
     // The installed shared kind-marker nodes, one per marker.
     markers: Markers,
-    /// The shared `[int, Type]` type expression every literal's pair carries.
+    /// The shared `[int, Type]` type expression every literal's expr carries.
     int_type: NodeId,
     /// The shared `[float, Type]` type expression, paired into every `Float`
     /// literal.
@@ -266,9 +266,9 @@ where
     // The two shared index constants.
     //
     // Invariant: allocated before any function exists, so untagged.
-    /// The shared `USize(0)` node — element 0 of an expression's pair.
+    /// The shared `USize(0)` node — element 0 of an expression's expr.
     zero_value: NodeId,
-    /// The shared `USize(1)` node — element 1 of an expression's pair.
+    /// The shared `USize(1)` node — element 1 of an expression's expr.
     one_value: NodeId,
     /// One shared absent-occurrence slot per attribute that opted in, indexed by
     /// its position in [`AttrSet::ORDER`].
@@ -314,15 +314,15 @@ pub struct NonTerminating {
 /// can name a different expression than the rest.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExprState {
-    /// The compiled pair node `[value, type]`.
+    /// The compiled expr node `[value, type]`.
     pub term: Option<NodeId>,
-    /// Element 0 of the pair (the value).
+    /// Element 0 of the expr (the value).
     ///
     /// # Invariant
-    /// It is stored for a static node and built lazily as `Index(pair, 0)` for a
+    /// It is stored for a static node and built lazily as `Index(expr, 0)` for a
     /// call result.
     pub val: Option<NodeId>,
-    /// Element 1 of the pair (the type).
+    /// Element 1 of the expr (the type).
     pub ty: Option<NodeId>,
     /// The constraint attribute slot, which the apply-time check reads.
     ///
@@ -362,7 +362,7 @@ where
     /// The root expression's attribute tail, as the checker computed it ([`Checker::schema_tail`]).
     ///
     /// # Invariant
-    /// It is index-aligned with the runtime pair's attribute slots
+    /// It is index-aligned with the runtime expr's attribute slots
     /// (`build.root_term`), which are built at the merged width — not with the
     /// IR's own stamp, which holds only what the source spelled.
     pub root_schema_tail: Vec<P::Attr>,
@@ -779,7 +779,7 @@ where
         let root_val = checker.value_of(root);
         let root_schema_tail = checker.schema_tail(root).to_vec();
         // The definition pass syncs an apply's result cell with the return
-        // pair, so an unannotated call takes the return type.
+        // expr, so an unannotated call takes the return type.
         Build {
             ir: checker.ir,
             module: checker.module,
@@ -892,25 +892,25 @@ where
         self.int_type = self.kind_expr(root, self.markers.int_marker);
         self.float_type = self.kind_expr(root, self.markers.float_marker);
         self.string_type = self.kind_expr(root, self.markers.string_marker);
-        // The positional-read constants, the subscripts of `Index(pair, 0)` and
-        // `Index(pair, 1)`, shared with the markers above.
+        // The positional-read constants, the subscripts of `Index(expr, 0)` and
+        // `Index(expr, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
         self.one_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(1))));
         // The default attribute array: a hole reads a wildcard
         // (`docs/notes/array-attribute-view.md`).
         let cell = ArrayItem::new(AnyNodeId::Dynamic(self.any_value));
-        let defaults = vec![cell; crate::shape::PAIR_ATTR_BASE + P::Attr::ORDER.len()];
+        let defaults = vec![cell; crate::shape::EXPR_ATTR_BASE + P::Attr::ORDER.len()];
         let defaults = self.module.alloc_array(&defaults, root);
         self.module.set_default_attributes(defaults);
     }
 
-    /// The shared `USize(0)` node — the `Index(pair, 0)` subscript every value
-    /// read and pair-slot descent uses.
+    /// The shared `USize(0)` node — the `Index(expr, 0)` subscript every value
+    /// read and expr-slot descent uses.
     pub(super) fn zero(&self) -> NodeId {
         self.zero_value
     }
 
-    /// The shared `USize(1)` node — the `Index(pair, 1)` subscript every type
+    /// The shared `USize(1)` node — the `Index(expr, 1)` subscript every type
     /// read uses.
     pub(super) fn one(&self) -> NodeId {
         self.one_value
@@ -1046,7 +1046,7 @@ where
     ///
     /// # Invariant
     /// `layout` is a registered id whose `i`-th canonical index names the attribute
-    /// the array's `PAIR_ATTR_BASE + i`-th slot carries; id `0` is the empty layout
+    /// the array's `EXPR_ATTR_BASE + i`-th slot carries; id `0` is the empty layout
     /// ([`Self::array_node`]). See `docs/notes/array-attribute-view.md`.
     pub fn array_node_with_layout(
         &mut self,
@@ -1098,7 +1098,7 @@ where
     /// The attribute slot a read states, when it states one.
     ///
     /// # Invariant
-    /// The slot is the element's **attribute pair**, not the element: a reader of
+    /// The slot is the element's **attribute expr**, not the element: a reader of
     /// the slot compares its value position, so returning the element would put the
     /// term's value where a perspective belongs.
     pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
@@ -1177,19 +1177,19 @@ where
         self.alloc_node(block, Some(Operation { operator, operand }), None)
     }
 
-    /// A pair node `[value, type]` built around two already-compiled nodes.
-    fn pair_of(&mut self, value: NodeId, ty: NodeId) -> NodeId {
-        self.slot_pair(self.current_block, value, ty)
+    /// An expr node `[value, type]` built around two already-compiled nodes.
+    fn expr_of(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+        self.slot_expr(self.current_block, value, ty)
     }
 
-    /// A **pair** of the recursive encoding at full attribute width: `[first,
+    /// A **expr** of the recursive encoding at full attribute width: `[first,
     /// second, wildcards…]`.
     ///
     /// # Invariant
-    /// Every pair the checker mints comes from here, so a reader finds its two
-    /// meaningful slots at [`crate::shape::PAIR_VALUE_SLOT`]/[`crate::shape::PAIR_TYPE_SLOT`] and
+    /// Every expr the checker mints comes from here, so a reader finds its two
+    /// meaningful slots at [`crate::shape::EXPR_VALUE_SLOT`]/[`crate::shape::EXPR_TYPE_SLOT`] and
     /// every other slot is the wildcard an unstated attribute is.
-    fn slot_pair(&mut self, block: BlockId, first: NodeId, second: NodeId) -> NodeId {
+    fn slot_expr(&mut self, block: BlockId, first: NodeId, second: NodeId) -> NodeId {
         let any = self.any();
         let mut items = Vec::with_capacity(slot_width::<P>());
         items.push(first);
@@ -1199,9 +1199,9 @@ where
         self.array_node_with_layout(block, &items, layout)
     }
 
-    /// A pair with one attribute slot at its canonical position — a parameter's,
+    /// An expr with one attribute slot at its canonical position — a parameter's,
     /// a signature's or an argument's.
-    fn attribute_pair(
+    fn attribute_expr(
         &mut self,
         block: BlockId,
         value: NodeId,
@@ -1228,7 +1228,7 @@ where
     ///
     /// # Invariant
     /// A clone states no value at check time; the walk follows [`Module::node_origin`]
-    /// back to the template that holds the pair.
+    /// back to the template that holds the expr.
     fn narrow_element(&self, element: NodeId, index: usize) -> bool {
         let mut current = Some(element);
         while let Some(node) = current {
@@ -1247,8 +1247,8 @@ where
         false
     }
 
-    /// A pair carrying the element slot's attributes at their canonical positions.
-    fn element_pair(&mut self, value: NodeId, ty: NodeId, element: NodeId) -> NodeId {
+    /// An expr carrying the element slot's attributes at their canonical positions.
+    fn element_expr(&mut self, value: NodeId, ty: NodeId, element: NodeId) -> NodeId {
         let mut items = vec![value, ty];
         for index in 0..P::Attr::ORDER.len() {
             // An undecided element's attribute is a lazy read of it.
@@ -1284,7 +1284,7 @@ where
     /// The kind expression of a compound type: `[marker, Type]`, where `marker`
     /// is a kind marker (see [`crate::shape`]).
     fn kind_expr(&mut self, block: BlockId, marker: NodeId) -> NodeId {
-        self.slot_pair(block, marker, self.type_expr)
+        self.slot_expr(block, marker, self.type_expr)
     }
 
     /// The function type expression `[[domain, codomain], [FunctionType, K]]`
@@ -1298,7 +1298,7 @@ where
         self.arrow_parts(block, domain, codomain).2
     }
 
-    /// [`Self::arrow`] returning all three nodes `(shape, kind, pair)` for a
+    /// [`Self::arrow`] returning all three nodes `(shape, kind, expr)` for a
     /// caller that also needs the halves.
     fn arrow_parts(
         &mut self,
@@ -1308,8 +1308,8 @@ where
     ) -> (NodeId, NodeId, NodeId) {
         let shape = self.array_node(block, &[domain, codomain]);
         let kind = self.kind_expr(block, self.markers.function_type_marker);
-        let pair = self.slot_pair(block, shape, kind);
-        (shape, kind, pair)
+        let expr = self.slot_expr(block, shape, kind);
+        (shape, kind, expr)
     }
 
     /// The struct marker node `[payload, TypeStruct]`, the type slot holding the
@@ -1322,7 +1322,7 @@ where
     fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
         let payload = self.array_node(self.current_block, &[id, names, names_in_order]);
         let tag = self.type_struct_marker_node();
-        self.slot_pair(self.current_block, payload, tag)
+        self.slot_expr(self.current_block, payload, tag)
     }
 
     /// The struct-kind requirement a decided-tier read states: `[[payload,
@@ -1334,7 +1334,7 @@ where
     /// struct analogue of the tuple read's `[TypeTuple, K]` unify.
     fn struct_kind_requirement(&mut self) -> NodeId {
         let payload = self.fresh_cell();
-        let marker = self.slot_pair(self.current_block, payload, self.type_struct_marker_node());
+        let marker = self.slot_expr(self.current_block, payload, self.type_struct_marker_node());
         self.kind_expr(self.current_block, marker)
     }
 
@@ -1383,7 +1383,7 @@ where
         let marker = self.struct_marker_node(id, names, names_in_order);
         self.module.evaluate_node_deep(marker, None);
         let kind = self.kind_expr(self.current_block, marker);
-        let wrapper = self.slot_pair(self.current_block, shape, kind);
+        let wrapper = self.slot_expr(self.current_block, shape, kind);
         (shape, kind, wrapper)
     }
 
@@ -1462,17 +1462,17 @@ where
         self.ir.depths[range.start as usize..range.end as usize].to_vec()
     }
 
-    /// The value of an expression: element 0 of its pair.
+    /// The value of an expression: element 0 of its expr.
     ///
     /// # Invariant
-    /// It is stored for a static node and built lazily as `Index(pair, 0)` for a
+    /// It is stored for a static node and built lazily as `Index(expr, 0)` for a
     /// call result.
     fn value_of(&mut self, e: ExprId) -> NodeId {
         if let Some(value) = self.state[e].val {
             return value;
         }
-        let pair = self.state[e].term.expect("expression must be compiled");
-        let operands = self.array_node(self.current_block, &[pair, self.zero()]);
+        let expr = self.state[e].term.expect("expression must be compiled");
+        let operands = self.array_node(self.current_block, &[expr, self.zero()]);
         let index = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -1496,7 +1496,7 @@ where
     }
 
     // The encoding accessors and shape predicates live in [`crate::shape`], the
-    // single authority for the pair/type encoding.
+    // single authority for the expr/type encoding.
 
     /// The checker's recursion: one frame per nested expression, so a hostile
     /// program may nest past the native stack.
@@ -1510,8 +1510,8 @@ where
     fn check_term(&mut self, e: ExprId) -> NodeId {
         // The IR is a graph, not a tree: one expression may have several parents.
         // Compile each once, or fresh state duplicates.
-        if let Some(pair) = self.state[e].term {
-            return pair;
+        if let Some(expr) = self.state[e].term {
+            return expr;
         }
         // A cycle forms only through a block-wide placeholder.
         //
@@ -1527,17 +1527,17 @@ where
         } else {
             None
         };
-        let pair = match self.ir[e].kind {
+        let expr = match self.ir[e].kind {
             ExprKind::Literal(lit) => {
-                // A literal builds its pair through `LiteralExt::build`.
+                // A literal builds its expr through `LiteralExt::build`.
                 //
                 // Invariant: a type-constant literal builds the universe.
                 let built = lit.build(self);
                 // A value literal decides its own attribute positions: each is the
-                // `[value, type]` pair its attribute's extension supplies, or the
+                // `[value, type]` expr its attribute's extension supplies, or the
                 // wildcard when the literal states nothing (spec §1, "Literals are
                 // expressions").
-                let pair = if lit.decides_attributes() {
+                let expr = if lit.decides_attributes() {
                     let mut items = vec![built.value, built.ty];
                     for marker in P::Attr::ORDER {
                         let slot = match self
@@ -1546,7 +1546,7 @@ where
                         {
                             Some(value) => {
                                 let value = self.value_node(P::Value::from(value));
-                                self.pair(value, self.int_type)
+                                self.expr(value, self.int_type)
                             }
                             None => self.any(),
                         };
@@ -1555,17 +1555,17 @@ where
                     let layout = self.full_width_layout();
                     self.array_node_with_layout(self.current_block, &items, layout)
                 } else {
-                    built.pair
+                    built.expr
                 };
-                self.state[e].term = Some(pair);
+                self.state[e].term = Some(expr);
                 self.state[e].val = Some(built.value);
                 self.state[e].ty = Some(built.ty);
-                pair
+                expr
             }
             ExprKind::Parameter => {
-                // The function compiled its parameter pair before the body.
+                // The function compiled its parameter expr before the body.
                 //
-                // Invariant: this use resolves to that pair.
+                // Invariant: this use resolves to that expr.
                 let binding = self.lookup(e);
                 self.state[e].term = Some(binding.term);
                 self.state[e].ty = Some(binding.ty);
@@ -1636,11 +1636,11 @@ where
                 // unified, so nothing inside reports a type error.
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
-                let pair = self.pair_of(val, ty_cell);
-                self.state[e].term = Some(pair);
+                let expr = self.expr_of(val, ty_cell);
+                self.state[e].term = Some(expr);
                 self.state[e].val = Some(val);
                 self.state[e].ty = Some(ty_cell);
-                pair
+                expr
             }
             ExprKind::Placeholder => {
                 // `_` is an inference hole in either position: two fresh cells.
@@ -1655,14 +1655,14 @@ where
                 for _ in 0..P::Attr::ORDER.len() {
                     let slot_value = self.fresh_cell();
                     let slot_type = self.fresh_cell();
-                    items.push(self.slot_pair(block, slot_value, slot_type));
+                    items.push(self.slot_expr(block, slot_value, slot_type));
                 }
                 let layout = self.full_width_layout();
-                let pair = self.array_node_with_layout(block, &items, layout);
-                self.state[e].term = Some(pair);
+                let expr = self.array_node_with_layout(block, &items, layout);
+                self.state[e].term = Some(expr);
                 self.state[e].val = Some(val);
                 self.state[e].ty = Some(ty_cell);
-                pair
+                expr
             }
             ExprKind::TypeArray {
                 element_type,
@@ -1671,26 +1671,26 @@ where
             ExprKind::TypeSet(_) => self.check_set_type(e),
             ExprKind::TypeTable(_) => self.check_table_type(e),
             ExprKind::Static { export } => {
-                // Imported package export: the package's final `[value, type]` pair.
-                let pair = self.module.materialize_leaf(export, self.current_block);
-                // The importer needs a *checked* contract: the pair's two items, so a
+                // Imported package export: the package's final `[value, type]` expr.
+                let expr = self.module.materialize_leaf(export, self.current_block);
+                // The importer needs a *checked* contract: the expr's two items, so a
                 // violated one is an honest guard, not a panic.
 
-                // SAFETY: `pair` was materialized into the current block, so its
+                // SAFETY: `expr` was materialized into the current block, so its
                 // arena is alive.
                 let Some(items) =
-                    (unsafe { self.module.array_items(pair) }).filter(|items| items.len() >= 2)
+                    (unsafe { self.module.array_items(expr) }).filter(|items| items.len() >= 2)
                 else {
-                    let pair = self.refused_pair(e);
-                    self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
-                    return pair;
+                    let expr = self.refused_expr(e);
+                    self.record_guard(expr, expr, self.loc(e, 0), DiagKind::ImportExport, None);
+                    return expr;
                 };
                 let value_node = self.module.as_dynamic(items[0].node, self.current_block);
                 let ty_node = self.module.as_dynamic(items[1].node, self.current_block);
-                self.state[e].term = Some(pair);
+                self.state[e].term = Some(expr);
                 self.state[e].val = Some(value_node);
                 self.state[e].ty = Some(ty_node);
-                pair
+                expr
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
             ExprKind::Gc { inner } => self.check_gc(e, inner),
@@ -1706,7 +1706,7 @@ where
             self.module.unify(vc, value);
             self.module.unify(tc, ty);
         }
-        pair
+        expr
     }
 
     /// Pin the marks `e` carries to the node its reader reaches them by.
@@ -1752,11 +1752,11 @@ where
             .expect("unresolved parameter (frontend bug)")
     }
 
-    /// The attributes a pair states, one node per canonical slot.
-    fn stated_attributes(&self, pair: NodeId) -> Vec<(P::Attr, NodeId)> {
+    /// The attributes an expr states, one node per canonical slot.
+    fn stated_attributes(&self, expr: NodeId) -> Vec<(P::Attr, NodeId)> {
         let Some(LowValue::Array(array)) = self
             .module
-            .node_value(AnyNodeId::Dynamic(pair))
+            .node_value(AnyNodeId::Dynamic(expr))
             .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
         else {
             return Vec::new();
@@ -1768,10 +1768,10 @@ where
             .iter()
             .enumerate()
             .filter_map(|(offset, canonical)| {
-                // The wildcard states nothing: it is the hole a pair carries for an
+                // The wildcard states nothing: it is the hole an expr carries for an
                 // attribute no one named.
                 let wildcard = items
-                    .get(PAIR_ATTR_BASE + offset)?
+                    .get(EXPR_ATTR_BASE + offset)?
                     .node
                     .dynamic()
                     .and_then(|node| self.module.node_value(AnyNodeId::Dynamic(node)))
@@ -1779,7 +1779,7 @@ where
                 if matches!(wildcard, Some(LowValue::Any)) {
                     return None;
                 }
-                let value = items.get(PAIR_ATTR_BASE + offset)?.node.dynamic()?;
+                let value = items.get(EXPR_ATTR_BASE + offset)?.node.dynamic()?;
                 let attribute = P::Attr::ORDER
                     .iter()
                     .find(|attribute| attribute.order_index() as u32 == *canonical)?;
@@ -1817,8 +1817,8 @@ where
         Checker::op_node(self, self.current_block, op, operand)
     }
 
-    fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId {
-        Checker::pair_of(self, value, ty)
+    fn expr(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+        Checker::expr_of(self, value, ty)
     }
 
     fn kind_expr(&mut self, marker: NodeId) -> NodeId {

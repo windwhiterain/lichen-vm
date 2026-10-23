@@ -972,7 +972,7 @@ pub enum KernelInstr {
     ///
     /// # Invariant
     /// `slice` and `index` are as in [`Self::SliceWriteCall`]. The third operand is the
-    /// [`Self::SliceWriteCall`] whose result this read observes, so a pair says *which* write to
+    /// [`Self::SliceWriteCall`] whose result this read observes, so an expr says *which* write to
     /// *which* slice it is ordered after rather than "after something"
     /// (`docs/notes/shared-memory-and-barriers.md` §3).
     SliceReadCall(ScalarClass),

@@ -71,7 +71,7 @@ primary  := int_literal
           | '(' expr ')'                            -- grouping (transparent)
           | '(' expr (sep expr)* sep? ')'           -- tuple value (always a Tuple)
           | '[' element (sep element)* ']'          -- array literal
-          | 'table' '(' pair (sep pair)* ')'        -- constant table value
+          | 'table' '(' expr (sep expr)* ')'        -- constant table value
           | 'set' '(' expr (sep expr)* ')'          -- set value (members are values; the instance is a Set, not an array)
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | 'tuple' '{' expr (sep expr)* sep? '}'   -- tuple type: a *slot* per element
@@ -87,7 +87,7 @@ postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
 element  := '@shallow' glued '(' n ')' expr           -- shallow marker, bare or with a depth (inside array literals only)
-pair     := expr '==>' expr                         -- table entry: key ==> value
+expr     := expr '==>' expr                         -- table entry: key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
            | expr                                   -- a bare expression statement: never a struct field
 fields   := (farg (sep farg)* sep?)?             -- instantiation/field-read paren content
@@ -211,7 +211,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   rides the enclosing function, so an *open* class is re-checked per application
   (`Int` and `Float` pass, a `string` is refused) while a *concrete* one is
   decided at the definition.  An open class's annotated type is the placeholder's
-  `[shape, kind]` pair of cells, so a printed signature shows it as the printer's
+  `[shape, kind]` expr of cells, so a printed signature shows it as the printer's
   honest raw mark — `raw[?a, ?b] -> …` — where `x : (Int ! in_num)` prints
   `Int -> …` ([raw-rendering-mark](notes/raw-rendering-mark.md)).
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
@@ -261,8 +261,8 @@ farg     := '.' name expr                         -- named instantiation argumen
   one element type (a disagreement is an `ArrayElement` mismatch, e.g. `if c then
   1 else "a"` is refused), and the expression's checked type is that element type.
 - **Tables.**  `table(k1 ==> v1, k2 ==> v2, …)` is a constant table value;
-  each entry is a `key ==> value` pair (the table arrow is not part of the expression
-  grammar, so it unambiguously separates the pair).
+  each entry is a `key ==> value` expr (the table arrow is not part of the expression
+  grammar, so it unambiguously separates the expr).
   `table()` is the empty table.  `t <== k` is the table read returning the entry
   whose stored key **equals** `k`: scalars, tuples and arrays compare by content
   (tuples and nested arrays element-wise), while a **table** key compares by
@@ -284,7 +284,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   literal); `set()` is the empty set.  A set's **value is its members**, and what
   makes it a set is its **type**, whose shape is the element type
   *alone*: a set has no length, so `set(a)` and `set(a, b)` are one type.  The
-  **set type** is the braced `set{E}`, one element *slot* that pairs with every
+  **set type** is the braced `set{E}`, one element *slot* that exprs with every
   member: `set{Int}` is the set of `Int`, `set{Int # 2}` states an element
   requirement, and a pin `set{5 : Int}` accepts only the member `5`.  That is
   what separates it from `array{T, n}`: a set is not indexable (`s[i]` is a
@@ -315,7 +315,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   marker at all.
 - **Marks (`~`).**  `expr ~ "text"` is a **mark**: compile-time metadata pinned to
   the expression it is written on.  It is not an attribute and never becomes a
-  value — no pair slot, no unification, no propagation, no evaluation — and the
+  value — no expr slot, no unification, no propagation, no evaluation — and the
   payload is a string literal, never an expression, because a mark the compiler
   cannot place is not a mark.  Several marks may pin one expression
   (`e ~ "a" ~ "b"`), they accumulate, and each wraps the whole expression to its
@@ -334,7 +334,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   which is empty for an ordinary file — so a `$` form is written only in a
   plugin's own embedded source, and two plugins each registering `$jit` never
   collide.  The checker compiles the arguments and adopts the `[value, type]`
-  pair the plugin's operator returns; it has no knowledge of what the operator
+  expr the plugin's operator returns; it has no knowledge of what the operator
   does or what its types are, so the check-and-emit is a private contract
   between a plugin and its own source.
 
@@ -447,14 +447,14 @@ maps every span back to the original file.
 - **Every attribute is handled like the type.**  The type position is the model
   for all of them: an attribute position holds an expression, it is unified the way
   the type is (only the attribute's own order decides relaxation), it rides the
-  function's parameter and return pair so an applied clone re-materializes it per
+  function's parameter and return expr so an applied clone re-materializes it per
   call, and an absent position is an undecided cell — never a special wildcard
   fill.  An expression's type is itself an expression, and a value/type unification
-  pairs their attribute positions **one-to-one in canonical order** — the type's
+  exprs their attribute positions **one-to-one in canonical order** — the type's
   `#` with the value's `#`, its `?` with the value's `?`, its `!` with the value's
   `!` — so the type expression carries the same attribute structure the value has.
   The pairing is **recursive into the compound's element positions**: a struct's,
-  a tuple's or an array's element slot pairs with the value's element slot, so a
+  a tuple's or an array's element slot exprs with the value's element slot, so a
   field's attribute is carried by the field's type expression — `x.to`'s type and
   `x.to`'s attribute are the same read of the same slot.
   There is no attribute-specific record, table or reference: a return's `#` is the
@@ -480,7 +480,7 @@ maps every span back to the original file.
 
   `add [1, 2]` is `3`, `add [1.5, 2.5]` is `4.0`, `add [1, 1.5]` is refused by the
   tie, `add [1, 2, 3]` by the length, `add ["a", "b"]` by the class.  The group is
-  one argument rather than a curried pair because lichen has no multi-parameter
+  one argument rather than a curried expr because lichen has no multi-parameter
   lambda (`(a, b) => e` does not parse — `(a, b)` is always a tuple *value*), and
   the group's elements are read with the ordinary index (`operands[i]`).  The prelude is
   **shadowable, not reserved**: it is seeded *before* a program's own imports and
@@ -518,7 +518,7 @@ maps every span back to the original file.
   names before compiling any value, then fills each placeholder with its
   value's node — so a *mutual* reference makes the IR a cycle there (the graph
   contains a back-edge), which the checker totalizes by pre-registering a
-  skeleton pair and binding the skeleton's cells to the finished pair (no
+  skeleton expr and binding the skeleton's cells to the finished expr (no
   recursion, no overflow **in the checker**).  A cycle among **scalar values** is
   refused before that: a block-wide binding's name is its value's own node, so a
   group of scalars that depends on itself is its own input, and the resolver
@@ -608,7 +608,7 @@ maps every span back to the original file.
   `Type` is the type of the *atomic* type markers (`Int : Type`,
   `string : Type`, `Type : Type`) and the terminal of every chain; it is
   **not** a supertype of all types.  A compound type is typed by its kind —
-  a `[marker, Type]` pair — not by `Type` itself: a **written** arrow `T -> U`
+  a `[marker, Type]` expr — not by `Type` itself: a **written** arrow `T -> U`
   is a **function value** — its parameter annotated `T`, its return annotated
   `U` — and a function value's type is the function itself (`f : f`, a
   self-referential node on the universe's pattern, so its chain closes at
@@ -755,7 +755,7 @@ maps every span back to the original file.
   `payload = [TypeId, names, names_in_order]`, the kind's marker
   slot), which lets a
   `a.name` read resolve a field by name.  Its kind is a standard `[marker, K]`
-  pair whose marker is that `[payload, TypeStruct]` pair — the marker's *type*
+  expr whose marker is that `[payload, TypeStruct]` expr — the marker's *type*
   slot is the `TypeStruct` atom, which is what makes "is this a struct marker?"
   a tag check rather than a shape guess.  The payload also holds a **fresh
   nominal id** — each occurrence of the syntax allocates a new id, so two
@@ -786,7 +786,7 @@ maps every span back to the original file.
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
   so the static checks see the concrete struct type.  A **placeholder** callee
   (`_(.type Float, .length 192)`) is decided by the **expected type** the
-  context states: at a call, the parameter's type pins the placeholder's pair
+  context states: at a call, the parameter's type pins the placeholder's expr
   to that struct type, so the instantiation is checked against it as a named
   callee's.  A context that states no expected type pins nothing, and the
   instantiation is refused by name (`the callee of an instantiation is not
@@ -942,31 +942,31 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
-| `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker deep-evaluates to `USize(1)` |
+| `@assert e` | `Assert { condition }` — a side constraint: the expression's expr is the condition's own; the condition's value node registers as an assert point the checker deep-evaluates to `USize(1)` |
 | `int2float e` / `float2int e` / `max a b` / `min a b` / `exp x` / `sqrt x` / `floor x` / `sin x` / `cos x` / `ln x` | `Prefix { operator, operands }` — `int2float`/`float2int` are the only forms whose type is not their operand's: the operand checks against the direction's source class, the result's type is its target.  `max`/`min` tie their operands to one class and leave it; `exp`, `sqrt`, `floor`, `sin`, `cos` and `ln` check their operand as `Float` and are `Float` |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a **tuple** element (a struct reads `a.name`) |
 | `e : T` | `Annotation { value, type: Some(compile(T)), attributes: <an empty range> }` — `attributes` holds one value expression per schema-tail entry, and a bare `:` annotation has no tail, so the range is empty |
-| `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` pairs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
+| `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` exprs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
 | `! p` / `e : T ! p` | the same `Annotation` chain's **refinement** piece: `p` is a predicate on the annotated *value*, held in one attribute slot and required to evaluate to `1`.  Like `#`/`?` the right side is one operand at the `->` level, so `e : T ! (x => x > 3)` writes the predicate explicitly; see [operator-polymorphism](notes/operator-polymorphism.md) §3 |
 | `_` (any position — type or value) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return_type }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `tuple{T1, …, Tn}` | `TypeTuple(range)` |
-| `struct{.a T1, .b T2}` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct{T1, …}`) is a `StructFieldName` check error |
+| `struct{.a T1, .b T2}` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` expr whose marker is the ordinary `[payload, TypeStruct]` expr (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct{T1, …}`) is a `StructFieldName` check error |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
 | `[e1, @shallow e2, @shallow(2) e3]` | `ShallowArray { range, depths }` — any `@shallow`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `@shallow`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `e ~ "text"` | **no kind at all** — a mark is an entry in `IR::marks` keyed by `e`'s `ExprId`, and the expression lowers to what it would lower to without it.  An annotation node is allocated only when the chain also spells a type, a perspective, a refinement or a doc |
 | `array{T, n}` | `TypeArray { element_type, length }` |
-| `set{E}` | `TypeSet(range)` — the one child is the element **slot**; the shape is that slot alone, so a `set{…}` type and its `set(…)` members pair one slot to every member |
+| `set{E}` | `TypeSet(range)` — the one child is the element **slot**; the shape is that slot alone, so a `set{…}` type and its `set(…)` members expr one slot to every member |
 | `table{K, V}` | `TypeTable(range)` — the two children are the key and value **slots**, exactly what `Table(range)` writes, so a table type and a table value are one type |
 | `table(k1 ==> v1, …)` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t <== k` | `Find { container, key }` — the infix table read; the entry whose stored key equals `k` (the Tables rule: content for scalars, tuples and arrays; identity for tables and functions) |
-| `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
-| a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
+| `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` expr the plugin's builder returns |
+| a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the expr and leaves the payload in the package's static arena |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 | `{ x = 1; …; y = 2 }` (no tail) | `Record { value, names }` — a struct-returning block (the frontend's `RecordBlock` node): `value` is a tuple of the emitted field values and `names` a range of each field's optional name, index-aligned with the tuple; the checker builds the anonymous struct type from the element types |
 | `{ …; return e }` | the `return` expression's own node (the frontend's `Block` node carries it as the block's `expr`) — the block's value is its tail, and the `return` may sit anywhere among the statements |
@@ -974,7 +974,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 There is no desugar step: bindings are graph sharing, and a block-wide
 binding reserves a placeholder id, compiles its value, then fills the id with
 the value's node — so a mutual reference makes the IR a cycle there, which the
-checker totalizes with a skeleton pair; a cycle among **scalar values** is refused
+checker totalizes with a skeleton expr; a cycle among **scalar values** is refused
 by the resolver instead, since a group of scalars that depends on itself is its
 own input, and the edge that closes it is left unresolved so the use lowers to an
 inert `ErrorBlock`, as an unresolved name's does.

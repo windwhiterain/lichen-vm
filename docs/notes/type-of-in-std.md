@@ -43,7 +43,7 @@ Every observation the builtin produced is reproduced:
 ## Why it moved
 
 The builtin was a keyword, an AST variant, an `ExprKind::TypeOf`, and a checker
-arm that read element 1 of the operand's `[value, type]` pair through the raw
+arm that read element 1 of the operand's `[value, type]` expr through the raw
 lowlevel `Index`. None of that was load-bearing: the read needs no grammar
 (juxtaposed application is the whole story) and no checker special case (an
 annotation already unifies a cell with a type). A form that the language can
@@ -198,7 +198,7 @@ returns it**:
 | `f = v => type_of v; f 1.5` | `Float: Type` |
 | `f = v => type_of v; f` | `Function: raw[?a, ?b] -> ?b` |
 
-The declaration is the tell: the wrapper's **domain prints as a raw pair**
+The declaration is the tell: the wrapper's **domain prints as a raw expr**
 (`raw[?a, ?b]`, not `?a`), because `type_of`'s declared result type *is* the
 argument's type cell — the `x : t` annotation inside the read unifies `t` with the
 parameter's type slot, and the body returns `t`, so the read's type and its

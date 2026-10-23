@@ -1,6 +1,6 @@
 # Evaluation performance: the unification walk
 
-> Status: current — the walk allocates nothing per array pair, keeps its recursion
+> Status: current — the walk allocates nothing per array expr, keeps its recursion
 > buffers, and cuts two frozen cycles it used to descend to the depth bound.
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (`unify`, `unify_array_items`,
 > `layout_len`/`layout_entry`, `fill_class_holes`, `propagate_class_value`),
@@ -41,14 +41,14 @@ the record; the counters themselves are not in the tree) put 465 811 of the 754 
 allocations inside `Module::unify`, and an exact-size histogram named them: **414 794 of
 8 bytes and 205 559 of 24 bytes**, which is 82 % of the run.
 
-The site is `unify_array_items`. Every array pair that carries an attribute layout (every
+The site is `unify_array_items`. Every array expr that carries an attribute layout (every
 language slot does) allocated **three** `Vec`s per comparison:
 
 - `array_layout(&a)` and `array_layout(&b)` copied the layout out of the registry
   (`Vec<u32>` of the layout's length — 8 bytes for a two-attribute slot), and
 - `canonicals` collected both layouts' union, sorted it, and deduplicated it (24 bytes).
 
-Unification descends an array pair's positions and attributes on every apply, so a
+Unification descends an array expr's positions and attributes on every apply, so a
 program's allocation count was a multiple of its unification steps.
 
 Three smaller sites had the same shape: `propagate_class_value` and `fill_class_holes`
@@ -62,11 +62,11 @@ The counters also exposed a second cost, larger than the allocations: **1 053 08
 `unify_inner` calls for `fib 10`**, of which **781 750 sat at depth ≥ 15** of a bound of
 64.
 
-The descent was a pair of *frozen* nodes: `[value, type, attributes]` arrays whose type
+The descent was an expr of *frozen* nodes: `[value, type, attributes]` arrays whose type
 slot is a function type, and a function type is the function itself. The recursion guard
-is a set of node **pairs on the current path**, and it cannot see a static ref: `Side::of`
-turns a static id into a `value` with no node, so the pair `(static ref, static ref)` has
-no name. Each level of the descent re-read the same frozen node into the same pair again,
+is a set of node **exprs on the current path**, and it cannot see a static ref: `Side::of`
+turns a static id into a `value` with no node, so the expr `(static ref, static ref)` has
+no name. Each level of the descent re-read the same frozen node into the same expr again,
 so nothing matched, and the comparison ran to `MAX_VALUE_DEPTH` before the bound gave it
 the benefit of the doubt. Every apply paid it.
 
@@ -81,10 +81,10 @@ None of them changes what the walk decides:
 2. **One payload compared with itself answers at once.** `a == b` on the two `ArrayValue`
    handles is the same frozen structure read through two paths; there is nothing to
    descend and no dynamic class to merge.
-3. **Two views of one frozen node are one value.** In the array descent, a pair of equal
+3. **Two views of one frozen node are one value.** In the array descent, an expr of equal
    `AnyNodeId::Static` refs returns without recursing. That is what cuts the function-type
    cycle above: the coinductive reading — a node compared with itself agrees — is the one
-   `path` already applies to node pairs, extended to the refs it cannot name.
+   `path` already applies to node exprs, extended to the refs it cannot name.
 4. **The recursion buffers are the module's** (`unify_path`, `unify_steps`,
    `class_snapshot`). `unify` takes them with `mem::take`, clears content and keeps
    capacity, and puts them back; `evaluate_class_first` does the same for its member
@@ -250,8 +250,8 @@ reset.** The round's first pass counted unifications over the whole process — 
 compile and the probe's second, check-only compile included — and read 18 841 of them, most
 of which looked like the clone groups' pairwise unification. Resetting the counters at
 `evaluate_raw` and dumping after it, `fib 10`'s run is **15 980 unifications**, of which the
-clone groups are **1 083 pairs**; the check-only compile adds 2 861 unifications and 359
-pairs. The rest are **answer commits** (one per computed node, `write_node_answer` joining a
+clone groups are **1 083 exprs**; the check-only compile adds 2 861 unifications and 359
+exprs. The rest are **answer commits** (one per computed node, `write_node_answer` joining a
 reader into its class) and the apply's own signature and parameter checks — inherent to the
 representation, not to the grouping.
 
@@ -275,7 +275,7 @@ Measured ceilings for the safe alternatives, with the per-phase numbers:
 | `Arc`-shared `LowShape` for clones | 2 702 boxes (8 % of allocations) | 1 159 | exact |
 | parser allocation reduction | — | 22 986 allocations (20 106 ≤16 B), ≈0.8 ms | exact |
 | checker `Loc` (`vec![step]` per build) | — | 2 235 allocations | exact |
-| `unify` self-pair fast path | 11 of 15 980 | 71 of 4 667 | worthless |
+| `unify` self-expr fast path | 11 of 15 980 | 71 of 4 667 | worthless |
 
 Where `fib 10`'s 22.6 ms actually goes, per phase: the prelude compile 2.7 ms, `add_node`
 5.1 ms, `unify` 4.5 ms (15 980 calls), the walk's own arithmetic ≈8 ms over 42 887 visits,
@@ -385,7 +385,7 @@ Inside the check, timed at the entries (timers in place, so inflated by ~50 ns p
 Round 3's "`unify` is 14.8 ms" is **superseded**: the fill skip (round 3) and the narrowed
 fill (round 6) took it to 6.8 ms. What is left of the check is proportional to two
 semantic facts — the **number of nodes the representation creates** (79 162 for a six-line
-program) and the **three-wide pair** every expression and value is stored as. Every exact
+program) and the **three-wide expr** every expression and value is stored as. Every exact
 optimisation this note has measured is now a few percent at most; the levers that are left
 are the two the maintainer declined in round 2 (sharing a materialized static read) and
 round 5 (sharing a wildcard's cell), both cell-identity changes.
@@ -457,9 +457,9 @@ under 6 ms in total.
 
 ## Round 4: the apply tail stops building two buffers per call
 
-`apply_parameter_check` compared a wide pair by **collecting both sides into a fresh
+`apply_parameter_check` compared a wide expr by **collecting both sides into a fresh
 `Vec<NodeId>`** on every apply, and its pattern walk started from a fresh
-`HashSet` each time. A language pair is three wide (value, type, attributes), so every
+`HashSet` each time. A language expr is three wide (value, type, attributes), so every
 apply took that path: two `Vec`s and one hash set per call, each growing by doubling as
 the walk filled it.
 
@@ -535,17 +535,17 @@ Two slot-table reductions ride along, both exact:
 - `evaluate_class_first` reads the three facts a member's turn depends on (visiting,
   operation, run stamp) through **one** lookup instead of three.
 
-## Round 2: the frozen pair guard, the node slot, and the per-apply buffers
+## Round 2: the frozen expr guard, the node slot, and the per-apply buffers
 
 Three changes, each measured on its own, all on the same probe:
 
-1. **The path guard now names frozen refs.** `unify_inner` descends a pair of frozen
+1. **The path guard now names frozen refs.** `unify_inner` descends an expr of frozen
    nodes as *one bare value against another*, so the class-level `path` set — which is
-   keyed on `NodeId` — cannot record it, and the same pair recurs level after level to
+   keyed on `NodeId` — cannot record it, and the same expr recurs level after level to
    the depth bound. `Module::unify_any_path` is the same guard keyed on `AnyNodeId`,
-   carried only for the pairs a `Static` ref names (two dynamic ids are already the class
+   carried only for the exprs a `Static` ref names (two dynamic ids are already the class
    guard's), and pooled on the module beside `unify_path`. The rule it applies is the one
-   `path` already applies: a pair already on the descent is one structure, and the frame
+   `path` already applies: an expr already on the descent is one structure, and the frame
    comparing it owns its interior, so the repeated visit adds nothing. Measured on
    `fib 10`: `unify_inner` **178 629 → 42 459** (−76 %), and `recursion.lichen`
    **53.4 → 43.4 ms**.
@@ -575,7 +575,7 @@ Three changes, each measured on its own, all on the same probe:
 
 The corpus' allocation count is flat across round 2 (2.064 M → 2.061 M): its
 allocation-heavy programs are the compute examples, whose cost is static-function
-materialization and the checker's own graph, not the array-pair walk this round cut.
+materialization and the checker's own graph, not the array-expr walk this round cut.
 
 ## What is knowingly unchanged
 

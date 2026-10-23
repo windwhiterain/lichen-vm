@@ -16,7 +16,7 @@
 
 ## 1. The problem
 
-`check_app` built the apply's pair as a value apply plus a **fresh result
+`check_app` built the apply's expr as a value apply plus a **fresh result
 cell** `c`: `apply_type` bound `c` to the call's own codomain when it ran, and
 the value side bound it too. Until then `c` was an undecided cell, and
 `Check` — which decides every expression's type slot and runs no body — read
@@ -33,7 +33,7 @@ landed form of that:
 - `check_app` builds the type-level apply with a **type-only argument** — an
   undecided value slot, the argument's type, and its attribute — so the type
   side's parameter check never evaluates the argument's value. The value apply
-  keeps the real `[value, type, attr]` pair.
+  keeps the real `[value, type, attr]` expr.
 - For a decided function type whose function is not under check, `check_app`
   calls `Module::apply_function_type` **at check**: the per-call signature
   clone binds `c` to the call's codomain and optionally runs the parameter
@@ -100,7 +100,7 @@ green must mean "the refinement holds", not "nobody asked". Four changes carry i
 scope of the forcing is the part that had to be measured:
 
 - **A frozen callee's type side carries the argument's value.** `check_app` hands
-  `apply_function_type` the value-bearing pair for a static callee and the type-only pair
+  `apply_function_type` the value-bearing expr for a static callee and the type-only expr
   for a dynamic one. The value slot used to be a fresh cell in both modes ("its check never
   evaluates the argument's value"), so a refinement predicate that reads the argument —
   `add ["a", "b"]` — had nothing to decide and stayed pending per `assert.rs`'s invariant.

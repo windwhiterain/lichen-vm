@@ -70,7 +70,7 @@ fn violations(module: &Module<LangProgram>) -> Vec<(NodeId, BlockId, NodeId, Blo
 /// The checker's built IR never names a non-root node of a descendant block.
 ///
 /// # Invariant
-/// `@gc` gives the parent `Index(pair, 0/1)` reads, so the declared root is the only child
+/// `@gc` gives the parent `Index(expr, 0/1)` reads, so the declared root is the only child
 /// node a parent names. The aliasing repairs were measured and rejected: a parent cell
 /// united with the inner's answers `none` for `@gc f 41`, and the root as the value handle
 /// breaks a block scope. See `docs/notes/gc-block.md`.

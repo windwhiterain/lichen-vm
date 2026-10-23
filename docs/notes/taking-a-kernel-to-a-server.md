@@ -78,7 +78,7 @@ engine lives in one `#[cfg(feature = "wasm")] mod cache`, and the GPU crate take
 a `workspace = true` dependency. Measured: `cargo tree -p lichen-compute-gpu --edges normal` no longer
 names `wasmi`, `wasmparser`, `wat`, `wast` or `spin`, both feature sets check with **zero warnings**,
 and the device suite is unchanged at **70 passed**. What `--no-default-features` removes is
-`cached_module` (it hands back a `wasmi::Engine`/`Module` pair, so it cannot exist without an engine);
+`cached_module` (it hands back a `wasmi::Engine`/`Module` expr, so it cannot exist without an engine);
 `module_cache_misses()` stays and is permanently `0`, which is the honest reading rather than a broken
 one. **The caveat is cargo's, not the split's**: features unify across a workspace build, so
 `--workspace` re-enables `wasm` because `lichen-compute` needs it — a genuinely GPU-only image must be
@@ -165,12 +165,12 @@ The honest unit for a server is therefore **not** the fused artifact but the fra
 build-time half already resolved at home:
 
 1. **The plan is materialised before shipping.** Staging is what a plan *creates*; once it is applied,
-   the body states its own slice write/read pairs (`KernelBody::barriers`, and `barrier_scan` reads
+   the body states its own slice write/read exprs (`KernelBody::barriers`, and `barrier_scan` reads
    them from the body), so **the server needs no plan and no marks**. `claim: null` is already
    allowed, and a server that runs no passes needs no claim either.
 2. **What is missing is small**: `schema::Fragment` is already `Facet`, so "serialize the fragment
-   alone" is expressible today — there is just **no versioned `read_fragment`/`write_fragment` pair**,
-   and no refusal for a version that does not match. That pair is the clean form: one blob, one
+   alone" is expressible today — there is just **no versioned `read_fragment`/`write_fragment` expr**,
+   and no refusal for a version that does not match. That expr is the clean form: one blob, one
    digest, one named refusal when it cannot be honoured.
 3. **The emitted module is not persisted.** `MODULES` is a process-wide `ModuleCache` with a miss
    counter (`lichen-runtime/src/module_cache.rs` since `a1aa17f1`), so every restart re-emits SPIR-V or wasm. Persisting the

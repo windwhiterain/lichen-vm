@@ -87,9 +87,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(ProbeValue::FloatType));
         let ty = ctx.universe();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -108,9 +108,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::type_marker());
         let ty = ctx.universe();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -175,23 +175,23 @@ fn the_checker_runs_on_an_extended_union() {
     ir.set_root(tuple);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok, "the extended-union program must check");
-    let float_pair = build.state[float_ty.0 as usize].term.unwrap();
+    let float_expr = build.state[float_ty.0 as usize].term.unwrap();
     let float_value = build.state[float_ty.0 as usize].val.unwrap();
     assert_eq!(
         build.module.node_value(AnyNodeId::Dynamic(float_value)),
         Some(ProbeValue::FloatType)
     );
     assert_eq!(build.state[float_ty.0 as usize].ty, Some(build.type_expr));
-    // SAFETY: `float_pair` is a live node of the build under test, whose block
+    // SAFETY: `float_expr` is a live node of the build under test, whose block
     // has not been dropped.
-    let ids = unsafe { build.module.array_items(float_pair) }
-        .expect("the pair is an array")
+    let ids = unsafe { build.module.array_items(float_expr) }
+        .expect("the expr is an array")
         .iter()
         .map(|item| dyn_node(item.node))
         .collect::<Vec<_>>();
     // Full width: the two meaningful slots, then the wildcard an unstated
     // attribute is.
-    assert!(ids.len() >= 2, "the pair is at least its two slots wide");
+    assert!(ids.len() >= 2, "the expr is at least its two slots wide");
     assert_eq!(ids[0], float_value);
     assert_eq!(ids[1], build.type_expr);
 }

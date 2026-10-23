@@ -312,7 +312,7 @@ fn a_sibling_diamond_reading_the_launch_extent_is_one_region_and_merges() {
              unregistered, so it carries no claim and a later digest-keyed pass cannot name it"
         )],
         "the pass's own line: one region, three nodes, both arrivals absorbed. Positions `2` and \
-         `3` are `.s` and `.q` here, not the `minimal()` pair's `{SUM}` and `{SUMSQ}`, because \
+         `3` are `.s` and `.q` here, not the `minimal()` expr's `{SUM}` and `{SUMSQ}`, because \
          this normalise also declares `.w`"
     );
 }
@@ -321,7 +321,7 @@ fn a_sibling_diamond_reading_the_launch_extent_is_one_region_and_merges() {
 ///
 /// # Invariant
 /// **One `Between` per arriving edge, each over a slot of its own**, and the surviving node holds
-/// **exactly** `compose_fan_in` over the region's own three bodies — so the diamond is the pair's
+/// **exactly** `compose_fan_in` over the region's own three bodies — so the diamond is the expr's
 /// own operation with two independent producers and not a second mechanism's answer.
 #[test]
 fn a_sibling_diamond_merges_into_one_node_under_the_floor() {

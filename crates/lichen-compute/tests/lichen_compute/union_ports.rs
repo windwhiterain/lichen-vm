@@ -203,7 +203,7 @@ fn a_consumer_naming_only_the_absorbed_buffer_merges() {
 /// A node naming a buffer the merged fragment has no port for is refused by name.
 ///
 /// # Invariant
-/// The graph is the recorded pair wired by hand with the producer naming one buffer more than
+/// The graph is the recorded expr wired by hand with the producer naming one buffer more than
 /// its body reads a port for, so the union is longer than the merged ports — the mismatch the
 /// union cannot paper over, and the one `PortsDoNotCorrespond` is written for.
 #[test]

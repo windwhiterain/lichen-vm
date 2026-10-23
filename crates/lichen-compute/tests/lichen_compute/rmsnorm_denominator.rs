@@ -1,4 +1,4 @@
-//! The RMSNorm pair under the floor, per denominator. See docs/notes/llm-operators.md.
+//! The RMSNorm expr under the floor, per denominator. See docs/notes/llm-operators.md.
 
 use super::common;
 
@@ -18,7 +18,7 @@ const COUNT: usize = 8;
 /// The producer's value, read as RMSNorm's consumer reads it.
 const SUM: &str = "(compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)";
 
-/// The RMSNorm pair with `denominator` written into the consumer's `element`.
+/// The RMSNorm expr with `denominator` written into the consumer's `element`.
 ///
 /// # Invariant
 /// The two kernels, their claims and the edge between them are the operator's own
@@ -172,14 +172,14 @@ fn verdict(denominator: &str) -> (String, bool) {
 /// # Invariant
 /// **Two facts.** A `sqrt` the lowering wrote out as its Newton iteration is read as the
 /// operator, so a denominator the walk can name bridges and the floor's licence merges the
-/// pair. The `int2float` reads `k.n`, which is the ABI's **first** leaf — the extent, not the
+/// expr. The `int2float` reads `k.n`, which is the ABI's **first** leaf — the extent, not the
 /// invocation's index, which is the **last** — so it is a value the whole launch fixes.
 #[test]
 fn a_fixed_size_and_a_runtime_extent_both_fuse() {
     let (line, merged) = verdict(&format!("sqrt ({SUM} / int2float 4 + 0.25)"));
     assert!(
         merged,
-        "the pair fuses once the denominator bridges: {line}"
+        "the expr fuses once the denominator bridges: {line}"
     );
     assert!(
         line.contains("licensed by the floor:"),

@@ -4,7 +4,7 @@ Status: **complete** — stages 1–5 landed (`df24812c`, `58ca01c2`, this round
 commit, and the full-width generation): the storage and registry, the checker's
 layout-carrying builders and readers, the default array, the unify wiring by canonical
 index, the `type_of`-shaped `perspective_of` spelling that replaced the call-site
-references, and the annotated pair generated full width. The measured results are at the
+references, and the annotated expr generated full width. The measured results are at the
 end of this note.
 
 ## The problem, in the superior's words
@@ -15,16 +15,16 @@ end of this note.
 > 这样高层就把所有东西当全宽attributes
 
 The check-time attribute mapping is *sparse*: each expression's schema tail says
-which attributes it carries, and the pair stores them densely
+which attributes it carries, and the expr stores them densely
 (`[value, type, attrs…]`, `attr_slot(i) = 2 + i`). Two consequences measured this
 session:
 
-- A pair cannot be made full width. An expression pair is also a *type value*
-  when the expression is a type (`[shape, kind]`, two items), so a five-wide pair
+- An expr cannot be made full width. An expression expr is also a *type value*
+  when the expression is a type (`[shape, kind]`, two items), so a five-wide expr
   breaks every type-level function (`expected raw[raw[…]], TypeStruct, …`), and
-  the pair readers that assumed 2..=3 elements silently returned nothing
+  the expr readers that assumed 2..=3 elements silently returned nothing
   (`f = x => x; f 1` answered `?a: ?a`).
-- The *runtime* pair unify deliberately excludes the attribute positions
+- The *runtime* expr unify deliberately excludes the attribute positions
   (`apply_parameter_check` unifies slots 0..2), so a caller's attribute values
   never reach a callee's cells — the asymmetry with the type slot that makes
   `type_of` work and a `perspective_of` written the same way fail (it answers an
@@ -36,12 +36,12 @@ session:
 **Every lowlevel array carries a mandatory attribute-layout id** naming one entry
 of a lowering-time index-array registry; the entry maps the array's slots to
 canonical attribute indices. A module-global *default attribute array* supplies
-the holes. The highlevel then reads every pair and every element slot as a
+the holes. The highlevel then reads every expr and every element slot as a
 full-width attribute array: positions it does not carry read the default.
 
 The underlying items stay as they are, so a type value remains a two-item
 `[shape, kind]` array while its *attribute view* is full width. That is what
-removes the dual-use conflict that defeated the wide-pair attempt.
+removes the dual-use conflict that defeated the wide-expr attempt.
 
 ## The encoding (the superior's, second round)
 
@@ -76,7 +76,7 @@ Concretely:
    (each found through its own layout), and a side whose layout omits `i` meets
    the default's slot for `i`. That is the recursion into attributes the current
    design lacks; the plain value and type positions keep unifying as they do.
-5. **The highlevel.** The checker's schema tails pick the layout: a pair with
+5. **The highlevel.** The checker's schema tails pick the layout: an expr with
    tail `[Perspective]` registers (or reuses) the layout `[0]`, and its attribute
    readers resolve a canonical attribute index to the slot the layout gives.
    `type_of`-style reading (`x # p` binding to the parameter's attribute cell) and
@@ -153,7 +153,7 @@ Two fixes made it work, neither a name match:
   decidable where the body is checked, so the provider unify is skipped for a computed
   attribute value; the check belongs to the call site the certificate reaches.
 - **A call's declared slot is its class's representative.** An apply node holds no value
-  of its own — the merge wrote the `[value, type]` pair onto the class's representative —
+  of its own — the merge wrote the `[value, type]` expr onto the class's representative —
   so `Checker::annotation_value_slot` forces the walk and names the representative. Before
   that, an annotation whose value was a call compared the call's answer array against the
   number (`expected raw[?a, ?b], found 2`).
@@ -163,7 +163,7 @@ whose argument is the enclosing parameter is a reference to the whole argument, 
 whose argument is a named field of it is a reference to that field. The slot is a fresh
 cell and the call site resolves it — the whole-parameter case through the certificate
 hole's fallback (the argument's provided slot), the field case through
-the applied clone's return pair.
+the applied clone's return expr.
 
 `# @any` reverted to the wildcard's plain meaning (a stated wildcard certificate is
 copied like any decided one); the `@any`-on-a-return overload is gone.
@@ -185,18 +185,18 @@ line alone refuses nothing new and leaves `a_read_takes_its_perspective_from_the
 red (the provider reads `0`); with the provider change it is green, and language 275,
 highlevel 136 and compute 237/0/1 are green.
 
-## Stage 5: the annotated pair is generated full width
+## Stage 5: the annotated expr is generated full width
 
-An annotation's pair carries **every** canonical attribute slot — the settled ones at
+An annotation's expr carries **every** canonical attribute slot — the settled ones at
 their canonical positions and the wildcard elsewhere — with the full-width layout
-(`Checker::check_ann`). One shape now describes every pair that carries attributes, so no
+(`Checker::check_ann`). One shape now describes every expr that carries attributes, so no
 reader has to know a tail's dense order; the renderer's `value_label` and
 `render_attributes` resolve through `Module::array_attribute` instead of a dense index,
-which is what made a doc label vanish when the pair went wide.
+which is what made a doc label vanish when the expr went wide.
 
-The width stops at the pairs that carry attributes. `Checker::pair_of` is used for both a
-**value pair** (`[value, type]`) and a **type value** (`[shape, kind]`), and the type
-readers still take the two-slot form, so making every pair wide is a separate change to
+The width stops at the exprs that carry attributes. `Checker::expr_of` is used for both a
+**value expr** (`[value, type]`) and a **type value** (`[shape, kind]`), and the type
+readers still take the two-slot form, so making every expr wide is a separate change to
 the type-value encoding rather than an attribute change.
 
 Measured: language 275, highlevel 136, lowlevel 164 (1 ignored), compute 252 plus the
@@ -214,7 +214,7 @@ which fails without the change and refuses with `expected 32, found 1`).
 
 ## The isomorphism: every expression carries the default, the order is the checker's
 
-**No slot is ever missing.** Every expression's pair is full width and every attribute position
+**No slot is ever missing.** Every expression's expr is full width and every attribute position
 carries a value: a literal `1` is `[1, Int, 0, 0, 0]`, the perspective default `0` being the
 lattice identity. A parameter that states nothing, and a caller that provides nothing, both carry
 that default rather than a hole.
@@ -223,7 +223,7 @@ that default rather than a hole.
 **type** only. Comparing the attribute positions there would compare `32` (a requirement) against
 `0` (the default), and `32 | 0 = 32` — the fact that admits the program — is an order fact the
 lowlevel does not have; widening that loop is measured to refuse six perspective programs with
-`expected Int, found Int`. Carrying the parameter's requirement in the apply's pair instead (to make
+`expected Int, found Int`. Carrying the parameter's requirement in the apply's expr instead (to make
 the structural compare exact) makes the runtime compare vacuous and is measured to lose the check
 for a runtime-valued attribute.
 
@@ -246,5 +246,5 @@ because the change that made the body check is the change that added the second 
 ## Open questions
 
 Nothing blocks the design. The runtime attribute *flow* — a caller's provided slot
-reaching a callee's attribute cell through the pair unify — is wired and exercised only
+reaching a callee's attribute cell through the expr unify — is wired and exercised only
 where a certificate is a hole; no user-facing program reads a flowed cell yet.

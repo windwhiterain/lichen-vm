@@ -124,7 +124,7 @@ and 5 — because the rotate-half form turns every head's key and query by the s
 product is invariant under that.
 
 `ATTEND_CACHE_STEP` makes the cache's length the caller's: one dispatch scores every `(head, position)`
-pair by folding the head's width, one sums each head's exponentials by folding the positions, one divides
+expr by folding the head's width, one sums each head's exponentials by folding the positions, one divides
 them into weights, and one mixes the cached values by folding the positions again. Measured over three
 positions, where the third carries a weight of `2.8e-6` — small enough that dropping it would hide in a
 loose check, which is why the last head's values near `-0.76` are asserted too — the answer is the host's
@@ -471,7 +471,7 @@ which is why the whole row went quiet rather than one stage of it.
 
 **What it buys**, narrow and held in memory, warm, `generate_batch(&[9707, 785], 3)` against the two
 `generate(.., 3)` calls it replaces, measured twice and in both orders: the batch **3.43 s, 3.62 s, 3.79 s,
-4.71 s** and the two alone **6.77 s, 7.15 s, 7.35 s, 7.59 s** — **1.6× to 2.2×**, and the order of the pair
+4.71 s** and the two alone **6.77 s, 7.15 s, 7.35 s, 7.59 s** — **1.6× to 2.2×**, and the order of the expr
 changes nothing. The batch pays each layer's weights once rather than once a sequence; the rotation and the
 attention still name one position and one cache, so those loop per sequence. The tokens are
 `[9707, 25, 358, 2776]` and `[785, 25, 330, 785]`, each what its start answers alone.
@@ -621,7 +621,7 @@ stays: it halves the caches, and it buys nothing to widen.
 Three prompts of one token each, timed from the request to the reply. The first is also the first request
 after the model loaded, so it carries the driver's compilation:
 
-| prompt | wall clock | per token | marginal, from the pair |
+| prompt | wall clock | per token | marginal, from the expr |
 |---|---|---|---|
 | 137 tokens | 116.1 s | 0.85 s | — |
 | 494 tokens | 153.0 s | 0.31 s | **0.104 s a token** |

@@ -13,7 +13,7 @@ use crate::{
 /// What an `Index` node turned out to be. See [`Module::selection_of`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
-    /// A `[then, else]` pair indexed by an undecided value: the language's
+    /// A `[then, else]` expr indexed by an undecided value: the language's
     /// conditional, and the one `Index` that computes.
     Computed,
     /// A view: the value the index actually names.
@@ -58,9 +58,9 @@ impl<P: Program> Module<P> {
         match operation.operator.as_enum() {
             // The checker's apply operands are `[function, argument,
             // result_cell, callee_type]`; the last two are not codegen.
-            Some(LowOperator::Apply) => self.operand_pair(operand, "Apply"),
+            Some(LowOperator::Apply) => self.operand_expr(operand, "Apply"),
             Some(LowOperator::Index) | Some(LowOperator::TableGet) => {
-                self.operand_pair(operand, "operator")
+                self.operand_expr(operand, "operator")
             }
             // A program's own operator: its operand array, whole.
             _ => Ok(vec![operand]),
@@ -72,7 +72,7 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// [`Self::operand_pair`] is the two-element reading; a four-element
+    /// [`Self::operand_expr`] is the two-element reading; a four-element
     /// `[function, argument, result_cell, callee_type]` has to be readable whole
     /// for a caller that wants its later ones, and the two readings cannot
     /// disagree about what the array holds.
@@ -82,7 +82,7 @@ impl<P: Program> Module<P> {
     }
 
     /// The `[left, right]` of a two-element operand array, all of this module's.
-    pub fn operand_pair(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
+    pub fn operand_expr(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
         // SAFETY: `operand` is a live node of `self`; nothing here releases it.
         let items = unsafe { self.array_items(operand) }
             .ok_or_else(|| format!("{what} operand is not an array value"))?;
@@ -163,7 +163,7 @@ impl<P: Program> Module<P> {
     /// # Invariant
     ///
     /// A `value_of` index extraction is not a definition — it is a view of a
-    /// `[value, type]` pair. The deep pass collapses some values to a bare
+    /// `[value, type]` expr. The deep pass collapses some values to a bare
     /// empty cell and unifies that cell with the defining computation, so the
     /// definition is reached through the class rather than an operand. The
     /// walk is the class's own member list, not the module's node table.
@@ -195,7 +195,7 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// The leaves of `function`'s **parameter domain** — the pair's value
+    /// The leaves of `function`'s **parameter domain** — the expr's value
     /// half, flattened one level.
     ///
     /// # Invariant
@@ -204,7 +204,7 @@ impl<P: Program> Module<P> {
     /// a caller that decoded it separately could decode it differently.
     pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
         let parameter = self.functions[function].parameter;
-        match self.pair_value_half(parameter) {
+        match self.expr_value_half(parameter) {
             Some(value) => self.value_leaves(value),
             None => Ok(vec![parameter]),
         }
@@ -216,7 +216,7 @@ impl<P: Program> Module<P> {
     /// # Invariant
     ///
     /// The domain is the function's parameter, derived here rather than
-    /// handed in, so every reader decodes the pair the same way. Three
+    /// handed in, so every reader decodes the expr the same way. Three
     /// answers, in order: a parameter leaf — `node` is in one domain leaf's
     /// equality class, how a reduced call's substituted parameter reads; a
     /// computation — the node or the class member that computes it; or opaque
@@ -250,8 +250,8 @@ impl<P: Program> Module<P> {
     /// # Invariant
     ///
     /// A *constant* index names an element, whether the target is a
-    /// `[value, type]` pair, a tuple domain's leaves, or a materialised
-    /// array. An earlier draft inferred a pair from the **width**, which a
+    /// `[value, type]` expr, a tuple domain's leaves, or a materialised
+    /// array. An earlier draft inferred an expr from the **width**, which a
     /// two-leaf domain also has. `Index(e, 0)` over a computation is a
     /// `value_of` peel; an undecided index into a two-element array is the
     /// conditional, the one `Index` that computes.
@@ -274,7 +274,7 @@ impl<P: Program> Module<P> {
                 return Some(Selection::Views(element));
             }
             // **A computed target at index 0** is a `value_of` peel: the
-            // result *is* the pair's value, so it names the operator.
+            // result *is* the expr's value, so it names the operator.
             if k == 0
                 && let AnyNodeId::Dynamic(node) = target.node
                 && self.node_operation(node).is_some()
@@ -391,17 +391,17 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The **value** half of a `[value, type]` pair node, or `None` when it
-    /// is not a pair.
+    /// The **value** half of a `[value, type]` expr node, or `None` when it
+    /// is not an expr.
     ///
     /// # Invariant
     ///
     /// The width is `apply.rs`'s, not a guess: it resolves the apply's return
-    /// pair with `items[1]` as the type slot for a 2-wide and a 3-wide
-    /// `[value, type, perspective]` pair alike, so the value is element 0 in
+    /// expr with `items[1]` as the type slot for a 2-wide and a 3-wide
+    /// `[value, type, perspective]` expr alike, so the value is element 0 in
     /// both. This is the one place that knows an encoding, and the pass in
     /// [`crate::low_type`] still learns no layout.
-    pub fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+    pub fn expr_value_half(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if items.len() < 2 {
@@ -429,25 +429,25 @@ impl<P: Program> Module<P> {
         Ok(false)
     }
 
-    /// The **type** half of a `[value, type]` pair node, or `None` when it is
-    /// not a pair.
+    /// The **type** half of a `[value, type]` expr node, or `None` when it is
+    /// not an expr.
     ///
     /// # Invariant
     ///
-    /// The sibling of [`Self::pair_value_half`], reading element 1 by the same
-    /// rule, so the two agree on what a pair is. It is public because the loop
-    /// reader names a pair's type when it checks an entering call's argument
+    /// The sibling of [`Self::expr_value_half`], reading element 1 by the same
+    /// rule, so the two agree on what an expr is. It is public because the loop
+    /// reader names an expr's type when it checks an entering call's argument
     /// type, and duplicating that decoding is what
     /// docs/notes/checker-encoding-instability.md is about.
-    pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
-        match self.pair_type_item(node)? {
+    pub fn expr_type_half(&self, node: NodeId) -> Option<NodeId> {
+        match self.expr_type_item(node)? {
             AnyNodeId::Dynamic(r#type) => Some(r#type),
             AnyNodeId::Static(_) => None,
         }
     }
 
-    /// The **type** half of a `[value, type]` pair node, as the pair's own reference.
-    pub fn pair_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
+    /// The **type** half of a `[value, type]` expr node, as the expr's own reference.
+    pub fn expr_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if items.len() < 2 {

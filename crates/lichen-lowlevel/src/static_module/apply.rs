@@ -83,7 +83,7 @@ impl<P: Program> Module<P> {
             let result = self.evaluate_node(Dyn(applied), Some(block));
             // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
-                && let Some(codomain) = self.pair_type_item(applied)
+                && let Some(codomain) = self.expr_type_item(applied)
             {
                 // A decided codomain stays the frozen ref the clone walk carried; a
                 // leaf in this block gives the bind its value.
@@ -117,14 +117,14 @@ impl<P: Program> Module<P> {
             return false;
         };
         let mut minted = HashMap::new();
-        // The return pair through the signature's remap, so the graph stays bound.
+        // The return expr through the signature's remap, so the graph stays bound.
         let module = self.static_module(function.module);
         let applied = module
             .functions
             .get(function.index.0)
             .map(|entry| entry.r#return);
         if let Some(r#return) = applied {
-            // The type side copies the return pair's type and attributes only
+            // The type side copies the return expr's type and attributes only
             // (`docs/notes/apply-type-side-check.md`).
             let mut ctx = StaticApplyCtx {
                 target: block,
@@ -137,7 +137,7 @@ impl<P: Program> Module<P> {
                 minted: HashMap::new(),
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
-            self.applied_pairs.insert(node, applied);
+            self.applied_exprs.insert(node, applied);
             remap = ctx.remap;
             minted = ctx.minted;
         }
@@ -169,7 +169,7 @@ impl<P: Program> Module<P> {
         true
     }
 
-    /// The frozen return pair's type and attribute positions; its value is a hole.
+    /// The frozen return expr's type and attribute positions; its value is a hole.
     fn static_return_type_apply(
         &mut self,
         r#return: LocalNodeId,
@@ -185,7 +185,7 @@ impl<P: Program> Module<P> {
         let source = unsafe { array.items() };
         let mut items = Vec::with_capacity(source.len());
         for (index, item) in source.iter().enumerate() {
-            // Position 0 is the pair's value (`docs/notes/compound-element-slots.md`).
+            // Position 0 is the expr's value (`docs/notes/compound-element-slots.md`).
             if index == 0 {
                 let hole = self.add_node(ctx.target, None, None);
                 items.push(ArrayItem::new(AnyNodeId::Dynamic(hole)));
@@ -221,13 +221,12 @@ impl<P: Program> Module<P> {
         node
     }
 
-    /// The frozen return pair, cloned into `block` and recorded as the applied pair,
+    /// The frozen return expr, cloned into `block` and recorded as the applied expr,
     /// together with the parameter's clone.
     #[stacksafe]
     pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
-        argument: NodeId,
         block: BlockId,
         node: NodeId,
     ) {
@@ -239,7 +238,7 @@ impl<P: Program> Module<P> {
         else {
             return;
         };
-        // The body graph, not its pair: a frozen reference is a static ref otherwise.
+        // The body graph, not its expr: a frozen reference is a static ref otherwise.
         let mut ctx = StaticApplyCtx {
             target: block,
             module,
@@ -256,22 +255,8 @@ impl<P: Program> Module<P> {
         self.static_node_apply(parameter, &mut ctx);
         if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
             self.applied_parameters.insert(node, cloned_parameter);
-            // The parameter is bound to this call's argument, so a return attribute
-            // that names one of its fields resolves on this clone — the same binding
-            // the type slot gets (spec §3, "Every attribute is handled like the
-            // type"). The reporting side owns the failure.
-            let recorded = self.unify_errors.len();
-            let _ = self.apply_parameter_check(
-                cloned_parameter,
-                argument,
-                block,
-                node,
-                AnyFunctionId::Static(function),
-                cloned_parameter,
-            );
-            self.unify_errors.truncate(recorded);
         }
-        self.applied_pairs.insert(node, applied);
+        self.applied_exprs.insert(node, applied);
     }
 
     /// The frozen asserts, cloned through the signature copies' remap.
@@ -311,17 +296,17 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// A frozen signature pair copied into `block`.
+    /// A frozen signature expr copied into `block`.
     #[stacksafe]
-    pub fn materialize_static_signature_pair(
+    pub fn materialize_static_signature_expr(
         &mut self,
         function: StaticFunctionRef,
-        return_pair: bool,
+        return_expr: bool,
         block: BlockId,
     ) -> Option<NodeId> {
         let module = self.static_module(function.module);
         let entry = module.functions.get(function.index.0)?;
-        let local = if return_pair {
+        let local = if return_expr {
             entry.r#return
         } else {
             entry.parameter
@@ -644,7 +629,7 @@ impl<P: Program> Module<P> {
             }
             assert_clones.push(instantiated);
         }
-        // Re-stamped after the walk: the pair and parameter belong to this closure.
+        // Re-stamped after the walk: the expr and parameter belong to this closure.
         let mut own = Vec::with_capacity(scope.len());
         for &node in &scope {
             let clone = self.static_node_apply(node, ctx);
@@ -707,9 +692,9 @@ pub struct Rehome {
     pub origin: StaticFunctionRef,
     /// The enclosing fresh closure a nested re-home hangs under.
     pub parent: Option<FunctionId>,
-    /// The re-homed closure's own return pair.
+    /// The re-homed closure's own return expr.
     pub r#return: NodeId,
-    /// The owner tag on that return pair.
+    /// The owner tag on that return expr.
     pub return_owner: Option<FunctionId>,
     /// The re-homed closure's own parameter.
     pub parameter: NodeId,
@@ -763,7 +748,7 @@ struct StaticApplyCtx<P: Program> {
     ///
     /// A frozen closure is re-homed **once** per pass. Its own scope holds its own value
     /// node, so the scope walk reaches it; a second re-home would share the first's
-    /// return pair and parameter through the remap, and the owner tag would then name
+    /// return expr and parameter through the remap, and the owner tag would then name
     /// one of the two closures only — the other would read its own shell in place and
     /// run no parameter check.
     minted: HashMap<StaticFunctionRef, FunctionId>,

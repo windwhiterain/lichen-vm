@@ -98,7 +98,7 @@ refinement is monotone by construction.
 
 Seeding is the caller's job. A layer above the lowlevel decodes the parameter's
 **type slot** through the encoding authority (`shape::low_type_of_slot`) and
-calls `seed_class_low_type`; the pass never learns the pair layout and never
+calls `seed_class_low_type`; the pass never learns the expr layout and never
 invents a parameter's type. That is what keeps the lowlevel honest — the graph
 facts live here, the type facts live with whoever owns the encoding.
 
@@ -160,25 +160,25 @@ statements about one class combine by picking whichever is `Some` —
 `debug_assert` that a second statement equals the first. The assertion then
 *measured* what had to change for the invariant to hold:
 
-- the shared **wildcard** node was seeded from whatever pair listed it — skipped (it
+- the shared **wildcard** node was seeded from whatever expr listed it — skipped (it
   states nothing);
-- a **data tuple** was read as a term pair because it has two items — the seed now
-  requires a pair's **layout** (`docs/notes/array-attribute-view.md`), which width
+- a **data tuple** was read as a term expr because it has two items — the seed now
+  requires an expr's **layout** (`docs/notes/array-attribute-view.md`), which width
   cannot tell;
-- an **operation node whose own value is a pair** (an apply's result) was stated both
-  by the seed (the pair view) and by the transfer (the bare result) — the transfer
-  now **declines for pair-valued nodes**, and `Index(pair, 0)`'s transfer derives the
-  result from the seeded pair;
+- an **operation node whose own value is an expr** (an apply's result) was stated both
+  by the seed (the expr view) and by the transfer (the bare result) — the transfer
+  now **declines for expr-valued nodes**, and `Index(expr, 0)`'s transfer derives the
+  result from the seeded expr;
 - **observation** stated arrays (the physical view) while the checker stated their
   types (the tuple view) — observation now states **scalars only**; a shape with
   positions comes from the type alone (`low_type_of`), which is the authority.
 
-**The exception is a pair, and it is seeded deliberately.** The JIT seeds each
+**The exception is an expr, and it is seeded deliberately.** The JIT seeds each
 template term's type cell onto two things: the term's value slot takes the cell's
-class, and the **pair** takes `Tuple([shape, Unknown])`. The pair is one of the
+class, and the **expr** takes `Tuple([shape, Unknown])`. The expr is one of the
 arrays above, and it is seeded anyway because a body term is reached through
-`Index(pair, 0)` — an `Index` reads its *container*, so without the pair's half
-the seed lands on a channel nothing reads. The cost is that a pair's class is now
+`Index(expr, 0)` — an `Index` reads its *container*, so without the expr's half
+the seed lands on a channel nothing reads. The cost is that an expr's class is now
 *stated* rather than degraded; what buys the safety back is that the statement is
 the checker's own conclusion (`value : type`), so it cannot contradict a
 transfer — and where a seed and a transfer do disagree, the lattice still joins
@@ -186,11 +186,11 @@ them to `Unknown`.
 
 **An element read states the slot, its dereference the value.** A compound's elements
 are complete `[value, type, attributes]` slots, so `Index(compound, k)`'s transfer states
-`Tuple([element, Unknown])` — the slot's pair — and `Index(slot, 0)` then states the
-element's value shape. A seed states the value class from the declared type, so the pair
+`Tuple([element, Unknown])` — the slot's expr — and `Index(slot, 0)` then states the
+element's value shape. A seed states the value class from the declared type, so the expr
 and the value agree: the measured conflict was `Tuple([USize, USize])` (the value) against
 `USize` (a transfer that indexed the slot as if it were the tuple). The kernel path walk
-skips a step whose target states the slot pair, and the structural deepening reads an
+skips a step whose target states the slot expr, and the structural deepening reads an
 element's slot value; values the lowering itself builds must be slot arrays too.
 
 **Observation needs two sites, not one.** `write_node_value` is the choke-point
@@ -208,15 +208,15 @@ answered `Unknown`):
   kind's marker for both classifies every scalar as an unrecognised kind.
 - The parameter's type slot is not always a type value: an *annotated*
   parameter's type cell holds the annotation expression's own `[value, type]`
-  term pair, while an *inferred* one is bound straight to a type value.
+  term expr, while an *inferred* one is bound straight to a type value.
   `low_type_of_slot` peels that one indirection, in the authority, so the caller
   reads no layout — which is the coupling this design exists to remove. The two
   are told apart by **whether the decode succeeds**, not by a structural guess,
-  which would not be sound: a term pair and a type value have the same two-slot
+  which would not be sound: a term expr and a type value have the same two-slot
   silhouette. What separates them is the terminal marker — the type slot of a
   term names the *type of an expression*, which for a type expression is the
   `Type` marker, and `Type` is the one kind marker the decode refuses — so a
-  pair never decodes directly and a bare type value always decodes on the first
+  expr never decodes directly and a bare type value always decodes on the first
   try. An undecided answer is `LowShape::Unknown` and never a fallback: a
   polymorphic parameter has no domain at this boundary, and a backend that
   invented one would compile a kernel for a type nobody wrote.
@@ -262,7 +262,7 @@ its only use cannot drift apart — and `Node::value`'s own doc states both axes
 epoch rides the same field because it answers the next question the run axis is
 asked: whether a *stalled* operator's reads would still decide the same
 ([stalled-rerun-epoch](stalled-rerun-epoch.md)).
-The axis was first *derived* from the slot through a pair of predicates that the
+The axis was first *derived* from the slot through an expr of predicates that the
 class scans read; what broke that derivation is the distinction the class channel
 needs: an answer an operator *produced* versus a value a unification *asserted*
 into its slot, which the slot cannot tell apart. So the field answers it, the
@@ -277,11 +277,11 @@ absent; it may still *compute* undecided) is stated where it is enforced,
 
 A node's low shape describes the **variant of that node's value**, and the
 highlevel judges that variant from the node's own type node — the type value at
-the term's value position (`shape::low_type_of_slot` follows a **pair** to its
+the term's value position (`shape::low_type_of_slot` follows a **expr** to its
 value; a plain `[shape, kind]` array *is* the type value). Consequently the
 transfer never adds an encoding layer: `Index(container, k)` answers the
-container's item as stored, so a class never states "a slot pair" as a value.
-Slot pairs remain structure the lowering walks; they are not a shape.
+container's item as stored, so a class never states "a slot expr" as a value.
+Slot exprs remain structure the lowering walks; they are not a shape.
 
 Measured when the rule landed (`a2fd2796`): `lichen-language` 275/275,
 `lichen-highlevel` 136/136, `lichen-lowlevel` 164 (one ignored); the compute

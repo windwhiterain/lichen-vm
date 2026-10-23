@@ -1,5 +1,5 @@
 //! `1.5` builds `[Float(1.5), [float, Type]]`; `1.0` must never build an `Int`
-//! pair. See floating-point.md §3.4.
+//! expr. See floating-point.md §3.4.
 
 use lichen_language::compile;
 use lichen_language::program::LangProgram as P;
@@ -13,7 +13,7 @@ fn value_of(module: &Module<P>, node: NodeId) -> Option<LowValue> {
 }
 
 #[test]
-fn a_float_literal_builds_a_float_pair_and_never_an_int_shaped_one() {
+fn a_float_literal_builds_a_float_expr_and_never_an_int_shaped_one() {
     // `1.5` — the value slot is `Float(1.5)`, the type slot is the shared
     // `[float, Type]` type expression.
     let report = compile("1.5");
@@ -28,7 +28,7 @@ fn a_float_literal_builds_a_float_pair_and_never_an_int_shaped_one() {
         "the type slot is the shared `[float, Type]` expression"
     );
 
-    // `1.0` must not build an `Int`-shaped pair.
+    // `1.0` must not build an `Int`-shaped expr.
     let report = compile("1.0");
     assert!(report.ok(), "1.0 must check: {:?}", report.diagnostics);
     let build = report.build.expect("a build");

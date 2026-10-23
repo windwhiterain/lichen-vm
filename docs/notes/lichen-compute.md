@@ -63,7 +63,7 @@ LangOperator = LowOperator + TypeOperator + GcdOp + ComputeOperator
 LangProgram  = ProgramImpl<LangValue, LangOperator, Perspective>
 ```
 
-`enum_ext!` generates the `From<X>` / `AsEnum<X>` pair each extension needs, so the
+`enum_ext!` generates the `From<X>` / `AsEnum<X>` expr each extension needs, so the
 vocabularies are flat unions with no `Ext` wrapper. The program marker (`LangProgram`)
 is what fixes the vocabulary for the whole frontend.
 
@@ -78,7 +78,7 @@ not callee-type dispatch:
   `PackageStore::register_native`), so a `$jit`/`$launch` is **private** to that
   module — two plugins each registering `$jit` never collide.
 - `$jit(f)` / `$launch(native, a)` parse to a `NativeCall`; the checker delegates to
-  the matching `NativeOp::build` and adopts whatever `[value, type]` pair it returns. The
+  the matching `NativeOp::build` and adopts whatever `[value, type]` expr it returns. The
   checker knows nothing about kernels — the lichen wrapper is the *only* thing that parses
   the kernel struct.
 
@@ -117,7 +117,7 @@ than counting positions.)
 `NativeOp::build` receives the **already-compiled** arguments (`NativeArg { expr, value,
 ty }`) and shapes the type through the curated `Ctx` (never raw lowlevel nodes): it
 calls `ctx.fresh()`/`ctx.array_node()`/`ctx.value_node()`/`ctx.check_unify()`/`ctx.universe()`,
-emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
+emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` expr.
 
 - **`JitOp::build`** / **`ParallelOp::build`** — function-ness (or arrow) gate:
   unify the argument's type with the arrow shape; emit `Jit`/`Parallel` over the argument
@@ -128,7 +128,7 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   (`$plrun(k.native, a)`) — emit the operator over `[native, a]`; the wrapper's
   `a: k.I` gates the argument and `r: k.O` types the result.  `LaunchOp`'s
   codomain is the callee's own `.O` — `Int` for a scalar kernel, and the
-  tuple type itself for a tuple-codomain one — so `LaunchOp` pairs the result
+  tuple type itself for a tuple-codomain one — so `LaunchOp` exprs the result
   with the **lazy codomain** and its arity rides along for free.
   `ParLaunchOp`'s result is the parameter's `.out` structure: one `Buf` field per
   output, whose field names the result type carries because `parallel` sets `.O` to
@@ -320,7 +320,7 @@ values.
 
 A constant's bits and an operator's operands are only readable against the class
 they were lowered in, so an instruction **names** its class rather than leaving one
-to be inferred — which is the same reason the two crossing directions are a pair
+to be inferred — which is the same reason the two crossing directions are an expr
 on `Conv` ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md)). A module
 that needs one element type per class is holding a fixed-size table of them, and
 that table's length is `ScalarClass::ALL`, so `ScalarClass::index` is a dense index
@@ -340,7 +340,7 @@ has: `kernel_bin` is the one conversion from `TypeOperator`, and `None` for the
 one operator no body can contain), the prefix scalar operators (`unary_class`
 answers `exp`, which lowers to `KernelInstr::Exp`; the two conversions are answered
 before it, because a literal converts in the language's own classes), the parameter
-read (`Index(param_pair, 0)`), a `value_of` extraction (`Index(pair, 0)`), and a
+read (`Index(param_expr, 0)`), a `value_of` extraction (`Index(expr, 0)`), and a
 2-element conditional, plus a cross-kernel `Launch`/`Call` (lowered to
 `CallKernel`).
 
@@ -362,7 +362,7 @@ diverges above it, silently. The choice is stated once, in `KernelBin`. See
 The design decision that keeps this safe: the JIT reads the lowlevel **value dataflow**
 (parameter reads + scalar operators), gets the I/O contract from the kernel signature
 (the struct's `.I`/`.O`), and ignores the type halves and union-find classes. It compiles the
-**template shape** — the parameter value (`Index(param_pair, 0)`) is a *symbolic* wasm
+**template shape** — the parameter value (`Index(param_expr, 0)`) is a *symbolic* wasm
 local, constants are concrete `i64.const`, and every operator is concrete. There is no
 snapshotting of a bound argument and no class-rep routing, so the launch-argument
 `Parameterized` handling (§6) does not apply to a pure shape walk. The "runtime is the
@@ -374,8 +374,8 @@ p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the par
 **low type** — seeded from the parameter's type cell by the encoding authority, then read
 back off the parameter's class (see [compute-jit-low-types](compute-jit-low-types.md)) — which
 drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element reads:
-`param_path`/`is_param_value` recognise `Index(param_pair, 0)` → `local.get 0` (scalar) and
-`Index(Index(param_pair, 0), k)` → `local.get k` (tuple element k), via `flat_arity`/
+`param_path`/`is_param_value` recognise `Index(param_expr, 0)` → `local.get 0` (scalar) and
+`Index(Index(param_expr, 0), k)` → `local.get k` (tuple element k), via `flat_arity`/
 `flatten_offset`. On the launch side the tuple argument is unwrapped by `collect_args` and
 the now multi-arity `main` is called through the dynamic `wasmi::Func::call` API.
 
@@ -391,7 +391,7 @@ leaf must leave exactly one value or the stack slots interleave.
 
 The count of leaves becomes `KernelFragment::results`, and it is what types the
 assembled function and sizes the launch's output buffer. `assemble_module`
-therefore keys its type index on the **pair** `(parameter arity, result arity)`,
+therefore keys its type index on the **expr** `(parameter arity, result arity)`,
 not on the parameter arity alone: two fragments can share a parameter arity and
 differ in result arity (`(i64) -> i64` against `(i64) -> (i64, i64)`), and wasm
 function types are indexed by type — keying on one arity would hand the second the
@@ -574,12 +574,12 @@ body's.
 A read of the domain at a path is matched **from the chain of `Index` nodes, not
 from the class of its base**: the deep pass may have unified the parameter with the
 argument it was passed, so the node the read names is a computation and only the
-chain says where it came from. `Index(param_pair, k)` is the pair's value half
+chain says where it came from. `Index(param_expr, k)` is the expr's value half
 rather than a step of the domain's path — it is how a read reaches the parameter at
 all, and counting it would descend the parameter's *wrapper* struct as though it
-were the domain's shape — and the cursor still stops **on** the pair, because the
-pair is the base the slot check has to see. The base is matched against the
-parameter slots themselves (each slot's pair and its value) *or* one of the
+were the domain's shape — and the cursor still stops **on** the expr, because the
+expr is the base the slot check has to see. The base is matched against the
+parameter slots themselves (each slot's expr and its value) *or* one of the
 domain's leaves: a read of `p` reaches the wrapper's field first, so the chain ends
 at a leaf rather than at the domain, and matching the slots alone placed six
 tuple-domain reads nowhere.
@@ -612,14 +612,14 @@ leaves, trying three shapes in the order the graph can rule them out:
 1. a read of the domain at a path — `k x` and `k x(0)` are the caller's own
    parameters, contiguous in the flattened layout, so they pass through, matched by
    `parameter_path_of`;
-2. the `[value, type]` pair's value half — a bare kernel apply carries the pair and
+2. the `[value, type]` expr's value half — a bare kernel apply carries the expr and
    the argument is its element 0;
 3. a concrete tuple value, element by element, recursing for a nested domain.
 
 A wrapper's `launch` argument is a bare `Parameterized` cell, concrete only at run
 time, so the tuple it stands for is not an array value here and never will be: the
 argument's class is where it is. Measured on
-`jit_cross_kernel_tuple_argument_through_the_wrapper`, the pair's value half is its
+`jit_cross_kernel_tuple_argument_through_the_wrapper`, the expr's value half is its
 own singleton class and holds no array, while `class_root(arg)` holds one — the peel
 loses the link, not the cell. The old walk tried four encodings in a loop and kept
 the first that worked; that is a guess that happens to be checked, where the three
@@ -762,7 +762,7 @@ multi-arity domain: two leaves returning `(5, 3): tuple{Int, Int}`, a per-leaf b
 (pin `5, 8`) so a leaf emitted from the wrong stack slot would show, a returned
 tuple indexed back with `r(0)`/`r(1)`, a three-leaf codomain `(7, 8, 9)` (the
 distinct wasm signature that forces `assemble_module` to key its type index on the
-arity *pair*), and the same multi-value run reached through the untyped
+arity *expr*), and the same multi-value run reached through the untyped
 `compute.call` path. One test pins the **decision** about a multi-value callee
 called from inside another body: it is refused, and the refusal names its cause
 ("more than one value") rather than silently truncating to the first result.
@@ -837,9 +837,9 @@ assembler's per-arity type section already matches. Two argument shapes cover it
   cross-kernel call result all keep working inside a tuple argument.
 
 The two **encodings** of the argument are not told apart by shape: a bare kernel apply
-carries the `[value, type]` pair whose element 0 is the argument, while a `launch` argument
-arrives as a bare `Parameterized` cell — and a pair has exactly as many elements as the
+carries the `[value, type]` expr whose element 0 is the argument, while a `launch` argument
+arrives as a bare `Parameterized` cell — and an expr has exactly as many elements as the
 two-element tuple it wraps. So each encoding is *emitted* and the first that produces one
-leaf per domain element is kept. That is not a guess: the leaves must emit anyway, and a pair
+leaf per domain element is kept. That is not a guess: the leaves must emit anyway, and an expr
 read as a tuple fails on its second element, which is a type cell. Each refusal names its own
 cause (wrong encoding / wrong element count / wrong read arity) and none falls back.

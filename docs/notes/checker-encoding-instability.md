@@ -2,17 +2,17 @@
 
 > Status: **current — the label stands, narrowed to one component.** The
 > encoding has one owner and a usable query surface; what remains unstable is
-> `lichen-compute`'s emitter walking the `[value, type]` pair on the way into a
+> `lichen-compute`'s emitter walking the `[value, type]` expr on the way into a
 > kernel body. The kernel *domain* read is gone (it comes from the parameter's
 > **low type**, [lowlevel-low-types](lowlevel-low-types.md)), and the lowlevel's
-> own pair decoding is inventoried below with the defect among it closed.
+> own expr decoding is inventoried below with the defect among it closed.
 > **Open:** the body's graph walk.
 > Points at: `crates/lichen-highlevel/src/shape.rs` (the encoding authority) and
 > `crates/lichen-compute/src/compute.rs` (the one component that still reads
 > around it).
 
 lichen's type representation is an untyped node graph with positional
-conventions: every expression compiles to a `[value, type, attrs…]` pair, every
+conventions: every expression compiles to a `[value, type, attrs…]` expr, every
 kinded type expression to a `[shape, [marker, universe]]` pattern, and every
 type spine ends at the self-referential universe `K = [Type, ↺]`.
 
@@ -24,11 +24,11 @@ checker, the renderer and the language composition read the layout through it.
 The cleanup's re-encoding (the `shape` authority, the kind-marker registry,
 single-sourced codec tags and attribute slots) ran through it, and every internal
 reader followed. Two parts of the layout are **frozen contracts** because an
-already-persisted artifact carries them: the attribute order (a pair's arity is
+already-persisted artifact carries them: the attribute order (an expr's arity is
 its schema tail, [attributes](attributes.md)) and each kind marker's persisted
 codec tag (the registry in `shape.rs`).
 
-**Outside the project** the pair and kind layout is **not** a frozen contract,
+**Outside the project** the expr and kind layout is **not** a frozen contract,
 and this note is the statement of that. The instability is scoped to the JIT
 boundary: anything that builds a program through the documented `Program` /
 `Ctx` extension points — a compiler plugin, a package — is not reading the
@@ -49,7 +49,7 @@ so an adapter answers *class* questions on top of it. Built and consumed:
 | `name_table_index` | `Checker::named_field_index_any` — the fold over a name table, shared so the two gates cannot decode an entry differently |
 
 A `TypeRef` is the distinction the encoding has and the type system does not: a
-type **term** is the `[shape, kind]` pair itself, a type **slot** is a node
+type **term** is the `[shape, kind]` expr itself, a type **slot** is a node
 holding one. Resolving one into the other is the authority's decision, so no
 caller unwraps a slot by hand. The two are both two-slot arrays, so no
 structural test separates them; the side that holds one always knows which it
@@ -104,34 +104,34 @@ that chooses the class cannot.
 
 ## The lowlevel readers too
 
-An audit of `crates/lichen-lowlevel` for the pair convention. Six readers, and
+An audit of `crates/lichen-lowlevel` for the expr convention. Six readers, and
 the distinction that matters is not *how much* each one knows but **whether the
 value it reads is an operand of the operation being performed**:
 
 | site | what it reads | verdict |
 |---|---|---|
-| `apply.rs` (two sites) | element 1 of a **parameter** node — the declared type, for `ApplyError` attribution only | **Wiring.** The apply pass built or cloned the pair it is reading; element 1 is an operand of the check it is performing. |
-| `apply.rs` (`wire_apply_result`) | element 1 of the **return pair** it just cached, to bind the checker's result cell | **Wiring.** The cell is the third operand of the apply. |
-| `resolve.rs` (`pair_value_half`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Encoding reader, and the lowlevel's own convention.** `define_in(function, node)` derives the domain itself, through `parameter_leaves`, from the pair the template carries; where the analysis starts from `Function`'s two nodes — `parameter_leaves`, and `loop_conversion.rs`'s state and spine roots — there is no caller to state it. |
-| `loop_conversion.rs` | a template's parameter, to resolve a read to the path into the parameter's value, and its return, for the spine's roots | **The same standing as `parameter_leaves`.** The loop's analysis is a template-shape question, so it reads the pair the template carries. |
+| `apply.rs` (two sites) | element 1 of a **parameter** node — the declared type, for `ApplyError` attribution only | **Wiring.** The apply pass built or cloned the expr it is reading; element 1 is an operand of the check it is performing. |
+| `apply.rs` (`wire_apply_result`) | element 1 of the **return expr** it just cached, to bind the checker's result cell | **Wiring.** The cell is the third operand of the apply. |
+| `resolve.rs` (`expr_value_half`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Encoding reader, and the lowlevel's own convention.** `define_in(function, node)` derives the domain itself, through `parameter_leaves`, from the expr the template carries; where the analysis starts from `Function`'s two nodes — `parameter_leaves`, and `loop_conversion.rs`'s state and spine roots — there is no caller to state it. |
+| `loop_conversion.rs` | a template's parameter, to resolve a read to the path into the parameter's value, and its return, for the spine's roots | **The same standing as `parameter_leaves`.** The loop's analysis is a template-shape question, so it reads the expr the template carries. |
 | `equality.rs` (`is_static_universe_id`) | a 2-element array whose element 1 points back at the same module and index | **Mixed.** The `[Type, ↺]` universe is the canonical instance, but the predicate is stated as a *generic* graph shape and unifies any two such cycles. It decodes the positions and reads no meaning. |
-| `evaluation.rs` (`table_get_operands`) | elements 0 and 1 of a `TableGet`'s operand, which the arm's own check already proved is a 2-element array | **Not an encoding reader.** A destructure of `[table, key]`; no pair is involved. |
+| `evaluation.rs` (`table_get_operands`) | elements 0 and 1 of a `TableGet`'s operand, which the arm's own check already proved is a 2-element array | **Not an encoding reader.** A destructure of `[table, key]`; no expr is involved. |
 
 A **per-analysis** boundary is the honest description; a crate-wide one is not:
-`low_type.rs` states "the pass never learns the `[value, type]` pair layout",
+`low_type.rs` states "the pass never learns the `[value, type]` expr layout",
 which is a claim about *that pass*, while `apply.rs` and `control_flow.rs` are in
 the same crate and do learn it.
 
 **The defect among the readers is answered by a stated convention, not by a
 sniff.** A function's `parameter` and `r#return` are `NodeId`s that hold the
-checker's pair, and `Function` says nothing about their shape. `Module::define_in`
-derives the domain itself — `parameter_leaves` reads the pair the template
+checker's expr, and `Function` says nothing about their shape. `Module::define_in`
+derives the domain itself — `parameter_leaves` reads the expr the template
 carries — and the analyses that *start*
-from the pair read it deliberately rather than sniffing for a width. Such a
+from the expr read it deliberately rather than sniffing for a width. Such a
 read is the lowlevel's own stated convention about `Function`, not a heuristic
 standing in for one. The lowlevel is the evaluator the checker's graph was
 written for — `P::Value` for the lichen frontend is the checker's own term — so
-the pair is inside the VM's value domain rather than a format it consumes, and
+the expr is inside the VM's value domain rather than a format it consumes, and
 there is no revision in which the lowlevel was free of the layout.
 
 ## What `lichen-compute` still reads
@@ -139,8 +139,8 @@ there is no revision in which the lowlevel was free of the layout.
 `lichen-compute`'s JIT is the one component that does not use the authority. It
 reads the conventions out of raw nodes:
 
-- `value_of_node` follows a `value_of` extraction — an `Index(pair, 0)` over a
-  pair node — down to the pair's value slot, the same access path the checker
+- `value_of_node` follows a `value_of` extraction — an `Index(expr, 0)` over a
+  expr node — down to the expr's value slot, the same access path the checker
   itself uses to reach most values.
 - The native operators read a kernel signature's domain and codomain through raw
   `Index` chains — `Index(sig.ty, 0)`, then `Index(sig_shape, 0)` /
@@ -155,7 +155,7 @@ authority's bound-type reader (`Module::function_type_signature`).
 
 **The domain read is gone.** `kernel_param_shape` and `element_shape` — the two
 functions that re-derived a kernel's domain by walking the type half of the
-parameter pair — were deleted. The domain now comes from the parameter's low
+parameter expr — were deleted. The domain now comes from the parameter's low
 type, and the *seed* for that low type is read once through the authority
 (`shape::low_type_of_slot`), a single named call rather than a convention the JIT
 re-derives. That was the read with the most reach: a `string` domain used to
@@ -163,16 +163,16 @@ decode as a machine scalar, so the old walk was not merely coupled, it was wrong
 where it was silent.
 
 What remains is the **body's graph walk**: the emitter reaches a value's
-computation by following `Index` chains from a known pair, and reaches a parameter
-element by its index path. Building a body's graph no longer needs the pair — the
-graph facts moved to `resolve.rs` without a control-flow graph, and the pair
+computation by following `Index` chains from a known expr, and reaches a parameter
+element by its index path. Building a body's graph no longer needs the expr — the
+graph facts moved to `resolve.rs` without a control-flow graph, and the expr
 reads that remain there are the two the analysis *starts* from
 (`parameter_leaves`, `loop_conversion.rs`) rather than a value the caller already
 held.
 
 ## What would remove the label
 
-A backend that reads each body node's **low type** instead of walking the pair
+A backend that reads each body node's **low type** instead of walking the expr
 would remove the last of it: the abstract-interpretation pass computes and stores
 every body node's low type, and [lowlevel-low-types](lowlevel-low-types.md) gave
 the lowlevel the layer. That is recorded as the open item in
@@ -202,7 +202,7 @@ matching renderer facts are in
 
 Statement bindings pre-resolve every use of a name to the value's own
 `ExprId`, so one expression can be referenced from several parents. Compiling
-it once and reusing the pair matters because a recompile allocates fresh state
+it once and reusing the expr matters because a recompile allocates fresh state
 again — and a struct type's nominal id **is** its written occurrence
 ([function-type-merge](function-type-merge.md)), so recompiling one occurrence
 would mint a second identity and silently break the sharing the frontend
@@ -220,7 +220,7 @@ kind into the placeholder, so a block root may be *any* kind, and a
 hand-maintained kind list silently misses a variant — a self-reference through
 an unlisted kind then re-enters the check forever. For a childless kind the
 skeleton is inert and the epilogue binds it away; a `Function` block root
-pre-registers its own pair in `check_lam` before its body compiles, overwriting
+pre-registers its own expr in `check_lam` before its body compiles, overwriting
 the skeleton.
 
 ### An inference hole in either position
@@ -233,7 +233,7 @@ with `Type` itself.
 
 ### A masked error region is an opaque leaf
 
-A recovered-error region compiles to a pair of fresh, never-unified cells:
+A recovered-error region compiles to an expr of fresh, never-unified cells:
 nothing inside it is checked, so it cannot introduce a spurious type-level
 "expected X, found Y" from inside itself — the parser's own syntactic diagnostic
 still fires at the parse layer — and the undecided cells never cause a cascade.
@@ -250,26 +250,26 @@ subscript is a constant node, shared for `0` and `1`.
 
 ### What `LiteralExt::build` may return
 
-A literal builds its `[value, type]` pair itself through `LiteralExt::build`:
+A literal builds its `[value, type]` expr itself through `LiteralExt::build`:
 the built-in int literal and the type-constant literal each build their own
 value and type nodes, referencing the prebuilt singleton expressions the context
-exposes, and a custom literal may build any value/type pair that references
+exposes, and a custom literal may build any value/type expr that references
 other expressions. A type-constant literal is the exception — `Type : Type` is
 built as the self-referential universe node, so it is not a `[value, type]`
-pair at all.
+expr at all.
 
 ### The `slot0_is_shape` heuristic, and what it is not
 
 `slot0_is_shape` decides "element 0 is an array ⇒ this is a shape" rather than
-an expression's `[value, type]` pair. It misfires on a pair whose **value** is
+an expression's `[value, type]` expr. It misfires on an expr whose **value** is
 an array — a tuple value is an array, and so is a struct marker's payload
-(`[payload, TypeStruct]`) — so a diagnostic path through such a pair may tag a
+(`[payload, TypeStruct]`) — so a diagnostic path through such an expr may tag a
 `Value` descent as `Shape`. It is a diagnostic rendering hint only: the unify
 itself is unaffected.
 
 ### Naming the layout: role, not structure
 
-An expression pair and a kinded type expression are distinguished by **role**,
+An expression expr and a kinded type expression are distinguished by **role**,
 never by structure: `[value, type, attrs…]` and `[shape, kind]` have
 positionally identical slots (`0`/`1`) but mean different things, so each gets
 its own constant names. The same reasoning repeats one level down, in the shape
@@ -278,7 +278,7 @@ half: an array's element position and a function's domain position are both
 rather than the layout.
 
 The struct marker is where the naming pays off: it is an ordinary
-`[value, type]` pair whose **type** read is the `TypeStruct` atom, so "is this a
+`[value, type]` expr whose **type** read is the `TypeStruct` atom, so "is this a
 struct marker?" is a check of a type constant rather than a guess about the arity
 of an open encoding. Its payload is `[TypeId, names, names_in_order]`, and the
 last field exists for the one reader a name→index table cannot serve: a named

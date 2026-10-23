@@ -397,7 +397,7 @@ where
     let mut used = Vec::new();
     for (library, instance, parameter) in probes {
         let mut cursor = parameter
-            .and_then(|parameter| module.pair_type_item(parameter))
+            .and_then(|parameter| module.expr_type_item(parameter))
             .and_then(dynamic_node);
         for _ in 0..2 {
             let Some(node) = cursor else {

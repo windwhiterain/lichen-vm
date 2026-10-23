@@ -58,7 +58,7 @@ zero exit status. The output is the answer **and its type**, written
 
 Why does the compiler print the type? Because lichen does not check
 types in a separate pass before running the program. Every expression
-evaluates to a *pair*: a value and its type. Evaluation is what decides
+evaluates to a *expr*: a value and its type. Evaluation is what decides
 both, and unification is what keeps them consistent. The type is part of
 the program's answer, so the compiler shows it to you. (Chapter 5 is
 about this model in full.)
@@ -176,7 +176,7 @@ directory works (Chapter 16).
 
 - A lichen program is a block: statements, then an optional tail. Its value
   is the tail's value.
-- The compiler prints `value: type`, because every expression is a pair.
+- The compiler prints `value: type`, because every expression is an expr.
 - Newlines, semicolons, and commas are all the same separator.
 - There are no comments; prose lives in the `---...---` header block.
 - A directory path runs every program in it.

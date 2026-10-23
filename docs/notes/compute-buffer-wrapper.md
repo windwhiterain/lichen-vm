@@ -45,7 +45,7 @@ than ignoring it or lowering it into something else.
 A kernel carries **no** `TypeKernel`/`TypeParKernel` marker: its struct's field
 names are the whole type-level story, and the checker and the shared renderer
 treat it as an ordinary struct. The buffer follows the same rule, and
-`TypeBuffer`/`TypeWrite` were the marker pair it would otherwise have needed.
+`TypeBuffer`/`TypeWrite` were the marker expr it would otherwise have needed.
 Giving the buffer type a *field* to read (`.element`) makes a marker unnecessary
 rather than half-implemented: the type's own shape says what the value is, so
 nothing has to declare a kind beside it.
@@ -240,8 +240,8 @@ inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 
 ## Two spelling facts, both load-bearing
 
-- The argument to `compute.P` must be an *instantiated* pair —
-  `P (compute.KT _)(.I In, .O Out)`. A pre-bound pair answers "this value is not
+- The argument to `compute.P` must be an *instantiated* expr —
+  `P (compute.KT _)(.I In, .O Out)`. A pre-bound expr answers "this value is not
   a container".
 - Applying a type lambda before instantiating needs parentheses:
   `(A In)(.n 3, …)`, not `A In(.n 3, …)`.
@@ -263,7 +263,7 @@ body spelled the read. `param_path` is a two-pass walk:
    selector as an `IndexStep` — a `Position` when it is a constant (`a(0)`), a
    `Named` name when it is a `TableGet` (a name is a compile-time string even
    when its index is not). A chain whose outermost `Index` reads the parameter
-   pair's value slot is a whole-parameter read: the empty path.
+   expr's value slot is a whole-parameter read: the empty path.
 2. **Resolve.** Walk the steps outermost-first against the parameter's type,
    carrying two parallel lists per level: the value's field *types* and the same
    value's field *names* (`struct_type_names`). A named step is its position in
@@ -306,7 +306,7 @@ is the equality class rather than the shape:
 chain[0] Index(921, 952)      // 952 is a *static* selector — a name
 chain[1] Index(923, 926)      // 926 likewise
 chain[2] 923: no operation     // the alias carries the field's class
-param_pair: 22                 // never reached
+param_expr: 22                 // never reached
 ```
 
 `param_path` answers it by testing the **equality class** at the innermost step rather
@@ -357,7 +357,7 @@ slot-read destructuring** — the step `peeled_argument` resolves — which is e
 the peeled node names a buffer and the unpeeled operand does not.
 
 Two consequences of that shape, both of them reasons the code reads as it does.
-Stepping **into the pair's value** is required for a struct parameter's fields,
+Stepping **into the expr's value** is required for a struct parameter's fields,
 because they live inside the value half and the `roles` path is made of field
 positions with no step for the peel — so `cfg.I.a` is two steps in, not a
 whole-parameter read. That step is **known not to reach the answer**: the value
@@ -427,10 +427,10 @@ Two defects were behind the one refusal, and fixing either alone still refuses:
    `struct_fields_of_slot`/`field_names`, the encoding authority the role table
    is itself read with, so a name can no longer resolve against a different
    layout than the roles did.
-2. **The pair's value-half peel was counted as a field.** `param_path` pushed
-   `Index(param_pair, 0)` as a path step, so every field after it was shifted by
+2. **The expr's value-half peel was counted as a field.** `param_path` pushed
+   `Index(param_expr, 0)` as a path step, so every field after it was shifted by
    one: `k.in.a` collected as `[#0, "in", "a"]`, which resolves `in` against
-   `.n`'s type and then cannot find it. The pair's value half *is* the parameter,
+   `.n`'s type and then cannot find it. The expr's value half *is* the parameter,
    not one of its fields, so the peel contributes no step — the path is counted
    from the parameter's first field, which is what `KernelRoles`' paths and the
    slot's scalar shape are both written against.

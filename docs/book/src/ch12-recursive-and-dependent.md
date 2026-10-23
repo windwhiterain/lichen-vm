@@ -129,7 +129,7 @@ There is no algorithm that decides every lichen program's termination,
 and the type system does not pretend otherwise. A program may have an
 infinite type, a cyclic value, or no answer at all; the checker's budgets
 are safety valves, not proofs (Chapter 4). What the language guarantees is
-the consistency of every `value : type` pair it produces, given consistent
+the consistency of every `value : type` expr it produces, given consistent
 inputs.
 
 ## Summary
@@ -155,7 +155,7 @@ inputs.
 
 1. Write two struct types that refer to each other, and a value that cycles
    through them. Read a field and explain where the printer cut.
-2. Explain why `A = struct{.next A}` is refused while the pair `A`/`B` is
+2. Explain why `A = struct{.next A}` is refused while the expr `A`/`B` is
    not.
 3. Write `gcd` with and without its annotation and compare the two outputs.
 4. Write `a = x => (1, "a", Int)(x)` and call it at each of the three

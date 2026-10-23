@@ -133,7 +133,7 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
         None => return "no marked function".to_string(),
     };
     let parameter = module.functions[function].parameter;
-    let value_cell = module.pair_value_half(parameter).unwrap_or(parameter);
+    let value_cell = module.expr_value_half(parameter).unwrap_or(parameter);
     let value_class = module.class_root(value_cell);
     let mut steps = Vec::new();
     let mut current = node;
@@ -415,7 +415,7 @@ fn dump_comparisons(source: &str) -> String {
                 .and_then(|items| items.get(1).map(|item| item.node))
                 .and_then(|node| node.dynamic())
                 .map(|argument| {
-                    let value = module.pair_value_half(argument).unwrap_or(argument);
+                    let value = module.expr_value_half(argument).unwrap_or(argument);
                     format!("{:?}", module.value_leaves(value))
                 })
                 .unwrap_or_else(|| "<no argument>".to_string());
@@ -434,7 +434,7 @@ fn dump_comparisons(source: &str) -> String {
                 .and_then(|items| items.get(1).map(|item| item.node))
                 .and_then(|node| node.dynamic())
                 .map(|argument| {
-                    let value = module.pair_value_half(argument).unwrap_or(argument);
+                    let value = module.expr_value_half(argument).unwrap_or(argument);
                     module.value_leaves(value).unwrap_or_default()
                 })
                 .unwrap_or_default()
@@ -542,7 +542,7 @@ fn dump_comparisons(source: &str) -> String {
                 // read with the operator it carries of its own.
                 if own == "an Apply" {
                     let mut frontier = vec![selector];
-                    if let Some(value_side) = module.apply_pairs.get(&selector).copied() {
+                    if let Some(value_side) = module.apply_exprs.get(&selector).copied() {
                         frontier.push(value_side);
                         lines.push(format!(
                             "            selector's value-side apply {}",
@@ -563,7 +563,7 @@ fn dump_comparisons(source: &str) -> String {
                             let Some(container) = item.node.dynamic() else {
                                 continue;
                             };
-                            let value = module.pair_value_half(container).unwrap_or(container);
+                            let value = module.expr_value_half(container).unwrap_or(container);
                             let leaves = module.value_leaves(value).unwrap_or_default();
                             lines.push(format!(
                                 "            apply {position} {}, leaves {leaves:?}",

@@ -19,16 +19,16 @@ the answer at any point:
 1. **Seed.** Each template term's type slot is decoded by the encoding authority
    (`lichen_highlevel::shape::low_type_of_slot`) and handed to
    `Module::seed_class_low_type`: the **value** slot takes the cell's class as a
-   lower bound, and the **pair** takes `Tuple([shape, Unknown])`. A term with no
+   lower bound, and the **expr** takes `Tuple([shape, Unknown])`. A term with no
    type cell seeds `Unknown`, which is the honest statement.
 2. **Pass.** `Module::infer_template_low_types` runs the fixed-point pass over
    the template, so the body's own low types exist before any apply.
 3. **Read.** The domain is `Module::low_type_of_node(param_value)` — the same
    read any other backend would do.
 
-**The pair's half of the seed is the load-bearing one.** The pass reaches a
-let-bound name through `Index(pair, 0)`, and an `Index` reads its **container's**
-low type — so it reads the pair. A pair is one of the encoding arrays
+**The expr's half of the seed is the load-bearing one.** The pass reaches a
+let-bound name through `Index(expr, 0)`, and an `Index` reads its **container's**
+low type — so it reads the expr. An expr is one of the encoding arrays
 [lowlevel-low-types §6](lowlevel-low-types.md) says no backend compiles against,
 because observation joins its two positions to `Array(Unknown, 2)` and the join
 is `Unknown`; seeding the value slot alone therefore seeds a channel nothing
@@ -99,7 +99,7 @@ backend reads that rather than an operand stack. The domain is a low type; the
   (`codomain_leaves`), because the low-type pass only ever sees the domain. So
   the wasm signature's two halves come from two different places — the domain
   from `flat_arity`, the results from the body walk — and `assemble_module`
-  therefore keys its type index on the `(parameter arity, result arity)` pair.
+  therefore keys its type index on the `(parameter arity, result arity)` expr.
 - `Lower::value` is the one placement mechanism, and it answers in three cases:
   a **literal**, a **parameter read at an index path**, or a `define_in` that
   names the definition. The parameter case matches the `Index` chain rather
@@ -107,7 +107,7 @@ backend reads that rather than an operand stack. The domain is a low type; the
   parameter with the argument it was passed — so the node a read names is a
   *computation* and only the chain says where it came from. A path walk covers
   scalar, flat-tuple and nested-tuple reads alike.
-- The lowering looks through the checker's `value_of` extraction (`Index(pair, 0)`)
+- The lowering looks through the checker's `value_of` extraction (`Index(expr, 0)`)
   to reach a value's actual computation, and lowers an `if c then a else b` (a
   2-element array indexed by a computed selector) to a wasm `select`.
 - `run_kernel` calls the compiled function over an argument vector;

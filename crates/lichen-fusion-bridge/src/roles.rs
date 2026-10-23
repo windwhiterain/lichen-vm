@@ -44,7 +44,7 @@ impl ReadRoles {
     /// The roles of a consumer's projection: the buffer at `position` is the producer's.
     ///
     /// # Invariant
-    /// One position names one producer, so this reads as the pair's own [`Variable::PRODUCER`].
+    /// One position names one producer, so this reads as the expr's own [`Variable::PRODUCER`].
     pub const fn consumer(position: usize) -> ReadRoles {
         ReadRoles {
             producer_inputs: [

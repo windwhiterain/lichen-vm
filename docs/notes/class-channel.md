@@ -346,7 +346,7 @@ redesign; it needed the boundary moved, which is what phase 1 did.
    (`pipeline`, `an_applied_struct_constructor_keeps_the_occurrence_identity`:
    1 expected → 5).  Propagation is silent; the checker's own comparison reports.
 3. **A structural comparison cannot be bounded by depth alone.**  `[cell, self]`
-   — the term pair a type is — repeats the *same node pair* at every level, so a
+   — the term expr a type is — repeats the *same node expr* at every level, so a
    depth bound (64) reports a conflict on a value that agrees with itself.
    `unify_values` carries the element-node path the old `reconcile_node` used,
    with the depth bound as the static case's guard only.
@@ -366,7 +366,7 @@ reason), and `pipeline` 137 of 140 — every number identical to `dev`'s.
 **What this does not settle.**  The write walk (`propagate_class_value`) is
 O(members) per write — no index makes writing to *m* members O(1) — and it is the
 remaining item.  The read is done: `class_committed_value` scanned the member
-list (twice per `unify_inner` pair, every array element included), which is the
+list (twice per `unify_inner` expr, every array element included), which is the
 measured 2.8s → 5.5s step `fd92bef` introduced; the class's representative now
 carries the member that holds the class's value, so the read is one `find` plus
 one field read.
@@ -385,7 +385,7 @@ two and three are **member-local**, not class-level: a member's existing value
 against the propagated value, and an operation's result against *its own* node's
 value.  Implementing them as "read the class's value and unify the incoming one
 against it" reports a conflict on every ordinary write, because a class here
-routinely holds *different* values on different members — a term pair on one, the
+routinely holds *different* values on different members — a term expr on one, the
 resolved value on another, a type cell on a third (§2 below measured exactly that
 mixture).  The tolerated comparison this note's §2 relies on is what keeps those
 ordinary writes from being conflicts.
@@ -576,7 +576,7 @@ change):
   **6** failures, all of the same seed-side kind, so the breakage is not the
   compound answers alone.
 - A trace of every call that reached the channel shows what it answers with:
-  `Array(Unknown, 2)` **for a `[value, type]` term pair** (a pair is a two-element
+  `Array(Unknown, 2)` **for a `[value, type]` term expr** (an expr is a two-element
   array), `Tuple([…])` for tuple values, `USize` for template cells whose class
   was unified with a runtime value.
 - Narrowed further — the class read added at one *reader* only
@@ -588,7 +588,7 @@ change):
 **values** in a class.  The two coincide exactly for the scalar classes — there a
 value's shape *is* its class — and nowhere else.  A type cell and a value node can
 also share one class (an annotated parameter's type cell holds the annotation's
-pair term; a frozen template's type cell resolves to a runtime *value* at the
+expr term; a frozen template's type cell resolves to a runtime *value* at the
 apply), which is why a scalar answer from the channel is not evidence about a
 slot's type either: in the trace the class was describing the *template's* value.
 
@@ -615,7 +615,7 @@ receiver on the *run* side, and that a low type would not be enough if it had on
 `OperatorExt::run(operand, _block, module)` (`program.rs:830-835`) — an arm
 receives the *evaluated* operand array and no node id for its own expression.
 `ParLaunchOp::build` creates `out_ty` (`compute.rs:8676`) and references it only
-from the pair `[op, out_ty]`; nothing at run time can name that cell, so
+from the expr `[op, out_ty]`; nothing at run time can name that cell, so
 "`seed_class_low_type(node, …)` at the `ParLaunch` arm" has no `node` to receive
 it.  The one node the arm *does* create for a several-output result
 (`compute.rs:1467`) is the buffer **value**, and the observation sites derive
@@ -630,7 +630,7 @@ that holds no value as its **class name** (`class_name` keys on
 type value** — a `write_node_value`, not a seed.  This is §2's lesson applied to
 §3: the reader asks for a value.
 
-**What today's `array{Int, ?d}` actually is** (measured on a "cpu" probe pair,
+**What today's `array{Int, ?d}` actually is** (measured on a "cpu" probe expr,
 scratch files, deleted):
 
 | spelling | printed |
@@ -893,7 +893,7 @@ the unify against `f`'s type makes those cells the function's own argument and
 result slots (trap 4) without pinning a polymorphic body.  The retired carrier
 that first published such an arrow was `$sig(f)` (`compute.rs`), which built the
 arrow `JitOp`'s own gate built — two fresh cells through `ctx.arrow`'s
-shape/kind/pair triple — and unified it against `f`'s type, with the shape node
+shape/kind/expr triple — and unified it against `f`'s type, with the shape node
 belonging to the wrapper (no pin); `jit`'s `.sig` field was `($sig(f))` instead
 of `(type_of f)`, and the operator was deleted once the struct carried
 `.I`/`.O`.

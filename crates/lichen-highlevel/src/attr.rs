@@ -15,20 +15,20 @@ pub trait AttrSpec: Clone + Copy + PartialEq + Eq + std::fmt::Debug + 'static {}
 /// holds — and its **canonical order**.
 ///
 /// # Invariant
-/// The order is the single allocation authority for pair slots: the attribute
-/// at order index `i` occupies pair slot `shape::attr_slot(i)`, so no
+/// The order is the single allocation authority for expr slots: the attribute
+/// at order index `i` occupies expr slot `shape::attr_slot(i)`, so no
 /// attribute can claim an index that is not its position.
 pub trait AttrSet: AttrSpec {
-    /// Every attribute this set can carry, in the canonical order — the pair
+    /// Every attribute this set can carry, in the canonical order — the expr
     /// layout. Checked by [`order_is_canonical`].
     const ORDER: &'static [Self];
 
     /// This attribute's index in the set's canonical order: `0` for the first,
-    /// at pair slot `shape::attr_slot(0)`.
+    /// at expr slot `shape::attr_slot(0)`.
     ///
     /// # Invariant
-    /// It is an *order*, not a pair slot: an expression's pair is dense over the
-    /// attributes it carries, so a carried attribute's pair slot is its position
+    /// It is an *order*, not an expr slot: an expression's expr is dense over the
+    /// attributes it carries, so a carried attribute's expr slot is its position
     /// in that expression's schema tail.
     fn order_index(&self) -> usize;
 }
@@ -91,13 +91,13 @@ where
     fn missing_value(&self) -> Option<LowValue>;
 
     /// The slot read for an absent occurrence: the uniform
-    /// `[missing_value, int]` pair, else a fresh cell.
+    /// `[missing_value, int]` expr, else a fresh cell.
     fn missing_slot(&self, ctx: &mut dyn Ctx<P>) -> NodeId {
         let value = match self.missing_value() {
             Some(value) => ctx.value_node(P::Value::from(value)),
             None => ctx.fresh(),
         };
-        ctx.pair(value, ctx.int_type())
+        ctx.expr(value, ctx.int_type())
     }
 
     /// Whether absent occurrences may read one shared missing-slot node rather
@@ -162,7 +162,7 @@ where
     /// value, or `None` when it constrains nothing.
     ///
     /// # Invariant
-    /// `value_pair` is the annotated expression's `[value, type]` term and `slot`
+    /// `value_expr` is the annotated expression's `[value, type]` term and `slot`
     /// its own attribute node on it, whose interior only the attribute reads. The
     /// checker registers the node through its assert channel, which
     /// deep-evaluates and requires `USize(1)`, and the apply clone re-checks the
@@ -170,7 +170,7 @@ where
     fn constraint(
         &self,
         _ctx: &mut dyn Ctx<P>,
-        _value_pair: NodeId,
+        _value_expr: NodeId,
         _slot: NodeId,
     ) -> Option<NodeId> {
         None
@@ -191,8 +191,8 @@ where
     ///
     /// # Invariant
     /// `attrs` is the composed extension registry, because a slot that holds a
-    /// **nested pair** cannot say which attributes that pair carries; it reads the
-    /// name through [`pair_label`].
+    /// **nested expr** cannot say which attributes that expr carries; it reads the
+    /// name through [`expr_label`].
     fn render(
         &self,
         _module: &Module<P>,
@@ -211,25 +211,25 @@ where
     }
 }
 
-/// The **name** `pair` reads as, when one of its attributes names it — the
-/// reader for a pair inside a slot.
+/// The **name** `expr` reads as, when one of its attributes names it — the
+/// reader for an expr inside a slot.
 ///
 /// # Invariant
-/// A pair's arity is in the graph but *which* attribute owns each tail slot is
+/// An expr's arity is in the graph but *which* attribute owns each tail slot is
 /// not, so the search asks **every** attribute in canonical order and the first
 /// answer wins. It is sound because an attribute answers only about content it
 /// recognises as its own. A *static* slot is skipped: an attribute reads a
 /// dynamic node.
-pub fn pair_label<P>(
+pub fn expr_label<P>(
     module: &Module<P>,
-    pair: NodeId,
+    expr: NodeId,
     attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
 ) -> Option<String>
 where
     P: HighProgram,
     P::Value: ValueType,
 {
-    let value = module.node_value(AnyNodeId::Dynamic(pair))?;
+    let value = module.node_value(AnyNodeId::Dynamic(expr))?;
     let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
     for marker in P::Attr::ORDER {
         let Some(AnyNodeId::Dynamic(slot)) =
@@ -253,15 +253,15 @@ where
 /// reported diagnostic, never a panic.
 pub type AttrExtRegistry<P, Attr> = Box<dyn Fn(&Attr) -> &'static dyn AttrExt<P>>;
 
-/// The **value node** of an attribute slot: a `[value, type]` pair's element
+/// The **value node** of an attribute slot: a `[value, type]` expr's element
 /// 0, or the slot itself when already bare.
 ///
 /// # Invariant
-/// Comparing two slots instead unifies a `[value, type]` pair against the
+/// Comparing two slots instead unifies a `[value, type]` expr against the
 /// other side — for a refinement, the predicate's own self-referential
 /// `[Function(fid), ↺]` type, whose positional descent walks into its cycle
 /// and reports a conflict (`docs/notes/attributes.md` §"the gate must compute
-/// its operands"). A slot whose value is not a pair is returned as it stands.
+/// its operands"). A slot whose value is not an expr is returned as it stands.
 pub fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
 where
     P::Value: ValueType + AsEnum<LowValue>,

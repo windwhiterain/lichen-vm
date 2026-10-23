@@ -11,7 +11,7 @@ impl<P: Program> Default for Module<P> {
 /// The default attribute array's node for canonical attribute `canonical`.
 ///
 /// # Invariant
-/// The array is read positionally — attribute `i` at `PAIR_ATTR_BASE + i` — so a default
+/// The array is read positionally — attribute `i` at `EXPR_ATTR_BASE + i` — so a default
 /// shorter than the canonical attribute count answers [`None`] for the attributes past its
 /// end rather than panicking.
 fn default_attribute(
@@ -23,7 +23,7 @@ fn default_attribute(
     // arena is live for this read.
     let items = unsafe { defaults.items() };
     items
-        .get(PAIR_ATTR_BASE + canonical as usize)
+        .get(EXPR_ATTR_BASE + canonical as usize)
         .map(|item| item.node)
 }
 
@@ -31,7 +31,7 @@ fn default_attribute(
 ///
 /// # Invariant
 /// `layout` is the registry entry the array's arena holds, so its binary search proves
-/// whether the array carries the attribute; [`PAIR_ATTR_BASE`] plus the found position is
+/// whether the array carries the attribute; [`EXPR_ATTR_BASE`] plus the found position is
 /// the slot, and a miss reads the default. See [`Module::array_attribute`].
 fn attribute_at(
     array: &ArrayValue,
@@ -46,7 +46,7 @@ fn attribute_at(
     // SAFETY: the payload of a value the module or a frozen module pins, so its home
     // arena is live for this read.
     let items = unsafe { array.items() };
-    items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
+    items.get(EXPR_ATTR_BASE + position).map(|item| item.node)
 }
 
 impl<P: Program> Module<P> {
@@ -66,8 +66,8 @@ impl<P: Program> Module<P> {
             functions: SlotMap::with_key(),
             full_width_layout: None,
             element_types: HashMap::new(),
-            applied_pairs: HashMap::new(),
-            apply_pairs: HashMap::new(),
+            applied_exprs: HashMap::new(),
+            apply_exprs: HashMap::new(),
             applied_parameters: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
@@ -114,7 +114,7 @@ impl<P: Program> Module<P> {
     /// registered once however many values carry it; the empty layout is entry `0`.
     pub fn register_attribute_layout(&mut self, indices: &[u32]) -> u32 {
         debug_assert!(
-            indices.windows(2).all(|pair| pair[0] < pair[1]),
+            indices.windows(2).all(|expr| expr[0] < expr[1]),
             "an attribute layout must list its canonical indices strictly increasingly: {indices:?}"
         );
         let layout: Box<[u32]> = indices.into();
@@ -155,7 +155,7 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// It is read positionally — attribute `i` at [`PAIR_ATTR_BASE`] + `i` — so a default
+    /// It is read positionally — attribute `i` at [`EXPR_ATTR_BASE`] + `i` — so a default
     /// shorter than the canonical attribute count answers [`None`] for the attributes past
     /// its end rather than panicking. See `docs/notes/array-attribute-view.md`.
     pub fn set_default_attributes(&mut self, attributes: AnyHandle<[ArrayItem]>) {
@@ -482,7 +482,7 @@ impl<P: Program> Module<P> {
         self.nodes[node].assumed_concrete = false;
     }
 
-    /// One name-table entry as its `(name, position)` pair, or `None` for an entry
+    /// One name-table entry as its `(name, position)` expr, or `None` for an entry
     /// still being built.
     pub fn name_table_entry(&self, item: &TableItem) -> Option<(&'static str, usize)>
     where

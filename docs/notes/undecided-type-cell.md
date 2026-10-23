@@ -2,7 +2,7 @@
 
 > **Status:** **three of the four fixed** (§10); the fourth is attributed and is a
 > different mechanism. The suppressing condition is one line —
-> `Module::pair_type_half` answers `None` for a **frozen** type half, so the
+> `Module::expr_type_half` answers `None` for a **frozen** type half, so the
 > `unify` binding an apply's result type cell to the callee's decided return type
 > was never called. §9 traces it, §10 fixes it, §10.2 attributes what remains.
 > **§10.2's account of the fourth is partly superseded** — §10.2b, after the
@@ -117,7 +117,7 @@ Ruled out by measurement, each with the program that rules it out:
 - **An annotation on the parameter.** `f = (x : Int) => x <= 10` ; `f 5` is still
   `raw 1: ?a`.
 
-## 4. The three families, and which pairs differ
+## 4. The three families, and which exprs differ
 
 | | Instance | Trigger, as measured |
 |---|---|---|
@@ -125,7 +125,7 @@ Ruled out by measurement, each with the program that rules it out:
 | **B** | `lazy_infinite.lichen` | a value read through a **lazy (`@shallow`) chain**. The same read on a literal binding decides. |
 | **C** | `import/_.lichen` | a value read through a **frozen module's export**. The same function defined locally decides. |
 
-Which pairs differ, concretely:
+Which exprs differ, concretely:
 
 - **A vs A** — the two differ only in where the comparison sits (top level, inside a
   called function). Same mechanism; `assert_in_function` adds one hop and nothing
@@ -164,7 +164,7 @@ route `==`, `!=`, `%` or the bitwise trio, "their contract being a class the che
 already pins". So at the user site `n <= 5` is an `ExprKind::Apply`, and
 `Checker::check_app` (`crates/lichen-highlevel/src/checker/lambda.rs`) mints a
 fresh cell `c`, stores it as `state[e].ty`, and says in a comment that *"the runtime
-apply binds it to the return pair"*.
+apply binds it to the return expr"*.
 
 Both ends of that promise were measured:
 
@@ -193,7 +193,7 @@ so no later write could have supplied the value either.
 **Not traced:** *which* condition suppresses that join for the comparison callee.
 The trace leaves two candidates standing and this slice stops before choosing
 between them: the static-materializer path that carries a frozen callee's return
-pair, and something keyed on the comparison's own result node rather than on the
+expr, and something keyed on the comparison's own result node rather than on the
 callee. Instrumenting the apply that is supposed to perform the bind is the next
 step.
 
@@ -252,7 +252,7 @@ session owns — **is not touched**.
 
 - **A** — named `evaluation.rs`, and **named wrong**: the bind lives in
   `static_module/apply.rs` and `function.rs`, and the refusal is one arm of
-  `Module::pair_type_half` in `resolve.rs`. §7's framing — "a checker-side decide at
+  `Module::expr_type_half` in `resolve.rs`. §7's framing — "a checker-side decide at
   `check_app`, which would have to read the routed callee's return type" — is not
   needed either: the runtime already read it and discarded it. **Fixed.**
 - **B** — the index read's element-type carry. **Located in §10.2**: not the read, but
@@ -296,11 +296,11 @@ in it that can fail, and §9.5 decides between the candidates.
 
 `Checker::check_app`
 (`crates/lichen-highlevel/src/checker/lambda.rs:251`) is the whole checker half. It
-`check_expr`s the callee and the argument, builds the argument pair, and then:
+`check_expr`s the callee and the argument, builds the argument expr, and then:
 
 ```rust
 // The result's type cell rides in the apply's operand; the runtime apply
-// binds it to the return pair.
+// binds it to the return expr.
 let c = self.fresh_cell();
 ```
 
@@ -308,8 +308,8 @@ let c = self.fresh_cell();
 in `check_app`. It is then threaded into **both** operand arrays at index 2:
 
 ```rust
-let value_operands = self.array_node(self.current_block, &[function_value, argument_pair, c, function_ty]);
-let type_operands  = self.array_node(self.current_block, &[function_ty, argument_pair, c, function_ty]);
+let value_operands = self.array_node(self.current_block, &[function_value, argument_expr, c, function_ty]);
+let type_operands  = self.array_node(self.current_block, &[function_ty, argument_expr, c, function_ty]);
 ```
 
 and stored as the expression's own type slot:
@@ -327,7 +327,7 @@ that bind, the promise in the comment was entirely the runtime's, and §6.1's
 call — the checker never had it. The two runtime readers below remain, and the
 checker's bind is the third route.
 
-### 9.2 The readers of the return pair, and where each binds `c`
+### 9.2 The readers of the return expr, and where each binds `c`
 
 The apply encodes **two** applications — the value's `[function, argument, c, type]` and
 the type's `[type, argument, c, type]` — and each reaches the bind at run time by a
@@ -336,17 +336,17 @@ different route; the checker adds its own bind for the decided function type.
 | route | callee kind | the bind | file |
 |---|---|---|---|
 | the **checker's** instance bind, `apply_function_type` | `Dynamic`, a decided function type | `self.unify(cell, codomain)` where `codomain` is the per-call clone's (`ParameterCheck::Skip`) | `function.rs:apply_function_type`, `lambda.rs:check_app` |
-| the **type** application, `apply_callee_type` → `apply_type` | `Dynamic` | `self.unify(cell, codomain)` where `codomain = self.pair_type_half(applied)` | `evaluation.rs:459`, `function.rs:139` |
-| the **value** application, `static_function_apply`'s tail | `Static` (frozen) | `module.unify(cell, codomain)` where `codomain = module.pair_type_half(applied)` | `static_module/apply.rs:83-88` |
+| the **type** application, `apply_callee_type` → `apply_type` | `Dynamic` | `self.unify(cell, codomain)` where `codomain = self.expr_type_half(applied)` | `evaluation.rs:459`, `function.rs:139` |
+| the **value** application, `static_function_apply`'s tail | `Static` (frozen) | `module.unify(cell, codomain)` where `codomain = module.expr_type_half(applied)` | `static_module/apply.rs:83-88` |
 
-Both routes read the codomain the **same** way — `Module::pair_type_half` — and both are
-the "the runtime apply binds it to the return pair" the checker defers to. The frozen
+Both routes read the codomain the **same** way — `Module::expr_type_half` — and both are
+the "the runtime apply binds it to the return expr" the checker defers to. The frozen
 route's own comment names the reason it exists rather than reusing the type route:
 
 ```rust
 // A static callee's type is static too, which the dynamic guard refuses.
 if let Some(cell) = cell
-    && let Some(codomain) = module.pair_type_half(applied)
+    && let Some(codomain) = module.expr_type_half(applied)
 {
     module.evaluate_node(Dyn(codomain), Some(block));
     module.unify(cell, codomain);
@@ -355,11 +355,11 @@ if let Some(cell) = cell
 
 ### 9.3 The condition that suppresses the join
 
-**`pair_type_half` answers `None` for a frozen type half, and both routes skip the
+**`expr_type_half` answers `None` for a frozen type half, and both routes skip the
 unify on `None`.** `crates/lichen-lowlevel/src/resolve.rs:366`:
 
 ```rust
-pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
+pub fn expr_type_half(&self, node: NodeId) -> Option<NodeId> {
     // SAFETY: `node` is a live node of `self`.
     let items = unsafe { self.array_items(node) }?;
     if !(2..=3).contains(&items.len()) {
@@ -372,14 +372,14 @@ pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
 }
 ```
 
-`pair_value_half` (`resolve.rs:331`) is the sibling and carries the same `Static => None`
+`expr_value_half` (`resolve.rs:331`) is the sibling and carries the same `Static => None`
 arm, so the two agree on the encoding; what they do **not** do is resolve a frozen item.
 `item_of` (`resolve.rs:278`) and `array_items_of` (`resolve.rs:270`) are the same rule in
 the same file, and `static_function_of_callee` (`resolve.rs:293`) is the one reader that
 *does* follow a frozen item — through `static_read`, not through a `NodeId`.
 
 **Why this is the discriminator, read from the clone walk.** A frozen function's return
-pair is cloned by `static_node_apply`, and `static_remap_value`
+expr is cloned by `static_node_apply`, and `static_remap_value`
 (`static_module/apply.rs:192`) re-points an item at a per-call clone **only** under two
 conditions:
 
@@ -391,7 +391,7 @@ AnyNodeId::Static(sref)
 node => node,
 ```
 
-So a pair's type half arrives `Dynamic` **iff the frozen node was undecided**, and stays
+So an expr's type half arrives `Dynamic` **iff the frozen node was undecided**, and stays
 a `Static` ref iff the frozen node was **decided**. The two families split exactly there,
 from the two `check_binop` result arms (`crates/lichen-highlevel/src/checker/operators.rs:70`):
 
@@ -405,11 +405,11 @@ let result = match operator {
 - `add`'s body is `operands[0] + operands[1]`, whose result is `arithmetic_class`'s
   **shared open class cell** (`operators.rs:145`, `left_ty` when neither operand states a
   class). That cell is *undecided* in the frozen module → cloned → element 1 is `Dynamic`
-  → `pair_type_half` answers `Some` → `c` is unified with it → `c` is in the class of the
+  → `expr_type_half` answers `Some` → `c` is unified with it → `c` is in the class of the
   cloned operand cell, which the parameter check has just bound to `Int`.
 - `less_or_equal`'s body is `operands[0] <= operands[1]`, whose result is `self.int_type`
   **itself** — a *decided* node of the frozen module → not cloned → element 1 is a
-  `Static` ref → `pair_type_half` answers `None` → **the `unify` never runs**.
+  `Static` ref → `expr_type_half` answers `None` → **the `unify` never runs**.
 
 This is the shape §2 measured and §6.1 could not see: the class is not refused, and the
 cell is not unconstrained after the join — **the join call itself is never reached**, and
@@ -419,27 +419,27 @@ the `?a` cell is the one the frozen module's decided `int_type` would have fille
 
 | | candidate | evidence that would confirm | evidence that would refute |
 |---|---|---|---|
-| **K1** | `pair_type_half`'s `Static => None` refuses the bind; the codomain is `Static` for a comparison and `Dynamic` for `add` | the frozen pair's element 1 is `Static` for `less_or_equal` and `Dynamic` for `add` | element 1 is `Dynamic` in both, and the codomain is empty for another reason |
+| **K1** | `expr_type_half`'s `Static => None` refuses the bind; the codomain is `Static` for a comparison and `Dynamic` for `add` | the frozen expr's element 1 is `Static` for `less_or_equal` and `Dynamic` for `add` | element 1 is `Dynamic` in both, and the codomain is empty for another reason |
 | **K2** | `static_remap_value` declines to clone, so the decided codomain stays a frozen ref — K1 seen from the other side, its cause rather than its symptom | the frozen `int_type` node reports `undecided() == false` | the frozen node reports `undecided() == true` and yet the item is `Static` |
-| **K3** | an ordering fault — the codomain is read before it is decided | `pair_type_half` answers `Some` but the codomain's value is `None` at the unify and decided afterwards | the codomain is decided at the moment of the read |
+| **K3** | an ordering fault — the codomain is read before it is decided | `expr_type_half` answers `Some` but the codomain's value is `None` at the unify and decided afterwards | the codomain is decided at the moment of the read |
 
 K1 and K2 are the same event read from two ends and would be settled by one measurement;
 K3 is excluded by the order of the statements (`evaluate_node(Dyn(applied))` runs before
-`pair_type_half`) **if** that measurement shows the codomain decided at the read.
+`expr_type_half`) **if** that measurement shows the codomain decided at the read.
 
-**The fix's home, if K1 holds, is not `evaluation.rs`.** `pair_type_half` is in
+**The fix's home, if K1 holds, is not `evaluation.rs`.** `expr_type_half` is in
 `resolve.rs`; the frozen route's bind is in `static_module/apply.rs`. Both are outside
 the file the §7 route-naming reserved, so the choice §7 left to the user does not have
 to be made again.
 
 ### 9.5 The measurement — the join call is never reached
 
-One probe in `static_function_apply`'s tail, printing the cloned return pair's element 1
-and which arm of `pair_type_half` answers, run through the CLI on each example and on
+One probe in `static_function_apply`'s tail, printing the cloned return expr's element 1
+and which arm of `expr_type_half` answers, run through the CLI on each example and on
 `add [1, 2]` for the contrast. `int_type` is the frozen module's **static index 11** in
 every program below, so `[1] Static(…, index 11)` is the decided `int_type` of §6.1.
 
-| program | the apply's result cell (`c`) | pair element 1 | `pair_type_half(applied)` | the cell's class after the bind |
+| program | the apply's result cell (`c`) | expr element 1 | `expr_type_half(applied)` | the cell's class after the bind |
 |---|---|---|---|---|
 | `add [1, 2]` → `3: Int` | `NodeId(34v1)` | `Dynamic(NodeId(50v1))`, decided | **`Some(NodeId(50v1))`** | joins, `Int` |
 | `assert.lichen` → `(raw 1, 5)` | `NodeId(37v1)` | `Static(ModuleKey(0), index 11)` | **`None`** | singleton `37v1`, empty |
@@ -449,7 +449,7 @@ every program below, so `[1] Static(…, index 11)` is the decided `int_type` of
 **`34v1` and `37v1` are the very ids §6.1 named**, so this is that measurement, not a
 second one: the same cell `34v1` that joins `int_type`'s class for `add` stays a
 singleton for `less_or_equal`, and the difference is entirely whether
-`pair_type_half` answers.
+`expr_type_half` answers.
 
 **Which candidate this settles.** K1 and K2 are the same event read from two ends, and
 the probe shows both halves: element 1 is `Dynamic` **iff** the frozen node was
@@ -458,13 +458,13 @@ the read is taken at all, the codomain is already decided (`[1] Dynamic(NodeId(5
 decided=true`), so this is not an ordering fault. The condition is:
 
 > **A decided return type is carried into the clone as a frozen `Static` ref, and
-> `pair_type_half` answers `None` for a frozen type half, so
+> `expr_type_half` answers `None` for a frozen type half, so
 > `static_function_apply`'s `unify(cell, codomain)` is never called.**
 
 The `?a` cell is a singleton with an empty value because the one call that could have
 filled it was skipped — not because a class was refused and not because the value was
 mislaid. §6.1's "the static-materializer path that carries a frozen callee's return
-pair" is this: the materializer carries it, and the reader declines it.
+expr" is this: the materializer carries it, and the reader declines it.
 
 ### 9.6 B and C do not fail the same way — measured, and §10 corrects this
 
@@ -481,7 +481,7 @@ that print `?a` in `lazy_infinite.lichen` are decided, and the `?a` sits elsewhe
 (§6.2's element slot). It is **wrong for C**: the cells that print `?a` in
 `import/_.lichen` were decided too — but only because the two applies whose bind
 matters, `math.succ` and `geo.inc_twice`, **never reached the probe at all**, the bind
-having been skipped on the very `pair_type_half = None` arm this section measures
+having been skipped on the very `expr_type_half = None` arm this section measures
 elsewhere. The probe could not see them, and "every bind that ran was decided" was read
 as "nothing is missing".
 
@@ -497,24 +497,24 @@ unchecked.
 `lichen-lowlevel`, and the same two lines on each of the two routes §9.2 named.
 
 > **A decided return type is carried through the clone walk as the frozen `Static` ref
-> it was, and `Module::pair_type_half` answers `None` for a frozen type half, so the
+> it was, and `Module::expr_type_half` answers `None` for a frozen type half, so the
 > `unify(cell, codomain)` that binds an apply's result type cell to the callee's
 > decided return type was never called.**
 
-`crates/lichen-lowlevel/src/resolve.rs` — the pair's type half as the reference the
-pair itself holds, frozen or not. `pair_type_half` now reads through it, so the width
+`crates/lichen-lowlevel/src/resolve.rs` — the expr's type half as the reference the
+expr itself holds, frozen or not. `expr_type_half` now reads through it, so the width
 rule stays in one place and **its `# Invariant` is unchanged, word for word**:
 
 ```rust
-    pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
-        match self.pair_type_item(node)? {
+    pub fn expr_type_half(&self, node: NodeId) -> Option<NodeId> {
+        match self.expr_type_item(node)? {
             AnyNodeId::Dynamic(r#type) => Some(r#type),
             AnyNodeId::Static(_) => None,
         }
     }
 
-    /// The **type** half of a `[value, type]` pair node, as the pair's own reference.
-    pub fn pair_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
+    /// The **type** half of a `[value, type]` expr node, as the expr's own reference.
+    pub fn expr_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
@@ -529,7 +529,7 @@ rule stays in one place and **its `# Invariant` is unchanged, word for word**:
 ```rust
             // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
-                && let Some(codomain) = module.pair_type_item(applied)
+                && let Some(codomain) = module.expr_type_item(applied)
             {
                 // A decided codomain stays the frozen ref the clone walk carried; a
                 // leaf in this block gives the bind its value.
@@ -545,14 +545,14 @@ same two lines. **§7's route choice did not have to be made:** the fix is in
 `crates/lichen-lowlevel/src/evaluation.rs` — the file another session owns — **is not
 touched**. `as_dynamic` is the crate's own instrument for this ("a static ref
 materialized into a leaf"), the same one `static_function_signature` documents and
-`check_app`'s guard already uses, so no second reading of a pair's encoding is added.
+`check_app`'s guard already uses, so no second reading of an expr's encoding is added.
 
 ### 10.1 Per instance, before and after
 
 | example | declared `output =` | before | after | mechanism |
 |---|---|---|---|---|
-| `assert.lichen` | `(1, 5): tuple{Int, Int}` | `(raw 1, 5): tuple{?a, Int}` | **`(1, 5): tuple{Int, Int}`** — matches | the comparison's apply bound on the **frozen** route, `static_function_apply`; §9.5 measured its `pair_type_half` as `None` |
-| `assert_in_function.lichen` | `1: Int` | `raw 1: ?a` | **`1: Int`** — matches | the same condition on the **dynamic** route: `f`'s return pair is `[Dynamic(112v1), Static(ModuleKey(0), index 11)]`, so `apply_type`'s `pair_type_half` was `None` for cell `53v1` |
+| `assert.lichen` | `(1, 5): tuple{Int, Int}` | `(raw 1, 5): tuple{?a, Int}` | **`(1, 5): tuple{Int, Int}`** — matches | the comparison's apply bound on the **frozen** route, `static_function_apply`; §9.5 measured its `expr_type_half` as `None` |
+| `assert_in_function.lichen` | `1: Int` | `raw 1: ?a` | **`1: Int`** — matches | the same condition on the **dynamic** route: `f`'s return expr is `[Dynamic(112v1), Static(ModuleKey(0), index 11)]`, so `apply_type`'s `expr_type_half` was `None` for cell `53v1` |
 | `import/_.lichen` | `(42, 10, 7): tuple{Int, Int, Int}` | `(raw 42, 10, raw 7): tuple{?a, Int, ?b}` | **`(42, 10, 7): tuple{Int, Int, Int}`** — matches | **family C was this condition too**, on both routes: `math.succ`'s and `geo.inc_twice`'s codomains were both carried frozen |
 | `lazy_infinite.lichen` | `(1, 2, 3): tuple{Int, Int, Int}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` — **unchanged** | §10.2: a different mechanism, in `arithmetic_class` |
 

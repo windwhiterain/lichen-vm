@@ -514,7 +514,7 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 ///
 /// # Invariant
 /// **A chain, a fan-in, or one producer's consumers**, in evaluation order, and every condition
-/// below is the pair's own: the shape is decided first, then one absorbed position per edge, and
+/// below is the expr's own: the shape is decided first, then one absorbed position per edge, and
 /// a merge that slipped past either would be a node reading a buffer the program never wired to it
 /// — the union cannot make one, and `PortsDoNotCorrespond` is where that stops.
 fn merge_region(

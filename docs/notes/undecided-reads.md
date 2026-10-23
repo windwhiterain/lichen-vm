@@ -29,7 +29,7 @@ have since been removed ([type-access](type-access.md)).
 
 The author's ruling: *a read on a container whose type is not decided cannot
 be checked there, and the apply applies the value and type slots separately,
-so a requirement deferred to the apply can leave a pair whose value and type
+so a requirement deferred to the apply can leave an expr whose value and type
 disagree; that is the same failure `raw` reports, and it is not a legitimate
 answer.*
 
@@ -43,7 +43,7 @@ That is why `compute.parallel` now takes the output type as an argument
 ## 2. Why the deferred tier was unsound (measured)
 
 All measured through the CLI on `dev` before the ruling. Each program is
-accepted (exit 0) and prints a pair whose value is not of its type:
+accepted (exit 0) and prints an expr whose value is not of its type:
 
 ```lichen
 f = x => { a = x(0); a : Int; a }
@@ -85,7 +85,7 @@ The access-caused `raw` answers were the same failure: before the ruling,
   for being decided (a type-function annotation is *deep-evaluated* first, so
   a written `(k : K _)` is decided), and refuse otherwise with
   `DiagKind::UndecidedContainer`, whose `field` slot names the read form.
-- A refused read answers the checker's refused pair, so no graph is built
+- A refused read answers the checker's refused expr, so no graph is built
   behind the refusal.
 - A lambda parameter's written type is deep-evaluated **before the body**
   (`checker/lambda.rs`), so a body's read on an annotated parameter is

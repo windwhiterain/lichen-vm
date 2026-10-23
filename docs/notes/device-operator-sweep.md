@@ -135,10 +135,10 @@ every kernel exactly as long as the launch covers.
 
 **Measured: elements 0 and 1 are exact on both, and that is the angle `θ = 0` alone.** The example's
 own `doc` says why: `position` is `0, 1, 2, 3` and `inverse_frequency` is all ones, so `θ` is `0, 1, 2,
-3`, every one an exact `f32`, and `cos 0 = 1` / `sin 0 = 0` exactly. The rotation's own body pairs
-the lanes (`odd = j % 2`, `pair = (j - odd) / 2`), so elements 0 and 1 are pair 0 and elements 2–7
-are pairs 1, 2 and 3 — **no pair at a nonzero angle is wholly bit-exact**, and **five of the eight
-elements differ**. Element 3 is the one exact element outside pair 0: it is `x[3] · cos 2 + x[2] ·
+3`, every one an exact `f32`, and `cos 0 = 1` / `sin 0 = 0` exactly. The rotation's own body exprs
+the lanes (`odd = j % 2`, `expr = (j - odd) / 2`), so elements 0 and 1 are expr 0 and elements 2–7
+are exprs 1, 2 and 3 — **no expr at a nonzero angle is wholly bit-exact**, and **five of the eight
+elements differ**. Element 3 is the one exact element outside expr 0: it is `x[3] · cos 2 + x[2] ·
 sin 2`, whose `cpu` and `gpu` answers coincide even though both of its factors do not.
 
 **Measured: the divergence is in the two transcendental kernels, and it does not grow through the
@@ -643,23 +643,23 @@ that render alike.
 **`cpu`** answer, the **`gpu`** answer or the **verbatim refusal**, and the per-element ulp distance
 read off both backends' own bit patterns where they differ. That is, in full:
 
-- **`rope`** — declared, `cpu` and `gpu` strings; 8 of 8 bit pairs; the per-element ulp table; the 8
-  bit pairs each for `cosines.c` and `sines.s`; 3 fragments at **369**, **594** and **610** words;
+- **`rope`** — declared, `cpu` and `gpu` strings; 8 of 8 bit exprs; the per-element ulp table; the 8
+  bit exprs each for `cosines.c` and `sines.s`; 3 fragments at **369**, **594** and **610** words;
   **3 `spirv-val` verdicts, 3 ACCEPT**.
-- **`silu`** — declared, `cpu` and `gpu` strings; 4 of 4 bit pairs; the same for `act.a`; 2 fragments
+- **`silu`** — declared, `cpu` and `gpu` strings; 4 of 4 bit exprs; the same for `act.a`; 2 fragments
   at **442** and **245** words; **2 verdicts, 2 ACCEPT**.
-- **`softmax`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; 2 fragments at
+- **`softmax`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit exprs; 2 fragments at
   **336** and **726** words; **2 verdicts, 2 ACCEPT**.
-- **`rmsnorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; the same for
+- **`rmsnorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit exprs; the same for
   `sums.s`; 2 fragments at **1658** and **337** words; **2 verdicts, 2 ACCEPT**.
-- **`layernorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; the same for
+- **`layernorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit exprs; the same for
   `sm.s` and `sq.q`; 3 fragments at **316**, **337** and **1734** words; **3 verdicts, 3 ACCEPT**.
-- **`attention`** — declared, `cpu` and `gpu` strings; 8 of 8 bit pairs; the same for `scale.s`;
+- **`attention`** — declared, `cpu` and `gpu` strings; 8 of 8 bit exprs; the same for `scale.s`;
   2 fragments at **1785** and **1052** words; **2 verdicts, 2 ACCEPT**.
 - **`gemv`** — the refusal **verbatim**; the `cpu` string; the `cpu` string of the padded variant
   (byte-equal with the device's); 1 fragment at **378** words; **1 verdict, 1 ACCEPT** — for a module
   that **never ran**.
-- **`matmul`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; 1 fragment at
+- **`matmul`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit exprs; 1 fragment at
   **417** words; **1 verdict, 1 ACCEPT**.
 
 **Measured, on this device, and it is a fact about the tree rather than about these programs:**

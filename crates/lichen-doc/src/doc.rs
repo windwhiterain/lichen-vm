@@ -60,7 +60,7 @@ where
         true
     }
 
-    /// Spell `? <named fields>` from the pair's struct type chain, so the names
+    /// Spell `? <named fields>` from the expr's struct type chain, so the names
     /// are the value's, never a hardcoded shape.
     fn render(
         &self,
@@ -68,9 +68,9 @@ where
         slot: NodeId,
         _attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
     ) -> Option<String> {
-        // The render slot is the `?` expression's `[value, type]` pair.
-        let pair = self.slot_value(module, slot)?;
-        let LowValue::Array(items) = pair else {
+        // The render slot is the `?` expression's `[value, type]` expr.
+        let expr = self.slot_value(module, slot)?;
+        let LowValue::Array(items) = expr else {
             return None;
         };
         // SAFETY: `items` is the payload of the value read from the live node
@@ -85,8 +85,8 @@ where
     /// A string doc names the value it attaches to; a struct doc describes
     /// instead.  See docs/notes/operator-polymorphism.md.
     fn label(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
-        let pair = self.slot_value(module, slot)?;
-        let LowValue::Array(items) = pair else {
+        let expr = self.slot_value(module, slot)?;
+        let LowValue::Array(items) = expr else {
             return None;
         };
         // SAFETY: `items` is the payload of the value read from the live node

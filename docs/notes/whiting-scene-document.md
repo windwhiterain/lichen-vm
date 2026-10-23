@@ -32,7 +32,7 @@
 `.ron`-shaped `Value` validated against a `Schema` that is itself a document;
 whiting's own `StandardScene` turns that into a graphics document and an instance
 document and emits, alongside both, the `Delta` that reaches them from the
-previous pair. `definition`, `graphics` and `scene` depend on `facet` and
+previous expr. `definition`, `graphics` and `scene` depend on `facet` and
 `thiserror` and nothing else: no wgpu, no tokio, no axum, and no `unsafe` anywhere
 in the workspace. `device` is the only crate that touches a GPU, and it is the
 only one expensive to link.
@@ -167,7 +167,7 @@ obvious are called out because they are the ones that will be got wrong.
 
 **Struct field names come from the type, not the value.** A lichen struct's value
 is positional; its names live in the kind marker's payload — `[payload,
-TypeStruct]` under the kind's `[marker, K]` pair, with `payload = [TypeId, names,
+TypeStruct]` under the kind's `[marker, K]` expr, with `payload = [TypeId, names,
 names_in_order]` — where `names` is a `table` of `string → index`. `lichen-render` already reads
 this — `struct_field_names` in `crates/lichen-render/src/render.rs` is the
 reference implementation, and `render_struct_fields_named` is its public face. A

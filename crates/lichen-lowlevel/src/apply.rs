@@ -111,12 +111,12 @@ impl<P: Program> Module<P> {
         false
     }
 
-    /// Wire the apply result: cache the return pair, unify it with the cloned return
+    /// Wire the apply result: cache the return expr, unify it with the cloned return
     /// node.
     ///
     /// # Invariant
-    /// This level learns nothing about which element of a pair is the value and which is
-    /// the type: it caches the pair it produced and stops. A caller that needs an element
+    /// This level learns nothing about which element of an expr is the value and which is
+    /// the type: it caches the expr it produced and stops. A caller that needs an element
     /// bound binds it itself, and the two applications an apply encodes are one class
     /// because the caller unifies them.
     pub(super) fn wire_apply_result(
@@ -183,7 +183,7 @@ pub(super) fn answer_elements_are_undecided<P: Program>(
 ///
 /// # Invariant
 /// The sort is stable, so a group's clones keep the walk's insertion order — the
-/// order the unification pairs them in.
+/// order the unification exprs them in.
 pub(super) fn regroup_clones<K, I>(remap: I, mut find: impl FnMut(K) -> K) -> Vec<(K, NodeId)>
 where
     K: Copy + Ord,

@@ -203,7 +203,7 @@ Order, so the risk stays auditable:
    (§2.3's first probe) — that behaviour currently has none.
 2. Define "a class holds several operations": propose *the operation's own
    computed value is authoritative; a committed value is a constraint
-   reconciled when it runs*, and write down what a disagreeing pair does.
+   reconciled when it runs*, and write down what a disagreeing expr does.
 3. Only then remove `force_pending`/`defer`/`pin`, one mechanism per commit,
    re-measuring the compute extension (`crates/lichen-compute/tests/lichen_compute/compute.rs`,
    62/0 on `dev`) at each step.

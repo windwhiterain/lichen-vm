@@ -390,9 +390,9 @@ where
         },
         DiagKind::NativeOpContract => match d.field.as_deref() {
             Some(name) => format!(
-                "native operator '{name}' returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+                "native operator '{name}' returned a malformed term — a native operator must return the [value, type] expr it built in the current block"
             ),
-            None => "a native operator returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+            None => "a native operator returned a malformed term — a native operator must return the [value, type] expr it built in the current block"
                 .to_string(),
         },
         DiagKind::ExtensionRule => match d.field.as_deref() {

@@ -103,18 +103,18 @@ unsafe extern "C" fn probe_entry(
                 let low = read
                     .as_ref()
                     .and_then(|value| AsEnum::<lichen_lowlevel::LowValue>::as_enum(value));
-                // The pair the item reads: an `Index` read names it as its operand.
-                let pair = match item.node {
+                // The expr the item reads: an `Index` read names it as its operand.
+                let expr = match item.node {
                     lichen_lowlevel::AnyNodeId::Dynamic(node) => module
                         .node_operation(node)
                         .and_then(|operation| operation.operand),
                     _ => None,
                 };
                 println!(
-                    "    entry: item {k}: shallow={} node={:?} reads_pair={pair:?} owner={:?} read={:?}",
+                    "    entry: item {k}: shallow={} node={:?} reads_expr={expr:?} owner={:?} read={:?}",
                     item.shallow,
                     item.node,
-                    pair.and_then(|pair| module.node_function(pair)),
+                    expr.and_then(|expr| module.node_function(expr)),
                     read
                 );
                 if let Some(lichen_lowlevel::LowValue::USize(n)) = low {
@@ -393,9 +393,9 @@ fn same_process_repeats() {
 ///
 /// # Invariant
 ///
-/// Every reading is a node id or an owner tag the module itself holds: the pair an
+/// Every reading is a node id or an owner tag the module itself holds: the expr an
 /// operand item reads, the parameter the apply's check writes, the closure the apply
-/// read, and the owner tag on the return pair. Two applies that read the same closure
+/// read, and the owner tag on the return expr. Two applies that read the same closure
 /// read the same shell, so the owner tag names both.
 #[test]
 fn frozen_readings() {
@@ -417,7 +417,7 @@ fn frozen_readings() {
     println!("### frozen answer: {answer}");
     for rehome in build.module.rehomed_functions() {
         println!(
-            "  rehome {:?} of {:?}: parent={:?} return_pair={:?} owner={:?} parameter={:?} owner={:?}",
+            "  rehome {:?} of {:?}: parent={:?} return_expr={:?} owner={:?} parameter={:?} owner={:?}",
             rehome.function,
             rehome.origin,
             rehome.parent,
@@ -435,7 +435,7 @@ fn frozen_readings() {
         .collect();
     applies.sort_by_key(|&(apply, _)| apply);
     for (apply, parameter) in applies {
-        let pair = build.module.applied_pairs.get(&apply).copied();
+        let expr = build.module.applied_exprs.get(&apply).copied();
         // The closure the apply read: the callee is the operand array's first item.
         let callee = build
             .module
@@ -461,9 +461,9 @@ fn frozen_readings() {
                 AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value).map(|low| format!("{low:?}"))
             });
         println!(
-            "  apply {apply:?}: closure={callee:?} parameter={parameter:?} owner={:?} return_pair={pair:?} owner={:?}",
+            "  apply {apply:?}: closure={callee:?} parameter={parameter:?} owner={:?} return_expr={expr:?} owner={:?}",
             build.module.node_function(parameter),
-            pair.and_then(|pair| build.module.node_function(pair)),
+            expr.and_then(|expr| build.module.node_function(expr)),
         );
     }
 }

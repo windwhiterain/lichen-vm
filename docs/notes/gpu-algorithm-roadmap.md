@@ -350,10 +350,10 @@ is lane-varying — and the value lattice cannot express it. The concrete sympto
 perspective on a kernel config parameter, `(k : ParA # 4)`, still fails the build in a
 **runtime** unify (`expected raw[?a, raw[?b, ?c]] -> raw[?d, ?e], found struct{…} -> ?j`)
 rather than the attribute check. Measured further: the checker's attribute paths do not
-fire for it (the provider, element-pair and type-attribute reconciliations were each
+fire for it (the provider, element-expr and type-attribute reconciliations were each
 traced), and disabling the frozen return-attribute propagation does not change it — the
 failing unify is the **kernel-type merge** at the value side, where the annotation's
-presence changes the config pair's shape. **The config annotation is not the MMA path**:
+presence changes the config expr's shape. **The config annotation is not the MMA path**:
 the author's verdict is that the requirement lands on the *register values* — a
 fragment's lane layout is a value fact, and the 32-lane group itself is the dispatch's
 (this backend runs 64-lane workgroups with a 32-lane subgroup), so the config does not

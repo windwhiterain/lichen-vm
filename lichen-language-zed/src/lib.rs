@@ -100,7 +100,7 @@ mod zed_impl {
         if on_windows() { ".exe" } else { "" }
     }
 
-    /// The shell environment as `(key, value)` pairs.
+    /// The shell environment as `(key, value)` exprs.
     fn shell_env(worktree: &Worktree) -> Vec<(String, String)> {
         worktree.shell_env()
     }

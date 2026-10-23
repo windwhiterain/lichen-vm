@@ -69,7 +69,7 @@ and the same three read suffixes; the difference is the mark's spelling and noth
 else.
 
 **The difference, in one sentence:** the depth form replaces the marked element with
-the call's `[value, type]` **pair**, while the bare form leaves the element as the
+the call's `[value, type]` **expr**, while the bare form leaves the element as the
 call's value alone — so the same read suffix walks one level deeper into a structure
 that is now a type spine.
 
@@ -90,13 +90,13 @@ levels. `…` below is the depth cut in the printout, not a value.
 
 | # | read | holds | class | kind |
 |---|---|---|---|---|
-| `[0]` | `inf(1)(0)` | `Array[USize(1), Array[NO VALUE, Array[…, …]]]` | a **2-element array** — a pair | the marked call's **value**: the pair `f 1 = [1, <lazy pair>]` |
+| `[0]` | `inf(1)(0)` | `Array[USize(1), Array[NO VALUE, Array[…, …]]]` | a **2-element array** — an expr | the marked call's **value**: the expr `f 1 = [1, <lazy expr>]` |
 | `[1]` | `inf(1)(1)(0)` | `Array[Array[NO VALUE, Array[TypeValue(TypeInt), Array[…]], NO VALUE, NO VALUE, NO VALUE], Array[NO VALUE, Array[…], NO VALUE, NO VALUE, NO VALUE]]` | a **2-element array of two 5-item element slots** | the **shape list** of the marked call's tuple type: `shape` of `[shape, kind]`, slot 0 typed `Int`, slot 1 open |
 | `[2]` | `inf(1)(1)(1)(0)` | `TypeValue(TypeTuple)` | **not** a `LowValue` at all | the **kind marker** `TypeTuple`, read off the `kind` half `[TypeTuple, Type]` |
 
 The chain that produces them, from the same printout: `inf(1)` is the marked element
-pair `[value, type]`; `(0)` reaches its value half — which is `f 1` **itself**, a
-pair, not a scalar; `(1)` reaches its type half, whose value the registration decided
+expr `[value, type]`; `(0)` reaches its value half — which is `f 1` **itself**, a
+expr, not a scalar; `(1)` reaches its type half, whose value the registration decided
 to `[shape, kind]`; `(0)` on that is `shape`, a list of two element slots; `(1)` is
 `kind = Array[TypeValue(TypeTuple), Array[TypeValue(TypeType), …]]`; `(0)` on the kind
 is `TypeValue(TypeTuple)`.
@@ -112,16 +112,16 @@ is `TypeValue(TypeTuple)`.
 `inf` itself reads `Array[USize(0), Array[USize(1), Array[USize(2), Array[USize(3), NO VALUE]]]]`
 in the control — the lazy list, each element the bare mark left unforced — against
 `Array[USize(0), Array[Array[USize(1), Array[NO VALUE, …]], Array[Array[…], Array[…]]]]`
-under the depth mark, where the tail element is the two-slot pair.
+under the depth mark, where the tail element is the two-slot expr.
 
 ### The author's three-element description, checked
 
-`990094e1`'s message — *"[1, <lazy pair>], a two-slot type structure, and the
+`990094e1`'s message — *"[1, <lazy expr>], a two-slot type structure, and the
 `TypeTuple` kind marker"* — is **right on all three counts**, and the middle one can
-be sharpened. Element `[0]` is exactly `[USize(1), <a pair whose head holds no
+be sharpened. Element `[0]` is exactly `[USize(1), <an expr whose head holds no
 value>]`. Element `[2]` is exactly `TypeValue(TypeTuple)`. Element `[1]` is a
 two-element array, so "two-slot" is right; what it holds is **not** a `[shape, kind]`
-type pair but the **shape half alone** — the list of two element slots — which is why
+type expr but the **shape half alone** — the list of two element slots — which is why
 its slot 0 is typed `TypeValue(TypeInt)` and its slot 1 holds an undecided cell.
 
 One further measured fact, because it removes the obvious suspect: **the two
@@ -144,7 +144,7 @@ each quoted, and then where the confusion actually is.
 
 ```rust
 n => {
-    // The wrapped term is a lazy region: its pair chain does not match
+    // The wrapped term is a lazy region: its expr chain does not match
     // the element's type, so its reads get a fresh cell.
     vals.push(self.wrap_shallow(el, n));
     // A marked call is applied as the bare arm's is, so the mark's
@@ -180,7 +180,7 @@ for &(slot0, slot1) in levels.iter().rev() {
 ```
 
 with level 1 seeded at `indexing.rs:476-477` as `(self.value_of(e),
-self.state[e].ty.unwrap())`. So the marked element is a **fresh masked pair
+self.state[e].ty.unwrap())`. So the marked element is a **fresh masked expr
 `[value_of(el), state[el].ty]`** — slot 0 the call's value, slot 1 the call's type
 node, slot 0 marked shallow — and `mask.push(depths[i] == usize::MAX)` marks the
 **array position** for the bare form only.
@@ -199,7 +199,7 @@ for (type_apply, tail) in shallow_types {
 ```
 
 The second component is `self.state[el].ty` — the marked call's **own type node**,
-which is by construction the element pair's slot 1. `evaluate_node_deep(type_apply)`
+which is by construction the element expr's slot 1. `evaluate_node_deep(type_apply)`
 decides that node to hold the **type value** `[shape, kind]`. **A type cell, written
 with a type: correct.**
 
@@ -228,19 +228,19 @@ it is that type's own data. The confusion hypothesis is **not** the mechanism.
 It is between the **element's shape** and the **program's read arity**, and it is
 two facts:
 
-1. `@shallow(n)` puts a **pair** in the element position and `@shallow` puts a
-   **value** (`indexing.rs:408` against `:398`). A pair's slot 1 is its type half,
+1. `@shallow(n)` puts a **expr** in the element position and `@shallow` puts a
+   **value** (`indexing.rs:408` against `:398`). An expr's slot 1 is its type half,
    so `(1)` enters the type — by the project's own core idea
    ([overview](overview.md) §"The core idea"), not by any mistake.
 2. The program was **written with the bare spelling's arity**. `inf(1)(0)` asks for
-   the marked element's slot 0, which is `f 1`, and `f 1` *is* a pair whose slot 0
+   the marked element's slot 0, which is `f 1`, and `f 1` *is* an expr whose slot 0
    is `1`.
 
 Element `[0]` is the direct evidence that the registration is not implicated: with
 the `n` arm's registration disabled by `if false &&`, the probe printed element `[0]`
-as `Array[USize(1), Array[NO VALUE, NO VALUE]]` — **the same pair**, only the deeper
+as `Array[USize(1), Array[NO VALUE, NO VALUE]]` — **the same expr**, only the deeper
 type side undecided — while `[1]` and `[2]` both became `NO VALUE`. **The
-registration wrote exactly the two type-side elements; the pair in `[0]` predates it
+registration wrote exactly the two type-side elements; the expr in `[0]` predates it
 and is `wrap_shallow`'s.**
 
 ## 4 Is there a correct fix, and what would it touch?
@@ -266,7 +266,7 @@ decision, taken on this measurement, that is what was done:
 |---|---|---|
 | the held test's program, one `(0)` deeper per read | `crates/lichen-language/tests/language/pipeline.rs` | **done** |
 | the held test's assertion, `.len() == 3` → the three numbers | same test, `common::usize_array(…) == vec![1, 2, 3]` | **done** |
-| the held test's comment, which described the pair and not the arity | same test | **done** — it now states the arity rule and points here |
+| the held test's comment, which described the expr and not the arity | same test | **done** — it now states the arity rule and points here |
 | `docs/language-spec.md` §"Shallow markers" | `docs/language-spec.md` | **untouched** — its declared slot is not meant to become `Int`, so nothing there needed changing |
 | `an_at_shallow_depth_marks_value_slots_shallow` | `pipeline.rs` | **untouched by decision**, and see below for why that is the reason the fix belongs in the arity |
 
@@ -274,7 +274,7 @@ decision, taken on this measurement, that is what was done:
 spelling `(inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))`, run against the new assertion,
 **fails** — `usize_of` panics at `crates/lichen-language/src/testing.rs:104` with
 `expected a usize value, got LowValue(Array(… metadata: 2))`, which is exactly the
-pair §2's table measured for element `[0]`. The new assertion therefore cannot pass on
+expr §2's table measured for element `[0]`. The new assertion therefore cannot pass on
 a type structure or a kind marker, which is what `.len() == 3` could not tell. The
 test's **name is unchanged** — `an_at_shallow_depth_one_on_a_recursive_tail_terminates`
 still says what it was written to pin, and every companion that names it still
@@ -282,14 +282,14 @@ resolves.
 
 **The arity is one extra `(0)` immediately after `inf(1)`, not one at the end of each
 read.** Measured both ways: the suffix form `inf(1)(1)(0)(0)` does **not** reach the
-arithmetic, because `(1)` is the element pair's **type** half, so a further `(0)` lands
+arithmetic, because `(1)` is the element expr's **type** half, so a further `(0)` lands
 inside the type's shape list. The spelling that works — and the one the test now
 carries — takes the element's value half first and then walks it exactly as the bare
 mark's reads do.
 
 **If the user instead wants the same spelling to answer the arithmetic**, that is a
 semantics change in the checker, and it would touch **`wrap_shallow` and the `n`
-arm's `vals.push` at `indexing.rs:408`** — dropping the extra pair so the position
+arm's `vals.push` at `indexing.rs:408`** — dropping the extra expr so the position
 holds `self.value_of(el)` and marking the position in `mask` instead, the way the bare
 arm does at `:418`. **That would break a passing test**, and this is why it is not
 recommended: `pipeline::an_at_shallow_depth_marks_value_slots_shallow` asserts
@@ -301,7 +301,7 @@ one level short.
 **And the closure.** [shallow-depth-mechanism](shallow-depth-mechanism.md) §2
 measured that `close_shallow_tail` contributes nothing here; re-measured here by
 replacing the `checker.rs:561` call with `let _ = &tail;`, all three elements came
-back **byte-identical** to the full run — same pair, same shape list, same
+back **byte-identical** to the full run — same expr, same shape list, same
 `TypeValue(TypeTuple)`. So the contradiction resolves cleanly rather than sharply:
 **a correct fix for the arithmetic does not need the closure, and could not be said
 to need it.** Had a fix required it, that would have contradicted §2; it does not,
@@ -329,7 +329,7 @@ nothing, so it panicked rather than failed. The registration fixed exactly that,
 `an_at_shallow_depth_one_on_a_recursive_tail_terminates` is now `ok` (measured).
 
 **It cannot tell** that the three values are `1`, `2` and `3`. Measured: it is green
-on `[1, <lazy pair>]`, a shape list, and `TypeTuple`. The author's charge — *"it is
+on `[1, <lazy expr>]`, a shape list, and `TypeTuple`. The author's charge — *"it is
 now green on values that are not the arithmetic"* — is **confirmed**, and this note
 sharpens it: it is green on values that are not the arithmetic **because the program
 reads one level too few for its own mark**, not because the mark answers a type
@@ -340,7 +340,7 @@ decision it is what the test now carries**: `common::usize_array(&module, &value
 vec![1, 2, 3]` on the one-level-deeper program of §4. It demands that the
 depth-marked reads reach the arithmetic — and it passes, measured, and the old
 spelling fails it, measured. What it bought is exactly what `.len() == 3` could not
-say: the three elements are the three **numbers**, not a pair, a shape list and a kind
+say: the three elements are the three **numbers**, not an expr, a shape list and a kind
 marker that happen to exist.
 
 **Can the program answer the arithmetic at all under a depth mark?** Yes — measured,
@@ -352,7 +352,7 @@ themselves**". That sentence is **confirmed by this measurement** — but it is 
 statement about the *marked levels*, not a licence for the *test's arity*. **So the
 green was not wrong; the test was.** It pinned a mis-spelled program with a
 length-only assertion, and its comment — *"an element holds a value the deep pass
-never forced: a pair is one"* — described the pair correctly while leaving the missing
+never forced: an expr is one"* — described the expr correctly while leaving the missing
 `(0)` unnamed. The two readings that comment left open are both right for different
 elements, and only one of them is the reason the numbers were missing. The comment now
 states the arity rule instead, and the assertion now says the numbers.
@@ -366,10 +366,10 @@ edited by this slice**, and both remain as they were.
   `[1]` as *"a two-slot type structure"*: **imprecise, corrected here.** It is the
   **shape list** of the marked call's tuple type — two element slots, slot 0 typed
   `TypeValue(TypeInt)`, slot 1 open — i.e. the `shape` half of the `[shape, kind]`
-  value the registration wrote, not a `[shape, kind]` pair. Its `[0]` and `[2]` rows
-  (`[USize(1), <lazy pair>]` and `TypeValue(TypeTuple)`) are **confirmed exactly**.
+  value the registration wrote, not a `[shape, kind]` expr. Its `[0]` and `[2]` rows
+  (`[USize(1), <lazy expr>]` and `TypeValue(TypeTuple)`) are **confirmed exactly**.
 - **[shallow-depth-mechanism](shallow-depth-mechanism.md) §4.2**, which says the
-  bare mark's *"element slot is the call's own pair and the depth mark's is a rebuilt
+  bare mark's *"element slot is the call's own expr and the depth mark's is a rebuilt
   one, whose resolved reads come off the type side"*: **confirmed and now exact.**
   "Off the type side" is not a side effect of the reads — the read chains are
   **identical** in the two programs (§2); the difference is the rebuilt element, whose
@@ -446,15 +446,15 @@ second was declined, because §4 measures that changing it would break
 Measured with temporary prints, then removed; the tree is unchanged by this section.
 
 - **`@shallow(2)`** — `l(1)(0)` fails at check with an **attribute read past a narrow
-  pair**: the checker's `element_pair` builds `Index(element, 2..4)` projections, and
+  expr**: the checker's `element_expr` builds `Index(element, 2..4)` projections, and
   the element's runtime value is a two-item array (the tuple's own value), so the read
   is out of bounds. The projections are built while the element's value is still
-  undecided, which is why a static guard in `element_pair` cannot see it.
+  undecided, which is why a static guard in `element_expr` cannot see it.
 - **`@shallow(1)`** — `step2(1)` reads a non-container: the lazy-region read of
   `step1(0)` is *not* recognized, so the read takes the normal slot path and yields a
   scalar; the chain then applies `(1)` to it. The recognition fails at check because
   the container's value is a clone that states no value, and the template walk
-  (`first_position`/`masked_pair` through `node_origin`) does not yet reach the mask
+  (`first_position`/`masked_expr` through `node_origin`) does not yet reach the mask
   across that clone.
 - The wrapper is now a **full-width slot** (`array_node_masked_slot`), which removes
   the out-of-bounds class for reads that reach *it*; the two failures above are one
@@ -462,16 +462,16 @@ Measured with temporary prints, then removed; the tree is unchanged by this sect
 
 **The block-local recursion** (`a_recursive_binding_inside_a_block_recurses`) is a
 separate reading: the conflict is a bare value `3` against a slot *dereference* whose
-value is `2`, at the unify's root. The parameter pairs themselves are fresh per
+value is `2`, at the unify's root. The parameter exprs themselves are fresh per
 instantiation (measured: `282` then `319` for one apply), so the sharing is one level
-in — the dereference node, not the pair.
+in — the dereference node, not the expr.
 
 ## 10. The lazy peel's resolution (round sixteen)
 
 The one-depth chain (`f = x => [x, @shallow(1) f (x + 1)]`) is now read as a sequence
 of **constant selections through reads**: `selected_item` resolves `[v0, v1][k]`
-through a container that is itself a read, and a call's pair resolves to the callee's
-template return pair. Measured verdicts, in chain order: `inf(1)` — not a region (a
+through a container that is itself a read, and a call's expr resolves to the callee's
+template return expr. Measured verdicts, in chain order: `inf(1)` — not a region (a
 plain tuple); `step1(0)` — a region; `step2(1)` — a region; `step3(0)` — **not**, and
 the peel's selected node there is a wrapper *value cell* rather than the wrapper, so
 the mask is one level further out than the peel currently looks.
@@ -481,12 +481,12 @@ the mask is one level further out than the peel currently looks.
 Measured on `a_recursive_binding_inside_a_block_recurses`, prints since removed:
 
 - The parameter checks are **fresh per instantiation**: the same apply node sees distinct
-  parameter pairs (`282`, `319`; `476`, `513`) with five unmarked items, so the
-  parameter pair is not what is shared.
+  parameter exprs (`282`, `319`; `476`, `513`) with five unmarked items, so the
+  parameter expr is not what is shared.
 - The failing unify compares two **clone chains**: one holds a bare `USize(3)`
   (clones of a value node ending at a node of function 6), the other an `Index` whose
   value is `USize(2)` (clones ending at a node of function 4). So the conflict is
-  between a *value clone* and a *read clone*, one function apart — the pair unify is
+  between a *value clone* and a *read clone*, one function apart — the expr unify is
   comparing a slot value against a dereference, not two values of one call.
 
 ## 12. The region answer is a construction fact (round eighteen)
@@ -501,31 +501,31 @@ That is now the case: `shallow_regions` records every wrapper the check builds, 
 template), falling back to the value mask only for a wrapper this check did not build
 (a frozen one). The wrapper's own value is not read.
 
-## 13. The pair-form wrapper, measured (round nineteen)
+## 13. The expr-form wrapper, measured (round nineteen)
 
-Tried and reverted: the wrapper's first item as the **call's pair** (`state[e].term`)
+Tried and reverted: the wrapper's first item as the **call's expr** (`state[e].term`)
 rather than its extracted value. Measured on the one-depth chain:
 
 - The read's element then is the apply node, whose value is the call's **result** — the
   tuple value, an array of two element slots — so the normal read's `Index(element, 0)`
   double-dereferences, and the attribute projections read `Index(tuple_value, 2..4)`:
   three `IndexOutOfBounds` diagnostics, index 2/3/4 on an array of length 2.
-- The pair form therefore still needs the region read (value = the element) and the
+- The expr form therefore still needs the region read (value = the element) and the
   region test to fire for those reads; with the constructional set it did not reach the
   wrapper through the chain, so the form changed the failure without removing it.
 The form is the structurally right one (the type slot composes the same way); it needs
-the region test to resolve the wrapper through the pair chain first.
+the region test to resolve the wrapper through the expr chain first.
 
 ## 14. What made the chain work (round twenty)
 
-The one-depth chain is green. The working form is the pair-form of §13 **plus** a
+The one-depth chain is green. The working form is the expr-form of §13 **plus** a
 mutually recursive resolution:
 
-- The wrapper's first item is the call's **pair** (the apply node), so a read of the
-  wrapper dereferences the pair a call states.
+- The wrapper's first item is the call's **expr** (the apply node), so a read of the
+  wrapper dereferences the expr a call states.
 - `array_of` and `selected_item` resolve each other: the array a node's value is is
   the node itself, the item a constant read selects, or the array a call's template
-  return pair holds — and a call's template pair is what states the call's value before
+  return expr holds — and a call's template expr is what states the call's value before
   any evaluation decides it, which is the reading the type slot already uses.
 
 ## 15. The block recursion's clone chains (round twenty-one)
@@ -547,13 +547,13 @@ Dumped with temporary prints, then removed:
 
 - The 3-against-2 conflict is recorded inside **`apply_parameter_check`**, called from
   `instantiate_stamped` on the **type side** (`apply_type_with` → `instantiate`). The
-  parameter and argument pairs are both full width there (measured 5/5), so the pair
+  parameter and argument exprs are both full width there (measured 5/5), so the expr
   branch, not the whole-value branch, does the unify.
 - **Negative:** skipping the *value* slot on the type side (unifying types only) breaks
   four highlevel refinement tests (`in_function_assert_*`, `a_body_index_on_a_literal_*`,
   `an_in_function_bounds_constraint_*`): the type side's value merge is what reports a
   refinement mismatch. That change is therefore wrong and was reverted.
-- Both pairs are per-instantiation yet the same call site's *argument pair node* is a
+- Both exprs are per-instantiation yet the same call site's *argument expr node* is a
   template node shared by every level; the type side's value merge is what joins the
   levels' parameter cells, so the fix has to keep the reporting merge while making it
   per-evaluation — not remove it.
@@ -584,7 +584,7 @@ Measured with temporary prints, then removed. The closure mint walk
 
 - when the block's `g` value is cloned during a call of `g`, the *minted* closure's
   template parameter is **the same clone node** as the enclosing instantiation's
-  parameter pair (`template_parameter 257 → cloned 442` for both);
+  parameter expr (`template_parameter 257 → cloned 442` for both);
 - that node is then bound by the enclosing call (measured: a `DBG u440` unify from
   `apply_parameter_check`, `440` against a class holding `USize(3)`);
 - the next mint clones the bound node and carries `3` into the fresh template, where
@@ -618,10 +618,10 @@ mint-ownership seam one level up, not a carry rule.
 
 The trace after round 25 shows, for every recursive level, a fresh apply node and a
 fresh operand array, but the operand's **items 1..** are the same nodes: item 0 (the
-callee) is cloned per level, item 1 (the argument pair) is not. So `z` never decreases
+callee) is cloned per level, item 1 (the argument expr) is not. So `z` never decreases
 and the check stops on the apply-depth budget.
 
-Root cause measured: the argument pair is a *minted* template node whose value was
+Root cause measured: the argument expr is a *minted* template node whose value was
 copied from the enclosing call (`z - 1` with `z = 3` gives `2`), and the mint's `carried`
 rule copies it into every later template.
 

@@ -181,15 +181,15 @@ fn probe_the_graph_a_loop_body_leaves() {
     );
     println!("  return: {}", describe(module, function.r#return));
     println!(
-        "  return's pair value half: {:?}",
-        module.pair_value_half(function.r#return)
+        "  return's expr value half: {:?}",
+        module.expr_value_half(function.r#return)
     );
     println!(
         "  return's items: {:?}",
         array_items(module, function.r#return)
     );
     // The chain the return's value half is.
-    if let Some(value) = module.pair_value_half(function.r#return) {
+    if let Some(value) = module.expr_value_half(function.r#return) {
         println!("  value half chain:");
         print_chain(module, value, 1);
     }
@@ -249,8 +249,8 @@ fn probe_the_graph_a_loop_body_leaves() {
         println!("  apply: {}", describe(module, id));
         println!("  apply's items: {:?}", array_items(module, id));
         println!(
-            "  apply's pair value half: {:?}",
-            module.pair_value_half(id)
+            "  apply's expr value half: {:?}",
+            module.expr_value_half(id)
         );
         if let Some(operands) = module.operands_of(id).ok() {
             for operand in operands {

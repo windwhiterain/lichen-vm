@@ -546,7 +546,7 @@ where
     /// path walk is tried on the node, on what one peel takes off it, and on its
     /// view, and the first that lands on a slot wins.
     fn parameter_path_of(&self, node: NodeId) -> Result<Option<usize>, String> {
-        let peeled = self.module.pair_value_half(node);
+        let peeled = self.module.expr_value_half(node);
         let viewed = match self.module.selection_of(node) {
             Some(lichen_lowlevel::Selection::Views(view)) => Some(view),
             _ => None,
@@ -571,7 +571,7 @@ where
     /// # Invariant
     /// The chain of `Index` nodes is the test, not the base's class: a parameter the
     /// deep pass unified with its argument is a computation by codegen time. The base
-    /// is matched against the slots themselves — each slot's pair and its value — or
+    /// is matched against the slots themselves — each slot's expr and its value — or
     /// against one of the domain's leaves, because a struct parameter, a tuple domain
     /// and a scalar each reach the walk through a different node.
     fn parameter_path(&self, node: NodeId) -> Result<Option<usize>, String> {
@@ -603,23 +603,23 @@ where
             let AnyNodeId::Dynamic(target) = target else {
                 return Ok(None);
             };
-            // **`Index(param_pair, k)` is the pair's value half, not a path step**, and the
-            // cursor stops on the pair.
+            // **`Index(param_expr, k)` is the expr's value half, not a path step**, and the
+            // cursor stops on the expr.
             if self
                 .params
                 .iter()
-                .any(|slot| self.module.class_root(slot.pair) == self.module.class_root(*target))
+                .any(|slot| self.module.class_root(slot.expr) == self.module.class_root(*target))
             {
                 cursor = *target;
                 break;
             }
-            // A pair or a slot is `2 + attributes` wide; a tuple's elements are slots
+            // An expr or a slot is `2 + attributes` wide; a tuple's elements are slots
             // (`docs/notes/compound-element-slots.md`).
             let class_value = self
                 .module
                 .class_value(*target)
                 .and_then(|value| AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value));
-            // A pair states its type in its second position
+            // An expr states its type in its second position
             // (`docs/notes/compound-element-slots.md`).
             let type_position = class_value.as_ref().and_then(|value| match value {
                 lichen_lowlevel::LowValue::Array(array) if array.layout() != 0 => {
@@ -638,7 +638,7 @@ where
                 Some(lichen_lowlevel::LowValue::Array(array))
                     if array.layout() != 0
                         && unsafe { array.items() }.len()
-                            == lichen_lowlevel::PAIR_ATTR_BASE
+                            == lichen_lowlevel::EXPR_ATTR_BASE
                                 + self.module.attribute_layout(array.layout()).len()
             );
             if std::env::var("DBG_DEREF").is_ok() {
@@ -650,7 +650,7 @@ where
                 );
             }
             if dereference {
-                // A pair's type (`1`) and attributes (`2+`) are not values this body
+                // An expr's type (`1`) and attributes (`2+`) are not values this body
                 // emits (`docs/notes/compound-element-slots.md`).
                 if step != 0 {
                     return Ok(None);
@@ -662,7 +662,7 @@ where
         }
         let root = self.module.class_root(cursor);
         let on_a_slot = self.params.iter().any(|slot| {
-            root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
+            root == self.module.class_root(slot.expr) || root == self.module.class_root(slot.value)
         });
         // The domain's leaves, or a class the type tree names
         // (`docs/notes/compound-element-slots.md`).
@@ -706,7 +706,7 @@ where
             return Some(slot.base + ordinal);
         }
         let (offset, outran) = self.walk_offsets(positions)?;
-        // A pair projection is a leading `0` (`docs/notes/compound-element-slots.md`).
+        // An expr projection is a leading `0` (`docs/notes/compound-element-slots.md`).
         if outran && positions.first() == Some(&0) {
             return self.walk_offsets(&positions[1..]).map(|(offset, _)| offset);
         }
@@ -915,8 +915,8 @@ where
             return Ok(value);
         }
         let Some(operation) = self.module.node_operation(node) else {
-            // A declaration instance is its `.native` slot; a pair reaches its value half.
-            if let Some(inner) = lichen_highlevel::shape::pair_value(self.module, node) {
+            // A declaration instance is its `.native` slot; an expr reaches its value half.
+            if let Some(inner) = lichen_highlevel::shape::expr_value(self.module, node) {
                 return self.value(inner);
             }
             if let Some(slot) = self.parameter_path_of(node)? {
@@ -1130,7 +1130,7 @@ where
         }
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
         let node = peeled.dynamic()?;
-        let value = self.module.pair_value_half(node).unwrap_or(node);
+        let value = self.module.expr_value_half(node).unwrap_or(node);
         // A target that is a `Buf` instance names the `$buf` op inside it.
         if let Some(payload) = self.instance_payload(value) {
             // The clone records the template it instantiates.
@@ -1323,7 +1323,7 @@ where
         else {
             return Ok(None);
         };
-        let value = self.module.pair_value_half(argument).unwrap_or(argument);
+        let value = self.module.expr_value_half(argument).unwrap_or(argument);
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
             return self.compute_operator(node, compute_op, value).map(Some);
         }
@@ -1340,7 +1340,7 @@ where
             else {
                 return Ok(None);
             };
-            let value = self.module.pair_value_half(argument).unwrap_or(argument);
+            let value = self.module.expr_value_half(argument).unwrap_or(argument);
             let elements = self
                 .module
                 .value_leaves(value)
@@ -1455,7 +1455,7 @@ where
         }
         // A type-side apply states no callee
         // (`docs/notes/apply-type-side-check.md`).
-        if let Some(value_apply) = self.module.apply_pairs.get(&node).copied()
+        if let Some(value_apply) = self.module.apply_exprs.get(&node).copied()
             && let Some(operand) = self
                 .module
                 .node_operation(value_apply)
@@ -1633,7 +1633,7 @@ where
                     .into(),
             );
         };
-        let value = self.module.pair_value_half(argument).unwrap_or(argument);
+        let value = self.module.expr_value_half(argument).unwrap_or(argument);
         let scalar = conversion.state.len() == 1 && conversion.state[0].is_empty();
         if scalar {
             return Ok(vec![self.value(value)?]);
@@ -1935,9 +1935,9 @@ where
             .iter()
             .map(|slot| {
                 format!(
-                    "pair {:?}/class {:?}, value {:?}/class {:?}",
-                    slot.pair,
-                    self.module.class_root(slot.pair),
+                    "expr {:?}/class {:?}, value {:?}/class {:?}",
+                    slot.expr,
+                    self.module.class_root(slot.expr),
                     slot.value,
                     self.module.class_root(slot.value)
                 )
@@ -2140,7 +2140,7 @@ where
         }
         // **The argument's class must be the callee's**: a wasm `call` types its operand
         // by the signature.
-        let peeled = self.module.pair_value_half(arg).unwrap_or(arg);
+        let peeled = self.module.expr_value_half(arg).unwrap_or(arg);
         let arg_class = node_class(self.module, peeled);
         if let Some(expected) = callee_params.first()
             && *expected != arg_class
@@ -2161,7 +2161,7 @@ where
     /// # Invariant
     /// Three shapes, tried in the order the graph can rule them out: a read of the
     /// domain at a path ([`Lower::parameter_path`]), which passes through as the
-    /// caller's own contiguous parameters; the `[value, type]` pair's value; and a
+    /// caller's own contiguous parameters; the `[value, type]` expr's value; and a
     /// concrete tuple value, element by element, recursing for a nested domain. Each
     /// is ruled out by a fact rather than by a later one failing.
     fn callee_args(&mut self, arg: NodeId, shape: &KernelShape) -> Result<Vec<ValueId>, String> {
@@ -2171,7 +2171,7 @@ where
         }
         if arity == 1 {
             return Ok(vec![
-                self.value(self.module.pair_value_half(arg).unwrap_or(arg))?,
+                self.value(self.module.expr_value_half(arg).unwrap_or(arg))?,
             ]);
         }
         let KernelShape::Tuple(items) = shape else {
@@ -2187,9 +2187,9 @@ where
             }
             return Ok(args);
         }
-        // (2) and (3): the pair's value half, read as a concrete tuple.
-        let array = self.module.pair_value_half(arg).unwrap_or(arg);
-        // **The read may be at the wrapper's class**: the pair's value half is its own
+        // (2) and (3): the expr's value half, read as a concrete tuple.
+        let array = self.module.expr_value_half(arg).unwrap_or(arg);
+        // **The read may be at the wrapper's class**: the expr's value half is its own
         // singleton cell.
         if let Ok(args) = self.tuple_leaves(array, items) {
             return Ok(args);
@@ -2230,7 +2230,7 @@ where
 
     /// Read an input buffer element: `read [cfg(1)(k), idx]`.
     fn buffer_read(&mut self, operand: NodeId) -> Result<ValueId, String> {
-        let operands = self.module.operand_pair(operand, "read")?;
+        let operands = self.module.operand_expr(operand, "read")?;
         let (Some(buffer), Some(index)) = (operands.first(), operands.get(1)) else {
             return Err("read's operand array must have two elements".into());
         };
@@ -2292,7 +2292,7 @@ where
         }
     }
 
-    /// The call a value peel `Index(pair, 0)` names.
+    /// The call a value peel `Index(expr, 0)` names.
     fn call_of_value_read(&self, node: NodeId) -> Option<NodeId> {
         let operands = self.arguments(node).ok()?;
         if self.selector(*operands.get(1)?)? != 0 {
@@ -2358,12 +2358,12 @@ where
         if active.conversion.state.len() == 1 && active.conversion.state[0].is_empty() {
             return self
                 .module
-                .pair_value_half(active.state)
+                .expr_value_half(active.state)
                 .map(AnyNodeId::Dynamic);
         }
         // The entering state is the argument's **value**: the element at the slot is
         // the node the call bound there.
-        let value = self.module.pair_value_half(active.state)?;
+        let value = self.module.expr_value_half(active.state)?;
         // SAFETY: `value` is a live node of the module being lowered.
         let elements = unsafe { self.module.array_items(value) }?;
         let element = elements.get(slot)?.node.dynamic()?;
@@ -2399,11 +2399,11 @@ where
         }
         let index = dynamic(items[1].node)?;
         let value_node = dynamic(items[2].node)?;
-        // **A record stores the call's pair**: the value written is the pair's value
+        // **A record stores the call's expr**: the value written is the expr's value
         // half — the call.
         let value_node = if self.module.node_operation(value_node).is_none() {
             self.module
-                .pair_value_half(value_node)
+                .expr_value_half(value_node)
                 .unwrap_or(value_node)
         } else {
             value_node
@@ -2463,7 +2463,7 @@ where
         self.tally.record_write(ordinal, element);
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
-        // A record stores the call's pair; the read peels it
+        // A record stores the call's expr; the read peels it
         // (`docs/notes/loop-conversion.md`).
         let value = match self.call_of_value_read(value_node) {
             Some(call) => self.value(call)?,

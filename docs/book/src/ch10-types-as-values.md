@@ -34,18 +34,18 @@ Int: Type
 ## Types are built by functions
 
 A type constructor is a function like any other. Here is a one-field box
-type and a two-field pair type:
+type and a two-field expr type:
 
 ```lichen
-Pair = T => U => tuple{T, U}
-Pair Int string
+Expr = T => U => tuple{T, U}
+Expr Int string
 ```
 
 ```text
 tuple{Int, string}: TypeTuple
 ```
 
-`Pair` is an ordinary lambda. Its parameters are type values, its body is
+`Expr` is an ordinary lambda. Its parameters are type values, its body is
 a tuple type expression, and the result is a type value of kind
 `TypeTuple`. The same function builds a different type when applied to
 different arguments:
@@ -201,7 +201,7 @@ self-referential node.
 
 - Types are values: they can be bound, passed, stored, and returned, and an
   array of types has type `array{Type, n}`.
-- A type constructor is an ordinary function; `Box Int` and `Pair Int
+- A type constructor is an ordinary function; `Box Int` and `Expr Int
   string` are applications.
 - A type value is not read apart: read a value's element and take its type
   (`type_of s.a`), or pass a type's parameters and build the type at the
@@ -215,9 +215,9 @@ self-referential node.
 
 ## Exercises
 
-1. Write `Pair = T => U => tuple{T, U}` and print `Pair Int string` and
-   `Pair Type Int`.
-2. Write `Pair = T => tuple{T, T}`, apply it to `Int` at the call site, and
+1. Write `Expr = T => U => tuple{T, U}` and print `Expr Int string` and
+   `Expr Type Int`.
+2. Write `Expr = T => tuple{T, T}`, apply it to `Int` at the call site, and
    explain why a generic function takes the element type rather than reading
    it out of a tuple type value.
 3. Write a type `t = tuple{5 : Int, Int}` and check that `(5, 2) : t`

@@ -181,7 +181,7 @@ fn consulted(graph: &Graph) -> (Option<Graph>, Vec<String>) {
 ///
 /// # Invariant
 /// The surviving node holds **exactly** `compose_fan_in` over the region's own three bodies, so a
-/// fan-in is the pair's own operation with a second producer rather than a second mechanism's
+/// fan-in is the expr's own operation with a second producer rather than a second mechanism's
 /// answer, and the union is `d` three times over — each producer's absorbed input dropped.
 #[test]
 fn a_consumer_of_two_producers_merges_into_one_node_under_the_floor() {

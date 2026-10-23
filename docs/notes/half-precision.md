@@ -50,7 +50,7 @@ each other, so one class is two enums. That is the shape of the work — every m
 every exhaustive match over the class — not the 440 textual hits a count of `ScalarClass`
 suggests.
 
-The two pack/unpack sites are the conversion pair itself and are now the shift pair above; the
+The two pack/unpack sites are the conversion expr itself and are now the shift expr above; the
 fold identity is exact at bf16 because a reduction states `0`, `1` or `-inf` and all three are
 exact halves; the lowering refuses a bf16 instruction **by name**
 (`BridgeRefusal::UnsupportedClass`) until the emitter can carry one.
@@ -63,7 +63,7 @@ useful part, because the two kinds need different work:
 
 | kind | sites | what an arm does today |
 |---|---|---|
-| **storage and width** — element read/write, packing, a binding's size, a wire tag, a stride | most | the 2-byte element and the shift pair, mirroring `Float` |
+| **storage and width** — element read/write, packing, a binding's size, a wire tag, a stride | most | the 2-byte element and the shift expr, mirroring `Float` |
 | **arithmetic or a backend** — the wasm assembler and lowerer, the SPIR-V operator table, the interpreter's operator tables | 6 | refused by name (`SpirvRefusal::UnsupportedClass`, or the `Result<_, String>` the function already returns) |
 | **placeholder** — an id or a type the emitter hands out where it has no 16-bit spelling | 6 | the existing `float`/`uint` id, each with an `# Invariant` saying it is a placeholder |
 

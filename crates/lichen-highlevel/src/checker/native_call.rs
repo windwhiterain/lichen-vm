@@ -55,20 +55,20 @@ where
                     DiagKind::NativeOpUnresolved,
                     Some(op),
                 );
-                let pair = self.pair_of(self.type_expr, self.type_expr);
-                self.state[e].term = Some(pair);
+                let expr = self.expr_of(self.type_expr, self.type_expr);
+                self.state[e].term = Some(expr);
                 self.state[e].val = None;
                 self.state[e].ty = Some(self.type_expr);
-                return pair;
+                return expr;
             }
         };
         // The type is not the plugin's to give: the boundary mints a fresh
-        // cell per call, through [`Checker::pair_of`].
+        // cell per call, through [`Checker::expr_of`].
         let ty = self.fresh_cell();
-        let pair = self.pair_of(built.value, ty);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(built.value, ty);
+        self.state[e].term = Some(expr);
         self.state[e].val = built.decided.then_some(built.value);
         self.state[e].ty = Some(ty);
-        pair
+        expr
     }
 }

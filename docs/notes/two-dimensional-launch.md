@@ -41,7 +41,7 @@ decides the size of the change:
 
 The distinction the whole proposal turns on: **by construction** means the type or the emitted
 module has nowhere to put a second dimension, so admitting one changes a type; **by
-convention** means a single `usize`/`u32` stands where a pair could, and admitting a second
+convention** means a single `usize`/`u32` stands where an expr could, and admitting a second
 dimension is an additive field plus whoever reads that field.
 
 ### 1.1 By construction
@@ -79,7 +79,7 @@ dimension is an additive field plus whoever reads that field.
 | `lichen-compute/src/compute.rs:4844` — `build_graph`, `:5302-5324` — the run | the pass is consulted with the same one-`usize` closure. |
 | `lichen-compute/src/compute.rs:5683-5691` — `MAX_PARALLEL_ELEMENTS` | `1 << 20` bounds **elements**, not `rows × cols`; a flattened launch pays it in full. |
 | `lichen-compute/src/compute.rs:5832-5835` — `chunk_bounds` | "Contiguous chunk bounds, a function of the **count** and worker count alone" — a 1-D decomposition of `[0, count)`. A 2-D launch would *keep* it: `id = base + j`, and the body splits as in §2.1. |
-| `lichen-kernel-ir/src/lib.rs:576-596` — `LaneWidth(u32)` | one number: "the lane count one workgroup runs". A 2-D workgroup needs a *pair*, and the pair is `TargetFacts`. |
+| `lichen-kernel-ir/src/lib.rs:576-596` — `LaneWidth(u32)` | one number: "the lane count one workgroup runs". A 2-D workgroup needs a *expr*, and the expr is `TargetFacts`. |
 | `lichen-kernel-ir/src/lib.rs:958-974` — `Slice { class, count, space }` | one array per space, counted in one dimension. |
 | `lichen-kernel-ir/src/plan.rs:64`, `:110-137` — `Plan::staging[].group_width` | "the plan stages `{name}` in a group of {asked} lane(s) and **one workgroup runs {lane_width}**… a group narrower than the workgroup needs a barrier narrower than the block, which lichen does not have". **A 2-D workgroup falsifies this sentence.** |
 | `lichen-fusion-bridge/src/tiled.rs:345-346`, `:380`, `:399` | "Each lane folds `[lane, lane + lane_width, …]` for `ceil(extent / lane_width)` steps"; `stride: lane_width`; `modulo: Some(lane_width)`. One axis, and it is the axis of the slice. |
@@ -198,23 +198,23 @@ There are three candidates, and they differ by an order of magnitude.
 **(a) A 2-D launch extent with a 1-D body — an outer/inner split the body sees as two indices.**
 This **already works** (§2.1). What is missing is that the split is written by hand: `r = i /
 cols; c = i % cols`, with `cols` as an ordinary runtime scalar. The minimum here is a *name* —
-a `compute.row`/`compute.col` pair, or a second extent the language states — plus the recording
+a `compute.row`/`compute.col` expr, or a second extent the language states — plus the recording
 fix in §2.3 so the second extent survives the graph path. Evidence that it works: the probe in
 §2.1, turned into an `examples/*.lichen` operator that **records and runs through
 `compute.graphrun` on the device** and answers the CPU result element for element. Nothing
 above the body moves: no `Slice`, no `Barrier`, no `Plan`, no `TargetFacts` field, no emitter
 change.
 
-**(b) A genuinely 2-D workgroup.** `EXECUTION_MODE_LOCAL_SIZE` (`:3134`) becomes a pair, a
+**(b) A genuinely 2-D workgroup.** `EXECUTION_MODE_LOCAL_SIZE` (`:3134`) becomes an expr, a
 second built-in (`LocalInvocationId`, `WorkgroupId`) is bound and read, `Slice` counts per lane
-in two dimensions, `Plan::group_width` becomes a pair, the tiler's stride and modulo become
+in two dimensions, `Plan::group_width` becomes an expr, the tiler's stride and modulo become
 strides, and `TargetFacts` grows a field — which by `fragment_digest`'s own invariant
 (`kernel-ir/lib.rs:1076-1097`, "Every field is hashed") changes **every kernel id in the tree**.
 Evidence: the same operator answering on the device, plus a `spirv-val` run and a staged-tile
 answer that the 1-D flattening cannot produce (a `Shared` exchange across a **row**, where the
 row is `LocalInvocationId.y`).
 
-**(c) Something else.** A `Count` carrying a pair, or an `Extent::Value` per axis. This is (b)
+**(c) Something else.** A `Count` carrying an expr, or an `Extent::Value` per axis. This is (b)
 with the backend left behind, and it buys nothing until the emitter can use it.
 
 **Recommendation: (a).** It is demonstrable on its own, it needs no new type in any backend, and
@@ -241,7 +241,7 @@ it is the only one of the three that does not stand on the tile-equivalence clai
 - **The launch signatures.** `ParallelBackend::{run, submit, run_batch}`
   (`kernel-ir/lib.rs:432-466`) and `GpuContext::{run, submit, run_over_device_extent}`
   (`dispatch.rs:790-855`) each take one `count: usize`. A 2-D extent is a second parameter or a
-  pair, and `run_batch`'s `BatchRefusal::Cannot` (`lib.rs:464-466`) is the door every other
+  expr, and `run_batch`'s `BatchRefusal::Cannot` (`lib.rs:464-466`) is the door every other
   backend would have to refuse by.
 - **The tests that pin one-dimensional arithmetic.** `LOCAL_SIZE_X + 5` in
   `compute.rs:1531` (the surplus-lane test), `tiled_count` / `tail` in `tiled_reduction.rs:404`

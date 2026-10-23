@@ -81,7 +81,7 @@ where
             // SAFETY: the default attributes are a live array of this module.
             let width = unsafe { module.default_attributes()?.items() }.len();
             let indices: Vec<u32> =
-                (0..width.saturating_sub(shape::PAIR_ATTR_BASE) as u32).collect();
+                (0..width.saturating_sub(shape::EXPR_ATTR_BASE) as u32).collect();
             let layout = module.layout_with_indices(&indices)?;
             let mut items: Vec<ArrayItem> = Vec::with_capacity(values.len());
             for n in values {

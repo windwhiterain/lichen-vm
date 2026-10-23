@@ -123,8 +123,8 @@ fn compute_nodes(
 /// # Invariant
 ///
 /// The callee slot holds a `value_of` extraction whose **own cached value is
-/// already the function** — `Index(pair, 0)` evaluates to the pair's value, so
-/// following the `Index` further would land on the pair rather than on the
+/// already the function** — `Index(expr, 0)` evaluates to the expr's value, so
+/// following the `Index` further would land on the expr rather than on the
 /// function.
 fn callee_of(module: &Module<LangProgram>, apply: NodeId) -> Option<AnyFunctionId> {
     let operation = module.node_operation(apply)?;
@@ -229,7 +229,7 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
 }
 
 /// Follow a `value_of` extraction — `Index(x, i)` — to `x`, as the
-/// checker reaches a pair's or a struct field's value.
+/// checker reaches an expr's or a struct field's value.
 fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
     let operation = module.node_operation(node).expect("an Index node");
     assert_eq!(

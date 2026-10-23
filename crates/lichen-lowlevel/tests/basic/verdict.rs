@@ -99,16 +99,16 @@ fn a_refused_subtree_leaves_its_parent_undecided() {
 fn an_operand_the_pass_never_walked_certifies_the_node() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // The pair's element 1 depends on the parameter, and only element 0 is ever read.
-    let mut pair_in_body = None;
+    // The expr's element 1 depends on the parameter, and only element 0 is ever read.
+    let mut expr_in_body = None;
     let (func_node, ret, _param) = function(&mut m, |m, ret, param| {
         let block = m.node_block(ret);
         let read_param = op_node(m, block, TestOperator::Id, Some(param));
         let one = usize_node(m, block, 1);
-        let pair = array_node(m, block, &[one, read_param], None);
-        pair_in_body = Some(pair);
+        let expr = array_node(m, block, &[one, read_param], None);
+        expr_in_body = Some(expr);
         let zero = usize_node(m, block, 0);
-        let operands = array_node(m, block, &[pair, zero], None);
+        let operands = array_node(m, block, &[expr, zero], None);
         m.close_operation_cycle(
             ret,
             Operation {
@@ -117,7 +117,7 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
             },
         );
     });
-    let pair = pair_in_body.expect("the body built its pair");
+    let expr = expr_in_body.expect("the body built its expr");
 
     // The checker's order: prove the body's own return before any apply.
     m.evaluate_node_deep(ret, None);
@@ -128,7 +128,7 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
         "the indexed read is certified concrete although its operand was never walked"
     );
     assert_eq!(
-        m.node_evaluated_deep(pair),
+        m.node_evaluated_deep(expr),
         None,
         "the operand itself has no verdict — that is what makes this the exemption"
     );

@@ -84,7 +84,7 @@ Each was implemented, measured on the repro, and reverted:
 | carry the runtime error's node and print its type | prints `TypeArray` / `Type` / `TypeTuple` — the type *chain's* kind, not the user's type |
 | record the container expression's type in the checker | prints `?a` — the argument's type only reaches the call's clone, never the template node |
 | make `check_index`'s element type follow the runtime subscript | breaks even the working tuple-of-Ints fold with two *"not a container"* errors |
-| clone the return pair's type half explicitly, and deep-evaluate the exit's type cell | no change (the class still answers the template's read) |
+| clone the return expr's type half explicitly, and deep-evaluate the exit's type cell | no change (the class still answers the template's read) |
 
 ## 6. The fix, decided
 
@@ -125,15 +125,15 @@ all, and it is the cell that answers `none`. The class sizes in the walk are rea
 class larger than one already carries a **value** (`op=false value=true`), so
 referencing it in place is correct. The read chain therefore reaches an undecided cell
 that no clone pass supplies: the outer apply's result cell is bound by the runtime
-`wire_apply_result` to the fold's cloned return pair, and that pair's type is undecided
+`wire_apply_result` to the fold's cloned return expr, and that expr's type is undecided
 because its decider (the base-arm read, whose type sits in the shared element cell's
 class) is rebuilt only from members the walk reaches. The next step is to instrument
-`wire_apply_result` for the outer apply and print the return pair's type clone and its
+`wire_apply_result` for the outer apply and print the return expr's type clone and its
 class, so the missing link is measured rather than inferred.
 
 **The third reading (dev@8ba354a6), and it names the class.** Instrumenting
 `apply_type`'s bind: the outer apply binds `cell=235v1` (the read's container type) to
-`codomain=366v1` (the applied pair's type item), and the unify forms the class
+`codomain=366v1` (the applied expr's type item), and the unify forms the class
 `{356v1, 366v1, 235v1}` — **every member is a bare cell with no operation and no
 value** (`op=false value=false` for all three). All six *body* applies in the same run
 bind with `value=true` on both sides; only the outer apply's codomain arrives open. So
@@ -142,10 +142,10 @@ the fold's return-type clone (`366v1`) is a bare cell whose template decider —
 said. The class cannot be decided by anything inside it: what is missing is the
 **boundary** between the fold's return type and the `if`'s element cell, not a value
 some member already holds. The next reading is the template node whose clone is
-`366v1` (the fold's return pair's type item) and that node's class at check time.
+`366v1` (the fold's return expr's type item) and that node's class at check time.
 
 **The fourth reading: the class has an operation, and it stays open.** Instrumenting
-`instantiate_stamped` for the return pair: the fold's return pair is `210v1`, its type
+`instantiate_stamped` for the return expr: the fold's return expr is `210v1`, its type
 item `41v1`, and **before the walk** `41v1`'s class is `{155v1 (bare, open), 41v1 (bare,
 open), 174v1 (op=true, open)}` — all in block 2, function 1. So the class is *not*
 memberless: `174v1` is the derived read that should decide it, and it never gets a value.
@@ -193,18 +193,18 @@ operand is the *type apply's* parameter clone, which is never bound (the type ap
 `instantiate(..., check_parameter = false)`, and it is the value apply — a different
 clone pass — that binds its own parameter). Three attempts measured and reverted:
 running `apply_parameter_check` in the type apply, binding only the parameter's **type**
-half there, and preferring the value apply's codomain (`pair_type_item(node)`) — the repro
+half there, and preferring the value apply's codomain (`expr_type_item(node)`) — the repro
 stays `raw none: ?a` in all three.
 
 So the remaining choice is structural, and it is the owner's:
 
-- **A. The read chain reads the apply node's own pair.** `check_app` sets the
-  application's type to a fresh cell bound by the type apply; the value apply's pair —
+- **A. The read chain reads the apply node's own expr.** `check_app` sets the
+  application's type to a fresh cell bound by the type apply; the value apply's expr —
   the node's own value — is already decided. A lazy `Index(value_apply, 1)` would read
   it. Risk: a *chained* apply's callee type (`(f x) y`) becomes a read rather than a
   decided cell, which touches the force path P1-49's refusal relies on.
 - **B. The type apply binds the value apply's codomain** (checker/runtime channel
-  needed: `apply_type` does not know the value apply's `applied` pair).
+  needed: `apply_type` does not know the value apply's `applied` expr).
 - **C. Accept the annotation as the contract** for struct-state folds and say so in the
   spec (the compute kernels already annotate; the workaround section below is that
   rule).

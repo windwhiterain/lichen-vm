@@ -14,19 +14,19 @@ use crate::shape;
 use super::Checker;
 use crate::diagnostic::AssertSpelling;
 
-/// The element pairs one reconciliation walk has already visited — one set per
+/// The element exprs one reconciliation walk has already visited — one set per
 /// walk, so neither suppresses the other.
 ///
 /// # Invariant
 /// A compound type may be **recursive** (`A = struct{.g B}`, `B = struct{.g
-/// A}`), and a pair's whole effect is the class merges it states, so visiting
+/// A}`), and an expr's whole effect is the class merges it states, so visiting
 /// it once is the whole of that effect. The two sets are separate because the
-/// attribute and the pin walks are different effects over the same pair.
+/// attribute and the pin walks are different effects over the same expr.
 #[derive(Default)]
 pub(super) struct ElementWalk {
-    /// The pairs [`Checker::check_element_pair_attributes`] has reconciled.
+    /// The exprs [`Checker::check_element_expr_attributes`] has reconciled.
     attributes: HashSet<(ExprId, ExprId)>,
-    /// The pairs [`Checker::check_element_pair_values`] has reconciled.
+    /// The exprs [`Checker::check_element_expr_values`] has reconciled.
     values: HashSet<(ExprId, ExprId)>,
 }
 
@@ -53,7 +53,7 @@ where
     /// returns the hole the slot falls back to.
     ///
     /// # Invariant
-    /// The hole is a fresh undecided `[value, type]` pair — the shape every
+    /// The hole is a fresh undecided `[value, type]` expr — the shape every
     /// attribute slot has. Nothing unifies against it: the guard has already
     /// failed the build and `check_failed` skips the definition pass. The guard
     /// is recorded once per build, at the first reader.
@@ -70,7 +70,7 @@ where
         }
         let value = self.fresh_cell();
         let ty = self.fresh_cell();
-        self.pair_of(value, ty)
+        self.expr_of(value, ty)
     }
 
     /// The sub-expressions of a compound whose perspectives meet in a
@@ -137,7 +137,7 @@ where
     /// # Invariant
     /// The annotation **replaces** the slots it names and **preserves** every
     /// slot it does not, so `(x # 8 ? doc) # 4` keeps the doc. Ordered by the
-    /// canonical attribute order, so the runtime pair stays consistent.
+    /// canonical attribute order, so the runtime expr stays consistent.
     fn merge_slots(&self, value_tail: Vec<P::Attr>, own_tail: Vec<P::Attr>) -> Vec<P::Attr> {
         let mut result = value_tail;
         for m in own_tail {
@@ -152,24 +152,24 @@ where
     }
 
     /// The value's existing attribute slot for `marker` — the node its runtime
-    /// pair carries at that attribute's position.
+    /// expr carries at that attribute's position.
     ///
     /// # Invariant
-    /// It is always a `[value, type]` term pair, for a constraint and a label
+    /// It is always a `[value, type]` term expr, for a constraint and a label
     /// alike, and `None` when the value's schema has no such slot.
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let value_tail = self.schema_tail(value).to_vec();
         if !value_tail.contains(marker) {
             return None;
         }
-        let pair = self.state[value].term?;
-        match self.slot_attribute(pair, marker.order_index() as u32)? {
+        let expr = self.state[value].term?;
+        match self.slot_attribute(expr, marker.order_index() as u32)? {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
         }
     }
 
-    /// The node a value carries for `marker`: its term pair's slot, else its
+    /// The node a value carries for `marker`: its term expr's slot, else its
     /// recorded constraint slot.
     fn value_attr_for(&mut self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
         if let Some(node) = self.value_attr_node(value, marker) {
@@ -189,12 +189,12 @@ where
             .flatten()
     }
 
-    /// The node that holds the `[value, type]` pair an attribute value answers with.
+    /// The node that holds the `[value, type]` expr an attribute value answers with.
     ///
     /// # Invariant
     /// A call's node holds no value of its own — its class does — so the walk is forced
     /// and the class's **representative** is the slot, because that is the node the
-    /// merge wrote the pair onto. Every other expression's own term already is its pair.
+    /// merge wrote the expr onto. Every other expression's own term already is its expr.
     fn annotation_value_slot(&mut self, pe: ExprId) -> NodeId {
         let term = self.state[pe]
             .term
@@ -209,13 +209,13 @@ where
         term
     }
 
-    /// The call's applied return slot for `marker`: the same pair whose type slot is
+    /// The call's applied return slot for `marker`: the same expr whose type slot is
     /// the call's type, so a reference's attribute is read where the type is
     /// (spec §3, "Every attribute is handled like the type").
     fn applied_attribute_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let apply = self.type_applies.get(&pe)?;
-        let pair = self.module.applied_pairs.get(apply).copied()?;
-        self.stated_attributes(pair)
+        let expr = self.module.applied_exprs.get(apply).copied()?;
+        self.stated_attributes(expr)
             .into_iter()
             .find(|(attribute, _)| attribute.order_index() == marker.order_index())
             .map(|(_, slot)| slot)
@@ -225,17 +225,17 @@ where
     /// attribute's *missing* slot.
     ///
     /// # Invariant
-    /// Both are `[value, type]` term pairs, so the apply-time check compares
+    /// Both are `[value, type]` term exprs, so the apply-time check compares
     /// them directly. Only meaningful once the expression is compiled.
     pub(super) fn attr_or_missing(&mut self, e: ExprId, marker: &P::Attr) -> NodeId {
         if let Some(slot) = self.state[e].attr {
             return slot;
         }
-        // `_` is undecided in every attribute: its pair carries a hole per position,
+        // `_` is undecided in every attribute: its expr carries a hole per position,
         // not the missing value (spec §1, "Literals and their attributes").
         if let ExprKind::Placeholder = self.ir[e].kind
-            && let Some(pair) = self.state[e].term
-            && let Some(slot) = self.slot_attribute(pair, marker.order_index() as u32)
+            && let Some(expr) = self.state[e].term
+            && let Some(slot) = self.slot_attribute(expr, marker.order_index() as u32)
             && let Some(slot) = slot.dynamic()
         {
             return slot;
@@ -350,13 +350,13 @@ where
     /// A type expression's term is the type value itself, unless the expression
     /// carries attributes — then the type it denotes is the **annotated value's**
     /// own term, a placeholder's cell or a type constant's `[marker, kind]`
-    /// pair. The pair is what keeps the class reachable from the parameter
-    /// pair, so the apply clone re-instantiates the refinement per call.
+    /// expr. The expr is what keeps the class reachable from the parameter
+    /// expr, so the apply clone re-instantiates the refinement per call.
     pub(super) fn type_denotation(&mut self, type_expr: ExprId, value: Option<ExprId>) -> NodeId {
         // Every attribute in play is reconciled here, the *missing* slot standing
         // in where a side carries none.
         if let Some(value) = value {
-            self.unify_type_attributes(type_expr, value, self.loc(value, shape::PAIR_ATTR_BASE));
+            self.unify_type_attributes(type_expr, value, self.loc(value, shape::EXPR_ATTR_BASE));
             self.unify_element_attributes(type_expr, value);
             self.unify_element_values(type_expr, value);
         }
@@ -380,13 +380,13 @@ where
     /// the pairing is by marker, never by position.
     fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId, loc: Loc) {
         let type_tail = self.schema_tail(type_expr).to_vec();
-        let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
+        let mut exprs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
         for marker in type_tail {
             let type_slot = self.attr_or_missing(type_expr, &marker);
             let value_slot = self.attr_or_missing(value, &marker);
-            pairs.push((marker, value_slot, type_slot));
+            exprs.push((marker, value_slot, type_slot));
         }
-        for (marker, value_slot, type_slot) in pairs {
+        for (marker, value_slot, type_slot) in exprs {
             let Some(ext) = self.attribute_extension(&marker) else {
                 continue;
             };
@@ -405,22 +405,22 @@ where
     /// parameter attribute. See docs/notes/compound-element-slots.md.
     fn unify_element_attributes(&mut self, type_expr: ExprId, value: ExprId) {
         let mut seen = ElementWalk::default();
-        for (type_el, value_el) in self.element_pairs(type_expr, value) {
-            self.check_element_pair_attributes(type_el, value_el, &mut seen);
+        for (type_el, value_el) in self.element_exprs(type_expr, value) {
+            self.check_element_expr_attributes(type_el, value_el, &mut seen);
         }
     }
 
-    /// One element pair's attribute reconciliation, descending into the nested
+    /// One element expr's attribute reconciliation, descending into the nested
     /// compounds beneath it.
     ///
     /// # Invariant
-    /// This is [`Self::unify_element_attributes`]'s body, so a caller that pairs
+    /// This is [`Self::unify_element_attributes`]'s body, so a caller that exprs
     /// by its own rule — the struct instantiation's definition order — gets the
     /// same walk the positional pairing gives.
     ///
-    /// `seen` terminates a **recursive** type: a pair's reconciliation is a
+    /// `seen` terminates a **recursive** type: an expr's reconciliation is a
     /// fixed set of class merges, so visiting one once is all of its effect.
-    pub(super) fn check_element_pair_attributes(
+    pub(super) fn check_element_expr_attributes(
         &mut self,
         type_el: ExprId,
         value_el: ExprId,
@@ -430,23 +430,23 @@ where
             return;
         }
         if !self.schema_tail(type_el).is_empty() || !self.schema_tail(value_el).is_empty() {
-            let loc = self.loc(value_el, shape::PAIR_ATTR_BASE);
+            let loc = self.loc(value_el, shape::EXPR_ATTR_BASE);
             self.unify_type_attributes(type_el, value_el, loc);
         }
-        for (nested_type, nested_value) in self.element_pairs(type_el, value_el) {
-            self.check_element_pair_attributes(nested_type, nested_value, seen);
+        for (nested_type, nested_value) in self.element_exprs(type_el, value_el) {
+            self.check_element_expr_attributes(nested_type, nested_value, seen);
         }
     }
 
-    /// The **pairs** an element walk compares: a compound type's element
+    /// The **exprs** an element walk compares: a compound type's element
     /// expressions against the value's.
     ///
     /// # Invariant
     /// An array's element position is *one* slot serving every element, so a
-    /// single type element pairs with each value element — which pairs a
+    /// single type element exprs with each value element — which exprs a
     /// one-element tuple with its own element the same way. A count mismatch of
     /// any other shape is the structural unify's to report.
-    fn element_pairs(&self, type_expr: ExprId, value: ExprId) -> Vec<(ExprId, ExprId)> {
+    fn element_exprs(&self, type_expr: ExprId, value: ExprId) -> Vec<(ExprId, ExprId)> {
         let (Some(types), Some(values)) = (
             self.compound_children(type_expr),
             self.compound_children(value),
@@ -470,20 +470,20 @@ where
     /// See docs/notes/compound-element-slots.md.
     fn unify_element_values(&mut self, type_expr: ExprId, value: ExprId) {
         let mut seen = ElementWalk::default();
-        for (type_el, value_el) in self.element_pairs(type_expr, value) {
-            self.check_element_pair_values(type_el, value_el, &mut seen);
+        for (type_el, value_el) in self.element_exprs(type_expr, value) {
+            self.check_element_expr_values(type_el, value_el, &mut seen);
         }
     }
 
-    /// One element pair's pin: the `: ` its type element spells, against the
+    /// One element expr's pin: the `: ` its type element spells, against the
     /// value that fills the position.
     ///
     /// # Invariant
-    /// This is [`Self::unify_element_values`]'s body, so a caller that pairs by
+    /// This is [`Self::unify_element_values`]'s body, so a caller that exprs by
     /// its own rule gets the same walk the positional pairing gives. `seen`
     /// terminates a recursive type, as
-    /// [`Self::check_element_pair_attributes`]'s does.
-    pub(super) fn check_element_pair_values(
+    /// [`Self::check_element_expr_attributes`]'s does.
+    pub(super) fn check_element_expr_values(
         &mut self,
         type_el: ExprId,
         value_el: ExprId,
@@ -503,16 +503,16 @@ where
             self.check_unify(
                 actual,
                 pin,
-                self.loc(value_el, shape::PAIR_VALUE_SLOT),
+                self.loc(value_el, shape::EXPR_VALUE_SLOT),
                 DiagKind::Annotation,
             );
-            for (nested_type, nested_value) in self.element_pairs(inner, value_el) {
-                self.check_element_pair_values(nested_type, nested_value, seen);
+            for (nested_type, nested_value) in self.element_exprs(inner, value_el) {
+                self.check_element_expr_values(nested_type, nested_value, seen);
             }
             return;
         }
-        for (nested_type, nested_value) in self.element_pairs(type_el, value_el) {
-            self.check_element_pair_values(nested_type, nested_value, seen);
+        for (nested_type, nested_value) in self.element_exprs(type_el, value_el) {
+            self.check_element_expr_values(nested_type, nested_value, seen);
         }
     }
 
@@ -522,7 +522,7 @@ where
     /// # Invariant
     /// Only the compound kinds answer; an apply's operands are not elements. A
     /// set's and a table's type form write their elements directly, so a value
-    /// pairs one for one; an array's is one element serving every value element.
+    /// exprs one for one; an array's is one element serving every value element.
     ///
     /// A **named** instantiation answers `None`: its IR keeps the call's order,
     /// so a positional pairing would take the wrong field (see
@@ -541,7 +541,7 @@ where
             | ExprKind::Table(_)
             | ExprKind::ShallowArray { .. } => Some(self.range_children(expr)),
             // The type forms: a set's one slot and a table's two, each of which
-            // pairs with the value's elements.
+            // exprs with the value's elements.
             ExprKind::TypeSet(_) => Some(self.range_children(expr)),
             ExprKind::TypeTable(_) => Some(self.range_children(expr)),
             ExprKind::TypeArray { element_type, .. } => Some(vec![element_type]),
@@ -565,8 +565,8 @@ where
     pub(super) fn check_ann(&mut self, e: ExprId, value: ExprId, r#type: Option<ExprId>) -> NodeId {
         self.check_expr(value);
         // `: T` — the value's type unified with the type expression itself; both
-        // sides are pairs in the recursive encoding.
-        let type_pair = match r#type {
+        // sides are exprs in the recursive encoding.
+        let type_expr = match r#type {
             Some(type_expr) => {
                 self.check_expr(type_expr);
                 // The type the annotation names (`type_denotation`); it is enforced
@@ -580,7 +580,7 @@ where
             None => self.state[value].ty.unwrap(),
         };
         let value_node = self.value_of(value);
-        // The annotated value's own term — the pair a refinement's predicate
+        // The annotated value's own term — the expr a refinement's predicate
         // is applied to.
         let value_term = self.state[value]
             .term
@@ -593,7 +593,7 @@ where
         let own_tail = self.ir.schema(e).clone().tail;
         let value_tail = self.schema_tail(value).to_vec();
         // Invariant: the frontend emits attribute values in canonical order,
-        // so `attrs[i]` pairs with `tail[i]`.
+        // so `attrs[i]` exprs with `tail[i]`.
         debug_assert!(
             own_tail.is_sorted_by_key(|m| m.order_index()),
             "an annotation's schema tail must be in the canonical attribute order"
@@ -625,15 +625,15 @@ where
                 attr_idx += 1;
                 self.check_expr(pe);
                 // The slot is the call's applied return slot when the value is a call —
-                // the same pair whose type slot is its type; otherwise the expression's
-                // own `[value, type]` pair (spec §3, "Every attribute is handled like
+                // the same expr whose type slot is its type; otherwise the expression's
+                // own `[value, type]` expr (spec §3, "Every attribute is handled like
                 // the type").
                 let slot = self
                     .applied_attribute_slot(pe, marker)
                     .unwrap_or_else(|| self.annotation_value_slot(pe));
                 if ext.is_label() {
                     // A label is metadata: it carries no apply-time slot, and its
-                    // slot is the annotation value's pair like any other's.
+                    // slot is the annotation value's expr like any other's.
                     slots.push(slot);
                 } else {
                     // A *constraint* replaces the slot and validates it against the
@@ -679,7 +679,7 @@ where
                 }
             } else {
                 // A slot the annotation does not spell is preserved: the value's
-                // existing term pair carries over unchanged.
+                // existing term expr carries over unchanged.
                 let node = self
                     .value_attr_for(value, marker)
                     .unwrap_or_else(|| self.missing_slot_of(marker, self.loc(e, 2)));
@@ -689,7 +689,7 @@ where
                 slots.push(node);
             }
         }
-        // The pair is **full width**: settled slots canonically, wildcards elsewhere
+        // The expr is **full width**: settled slots canonically, wildcards elsewhere
         // (`docs/notes/array-attribute-view.md`); a `_` value's positions are its own
         // holes (spec §1, "Literals and their attributes").
         let any = self.any();
@@ -716,15 +716,15 @@ where
         // The constraint slot is what the apply-time check reads; a label is
         // metadata only.
         self.state[e].attr = constraint_slot;
-        let mut pair = Vec::with_capacity(shape::slot_width::<P>());
-        pair.push(value_node);
-        pair.push(type_pair);
-        pair.extend(width);
+        let mut expr = Vec::with_capacity(shape::slot_width::<P>());
+        expr.push(value_node);
+        expr.push(type_expr);
+        expr.extend(width);
         let layout = self.full_width_layout();
-        let pair = self.array_node_with_layout(self.current_block, &pair, layout);
-        self.state[e].term = Some(pair);
+        let expr = self.array_node_with_layout(self.current_block, &expr, layout);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
-        self.state[e].ty = Some(type_pair);
-        pair
+        self.state[e].ty = Some(type_expr);
+        expr
     }
 }

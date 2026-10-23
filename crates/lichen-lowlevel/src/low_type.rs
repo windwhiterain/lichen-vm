@@ -63,8 +63,8 @@ impl<P: Program> Module<P> {
     /// the other passes left it. A leaf always declines: the pass is a
     /// *computation* route, and a leaf has no computation.
     fn low_type_transfer(&self, node: NodeId) -> Option<LowShape> {
-        // A pair-valued node is a term: the seed states its shape, and `Index` derives
-        // the result from that pair.
+        // An expr-valued node is a term: the seed states its shape, and `Index` derives
+        // the result from that expr.
         if matches!(
             self.nodes.get(node)?.value.and_then(|value| value.as_enum()),
             Some(LowValue::Array(array)) if array.layout() != 0
@@ -88,7 +88,7 @@ impl<P: Program> Module<P> {
                     LowShape::Array(element, length) if index < *length => (**element).clone()?,
                     _ => return None,
                 };
-                // A compound value's read states the element slot pair
+                // A compound value's read states the element slot expr
                 // (`docs/notes/lowlevel-low-types.md`).
                 let slot = matches!(
                     &container,

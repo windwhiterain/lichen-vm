@@ -39,7 +39,7 @@ match depths[i] {
     0 => { /* unmarked */ }
     usize::MAX => { /* the bare mark: registers (type_apply, ty) */ }
     n => {
-        // The wrapped term is a lazy region: its pair chain does not match
+        // The wrapped term is a lazy region: its expr chain does not match
         // the element's type, so its reads get a fresh cell.
         vals.push(self.wrap_shallow(el, n));
         tys.push(self.fresh_cell());
@@ -56,14 +56,14 @@ fact the whole verdict turns on, and it is what the code says.
 `wrap_shallow` is at `indexing.rs:463`. A depth of `n` walks the first `n` levels of the
 element's **type spine**:
 
-- **Level 1** is the element's own pair. For a call that is `(self.value_of(e), self.state[e].ty)`,
-  built from the extracted value and the type, *"the apply pair being virtual"*; for a data
+- **Level 1** is the element's own expr. For a call that is `(self.value_of(e), self.state[e].ty)`,
+  built from the extracted value and the type, *"the apply expr being virtual"*; for a data
   node the descent loop starts from the node itself.
 - **Each deeper level** is *slot 1* — the type half — of the previous level, and the loop
-  *"follows slot 1 only while the spine is a concrete pair at check time; an undecided slot
+  *"follows slot 1 only while the spine is a concrete expr at check time; an undecided slot
   ends it, and the wraps above the stop still apply."*
 
-Each level is then rebuilt from the innermost out, as a **fresh** pair, and the mask is the
+Each level is then rebuilt from the innermost out, as a **fresh** expr, and the mask is the
 one the landed note names:
 
 ```rust
@@ -81,10 +81,10 @@ and leaves the type walked. So:
   bare form marks after §7, not the type. The landed note's `index-read-unify.md` §7.1 row
   is accurate on this point.
 - **What a depth of `n` walks: the value slot of each of the first `n` levels of the
-  element's type spine**, each wrap a fresh pair so a shared subexpression is never itself
+  element's type spine**, each wrap a fresh expr so a shared subexpression is never itself
   marked.
 - **What its type slot is: a fresh cell** — but note *which* type slot. `wrap_shallow`'s own
-  `[value, type]` pairs carry the element's **own** type nodes down the spine; the
+  `[value, type]` exprs carry the element's **own** type nodes down the spine; the
   **declared** type of the marked position, the one a read of the tuple consults, is the
   fresh cell from §1.1. Both are type slots and they are not the same slot.
 
@@ -115,7 +115,7 @@ first, so a node with **no shape yields `None`** and the closure returns at the 
 **Inferred from the code, to be confirmed by the §5 probe:** the depth form's declared type
 slot is a bare undecided cell, so handing that cell to `close_shallow_tail` is a
 **structural no-op** — there is no field 1 to take. The other candidate the depth form
-offers is the `[value, type]` pair `wrap_shallow` just built, whose field 1 is the next inner
+offers is the `[value, type]` expr `wrap_shallow` just built, whose field 1 is the next inner
 level *by construction*; closing that would collapse the ladder the depth form exists to
 build. And nothing registers it: only the **bare** arm pushes to `shallow_types`
 (`indexing.rs:400-402`), and only those registrations are walked at
@@ -228,7 +228,7 @@ AnyNodeId::Dynamic(node) => module
     .expect("an array element has a value"),
 ```
 
-Under the depth mark element 1 is a **lazy, unevaluated pair**, so the helper panics and
+Under the depth mark element 1 is a **lazy, unevaluated expr**, so the helper panics and
 **the `.len() == 3` assertion is never reached**. The test's own comment states the truth —
 *"the tuple's elements are underdetermined cells rather than pinned scalars"* — while the
 helper it calls insists on scalars. **The assertion and the claim disagree, and the failure
@@ -298,7 +298,7 @@ raw[raw[?a, Int, ?b, ?c, ?d], 2]`, a fresh cell name each time, exactly as descr
 but it is **501 of them, not an unbounded number**.
 
 **Why it cannot hang: the checker's own budget already refuses it.** `WorkBudget::default`
-(`crates/lichen-highlevel/src/checker.rs:388`) pairs `apply_depth_limit: 500` with
+(`crates/lichen-highlevel/src/checker.rs:388`) exprs `apply_depth_limit: 500` with
 `apply_total_limit: 2_000`, and the refusal the runner prints is `DiagKind::NonTerminating` —
 *"the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The
 program may still terminate when run."* The 501-error cascade is that same guard seen from
@@ -320,7 +320,7 @@ if depths.iter().any(|&d| d != 0) {
 A written depth of `0` leaves `depths` all-zero, so the `else` arm runs and the array is
 allocated **plain**: no `ExprKind::ShallowArray`, no `range_depths`, no
 `check_shallow_array_term`, and no `0 =>` arm of §1.1 ever reached. **The mark is erased
-before the IR exists**, which is why each pair of rows above is the same run twice.
+before the IR exists**, which is why each expr of rows above is the same run twice.
 
 **What follows, and it is the load-bearing consequence:** no program spelled with
 `@shallow(0)` can differ from the same program with the marker deleted, so **the spelling
@@ -382,7 +382,7 @@ Reverted after the run; recorded here so it can be re-applied without re-derivin
 --- a/crates/lichen-highlevel/src/checker/indexing.rs
 +++ b/crates/lichen-highlevel/src/checker/indexing.rs
 @@ -406,6 +406,10 @@ where
-                     // The wrapped term is a lazy region: its pair chain does not match
+                     // The wrapped term is a lazy region: its expr chain does not match
                      // the element's type, so its reads get a fresh cell.
                      vals.push(self.wrap_shallow(el, n));
 +                    // PROBE P1: the bare arm's registration, applied to the depth arm.
@@ -474,7 +474,7 @@ and marks the mechanism unknown.
 **What is not established by it either:** the test's own comment still says *"the reads stay
 lazy under the mark, so the tuple's elements are underdetermined cells rather than pinned
 scalars"*, and P1 satisfies that comment and the assertion at the same time — the elements are
-lazy *pairs*, and `array_values` wants a value per element, which a pair now is. Whether
+lazy *exprs*, and `array_values` wants a value per element, which an expr now is. Whether
 that is the semantics the depth form should have, or an accident of what `node_value` counts
 as a value, is **the user's decision and not a measurement**.
 
@@ -533,7 +533,7 @@ invisible until a depth-marked **call** was written.
 2. **The flipped test still contradicts itself.** Its comment says the elements are
    *"underdetermined cells rather than pinned scalars"* and its assertion demands a value per
    element through a helper that panics without one. P1 satisfies both readings at once,
-   because the elements are lazy *pairs* and a pair is a value. Whether that is the intended
+   because the elements are lazy *exprs* and an expr is a value. Whether that is the intended
    depth-form semantics or an accident of what `node_value` counts is **not a measurement**.
 3. **The depth form's own reading is not tested end-to-end.** Nothing in the tree pins what
    `@shallow(n)` over a call should print. §5.2's rows 4–9 are the closest thing, and they

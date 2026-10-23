@@ -21,7 +21,7 @@ found to have.
 
 What makes lichen different from most languages is that the second half
 is not computed by a separate checker. Every value in the system is
-represented as a pair of two graph nodes, its value and its type, and
+represented as an expr of two graph nodes, its value and its type, and
 **unification is a runtime operation**. Checking a program and running
 it are the same pass. That has three consequences you will meet again
 and again:
@@ -62,7 +62,7 @@ The book is in four parts:
 
 1. **Learning lichen** — install, run, and write real programs. This part
    ends with everything a first program needs.
-2. **Values and types** — the model: the value/type pair, laziness, the
+2. **Values and types** — the model: the value/type expr, laziness, the
    compound forms (tuples, arrays, structs, tables, sets), and types as
    values.
 3. **Types at work** — polymorphism, classes and refinements, recursive and

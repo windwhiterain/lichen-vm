@@ -22,7 +22,7 @@ use lichen_utils::extend::AsEnum;
 /// # Invariant
 ///
 /// Both declare `Float` buffers on every side, so **every** class in both fragments
-/// is `Float`: the pair differs only in what it computes. A difference between the
+/// is `Float`: the expr differs only in what it computes. A difference between the
 /// fragments is a difference between the compilations, never one the program asked
 /// for.
 ///
@@ -65,7 +65,7 @@ attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,elemen
 ///
 /// # Invariant
 ///
-/// The root is the pair, so the module forces `scores` before `attend` — the order
+/// The root is the expr, so the module forces `scores` before `attend` — the order
 /// in which both compile the same bodies the test program compiles the other way
 /// round. Nothing else differs: the kernel declarations are the same in both.
 const CONTROL: &str = "(scores, attend)\n";

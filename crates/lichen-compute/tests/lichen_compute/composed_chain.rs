@@ -26,7 +26,7 @@ fn the_composed_chain_records_the_merged_body() {
     let producer = instances[0].fragment.clone();
     let consumer = instances[1].fragment.clone();
 
-    // The recorded pair, untouched: the producer's marks go by contract, not by caller surgery.
+    // The recorded expr, untouched: the producer's marks go by contract, not by caller surgery.
     let merged = compose(&producer, &consumer, ABSORBED).expect("the recorded chain composes");
     merged
         .body

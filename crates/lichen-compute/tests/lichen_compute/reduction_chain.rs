@@ -280,7 +280,7 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
     assert_eq!(
         tiled.body().barriers.len(),
         1,
-        "the tiled body records the write-to-read pair its barrier separates"
+        "the tiled body records the write-to-read expr its barrier separates"
     );
 
     let before = body_fragment(folding.per_lane(), Vec::new());

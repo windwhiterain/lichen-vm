@@ -10,15 +10,15 @@ use crate::ir::{ExprId, Loc, LocPath, LocStep};
 use crate::program::{HighProgram, ValueType};
 use crate::shape;
 
-/// The pair slot the leading step of `path` names.
+/// The expr slot the leading step of `path` names.
 ///
 /// # Invariant
 /// `None` means the path names the expression as a whole or enters a structure,
 /// neither of which is one slot.
 pub fn slot_of_path(path: &[LocStep]) -> Option<usize> {
     match path.first() {
-        Some(LocStep::Value) => Some(shape::PAIR_VALUE_SLOT),
-        Some(LocStep::Type) => Some(shape::PAIR_TYPE_SLOT),
+        Some(LocStep::Value) => Some(shape::EXPR_VALUE_SLOT),
+        Some(LocStep::Type) => Some(shape::EXPR_TYPE_SLOT),
         Some(LocStep::Attr(index)) => Some(shape::attr_slot(*index)),
         _ => None,
     }
@@ -73,7 +73,7 @@ where
     /// See docs/notes/lowering-map.md.
     ///
     /// # Invariant
-    /// The map is **total over the compiled slots**: an expression's pair,
+    /// The map is **total over the compiled slots**: an expression's expr,
     /// value and type are all here whether or not a check failed. A node
     /// outside them — an operation's own answer, a cell a unification created —
     /// names no expression, because nothing in this build knows which one
@@ -94,7 +94,7 @@ where
         self.lowerings().get(&anchored)
     }
 
-    /// The pair slot `loc` names.
+    /// The expr slot `loc` names.
     ///
     /// # Invariant
     /// `None` when the path names the expression as a whole or enters a

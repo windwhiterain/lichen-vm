@@ -295,9 +295,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(ProbeValue::FloatType));
         let ty = ctx.universe();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }

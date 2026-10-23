@@ -17,7 +17,7 @@ pub trait AsEnum<B> {
 /// # Invariant
 ///
 /// Every extension enum stays the single source of truth for its own variants,
-/// which are never spliced; one `From`/`AsEnum` pair is generated per
+/// which are never spliced; one `From`/`AsEnum` expr is generated per
 /// extension.  A downstream lists every ancestor layer's enum flat, plus its
 /// own, in one invocation — no nesting, no delegation, so no value is
 /// representable under two branches.  Every extension enum must be `Clone`.

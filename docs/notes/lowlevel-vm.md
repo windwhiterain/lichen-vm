@@ -16,7 +16,7 @@ typechecker — "the runtime is the typechecker."
 ## The graph
 
 A `Module<P>` is a dense id-keyed arena of nodes (`NodeId`). Functions, arrays and
-pairs are **shared** nodes, not copies — a binding is graph sharing, so a name's
+exprs are **shared** nodes, not copies — a binding is graph sharing, so a name's
 every use is the same node. The `Program` trait parameterizes the instance over
 the value, operator, global-extension and package-metadata vocabularies, so one
 runtime serves every layer; a program's value type *composes* the lowlevel's own
@@ -28,8 +28,8 @@ Values and types are one runtime kind. `LowValue` is the structural vocabulary �
 Static` names a node in the building module or in a frozen one, so a value can
 reference both.
 
-**The lowlevel is untyped by design.** It knows the `[value, type]` pair only
-where the pair is an *operand of the operation in hand*; it holds no type
+**The lowlevel is untyped by design.** It knows the `[value, type]` expr only
+where the expr is an *operand of the operation in hand*; it holds no type
 predicate, no `is_type`, and no notion of a kind marker. A policy that needs the
 highlevel's type theory is stated by the layer that owns it
 ([checker-encoding-instability](checker-encoding-instability.md)).
@@ -43,14 +43,14 @@ Several walks descend the node graph and must cut a cycle rather than loop: the
 unification comparison, the deep pass's reconciliation of a forced computation
 against the value its class committed, the table key comparison, and the type/value
 printers in `lichen-render`. Each asks whether something is on the **current recursion
-path**, which is an *ancestor* relation and not a visited mark — a node or pair met
+path**, which is an *ancestor* relation and not a visited mark — a node or expr met
 again in a sibling subtree is not on the path and must be visited again, so
 membership is removed on the way out. What the guard accepts is distinct (the caller
 tests before it inserts), so a set answers the same question under the same
 insert/remove discipline. `AncestorNodes` is the one-node form and `AncestorPairs` the
-unordered-pair form; both orientations of a pair are stored, which is what lets one
+unordered-expr form; both orientations of an expr are stored, which is what lets one
 probe answer the symmetric test. The **unification** comparison is the one walk that
-*agrees* with a pair it meets again — two cyclic values agree exactly when their
+*agrees* with an expr it meets again — two cyclic values agree exactly when their
 elements do — which is what lets a function type's `↺` slot be read at all; the
 others cut.
 
@@ -66,7 +66,7 @@ and any consumer that tries re-derives the same answers differently.
 defines it — a computation, one of the function's parameter leaves, or nothing
 computable — so a consumer builds a body over the answers instead of re-deriving them.
 `Module::parameter_leaves` is its other half, decoding the domain's leaves **in one
-place** so a caller cannot decode the pair differently. `Module::defining_member` walks
+place** so a caller cannot decode the expr differently. `Module::defining_member` walks
 the class's own member list rather than the module's node table, which holds every
 kernel's nodes while one kernel is compiled — a table scan made codegen quadratic in
 the number of kernels.
@@ -127,7 +127,7 @@ function-ness guard cannot see. An out-of-bounds index is refused the same way r
 than panicking in raw slice indexing. A late binding still reaches the position
 through the `Error`/undecided arms, so nothing that could later resolve is lost.
 A **struct instance** is the hard case among them: its value is structurally a
-`LowValue::Array` — the same shape a compute kernel's `[native, sig]` pair takes,
+`LowValue::Array` — the same shape a compute kernel's `[native, sig]` expr takes,
 which the lowlevel cannot tell apart — so only the program knows which of its
 values are callable (`Program::is_callable`), and its answer has to refuse the
 instance for the failure to be recorded at all. A callee that *is* a parameter
@@ -143,10 +143,10 @@ array with it — a proven-concrete claim about a computation that never happene
 run.
 
 Functions are first-class: a function's body is a **template**, and an apply
-clones the nodes whose value could differ per call — the parameter pair and the
+clones the nodes whose value could differ per call — the parameter expr and the
 return cells among them — so a signature is re-instantiated per call
 (let-polymorphism) and the template is never bound. Recursion is a function
-referring to its own pair; the apply and evaluation depth budgets record
+referring to its own expr; the apply and evaluation depth budgets record
 `Module::budget_exhausted` and return a value instead of panicking, so a
 non-terminating program is the program's own problem: no diagnostic is owed (see
 `nontermination-is-the-programs.md`).
@@ -195,7 +195,7 @@ members, so an unresolved bind would leave the cell undecided. A lazy return typ
 body ending in a call — is an `Index` read, which already aliased its target cell at
 evaluation time, so the unify joins the cell into that class and the binding
 propagates regardless of when the nested apply runs. Element 1 is the type slot of a
-2-wide `[value, type]` pair and of a 3-wide `[value, type, perspective]` pair alike.
+2-wide `[value, type]` expr and of a 3-wide `[value, type, perspective]` expr alike.
 
 The applied function's parameter is an entry point of the materialize walk in its own
 right, not merely a node the return subtree happens to reach: an *ignored* parameter
@@ -215,7 +215,7 @@ Identity in the VM is the union-find **class**: `unify(a, b)` merges the two
 classes, settles the value the merged class holds, and records the conflict — one
 recursion, not a comparison path beside a write path. There is no separate
 "undecided side" case: "this class knows nothing" is the `None` the question
-every pair is asked, and the arm it lands in is its answer. A class carries one
+every expr is asked, and the arm it lands in is its answer. A class carries one
 value and one **low type**.
 
 The arms, in order:
@@ -285,7 +285,7 @@ The full semantics, and the reason a read can be taken too early, are
 
 The conflict record itself is a flat, ordered sequence of `UnifyStep`s: the
 structural path from the unified root operands (`root_a`/`root_b`) down to the
-failing pair, which is the "step by step" a layer above uses to pinpoint which
+failing expr, which is the "step by step" a layer above uses to pinpoint which
 component of a compound type conflicts. A static child resolves to
 `NodeId::default()` because it materializes into a fresh leaf, so only `index` is
 authoritative and a reader re-reads the path through the graph when it needs
@@ -303,11 +303,11 @@ the checker recorded (`Build::apply_edges`), so keying by it lets a diagnosis re
 argument's source span even when the argument node is shared. One error is recorded
 per apply node, so a later re-read of the same apply does not record it again.
 
-The recursion guard has two halves, one per kind of pair. `path` guards only pairs
-that have **nodes**; a pair of bare values has no class to name it — a
+The recursion guard has two halves, one per kind of expr. `path` guards only exprs
+that have **nodes**; an expr of bare values has no class to name it — a
 self-referential structure reached through the node-less arms (`[cell, self]`, the
-term pair a type is) would repeat forever — so `depth` bounds that descent instead,
-and a pair past `MAX_VALUE_DEPTH` (64) is given the benefit of the doubt exactly as
+term expr a type is) would repeat forever — so `depth` bounds that descent instead,
+and an expr past `MAX_VALUE_DEPTH` (64) is given the benefit of the doubt exactly as
 the unifier's cycle guard does.
 
 A structural cycle cut marks the node it re-entered, and the two cases a `None` verdict
@@ -350,7 +350,7 @@ graph fact — a 2-element array one of whose elements points back at its own cl
   by that hash, and a read binary-searches and verifies the equal-hash run with
   `key_eq`.
 - **Asserts** are the recorded-constraint channel: a `PendingAssert` carries the
-  condition, the live pair and the template it came from. `check_asserts`
+  condition, the live expr and the template it came from. `check_asserts`
   deep-evaluates the condition and requires `USize(1)`; a condition that stays
   undecided is pending, not failed, and the apply clone re-checks it per call.
   That is the mechanism a refinement rides
@@ -383,7 +383,7 @@ dynamic key and the static key the freeze files it as unfold to the same number.
 - **A cycle is cut by the depth bound, not by a path check.** The walk unfolds to a
   fixed depth and every position at that frontier mixes in the same `FRONTIER_TOKEN`. A
   revisited-node token carrying *its own* revisit depth disagrees with `key_eq`, which
-  cuts on the *pair* of nodes on its path: `[1, ↺]` and `[1, [1, ↺]]` are equal under
+  cuts on the *expr* of nodes on its path: `[1, ↺]` and `[1, [1, ↺]]` are equal under
   it while their revisits sit at different depths. Truncating both at one depth is
   invariant under that equality, so the bound costs candidate quality and can never
   hide a key that is there.
@@ -418,7 +418,7 @@ The VM has three bounds and they catch three different shapes:
 
 - **`apply_depth_limit` bounds nesting.** An unrolling self-apply nests one level per
   application and is refused here.
-- **`apply_total_limit` bounds work.** A recursion whose return is a *cached pair*
+- **`apply_total_limit` bounds work.** A recursion whose return is a *cached expr*
   containing the recursion (`f(x) = [f(x), 0]`) evaluates each apply to its cached
   value and returns, so every apply sits at depth 1 and the nesting guard never fires;
   only the total-application budget catches it. The same bound turns an endless but
@@ -456,11 +456,11 @@ template (`infer_template_low_types`, in `low_type.rs`) that a caller seeds with
 `seed_class_low_type` before running. It gives a backend a type answer without
 reading the checker's encoding — [lowlevel-low-types](lowlevel-low-types.md).
 
-A compiled function's **parameter and return are `[value, type]` pair cells**, and
+A compiled function's **parameter and return are `[value, type]` expr cells**, and
 that is the lowlevel's own convention rather than a format it consumes: `Function`
-calls the parameter node a *pair*, the apply resolves its arity, and the evaluator
-peels `Index(pair, 0)`. Every read of either node therefore goes through
-`Module::pair_value_half` (the sibling `pair_type_half` reads element 1 by the same
-rule), and the pair is two **or three** wide — the 3-wide form carries a perspective,
-with the value at element 0 in both. `resolve.rs`'s `pair_value_half` is the one place
+calls the parameter node a *expr*, the apply resolves its arity, and the evaluator
+peels `Index(expr, 0)`. Every read of either node therefore goes through
+`Module::expr_value_half` (the sibling `expr_type_half` reads element 1 by the same
+rule), and the expr is two **or three** wide — the 3-wide form carries a perspective,
+with the value at element 0 in both. `resolve.rs`'s `expr_value_half` is the one place
 that knows this layout; the low-type pass in `low_type.rs` learns none of it.

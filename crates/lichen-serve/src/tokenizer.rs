@@ -95,12 +95,12 @@ impl Tokenizer {
             .iter()
             .enumerate()
         {
-            let pair = merge
+            let expr = merge
                 .as_array()
-                .filter(|pair| pair.len() == 2)
-                .ok_or_else(|| TokenizerRefusal::Weights("a merge is not a pair".to_string()))?;
-            let left = pair[0].as_str().unwrap_or_default().to_string();
-            let right = pair[1].as_str().unwrap_or_default().to_string();
+                .filter(|expr| expr.len() == 2)
+                .ok_or_else(|| TokenizerRefusal::Weights("a merge is not an expr".to_string()))?;
+            let left = expr[0].as_str().unwrap_or_default().to_string();
+            let right = expr[1].as_str().unwrap_or_default().to_string();
             ranks.insert((left, right), rank);
         }
         let mut added: Vec<(String, usize)> = document
@@ -197,8 +197,8 @@ impl Tokenizer {
             while symbols.len() > 1 {
                 let mut best: Option<(usize, usize)> = None;
                 for index in 0..symbols.len() - 1 {
-                    let pair = (symbols[index].clone(), symbols[index + 1].clone());
-                    if let Some(rank) = self.ranks.get(&pair)
+                    let expr = (symbols[index].clone(), symbols[index + 1].clone());
+                    if let Some(rank) = self.ranks.get(&expr)
                         && best.is_none_or(|(held, _)| *rank < held)
                     {
                         best = Some((*rank, index));

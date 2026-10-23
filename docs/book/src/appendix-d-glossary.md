@@ -78,7 +78,7 @@ Chapter 15.
 **package** — a module with a declared dependency; fetched by the package
 manager. Chapter 15.
 
-**pair** — every expression's value and type, printed `value: type`. The
+**expr** — every expression's value and type, printed `value: type`. The
 book's first fact. Chapter 5.
 
 **perspective** — the `#` slot: a uniformity claim, ordered by divisibility.
@@ -108,12 +108,12 @@ and its attributes. Chapter 10.
 
 **table** — a constant key→value mapping with its own read. Chapter 9.
 
-**type** — a value; the second half of every pair. Chapter 5.
+**type** — a value; the second half of every expr. Chapter 5.
 
 **unification** — the operation that finds a type by making two described
 shapes agree. Chapter 5.
 
-**value** — the first half of every pair; what a program computes.
+**value** — the first half of every expr; what a program computes.
 Chapter 5.
 
 **wildcard** — the unconstrained value position of a compound type's slot;

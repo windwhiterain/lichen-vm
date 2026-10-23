@@ -279,8 +279,8 @@ fn branched_slice_read(in_the_arm: bool) -> (KernelBody, Barrier) {
 /// A barrier whose read a lane can skip is invalid rather than imprecise, so the gate refuses it.
 #[test]
 fn a_barrier_whose_read_sits_under_a_branch_is_refused() {
-    let (mut body, pair) = branched_slice_read(true);
-    body.barriers.push(pair);
+    let (mut body, expr) = branched_slice_read(true);
+    body.barriers.push(expr);
     let refusal = body
         .validate()
         .expect_err("a barrier before a read a lane can skip is refused");
@@ -291,8 +291,8 @@ fn a_barrier_whose_read_sits_under_a_branch_is_refused() {
 /// What the check does catch, from the other side: a read every path reaches needs no refusal.
 #[test]
 fn a_barrier_whose_read_every_lane_reaches_is_accepted() {
-    let (mut body, pair) = branched_slice_read(false);
-    body.barriers.push(pair);
+    let (mut body, expr) = branched_slice_read(false);
+    body.barriers.push(expr);
     body.validate()
         .expect("a read on every path to the return carries a uniform barrier");
 }
@@ -322,7 +322,7 @@ fn slice_accesses(body: &KernelBody, write: bool) -> Vec<ValueId> {
 
 /// A write and a read at two different indices may meet across lanes, so they are separated.
 #[test]
-fn a_slice_write_and_a_read_by_another_index_are_a_pair() {
+fn a_slice_write_and_a_read_by_another_index_are_a_expr() {
     let body = from_flat(
         1,
         &[
@@ -338,11 +338,11 @@ fn a_slice_write_and_a_read_by_another_index_are_a_pair() {
         ],
     );
     let lane = body.parameters()[0];
-    let pairs = body
+    let exprs = body
         .barrier_scan(lane, &[])
         .expect("a lane-dependent write and a read at another index are well formed");
     assert_eq!(
-        pairs,
+        exprs,
         vec![Barrier {
             write: slice_accesses(&body, true)[0],
             read: slice_accesses(&body, false)[0],
@@ -352,7 +352,7 @@ fn a_slice_write_and_a_read_by_another_index_are_a_pair() {
 
 /// A lane reads the address it wrote itself, in program order, so nothing is owed.
 #[test]
-fn a_slice_write_and_a_read_by_the_same_index_are_no_pair() {
+fn a_slice_write_and_a_read_by_the_same_index_are_no_expr() {
     let body = from_flat(
         1,
         &[
@@ -472,7 +472,7 @@ fn a_slice_index_that_may_address_past_its_slice_is_refused() {
     );
 }
 
-/// `i % 64` against a slice of 64 is in bounds, so the pair it stages is still recorded.
+/// `i % 64` against a slice of 64 is in bounds, so the expr it stages is still recorded.
 #[test]
 fn a_slice_index_bounded_by_the_slice_is_accepted() {
     let mut body = KernelBody::new();
@@ -515,11 +515,11 @@ fn a_slice_index_bounded_by_the_slice_is_accepted() {
     );
     body.set_terminator(entry, Terminator::Return { values: vec![read] });
     let lane = body.parameters()[1];
-    let pairs = staging(64, body)
+    let exprs = staging(64, body)
         .barrier_scan(lane)
         .expect("a slice of 64 holds `i % 64`");
     assert_eq!(
-        pairs,
+        exprs,
         vec![Barrier {
             write: written,
             read

@@ -27,12 +27,12 @@ A loop needs a **`loop`** (the header, which a backedge re-enters) wrapped in a
 2. **The loop's test has to run before the loop opens as well as at the `loop`
    label.** A `While` that is emitted where the terminator sits computes its
    condition once, outside the loop. The condition is the loop's own code, so the
-   `block`/`loop` pair opens *before* it and the backedge re-enters it.
+   `block`/`loop` expr opens *before* it and the backedge re-enters it.
 3. **A frame's base height is fixed when it opens.** A `block`'s results are its
    *produced* values; anything the stack held below the frame is unwound away by a
    branch that exits it. So a loop has to be reached with its state as the **whole**
    operand stack, and values the surrounding code holds cannot survive across it.
-4. **The state has to be in locals before the pair opens**, because the test runs
+4. **The state has to be in locals before the expr opens**, because the test runs
    before the loop and again at the label — and rule 1 means the backedge cannot
    carry the next state back as an operand.
 
@@ -45,7 +45,7 @@ to be decided before any of them is emitted**.
 Each of these was written, shipped to a failing test, and found by reading the
 emitted bytes:
 
-1. **The condition was computed once, outside the loop** — the `block`/`loop` pair
+1. **The condition was computed once, outside the loop** — the `block`/`loop` expr
    opened after the header's instructions had already been emitted. Nothing needs
    `Flow::Block`'s own terminator-vs-body distinction more than this.
 2. **The recorded stack height drifted.** `set_locals`/`get_locals` changed the
@@ -84,7 +84,7 @@ block_types.insert((class, arity), id);
 `wasm.section` serializes, so anything added to `types` afterwards is in no section at
 all — the index a body names then refers to a type the module does not have, which
 wasmi reports as `unknown type: type index out of bounds`. Nothing noticed while no
-body named a block type; the first loop did. **Fixed** (the pairs are collected and
+body named a block type; the first loop did. **Fixed** (the exprs are collected and
 declared before the section is written), and it is the one part of this work that is
 independently correct and landed.
 

@@ -10,7 +10,7 @@ fn a_marked_tail_recursion_converts() {
     let conversion = m
         .loop_conversion(function)
         .expect("a tail self-application with a base converts");
-    // `count`'s parameter is a bare cell (no `[value, type]` pair): the whole
+    // `count`'s parameter is a bare cell (no `[value, type]` expr): the whole
     // value, one slot.
     assert_eq!(conversion.state, vec![Vec::<usize>::new()]);
     assert_eq!(conversion.tests.len(), 1);
@@ -34,7 +34,7 @@ fn a_recursion_whose_call_is_not_in_tail_position_refuses() {
 
 #[test]
 fn a_recursion_in_a_tuple_element_refuses() {
-    // The return's `[value, type]` pair makes the tuple, not its first element, the spine.
+    // The return's `[value, type]` expr makes the tuple, not its first element, the spine.
     let mut m: Module<TestProgram> = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);

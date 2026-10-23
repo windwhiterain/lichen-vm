@@ -49,9 +49,9 @@ The `raw none` for a kernel's `.native` is the check-time reading too: the kerne
 ## 4. The field-arrow rendering, and how it was closed
 
 `module_field_definitions_resolve` hovers a module file's `succ = x => x + 1` and expects an
-arrow. A lambda's type is its self-referential pair `[Function(fid), ↺]`; `D -> C` is the
-**rendering** of that pair by reading the template's parameter and return type cells — not a
+arrow. A lambda's type is its self-referential expr `[Function(fid), ↺]`; `D -> C` is the
+**rendering** of that expr by reading the template's parameter and return type cells — not a
 value the editor should evaluate. The rendering line landed it (`460531e0`): the codomain is
 read from `functions[fid].return_type` (the cell the checker stores so a clone-on-unify reads
-it without forcing `r#return`), the `r#return` pair stays the fallback, and the domain keeps
+it without forcing `r#return`), the `r#return` expr stays the fallback, and the domain keeps
 its `AnyNodeId` so a static `Int` renders. `succ` now hovers `Int -> Int` in a `Check` build.

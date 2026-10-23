@@ -119,7 +119,7 @@ are built inside its own source. `Session::release` is the other half of it: a r
 produced is the caller's to hand back, or a service that steps for hours leaks its device memory.
 
 **The decode step's shape runs through the service path.** A graph parameter holding four buffers,
-with each dispatch reading a pair of them through its own struct, is what a decode step looks like
+with each dispatch reading an expr of them through its own struct, is what a decode step looks like
 (`decode_step_graph.rs`). A `Prepared` of that shape takes **five arguments in the parameter's
 order** — one count and the four buffers — runs in **one submission**, and accepts a **resident**
 among a later step's arguments. Both answers were hand-derived and matched (`[63, 96]`, then
@@ -335,7 +335,7 @@ with the resident sequence still advancing from a cache it never uploaded). Two 
 the ones a reader must not break: a reused slot keeps the previous sequence's words past position
 zero, which is safe only because a reader reads positions before its own; and `capacity` and `dim`
 are the **source's own literals**, since the kernel divides a lane by their product, so a different
-pair addresses the wrong slots and no run can detect it.
+expr addresses the wrong slots and no run can detect it.
 
 **A batched decode step runs, and a sequence's answer does not depend on its batch.** The whole step —
 the score GEMV, the greedy sampler and the cache append — over three sequences at once, in **one
@@ -420,7 +420,7 @@ fold carries an `Int` slot beside two `Float` ones, and the cache append — rec
 through `first[0]` and answers step one, `[1.0, 2.0, 2.0, 0.0, -1.0]`. So a step is
 **one submission**, and a loop over steps needs **no host round trip** — the shape this
 note is built on is expressible today, in the language, with no copies.
-[llm-operators](llm-operators.md) had measured the append-then-score **pair**; the
+[llm-operators](llm-operators.md) had measured the append-then-score **expr**; the
 third kernel, and two graph runs chained, are what this adds.
 
 **One defect rides with it, and it has a one-token workaround.** A graph run's answer
@@ -445,7 +445,7 @@ tree:
   a count of 40 out of 128 ran **one** workgroup where `Constant(128)` ran two.
 - **Outputs are write-only, and `.in`/`.out` are disjoint by construction**
   ([shared-memory-and-barriers](shared-memory-and-barriers.md) §3): no global buffer
-  is both read and written by one body, and the unordered pair is *unspellable*
+  is both read and written by one body, and the unordered expr is *unspellable*
   rather than forbidden.
 - **A launch that stages a slice must cover whole workgroups**
   (`RunError::StagedLaunchNotAWholeWorkgroup`), so a tiled kernel's extent is a
@@ -601,7 +601,7 @@ the graph's later nodes**, so an alias cannot clobber a value somebody still rea
 
 The conservatism runs in the safe direction for exactly this use: the scan
 over-approximates overlap, so "no barrier" is a proof of the aliasing condition
-rather than a guess about it. The failure it must never have — an aliased pair
+rather than a guess about it. The failure it must never have — an aliased expr
 called safe that is not — is the shape this repository treats as worst, which is why
 the rule is stated as a refusal first.
 

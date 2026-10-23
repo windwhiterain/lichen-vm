@@ -34,7 +34,7 @@
     contributes to exactly two taps and the Laplacian sums to zero over the torus. The plane sums to \
     `8`; the masked chain's step sums to `5`, having lost three through its four zero edges; the \
     wrapped step sums to `8`, and so does the wrapped answer after one more step through the loop. \
-    That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
+    That expr is what makes a boundary a *choice*, and it is the closest this language comes to a \
     conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
     in the declared output but not stated as an invariant.\n\n\
     **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is the \

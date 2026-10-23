@@ -65,7 +65,7 @@ pub struct BuiltinName {
     /// The export's rendered type, carried from the build that checked it.
     ///
     /// # Invariant
-    /// `None` when that build rendered no type for the pair; the hover then names the
+    /// `None` when that build rendered no type for the expr; the hover then names the
     /// definition alone (`docs/notes/core-prelude.md` §5).
     pub ty: Option<String>,
 }

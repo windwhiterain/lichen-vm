@@ -19,7 +19,7 @@ fn clean_expr(source: &str) -> Expr {
 
 #[test]
 fn a_parenthesised_value_is_an_argument_in_every_argument_position() {
-    // Each pair differs in nothing but the parentheses around `s (0) - 1`.
+    // Each expr differs in nothing but the parentheses around `s (0) - 1`.
     let positions: &[(&str, &str, &str)] = &[
         ("field", "(R _)(.at s (0) - 1)", "(R _)(.at (s (0) - 1))"),
         (
@@ -118,7 +118,7 @@ softmax_raw";
         "unexpected message: {}",
         short[0].message
     );
-    // The second sits three lines earlier: the pair is out of source order.
+    // The second sits three lines earlier: the expr is out of source order.
     assert_eq!(short[1].span, Some((1, 29)));
 
     let balanced = body.replacen("))))\n", ")))))\n", 1);

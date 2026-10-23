@@ -67,7 +67,7 @@ fn a_named_argument_reconciles_against_its_own_field() {
 }
 
 /// A struct type may name itself or a cycle of siblings, so the walk must
-/// visit each pair once.
+/// visit each expr once.
 #[test]
 fn a_recursive_struct_type_reconciles_and_terminates() {
     assert!(

@@ -4,7 +4,7 @@
   doc = "Row softmax: y[i] = exp(x[i] - max(x)) / sum_j exp(x[j] - max(x)), the entry of attention. It \
    is two kernels because the surface wants two — a `max` reduction over the row, then one kernel \
    that folds `sum exp` and divides by that fold on the way out — and the two claims are what lets \
-   the floor see the pair as one region. The `max` kernel seeds its fold with `((0.0 - 1.0) / 0.0)`, \
+   the floor see the expr as one region. The `max` kernel seeds its fold with `((0.0 - 1.0) / 0.0)`, \
    which **is** the unit of `max`: the language has no unary minus, so `−∞` is written as a \
    literal over a zero literal. A finite stand-in for it is a claim that holds only for rows above \
    it. The row is `1, 2, 3, 4`, so the row's maximum is `4` and the exponents are `-3, -2, -1, 0`; \

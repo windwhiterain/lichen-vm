@@ -93,7 +93,7 @@ fn masked_loop() -> KernelFragment {
         vec![lane, nothing],
         vec![ScalarClass::Float],
     );
-    // **The feature**: `1 * holds`, whose `OpSelect` names the integer pair.
+    // **The feature**: `1 * holds`, whose `OpSelect` names the integer expr.
     let masked = body.add_op(
         step,
         KernelInstr::Bin(ScalarClass::Int, KernelBin::Mul),
@@ -284,7 +284,7 @@ fn on_device(
 /// The masked loop runs, and answers what its three trips compute.
 ///
 /// # Invariant
-/// A module a validator accepts is not yet an answer: the emitted `OpSelect` could carry the pair
+/// A module a validator accepts is not yet an answer: the emitted `OpSelect` could carry the expr
 /// the wrong way round and still validate, and then every trip would count as `0`. The answer is
 /// therefore written out by hand — **not** taken from `reference`, which walks only the entry
 /// block's instructions and reads a looped body as never having run.

@@ -128,7 +128,7 @@ fn floats(values: &[f32]) -> String {
 /// # Invariant
 /// The append launches over `capacity · dim` lanes and the scorer over `capacity`, so the two
 /// extents are equal exactly when `dim == 1`, which is the one case a merged node could have.
-fn decode_pair(capacity: usize, dim: usize, direct: bool) -> String {
+fn decode_expr(capacity: usize, dim: usize, direct: bool) -> String {
     let count = capacity * dim;
     let cache = floats(&(1..=count).map(|value| value as f32).collect::<Vec<f32>>());
     let values = floats(
@@ -326,18 +326,18 @@ fn measure(label: &str, source: &str) {
 #[test]
 fn probe_the_floor_on_a_real_operator() {
     measure("gemv", GEMV);
-    measure("decode_direct", &decode_pair(8, 1, true));
+    measure("decode_direct", &decode_expr(8, 1, true));
     measure(
         "decode_direct_cpu",
-        &decode_pair(8, 1, true).replace("\"gpu\"", "\"cpu\""),
+        &decode_expr(8, 1, true).replace("\"gpu\"", "\"cpu\""),
     );
-    measure("decode_direct_4x2", &decode_pair(4, 2, true));
+    measure("decode_direct_4x2", &decode_expr(4, 2, true));
     measure(
         "decode_direct_4x2_cpu",
-        &decode_pair(4, 2, true).replace("\"gpu\"", "\"cpu\""),
+        &decode_expr(4, 2, true).replace("\"gpu\"", "\"cpu\""),
     );
-    measure("decode_pair", &decode_pair(4, 2, false));
-    measure("decode_pair_equal", &decode_pair(8, 1, false));
+    measure("decode_expr", &decode_expr(4, 2, false));
+    measure("decode_expr_equal", &decode_expr(8, 1, false));
     measure("stencil_dirichlet", STENCIL_DIRICHLET);
     measure("stencil_ring", STENCIL_RING);
     measure("stencil_grid", STENCIL_GRID);

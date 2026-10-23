@@ -110,9 +110,9 @@ where
         names
     }
 
-    /// The pair node `[value, type]` the named expression compiled to.
-    pub fn pair_of(&self, name: &str) -> NodeId {
-        self.expect_slot(name, "pair", |state| state.term)
+    /// The expr node `[value, type]` the named expression compiled to.
+    pub fn slot_of(&self, name: &str) -> NodeId {
+        self.expect_slot(name, "expr", |state| state.term)
     }
 
     /// The **value** node the named expression lowered to.
@@ -191,7 +191,7 @@ where
         self.build.lowering_of(node).map(|loc| loc.expr)
     }
 
-    /// The pair slot `node` is, as a phrase.
+    /// The expr slot `node` is, as a phrase.
     ///
     /// # Invariant
     /// One of `value`, `type`, `an attribute slot`, `the expression itself`,

@@ -184,7 +184,7 @@ fn run_range<State: HostWords>(
     let mut store = wasmi::Store::new(engine, state);
     let mut linker = wasmi::Linker::<State>::new(engine);
 
-    // One `read`/`write` pair per class: both are defined even when the module
+    // One `read`/`write` expr per class: both are defined even when the module
     // declares only one.
     for (element_class, value_type) in [
         (ScalarClass::Int, wasmi::ValType::I64),

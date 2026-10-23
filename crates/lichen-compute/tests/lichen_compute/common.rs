@@ -78,7 +78,7 @@ pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFr
 /// through `low_type_of_slot`, which is the call the element class is taken by.
 ///
 /// The wrapper's fields are `native`, `type` and `length`
-/// (`docs/notes/kernel-buffer-declarations.md`); the older `native`/`element` pair is
+/// (`docs/notes/kernel-buffer-declarations.md`); the older `native`/`element` expr is
 /// still recognised, so a module that holds both shapes is read for both.
 pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> {
     use lichen_highlevel::shape::{TypeRef, field_names, field_type, low_type_of_slot};

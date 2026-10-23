@@ -23,14 +23,14 @@ where
     /// instantiated condition at each call.
     pub(super) fn check_assert(&mut self, e: ExprId, condition: ExprId) -> NodeId {
         self.check_expr(condition);
-        // The assert names the value node — element 0 of the pair.
+        // The assert names the value node — element 0 of the expr.
         let value = self.value_of(condition);
         self.register_assert(value, self.loc(e, 0), true, AssertSpelling::Condition);
-        let pair = self.state[condition].term.unwrap();
-        self.state[e].term = Some(pair);
+        let expr = self.state[condition].term.unwrap();
+        self.state[e].term = Some(expr);
         self.state[e].val = self.state[condition].val;
         self.state[e].ty = self.state[condition].ty;
-        pair
+        expr
     }
 
     /// Registers an assert condition: the module worklist entry, plus the

@@ -99,7 +99,7 @@ pub(crate) enum KeyState {
 }
 
 impl<P: Program> Module<P> {
-    /// Build a constant table value from raw `(key, value)` node pairs.
+    /// Build a constant table value from raw `(key, value)` node exprs.
     ///
     /// # Invariant
     ///

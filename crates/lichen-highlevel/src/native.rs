@@ -18,11 +18,11 @@ use crate::program::{Ctx, HighProgram, ValueType};
 /// # Invariant
 /// A native operator is an operator: raw operands in, one raw result node out,
 /// and no type anywhere. The checker mints the expression's type
-/// unconditionally as a fresh cell and pairs it with `value`; the lichen
+/// unconditionally as a fresh cell and exprs it with `value`; the lichen
 /// wrapper around `$name` states the types it knows.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeApply {
-    /// The expression's value node — element 0 of the term pair the checker
+    /// The expression's value node — element 0 of the term expr the checker
     /// builds around it. See docs/language-spec.md.
     pub value: NodeId,
     /// Whether `value` is a decided value the checker caches as the

@@ -5,8 +5,8 @@
 By the lichen contributors.
 
 This book is the official guide to the lichen programming language: a
-small, lazy, pure language in which every expression is a pair of a
-value and its type, and the compiler's answer to a program is that pair.
+small, lazy, pure language in which every expression is an expr of a
+value and its type, and the compiler's answer to a program is that expr.
 
 The book is written for people who have programmed before in some
 language and want to learn lichen from the ground up. It is a

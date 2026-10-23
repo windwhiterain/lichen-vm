@@ -36,11 +36,11 @@ use crate::shape::for_each_kind_marker;
 pub struct HighGlobalExt;
 impl GlobalExt for HighGlobalExt {}
 
-/// Per-package metadata for the highlevel `Program`: the exported pair ref and
+/// Per-package metadata for the highlevel `Program`: the exported expr ref and
 /// the direct bindings.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HighPackageMeta {
-    /// The package's exported final-expression pair; `None` until a higher
+    /// The package's exported final-expression expr; `None` until a higher
     /// layer records it.
     pub export: Option<lichen_lowlevel::StaticNodeId>,
     /// The package's directly-exposed `(name, export)` bindings.
@@ -79,7 +79,7 @@ pub struct PackageSource {
     /// nodes: a refinement's domain names a node of **that** module, so the reading
     /// build keeps the text rather than the node (`docs/notes/core-prelude.md`).
     pub assert_spellings: Vec<(usize, String)>,
-    /// `(frozen export-pair index, the binding's rendered type)`, sorted by index so
+    /// `(frozen export-expr index, the binding's rendered type)`, sorted by index so
     /// a lookup is a binary search.
     ///
     /// # Invariant
@@ -107,7 +107,7 @@ impl PackageSource {
             .map(|at| self.assert_spellings[at].1.as_str())
     }
 
-    /// The rendered type of the export pair frozen at `index`, when the build
+    /// The rendered type of the export expr frozen at `index`, when the build
     /// rendered one.
     pub fn export_type_of(&self, index: lichen_lowlevel::LocalNodeId) -> Option<&str> {
         self.export_types
@@ -117,16 +117,16 @@ impl PackageSource {
     }
 }
 
-/// The result of building a literal: the compiled `[value, type]` pair plus its
+/// The result of building a literal: the compiled `[value, type]` expr plus its
 /// value and type nodes.
 ///
 /// # Invariant
-/// `Type : Type` is the one case where the pair *is* the value's universe node
+/// `Type : Type` is the one case where the expr *is* the value's universe node
 /// (self-referential), not `[value, type]`, so a literal returns all three
-/// rather than assuming `pair = [value, ty]`.
+/// rather than assuming `expr = [value, ty]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiteralBuild {
-    pub pair: NodeId,
+    pub expr: NodeId,
     pub value: NodeId,
     pub ty: NodeId,
 }
@@ -147,7 +147,7 @@ macro_rules! define_ctx_marker_accessors {
 ///
 /// # Invariant
 /// Every encoder builds a well-formed structure by construction — a
-/// [`Self::pair`] is always `[value, type]`, a [`Self::kind_expr`] always
+/// [`Self::expr`] is always `[value, type]`, a [`Self::kind_expr`] always
 /// `[marker, Type]` — and the active block is managed internally, so an
 /// extension can never build into the wrong block. Driven by a literal's
 /// `LiteralExt::build`, a native operator's `NativeOp::build`, and an
@@ -164,8 +164,8 @@ pub trait Ctx<P: Program> {
     fn record_full_width_layout(&mut self, layout: u32);
     /// An operation node with the given operator and optional operand.
     fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
-    /// A `[value, type]` pair node — the encoding of an expression's term.
-    fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
+    /// A `[value, type]` expr node — the encoding of an expression's term.
+    fn expr(&mut self, value: NodeId, ty: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
     /// A function type expression `[[domain, codomain], [FunctionType, Type]]`.
@@ -224,10 +224,10 @@ pub trait Ctx<P: Program> {
 /// `build` is the single creation function: it decides the value node and the
 /// type node, referencing the prebuilt singleton exprs the context exposes.
 pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
-    /// Build this literal's value and type nodes (and their pair).
+    /// Build this literal's value and type nodes (and their expr).
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild;
 
-    /// Whether the pair is a value expression of this occurrence (a value
+    /// Whether the expr is a value expression of this occurrence (a value
     /// literal), so the literal decides its attribute positions itself; a type
     /// constant is a shared type value and answers `false`.
     fn decides_attributes(&self) -> bool {
@@ -247,9 +247,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(LowValue::USize(self.0)));
         let ty = ctx.int_type();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -260,7 +260,7 @@ where
 /// See `docs/notes/floating-point.md` §3.3.
 ///
 /// # Invariant
-/// The pair is `[Float(1.5), [float, Type]]`, never an `Int`-shaped pair: §4.2
+/// The expr is `[Float(1.5), [float, Type]]`, never an `Int`-shaped expr: §4.2
 /// makes that a *different type*, not a lossy rendering of this one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FloatLit(pub f32);
@@ -272,9 +272,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(LowValue::Float(self.0)));
         let ty = ctx.float_type();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -293,16 +293,16 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(LowValue::Str(self.0)));
         let ty = ctx.string_type();
-        let pair = ctx.pair(value_node, ty);
+        let expr = ctx.expr(value_node, ty);
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
     }
 }
 
-/// The built-in `Int` type constant — `Int : Type`. A unit literal whose pair
+/// The built-in `Int` type constant — `Int : Type`. A unit literal whose expr
 /// is the shared `[int, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct IntTypeLit;
@@ -314,9 +314,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.int_marker_node();
         let ty = ctx.universe();
-        let pair = ctx.int_type();
+        let expr = ctx.int_type();
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -329,7 +329,7 @@ where
 }
 
 /// The built-in `Float` type constant — `Float : Type`. A unit literal whose
-/// pair is the shared `[float, Type]`.
+/// expr is the shared `[float, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FloatTypeLit;
 
@@ -340,9 +340,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.float_marker_node();
         let ty = ctx.universe();
-        let pair = ctx.float_type();
+        let expr = ctx.float_type();
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -355,7 +355,7 @@ where
 }
 
 /// The built-in `string` type constant — `string : Type`. A unit literal whose
-/// pair is the shared `[string, Type]`.
+/// expr is the shared `[string, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct StringTypeLit;
 
@@ -366,9 +366,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.string_marker_node();
         let ty = ctx.universe();
-        let pair = ctx.string_type();
+        let expr = ctx.string_type();
         LiteralBuild {
-            pair,
+            expr,
             value: value_node,
             ty,
         }
@@ -380,7 +380,7 @@ where
     }
 }
 
-/// The built-in `Type` type constant — `Type : Type`. A unit literal whose pair
+/// The built-in `Type` type constant — `Type : Type`. A unit literal whose expr
 /// is the self-referential universe node.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TypeTypeLit;
@@ -391,7 +391,7 @@ where
 {
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         LiteralBuild {
-            pair: ctx.universe(),
+            expr: ctx.universe(),
             value: ctx.type_marker_node(),
             ty: ctx.universe(),
         }
@@ -420,8 +420,8 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value = ctx.value_node(P::Value::from(LowValue::Any));
         let ty = ctx.fresh();
-        let pair = ctx.pair(value, ty);
-        LiteralBuild { pair, value, ty }
+        let expr = ctx.expr(value, ty);
+        LiteralBuild { expr, value, ty }
     }
 
     /// The wildcard constrains nothing, so its own attributes are the wildcard.
@@ -491,7 +491,7 @@ macro_rules! define_type_value {
                 $variant,
             )*
             /// A nominal type id: a struct type's identity marker, at `shape[0]`
-            /// of a `TypeStruct`-kinded pair.
+            /// of a `TypeStruct`-kinded expr.
             ///
             /// # Invariant
             /// Equal ids unify, different ids do not, and an id never unifies with

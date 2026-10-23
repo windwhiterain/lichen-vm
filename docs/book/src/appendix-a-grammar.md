@@ -75,7 +75,7 @@ apply     := atom atom*
 atom      := primary postfix*
 primary   := int | string | 'Int' | 'Float' | 'string' | 'Type' | '_'
            | name | '$' name '(' args ')' | '(' expr ')' | '(' tuple ')'
-           | '[' array ']' | 'table' '(' pairs ')' | 'set' '(' args ')'
+           | '[' array ']' | 'table' '(' exprs ')' | 'set' '(' args ')'
            | '{' block '}' | 'tuple' '{' slots '}' | 'struct' '{' fields '}'
            | 'array' '{' expr ',' expr '}' | 'set' '{' slot '}'
            | 'table' '{' expr ',' expr '}' | 'if' expr 'then' expr 'else' expr
@@ -83,7 +83,7 @@ postfix   := glued '[' expr ']'        -- array read
            | glued '(' fields ')'      -- tuple read, or struct instantiation
            | '.' name                  -- struct field read
 element   := ['@shallow' ['(' n ')']] glued-expr
-pair      := expr '==>' expr
+expr      := expr '==>' expr
 ```
 
 Where this differs from the spec, the spec is right.

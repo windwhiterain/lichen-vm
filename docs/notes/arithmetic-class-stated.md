@@ -235,7 +235,7 @@ let elem_cell = match element {
         &[
             shape::TYPE_SHAPE_SLOT,
             shape::ARRAY_TYPE_ELEMENT_SLOT,
-            shape::PAIR_TYPE_SLOT,
+            shape::EXPR_TYPE_SLOT,
         ],
     ),
 };
@@ -245,7 +245,7 @@ and **that** `elem_cell` is the cell the three `?a`/`?b`/`?c` print from — mea
 undecided singleton each. The missing write is the index read's carry from a container
 element cell that is already decided (`15 of 15` in `lazy_infinite.lichen`), which is
 [compound-element-slots](compound-element-slots.md) §"The read path", in the same
-`lichen-lowlevel` neighbourhood as the `pair_type_half` fix that closed the other
+`lichen-lowlevel` neighbourhood as the `expr_type_half` fix that closed the other
 three, and **not** a checker decision. A fix there would be its own slice and needs
 your decision; this one touches nothing.
 

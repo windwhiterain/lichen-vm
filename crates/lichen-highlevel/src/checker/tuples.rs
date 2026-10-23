@@ -14,7 +14,7 @@ where
         let mut slots = Vec::new();
         for &el in &elements {
             self.check_expr(el);
-            // An element is a complete slot: the term is the value pair.
+            // An element is a complete slot: the term is the value expr.
             vals.push(self.state[el].term.expect("an element is compiled"));
             let ty = self.state[el].ty;
             let attrs = self.element_attr_slots(el);
@@ -24,12 +24,12 @@ where
         let value = self.array_node(self.current_block, &vals);
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.slot_pair(self.current_block, shape, kind);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
+        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        pair
+        expr
     }
 
     /// A tuple type expression: each element's slot is a full term.
@@ -41,11 +41,11 @@ where
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let pair = self.slot_pair(self.current_block, shape, kind);
-        self.state[e].term = Some(pair);
+        let expr = self.slot_expr(self.current_block, shape, kind);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
-        pair
+        expr
     }
 
     /// An element's slot, read from the expression that writes it.
@@ -181,7 +181,7 @@ where
     /// tuple-type element, a function-type side.
     ///
     /// # Invariant
-    /// A term put in a type position unifies as its own value pair, which never
+    /// A term put in a type position unifies as its own value expr, which never
     /// unifies with its type: `struct{.f Int, .g b}` fails, `struct{.f Int, .g B}`
     /// works. An expression that carries attributes denotes the annotated value's
     /// term instead; see `docs/notes/operator-polymorphism.md` §3.

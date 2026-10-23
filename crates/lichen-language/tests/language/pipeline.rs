@@ -263,7 +263,7 @@ fn an_annotated_parameter_checks() {
 #[test]
 fn an_annotated_parameter_prints_its_pinned_type() {
     // A `_` annotation renders the class it bound to (`Int`, not the raw
-    // `[Int, Type]` pair).
+    // `[Int, Type]` expr).
 
     // The printer recognizes a cell unified into the universe class.
     assert_eq!(
@@ -278,7 +278,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
 ///
 /// # Invariant
 ///
-/// Only the runtime pair carries that width, so a renderer reading the
+/// Only the runtime expr carries that width, so a renderer reading the
 /// frontend's own IR stamp drops the preserved slot.
 #[test]
 fn a_root_annotation_renders_the_merged_attribute_tail() {
@@ -932,7 +932,7 @@ fn assert_self_reference_is_refused(source: &str) {
 }
 
 #[test]
-fn a_mutual_pair_is_refused() {
+fn a_mutual_expr_is_refused() {
     // `a = b; b = a` is a cycle among scalars: a binding's name is its value's own node.
     assert_cycle_is_refused("a = b\nb = a\na");
 }
@@ -1003,7 +1003,7 @@ fn a_deep_operator_chain_compiles_without_an_overflow() {
 
 #[test]
 fn a_struct_type_kinds_and_evaluates() {
-    // A bare struct type is a well-typed program: the pair
+    // A bare struct type is a well-typed program: the expr
     // `[[Int, Int], [TypeId(n), Type]]`.
     run("struct{.f Int, .g Int}");
 }
@@ -1247,7 +1247,7 @@ fn an_apply_of_a_deferred_non_function_reports_where_to_look() {
 #[test]
 fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
     // The instance is a `LowValue::Array` — a compute kernel's
-    // `[native, sig]` pair looks the same here.
+    // `[native, sig]` expr looks the same here.
 
     // Only the program knows which values are callable
     // (`Program::is_callable`), so its answer refuses this one.
@@ -1705,7 +1705,7 @@ fn a_return_statement_enforces_the_block_value_anywhere() {
 
 #[test]
 fn mutually_recursive_structs_check_and_evaluate() {
-    // Two struct types that reference each other *as types*, plus a pair of
+    // Two struct types that reference each other *as types*, plus an expr of
     // mutually-recursive instances.
 
     // The checker's skeleton cuts the IR cycle and the deep pass the value
@@ -2110,7 +2110,7 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     // The compile-time wrap cannot descend the undecided spine, so the
     // definition pass terminates.
 
-    // `@shallow(n)` puts the call's `[value, type]` pair in the
+    // `@shallow(n)` puts the call's `[value, type]` expr in the
     // element, where the bare mark puts the call's value.
 
     // So a read under the depth's mark needs one subscript more
@@ -2119,7 +2119,7 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     // `docs/notes/shallow-depth-element-values.md` §1 has the
     // measurement behind this, and §4 the arity.
 
-    // A length could not tell `1, 2, 3` from a pair, a shape and
+    // A length could not tell `1, 2, 3` from an expr, a shape and
     // a kind marker; the numbers are what this asserts.
     let (module, value, _) = common::evaluate(
         "f = x => [x, @shallow(1) f (x + 1)]\n\

@@ -22,11 +22,11 @@ where
     ///
     /// # Invariant
     /// The `loc`'s `slot` names which element of the expression's
-    /// `[value, type, attrs…]` pair the check is about; its `path` is extended
+    /// `[value, type, attrs…]` expr the check is about; its `path` is extended
     /// from the unify's own descent. The return value is the *precondition* of
     /// the expression the caller will build: a guard that refused a construct
     /// has judged it undefined, so its graph is not built behind the refusal
-    /// (`refused_pair`).
+    /// (`refused_expr`).
     pub fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) -> bool {
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
@@ -36,7 +36,7 @@ where
         false
     }
 
-    /// The `[value, type]` pair a **refused** expression carries on with: one
+    /// The `[value, type]` expr a **refused** expression carries on with: one
     /// fresh undecided cell in each slot.
     ///
     /// # Invariant
@@ -45,13 +45,13 @@ where
     /// the refusal was about. Building that is how an already-reported refusal
     /// goes on to panic ([`Self::fresh_cell`]: an empty cell is undecided's only
     /// in-VM representation).
-    pub(super) fn refused_pair(&mut self, e: ExprId) -> NodeId {
+    pub(super) fn refused_expr(&mut self, e: ExprId) -> NodeId {
         let cell = self.fresh_cell();
-        let pair = self.pair_of(cell, cell);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(cell, cell);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(cell);
         self.state[e].ty = Some(cell);
-        pair
+        expr
     }
 
     /// Compute both operands of a check before it compares them.
@@ -127,7 +127,7 @@ where
     }
 
     /// Refuse a read whose container's type is not decided where the read is
-    /// checked, and answer the refused pair.
+    /// checked, and answer the refused expr.
     ///
     /// # Invariant
     /// A read states its requirement from the container's type; an undecided
@@ -148,7 +148,7 @@ where
             DiagKind::UndecidedContainer,
             Some(read),
         );
-        self.refused_pair(e)
+        self.refused_expr(e)
     }
 
     /// Record a failed checker-issued unify.
@@ -191,8 +191,8 @@ where
     /// leading slot is filled from the lowlevel's unify `steps`.
     pub(super) fn loc(&self, e: ExprId, slot: usize) -> Loc {
         let step = match slot {
-            shape::PAIR_VALUE_SLOT => LocStep::Value,
-            shape::PAIR_TYPE_SLOT => LocStep::Type,
+            shape::EXPR_VALUE_SLOT => LocStep::Value,
+            shape::EXPR_TYPE_SLOT => LocStep::Type,
             n => LocStep::Attr(shape::attr_index(n)),
         };
         Loc {

@@ -119,7 +119,7 @@ lands:
   in; `checker::structs::slot_read`'s **lazy** fallback does the same, which is
   what a resolved read and an apply-time one must agree about.
 - Both printers render a tuple's elements through their slots, and an unreadable
-  slot falls back to the raw mark rather than printing an element pair whole.
+  slot falls back to the raw mark rather than printing an element expr whole.
 
 ## The spelling
 
@@ -206,16 +206,16 @@ and each is refused after it, the way the same tuple spelled on its own is.
 
 Two things the walk has to state about itself:
 
-- **A named call pairs by the definition's order, not the call's.** The IR keeps
+- **A named call exprs by the definition's order, not the call's.** The IR keeps
   `S(.b …, .a …)` in call order while the checker reorders the graph, so a
   positional pairing would check the wrong argument against the wrong field.
   `compound_children` therefore answers `None` for a named instantiation and
   `checker::unify_instantiate_elements` / the reorder's own `assign` map own it.
-- **A pair is visited once.** A struct type may name itself or a cycle of
+- **An expr is visited once.** A struct type may name itself or a cycle of
   siblings (`A = struct{.g B}`, `B = struct{.g A}`), and descending a field's own
   compound type is unbounded without a visited set — it overflowed the stack. One
   set per walk, because the attribute and the pin walks are different effects over
-  the same pair and neither may suppress the other.
+  the same expr and neither may suppress the other.
 
 What the walk does **not** reach is a callee the checker never saw at the source:
 a parameter, a placeholder, a nested instantiation spells no field requirement, so
@@ -287,11 +287,11 @@ rules that need a count are stated once each:
 - `check_array_type` (`array{T, n}`), `check_array_term`, and `check_index`'s pin
   build `[element slot, length]`; `low_type_of_array` and both printers read the
   slot's type position.
-- The element walk pairs a **single** type element with *each* value element
-  (`checker::element_pairs`), which is what a pin on an array's element means:
+- The element walk exprs a **single** type element with *each* value element
+  (`checker::element_exprs`), which is what a pin on an array's element means:
   `[1, 2] : array{5 : Int, 2}` is refused twice, once per element, and
   `[1 # 4, 2] : array{Int # 2, 2}` holds while `[1 # 2, 2] : array{Int # 4, 2}` is
-  refused. A one-element tuple pairs the same way, so the rule needs no kind test.
+  refused. A one-element tuple exprs the same way, so the rule needs no kind test.
 
 ## The table and set steps
 
@@ -305,8 +305,8 @@ slots' type positions.
 Both have a *type* spelling, so an element requirement is written for them like
 any other compound's: `set(1 # 4, 2) : set{Int # 2}` holds, `set(1 # 2, 2) :
 set{Int # 4}` is refused, and `set(1, 2) : set{1 : Int}` is refused on the second
-member — the set's single slot pairs with every member through `element_pairs`'
-single-element arm, the array's rule. `table{K, V}` pairs its key and value slots
+member — the set's single slot exprs with every member through `element_exprs`'
+single-element arm, the array's rule. `table{K, V}` exprs its key and value slots
 with each entry's, so a pin or requirement inside either position is enforced
 per entry.
 

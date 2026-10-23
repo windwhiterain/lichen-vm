@@ -100,7 +100,7 @@ returned closure's instance (`source=F2 fresh=F4` and a second `fresh=F5`), both
 returned closure's **template** at the outer apply, and the minted instance (`F5`) is never
 applied in either program. So "which generation is applied" does not separate them, and
 neither does the applied closure's captured scope: printed cell by cell, with each cell's
-own slot, its class's answer, and its pair's head, **neither program's applied template
+own slot, its class's answer, and its expr's head, **neither program's applied template
 holds the captured `3`**, while one answers `3` and the other `none`.
 
 The failing shape's outer apply also returns undecided **before** it reads a callee: the
@@ -120,7 +120,7 @@ self.module.functions[function].r#return = ret;
 
 and an apply expression's `term` is its **operation node** (`check_app` sets
 `state[e].term = Some(node)`, `state[e].val = None`, `state[e].ty = Some(c)`), while every
-other body kind's term is a `[value, type]` pair. Measured, that wiring shows on the
+other body kind's term is a `[value, type]` expr. Measured, that wiring shows on the
 instantiation path: `RETURN … operation=true` appears for the apply-bodied function in the
 failing form, and the failing run **stops** at that instantiation while the working inline
 form continues into further ones.
@@ -131,11 +131,11 @@ has a bare apply body too, so it carries the same operation-wired return. What s
 two must therefore be what the **binding** contributes — the reference the callee resolves
 through — and not the return's shape.
 
-Refuted along the way, each by measurement: the *return's* shape (a pair with two items in
+Refuted along the way, each by measurement: the *return's* shape (an expr with two items in
 both the failing and the inline form), the *applied ids* (both forms mint the same
 instances and apply the same functions), and the *clone decisions on operation nodes* (both
 forms clone them, in similar numbers). Also measured: `wire_apply_result` writes the result
-into the apply's node and unifies the caller's cell only in its pair-valued arm, so a
+into the apply's node and unifies the caller's cell only in its expr-valued arm, so a
 **function-valued** result is returned without being written — which is why a direct chain
 that reads the node and a local hop that carries the value behave differently.
 
@@ -264,10 +264,10 @@ s2 (answers none): site 1 ten times, site 2 six, site 3 five, site 4 nine
 **The counts do not support "two binds are missing", and that reading is withdrawn.** A
 `MERGE` line is a *class merge*; a `unify` whose two sides already share a class logs
 nothing, so fewer merges is not fewer binds. Measured directly instead: `wire_apply_result`
-is called **three times in both forms and takes its pair arm in all three** — so the arm is
+is called **three times in both forms and takes its expr arm in all three** — so the arm is
 not what differs, and the failing form does reach the bind.
 
-What the pair arm does *not* achieve in the failing form is the class itself: there the
+What the expr arm does *not* achieve in the failing form is the class itself: there the
 result cell's class holds only the caller's block (measured in §7: four members, all in
 block 1), while the body-block clone the answer reads is in another class, and in the working
 form the site-2 merge is what puts the two in one. So the open question is narrower than a
@@ -275,7 +275,7 @@ missing call: **which unify should have put the body-block clone into the result
 class, and why it did not** — with the answer's class membership, not the call counts, as the
 thing to trace.
 
-## 10. A link measured here, not the last one: the wiring names the pair's other cell
+## 10. A link measured here, not the last one: the wiring names the expr's other cell
 
 Tracing every `unify` whose either side is a clone (the entry, so a no-op unification is
 logged too) answers it. In the failing form **no unification mentions the cell the answer
@@ -287,15 +287,15 @@ UNIFY a=n113 (top level, origin n54, value array) b=n87 (F1, block 4, origin n22
 UNIFY a=n96  (top level, origin n58, value 3)     b=n86 (F1, block 4, origin n21)   ← the answer's cell
 
 s2 (answers none), its last three events
-WIRE-ARM node=n61 cell=Some(n59) result=array arm=pair
+WIRE-ARM node=n61 cell=Some(n59) result=array arm=expr
 UNIFY a=n61 (top level, operation) b=n75 (top level, operation, origin n55)
 UNIFY a=n59 (top level, origin None, value None)  b=n70 (F1, block 4, origin n22)   ← the other cell
 ```
 
 So the failing form's wiring binds the **result cell** to the body-block clone of `n22` — the
-other cell of the same top-level pair — and the clone of `n21`, which the answer reads, is
+other cell of the same top-level expr — and the clone of `n21`, which the answer reads, is
 never offered to any unification. The working form binds both. That measures **which node the
-apply's return pair names**, and at the time it was written this looked like the last link; it is
+apply's return expr names**, and at the time it was written this looked like the last link; it is
 not, and §26 has the cause. What it does establish is the shape of the loss: in the failing form
 the cell nothing offers to a unification is the one the answer reads.
 
@@ -309,7 +309,7 @@ top-level leaf, which is where a lambda's parameter cells live:
 READ-NONE n69 (F1, block 4, leaf, origin n21)
   referrers=[ n55 (F3, block 4, operation)          ← the body's apply, which names it
               n61 (top level, operation)            ← the root apply
-              n68 (F4, block 4, leaf, origin n23)   ← a clone of the *pair*, not of a cell
+              n68 (F4, block 4, leaf, origin n23)   ← a clone of the *expr*, not of a cell
               n71, n100 ]                           ← its own clones
 ```
 
@@ -320,9 +320,9 @@ one parameter has two template nodes:
 FUNCTION-SHAPE function=F1 parameter=n23 items=[n21 n22] return=n32
 ```
 
-`n23` is the parameter's **pair** node and `n21`/`n22` are its two **cells** (value and type).
-So the parameter check binds a clone of the *pair* (`origin=n23`) while the answer reads a
-clone of the *value cell* (`origin=n21`) — the two origins are a pair and one of its cells, not
+`n23` is the parameter's **expr** node and `n21`/`n22` are its two **cells** (value and type).
+So the parameter check binds a clone of the *expr* (`origin=n23`) while the answer reads a
+clone of the *value cell* (`origin=n21`) — the two origins are an expr and one of its cells, not
 two templates, and "one parameter, two template nodes" is withdrawn.
 
 What stands, measured repeatedly: in the failing form the value cell's clone is neither
@@ -359,7 +359,7 @@ m3 (3)     F3/s1 F1/s1 F4/s1
 ```
 
 The `F1, F4, F3, F1, F4` sequence quoted here earlier came from a different print in an
-earlier round and a different program pair, and citing it as this pair's trace was a mistake.
+earlier round and a different program expr, and citing it as this expr's trace was a mistake.
 So the double instantiation is refuted, and the last link is open again: **why one
 instantiation leaves two clones of one template in one call, with a value in one and nothing
 in the other.**
@@ -371,8 +371,8 @@ ledger the later sections add to, and it is the count the standing section quote
 
 | # | candidate | refuted by |
 | --- | --- | --- |
-| 1 | two fewer result-cell binds | the arm trace: three wirings, all the pair arm, in both forms |
-| 2 | one parameter with two template nodes | the function's own shape: the node is the pair, the two are its cells |
+| 1 | two fewer result-cell binds | the arm trace: three wirings, all the expr arm, in both forms |
+| 2 | one parameter with two template nodes | the function's own shape: the node is the expr, the two are its cells |
 | 3 | the descent not reaching the value cell | the descent trace: identical 36-step traces |
 | 4 | one call instantiating twice | the path trace: identical sequences in five programs |
 | 5 | the walk remapping the parameter's cells differently | the walk trace: 18 identical events, same remap states |
@@ -459,7 +459,7 @@ reference:
 
 ```
 READ-NONE n69 (F1, block 4, origin n21) minted=14
-named-node-by = [ n55 (F3, block 4, operation, value pair) minted=None
+named-node-by = [ n55 (F3, block 4, operation, value expr) minted=None
                   n61 (top level, operation)                minted=None
                   n68 (F4, block 4) minted=14, n71 (F3, block 4) minted=15,
                   n75 (top level) minted=16, n100 (top level) minted=18 ]
@@ -479,12 +479,12 @@ which walk minted it — the last step before this is stated as the cause.
 ## 17. The return shape is not the cause either
 
 Printing whether a function's own `r#return` is an operation separates the two forms measured
-first — the failing ones wire it to an operation, the working ones to a pair:
+first — the failing ones wire it to an operation, the working ones to an expr:
 
 | program | answer | the apply-bodied function's `r#return` |
 | --- | --- | --- |
 | `s2`, `m4` | `none` | operation |
-| `s1`, `n1e` | `3` | pair |
+| `s1`, `n1e` | `3` | expr |
 
 **That reading is withdrawn: it fails its own prediction.** If an operation-wired return caused
 the loss, every program with one would lose it — and these do not:
@@ -512,7 +512,7 @@ ubiquitous here and separate nothing.
 ## 18. The instrument, and what it does not do yet
 `crates/lichen-highlevel/tests/highlevel/zz_nested_apply_probe.rs` reproduces the failing shape at
 the IR level and prints readings by name: the root, body and call answers through their
-pairs' own value slots, each expression's pair together with its class and its class
+exprs' own value slots, each expression's expr together with its class and its class
 members' slots. It reproduces the undecided root — and it reports an undecided root for
 the **literal control** as well, which the language front end answers `3`. An IR probe
 carries no core prelude, so it is not a faithful runner for a program's answer (the
@@ -672,7 +672,7 @@ that split.
 node shares a class with a stale item sounds like the right differential — in the failing form the
 answer's read *is* the stale cell — but the field is false in **every** program, the failing ones
 included, because an apply root has no value node at all: `state[root].val` is empty by
-construction for an apply, and the answer lives in the root pair's own value slot. Measuring
+construction for an apply, and the answer lives in the root expr's own value slot. Measuring
 "where the answer comes from" therefore has to start from that slot, not from the root's value
 node — the same distinction the TestKit reading `try_node_of` was added for in this note's earlier
 work.
@@ -1176,8 +1176,8 @@ and the first one this note made by predicting instead of measuring. Item by ite
 looks the same in a failing and in a working program:
 
 ```
-m4  n61: [0] n39 (F3, holds a function)  [1] n58 (top level, pair)  [2] n59 (empty)  [3] n41 (F3, pair)
-v3  n80: [0] n58 (F3, holds a function)  [1] n77 (top level, pair)  [2] n78 (empty)  [3] n60 (F3, pair)
+m4  n61: [0] n39 (F3, holds a function)  [1] n58 (top level, expr)  [2] n59 (empty)  [3] n41 (F3, expr)
+v3  n80: [0] n58 (F3, holds a function)  [1] n77 (top level, expr)  [2] n78 (empty)  [3] n60 (F3, expr)
 ```
 
 Neither array holds the stale clone, so the operand array does not carry it. What *is* measured is the
@@ -1221,7 +1221,7 @@ whether the value is a wildcard, whether it holds a foreign function, and the va
 lines for a failing and for two working programs:
 
 ```
-m4, v3, h2:  carried=true template_answer=false wildcard=false foreign=false value=pair   (first lines
+m4, v3, h2:  carried=true template_answer=false wildcard=false foreign=false value=expr   (first lines
              identical in all three)
 ```
 
@@ -1328,7 +1328,7 @@ design, and for an apply-bodied function that node *is* the body's apply, so the
 the parameter unbound and pins the empty generation it mints. **The repair that landed is neither of the
 options below**: it makes the apply run **both** of its slots (the type's as well as the value's, which had
 only ever run for a callee whose value was not concrete) and makes the type application read the
-instantiated return's pair **after** evaluating that clone, where before it read the pair first and
+instantiated return's expr **after** evaluating that clone, where before it read the expr first and
 returned early on an operation's absent value. Measured: every previously failing program answers its
 correct value and no other program's answer moved. The options below are kept as the record of what was
 weighed.
@@ -1337,7 +1337,7 @@ weighed.
 failing to none failing while the other `407` programs keep their answers, plus the `h1`/`k4`-style
 contrast and the five predictions in §26 still holding. Measured after the repair: the values of all
 twenty-two are correct, **zero** of the other four hundred and seven answers moved, and the four programs
-whose type is still undecided are `b7`, `g2`, `g3`, `h5` (an undecided pair) and `w5` (an undecided
+whose type is still undecided are `b7`, `g2`, `g3`, `h5` (an undecided expr) and `w5` (an undecided
 scalar).
 
 **Both ends of what was left are repaired, and the acceptance is the corpus.** `w5` failed because its
@@ -1345,8 +1345,8 @@ root apply has a **static** callee: element 3 carried the type and it resolved t
 `AnyFunctionId::Static` variant, which the dynamic path's guard refuses, so the type side was skipped and
 the root's type cell stayed empty. The static path now applies its type slot the same way the dynamic one
 does — after the instantiated return is evaluated, take its type half, evaluate it, and unify it with the
-checker-wired result cell. The dynamic path evaluates that clone only when its pair is absent, since
-forcing one that already answers costs an apply the depth budget counts, and the pair's elements are
+checker-wired result cell. The dynamic path evaluates that clone only when its expr is absent, since
+forcing one that already answers costs an apply the depth budget counts, and the expr's elements are
 resolved only inside a deep pass and never at a position the mask marks shallow. That also repaired `b7`,
 `g2`, `g3` and `h5`, whose type chains pass through static callees further down. Measured over the corpus
 afterwards: **twenty-two answers moved, every one of them a program that previously answered `none`**, all
@@ -1360,7 +1360,7 @@ fact about how much work an apply does, so the test that watched it now asserts 
 its budget rather than which one.
 
 **Three routes to those slots were tried and refuted**, so a later attempt need not repeat them:
-evaluating the pair's own items changed no answer; evaluating the chain's operation-bearing producer
+evaluating the expr's own items changed no answer; evaluating the chain's operation-bearing producer
 changed no answer; and unifying the slot with the chain's value-bearing element is **harmful** — it turned
 five previously correct programs into `expected Type, found Int` and the four into nested `raw[?a, …]`
 types. The type application's post-processing is not where the repair belongs.
@@ -1369,7 +1369,7 @@ types. The type application's post-processing is not where the repair belongs.
 origin carries an operation while it does not fires **forty-six times** in `g3` and **zero times** in `m4`,
 matching `node_apply` publishing a clone into the remap before assigning its operation. Completing those
 clones was tried and is **not** the repair either: copying the operation from the origin chain produces
-nested `raw[raw[…]]` types, because an apply's value is a pair while a type slot needs one element of it.
+nested `raw[raw[…]]` types, because an apply's value is an expr while a type slot needs one element of it.
 The hole is recorded here as a fact about the engine, not as the cause of this defect — the type slot is
 filled by the application above, not by completing those clones.
 
@@ -1378,7 +1378,7 @@ filled by the application above, not by completing those clones.
 | **A. Run the pass without pinning** — evaluate the return for its checks but mark what it computes unpinnable, so the generation it mints cannot be copied into the run | the pinning rule the pass relies on ("the deep pass pins what the clone copies") | keeps the pass's stated purpose, the narrowest change, and the failing programs keep their checks | touches the pinning invariant, which other notes rely on; needs a rule for *which* results are unpinnable and a reason that is not "this shape" |
 | **B. Give the pass a check-only mode** — evaluate the body for its asserts and discard everything else | the pass's contract at its call site (`checker.rs:557`) | matches the comment's stated purpose exactly ("its checks fire even unapplied"); no lowlevel change | the largest change to the checker's side; a body that must be *evaluated* to fire its checks still runs the call, so the fix is about what is *kept*, not about what runs |
 | **C. Reach the pinned generation from the run** — when the call binds, let the value also reach the clone the pass pinned | `node_apply`'s binding / the class machinery | no checker change; it is what already happens in the `h1`/`k4` contrast, so it generalises an existing path | the broadest effect on sharing: it makes two generations of one template see one value, which is exactly the kind of merge the earlier `function-unify` repair had to be careful about |
-| **D. Give an apply-bodied function a return pair of its own** — so the pass evaluates a pair rather than the apply | `check_lam`'s wiring of `r#return` | removes the antecedent entirely; the pass then cannot run the body | moves what every call of such a function reads, and is the candidate §4 examined first; it changes shape for programs that answer correctly today |
+| **D. Give an apply-bodied function a return expr of its own** — so the pass evaluates an expr rather than the apply | `check_lam`'s wiring of `r#return` | removes the antecedent entirely; the pass then cannot run the body | moves what every call of such a function reads, and is the candidate §4 examined first; it changes shape for programs that answer correctly today |
 
 Option **A** is the narrowest and the one whose acceptance test the investigation has already built; **D**
 is the only one that removes the antecedent instead of compensating for it. If a repair is wanted, the
@@ -1487,9 +1487,9 @@ under `[dev-dependencies]` — its own manifest comment says "so no library half
 it" — so they cannot reach a production path, and `class_members_with_values` sits in the library but its
 only caller anywhere is that probe surface (`probe.rs:194`). The repair is two lowlevel edits: every apply
 applies **both** slots, the type side for a concrete callee included, and the type application reads the
-instantiated return's pair **after** evaluating that clone. Measured over the corpus: all twenty-two
+instantiated return's expr **after** evaluating that clone. Measured over the corpus: all twenty-two
 failing programs now answer their correct value — eighteen of them fully, four (`b7`, `g2`, `g3`, `h5`)
-with an undecided pair type and `w5` with an undecided scalar type — and **no other program's answer
+with an undecided expr type and `w5` with an undecided scalar type — and **no other program's answer
 moved**: twenty-two of four hundred and twenty-nine answered differently, every one of them a program
 that previously answered `none`.
 

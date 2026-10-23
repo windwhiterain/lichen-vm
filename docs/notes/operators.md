@@ -76,7 +76,7 @@ parsed inside the existing unary level (§3), and each carries its class to a
 `TypeOperator` — a `KernelBin` variant for `max`/`min`, the target-neutral
 `KernelInstr::Exp` for the transcendental, and the target-neutral
 `KernelInstr::Conv { from, to }` for a crossing, because a stack machine cannot
-tell the two directions apart from its operand, so the IR carries the pair and
+tell the two directions apart from its operand, so the IR carries the expr and
 each backend answers it alone (§7). One AST form carries all five because the
 arity is the operator's own: a one-operand keyword takes an application
 (`int2float f x` converts `f x`), a two-operand one takes atoms (`max a b` is the

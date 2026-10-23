@@ -2,7 +2,7 @@
   order = "16"
   compute = import "compute.lichen"
   doc = "SwiGLU's gate half: `y[i] = silu(g[i]) * u[i]`, where `silu(x) = x / (1 + exp(-x))`.
-  It is two kernels because the surface fuses a **pair**, and one kernel would have claimed the
+  It is two kernels because the surface fuses a **expr**, and one kernel would have claimed the
   whole of `silu(g) * u` and fused with nothing. The split puts the quotient in the producer and
   leaves a plain product to the consumer, which is also where a reader looking for the operator
   looks first. `g = 0, 1, -1, 2` and `u = 3, 1, 0.5, 4`, so lane 0 is `0 / (1 + exp(0)) = 0`

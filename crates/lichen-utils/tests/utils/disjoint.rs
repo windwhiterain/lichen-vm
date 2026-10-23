@@ -50,8 +50,8 @@ fn make_set_initializes_singleton() {
 fn find_returns_representative_and_compresses_path() {
     let mut nodes = SlotMap::with_key();
     let ids: Vec<_> = (0..5).map(|_| add(&mut nodes)).collect();
-    for pair in ids.windows(2) {
-        link(&mut nodes, pair[1], pair[0]); // 0 <- 1 <- 2 <- 3 <- 4
+    for expr in ids.windows(2) {
+        link(&mut nodes, expr[1], expr[0]); // 0 <- 1 <- 2 <- 3 <- 4
     }
 
     let root = disjoint::find(&mut nodes, *ids.last().unwrap());
@@ -69,8 +69,8 @@ fn find_is_stack_safe_on_deep_chains() {
     for _ in 0..100_000 {
         chain.push(add(&mut nodes));
     }
-    for pair in chain.windows(2) {
-        link(&mut nodes, pair[1], pair[0]);
+    for expr in chain.windows(2) {
+        link(&mut nodes, expr[1], expr[0]);
     }
 
     let root = disjoint::find(&mut nodes, *chain.last().unwrap());
@@ -139,11 +139,11 @@ fn members_visits_each_node_exactly_once() {
     let mut reps = ids.clone();
     while reps.len() > 1 {
         let mut next = Vec::new();
-        for pair in reps.chunks(2) {
-            let rep = if pair.len() == 2 {
-                disjoint::union(&mut nodes, pair[0], pair[1])
+        for expr in reps.chunks(2) {
+            let rep = if expr.len() == 2 {
+                disjoint::union(&mut nodes, expr[0], expr[1])
             } else {
-                pair[0]
+                expr[0]
             };
             next.push(rep);
         }

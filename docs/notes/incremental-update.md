@@ -207,7 +207,7 @@ of §8 is the item that has to be settled before that changes.
 The boundary is the *lambda*, not nesting: a mark in a **block** is solved (it has no
 free variable) and is retained at its nested path, exactly like a top-level one —
 `@cache a = { @cache i = 1 + 2; i + 4 }` retains two cells and reads both back on an edit
-outside them. A mark in a **lambda** body is a template, so its pair is not solved and
+outside them. A mark in a **lambda** body is a template, so its expr is not solved and
 nothing is retained.
 
 ## 3. Retention: the `@cache` mark
@@ -231,7 +231,7 @@ name was available; nothing about the mechanism below changed with the spelling,
 token kind (`TokenKind::KwCache`) is the same one the parser always read.
 
 It is deliberately **not an attribute**: an attribute's slot is a *runtime* value — the
-annotation's own `[value, type]` term pair ([attributes](attributes.md)) — while this
+annotation's own `[value, type]` term expr ([attributes](attributes.md)) — while this
 mark is static and identity-selecting. A `@cache` mark must be visible at lowering, before
 any node exists, which is what a keyword is and what a slot is not.
 
@@ -260,7 +260,7 @@ the mark would vanish in the statement → field conversion.
 
 ### 3.3 What a cell holds, and what it costs
 
-A cell's value is a `[value, type]` pair; freezing turns a solved node set into a static
+A cell's value is a `[value, type]` expr; freezing turns a solved node set into a static
 artifact *and* hands back the `NodeId → LocalNodeId` map, so a cell's frozen reference is
 a `StaticNodeId` into that artifact. A later build **reuses** a clean cell by lowering it
 to `ExprKind::Static { export }` instead of compiling its body — the node the front end
@@ -352,7 +352,7 @@ read graph.
 **Two limitations, recorded rather than hidden:**
 
 - a marked binding whose value spells an **annotation** is not eligible (a static read
-  materializes a two-wide pair, and an annotation makes the source's pair wider, so it
+  materializes a two-wide expr, and an annotation makes the source's expr wider, so it
   would be read back at the wrong arity) — it is compiled and re-frozen as an ordinary
   binding;
 - a **`Parameterized`** cell is not retained (it has no answer to keep): the cell is left
@@ -595,7 +595,7 @@ one registry. That has three consequences:
 **The report carries what the editor reads.** `SessionReport` carries the token stream,
 the resolved AST and the build's `ExprId → span` index, because a caller that had to
 re-lex or re-parse to get them would not be incremental at all. The span index is retained
-across a reuse, and moved through the edit: a rendered diagnostic is a `(line, col)` pair
+across a reuse, and moved through the edit: a rendered diagnostic is a `(line, col)` expr
 and the content key is span-free, so an edit that moves text without changing the resolved
 structure would otherwise leave the cached spans describing the old file. A position the
 edit replaced outright — a check diagnostic pointing into the text it rewrote — has no
@@ -683,7 +683,7 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
 - **A shared payload is what makes one artifact reference another**, and a scalar is not
   (§6.3).
 - **Two artifacts that reference each other are never freed.** `evict` refuses both, and
-  `evict_unreachable`'s passes stop making progress, so the pair stays pending forever.
+  `evict_unreachable`'s passes stop making progress, so the expr stays pending forever.
   The honest answer for a cycle, but it is a leak.
 - **A cell is read back by *skipping the body*.** Its lowering, its check and its
   evaluation all do not happen, so a cell frozen from a build that failed *carries that

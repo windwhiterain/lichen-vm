@@ -1,4 +1,4 @@
-//! Probe: argmax as three single-class folds, with no pair accumulator.
+//! Probe: argmax as three single-class folds, with no expr accumulator.
 //!
 //! # Invariant
 //!

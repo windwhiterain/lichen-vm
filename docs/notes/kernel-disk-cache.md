@@ -108,7 +108,7 @@ Three, all `Relaxed` atomics beside one another:
 ## The three runs
 
 `kernel_disk_cache_probe <cold|warm|heal|reverse>` against one fixed directory,
-each evaluating the same two programs (a cross-calling kernel pair, and a second
+each evaluating the same two programs (a cross-calling kernel expr, and a second
 root) twice apiece:
 
 | run | misses | disk hits | disk writes | values |

@@ -171,7 +171,7 @@ The folded body is four instructions and their negations:
 ```
 
 **Measured: the substitution is a two-word surcharge, not a saving, and it needs a negation the
-emitter does not emit.** The two `OpExtInst Fma` a pair replaces cost **8 words each**, the same
+emitter does not emit.** The two `OpExtInst Fma` an expr replaces cost **8 words each**, the same
 as the `OpFMul` + `OpFSub` (**4 + 4**) they replace, so **the arithmetic is free**; the import is
 **6 words** and each `OpFNegate` is **4**. Against those, the four dead multiplies and their
 decorations come back. The net is **482 → 484**. **This is not the instruction count an emitter

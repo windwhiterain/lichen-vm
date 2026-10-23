@@ -208,9 +208,9 @@ match**, and a third copy of the same width rule.
 | `Int` | emitted | emitted | emitted | emitted |
 | `Float` | emitted | **never emitted** | emitted | emitted |
 
-Both arms are now **one shape with no `match` at all**: the float pair is class-independent
+Both arms are now **one shape with no `match` at all**: the float expr is class-independent
 (`OpTypeFloat 32` is declared in every module, §4's M1–M3 change nothing about capabilities), and
-the integer pair is written at the width `Ids::integer` names through one new helper,
+the integer expr is written at the width `Ids::integer` names through one new helper,
 `Ids::integer_constant`. `Literals::get` spelled that width a third time and now calls the same
 helper, so a pool constant and a literal cannot be written at different widths again. **The
 sampler was not special-cased**: the four constants are declared unconditionally, which §3's M5

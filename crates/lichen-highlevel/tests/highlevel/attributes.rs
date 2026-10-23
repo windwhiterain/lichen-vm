@@ -87,16 +87,16 @@ fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
     let program = annotated_int();
     let annotation = program.root;
     let build = Checker::<TaggedProgram>::build(program.ir);
-    let pair = build.state[annotation]
+    let expr = build.state[annotation]
         .term
-        .expect("the annotation compiled to a pair");
-    // SAFETY: `pair` is a live node of the build under test, whose block has
+        .expect("the annotation compiled to an expr");
+    // SAFETY: `expr` is a live node of the build under test, whose block has
     // not been dropped.
-    let items = unsafe { build.module.array_items(pair) }.expect("the pair is an array");
+    let items = unsafe { build.module.array_items(expr) }.expect("the expr is an array");
     assert_eq!(
         items.len(),
         3,
-        "the pair keeps the schema's `[value, type, attribute]` arity"
+        "the expr keeps the schema's `[value, type, attribute]` arity"
     );
 }
 

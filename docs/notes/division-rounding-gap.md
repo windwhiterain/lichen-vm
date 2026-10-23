@@ -16,7 +16,7 @@
 > claims of theirs this measurement contradicts, each in the note's own words with its history kept.
 >
 > **The one-sentence result: a device does not divide, it multiplies by a reciprocal, and the
-> mover rule is an identity rather than a threshold.** For **every** `(a, b)` pair measured on
+> mover rule is an identity rather than a threshold.** For **every** `(a, b)` expr measured on
 > **both** vendors there is an `f32` `r` with `a · r` **exactly** equal to the device's answer, and
 > for every divisor of a 64-point grid that `r` is **unique**. The lanes that move are the lanes
 > where `a · r` and the correctly rounded quotient disagree, and the two vendors' `r` are not the

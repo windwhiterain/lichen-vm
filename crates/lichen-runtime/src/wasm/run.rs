@@ -17,7 +17,7 @@ use crate::module_cache::cached_module;
 /// # Invariant
 /// wasm has no 16-bit float, so a bf16 takes the `F32` lane the assembler
 /// declares for it: the pattern is the half's own, and a module carrying one
-/// cannot link the host's import pair.
+/// cannot link the host's import expr.
 pub fn to_wasmi(class: ScalarClass, bits: i64) -> wasmi::Val {
     match class {
         ScalarClass::Int => wasmi::Val::I64(bits),

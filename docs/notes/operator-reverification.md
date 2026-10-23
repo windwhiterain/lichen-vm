@@ -77,7 +77,7 @@ the undecorated path. The after-column is this note, measured on the RTX 3060 an
 | | the example's own four elements | 3/4, worst **1** | **3/4, worst 1** | **4/4, worst 0** |
 | **`rope`** | the example's own eight | 6/8, worst **3** | **6/8, worst 1**, abs `4.77e-7` | **7/8, worst 1** |
 | | 512 lanes, 256 angles over `[−8, 8)` | *no baseline* | **512/512, worst 0** | **512/512, worst 0** |
-| **`softmax`** | gathered divisor, 256 pairs | 170/256, worst **118** | **178/256, worst 1** — see §3 | **158/256, worst 1** — see §3 |
+| **`softmax`** | gathered divisor, 256 exprs | 170/256, worst **118** | **178/256, worst 1** — see §3 | **158/256, worst 1** — see §3 |
 | | the same grid, exponents shifted by 16 | *no baseline* | **177/256, worst 1**, abs `2.5e-1` | **170/256, worst 1**, abs `2.5e-1` |
 | | the real two-kernel body, twelve rows | 37/48, worst 1 | **38/48, worst 1**, abs `5.96e-8` | **38/48, worst 1**, abs `5.96e-8` |
 | | the example's own four elements | 4/4, worst 0 | **4/4, worst 0** | **4/4, worst 0** |
@@ -161,7 +161,7 @@ with the bound it is stated at still the right one.**
 before figure splits into 77 movers at 1 ulp and 9 at the `exp`'s tail; after the fix the tail is
 gone and what is left is the division's own class.
 
-| `exp (x[i]) / total[i]`, 256 pairs | before, RTX 3060 | after, RTX 3060 | after, Iris Xe |
+| `exp (x[i]) / total[i]`, 256 exprs | before, RTX 3060 | after, RTX 3060 | after, Iris Xe |
 |---|---|---|---|
 | the note's grid, exponents `−16 + m/16` | **170/256**, worst **118** | **178/256**, worst **1** | **158/256**, worst **1** |
 | — of whose movers printed inexactly | — | **46 of 78** | **51 of 98** |
@@ -217,7 +217,7 @@ fn a_spliced_sin_is_the_definition_the_cpu_runs() {
     println!("ran on {}", context.device_name());
 }
 
-/// `cos` is asked over the same arguments, so the pair reads beside each other.
+/// `cos` is asked over the same arguments, so the expr reads beside each other.
 #[test]
 fn a_spliced_cos_is_the_definition_the_cpu_runs() {
     let Some(context) = common::context("a_spliced_cos_is_the_definition_the_cpu_runs") else {
@@ -257,7 +257,7 @@ fn a_spliced_sin_is_the_definition_the_cpu_runs() {
     println!("ran on {}", context.device_name());
 }
 
-/// `cos` over the same arguments, so the pair reads beside them.
+/// `cos` over the same arguments, so the expr reads beside them.
 /// Bound was 6; same change and same note.
 #[test]
 fn a_spliced_cos_is_the_definition_the_cpu_runs() {

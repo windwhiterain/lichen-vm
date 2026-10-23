@@ -360,7 +360,7 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
   the window.**  Two rules, and they interact:
   - a **clone's spans are stale**.  The splice clones the untouched statements
     around the window, and a clone's bytes are unchanged but its *position* is
-    not — a `Span` is a `(line, col)` pair, so an edit that adds or removes a
+    not — a `Span` is a `(line, col)` expr, so an edit that adds or removes a
     **line** moves every statement after it.  A diagnostic in a cloned statement
     then renders on the wrong line.  `lichen-language`'s `spans` module walks
     the clone and rewrites every span — and a recovered error's byte range —

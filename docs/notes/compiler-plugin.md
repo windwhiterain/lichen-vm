@@ -53,7 +53,7 @@ enum_ext! {
 }
 ```
 
-`enum_ext!` emits the enum plus, per extension, the `From<Ext>` and `AsEnum<Ext>` pair
+`enum_ext!` emits the enum plus, per extension, the `From<Ext>` and `AsEnum<Ext>` expr
 the `Program` contract requires. The effect is that a value or operator union is a
 **flat union** with no `Ext` wrapper and no nesting — an extension is one variant deep.
 
@@ -100,21 +100,21 @@ pub struct NativeApply { pub value: NodeId, pub decided: bool }
   nodes. Its `NativeApply` answers with the expression's value node and whether that is a
   decided value or a computation the runtime reads.
 - `Ctx` is the checker's encoding surface: `fresh` (a new undecided cell), `array_node`,
-  `op_node`, `pair`, `kind_expr`, `universe`, the marker nodes, and `check_unify(_relaxed)`.
+  `op_node`, `expr`, `kind_expr`, `universe`, the marker nodes, and `check_unify(_relaxed)`.
 - `Ctx` is the encode/parse boundary: the highlevel owns the `[value, type]` grammar, and an
   extension expresses *content* through these semantic encoders rather than hand-assembling
-  lowlevel nodes. Each encoder builds a well-formed structure by construction — a `Ctx::pair`
+  lowlevel nodes. Each encoder builds a well-formed structure by construction — a `Ctx::expr`
   is always `[value, type]`, a `Ctx::kind_expr` always `[marker, Type]` — and the active block
   is managed internally, so an extension can never build into the wrong block. The one
   deliberate exception is the lowlevel-only constructs a native operator genuinely needs — a
   fresh cell, an op node, an array shape; those are the *shape* of the grammar, not a bypass.
 - `Ctx::arrow` builds `[[domain, codomain], [FunctionType, Type]]` — the single spelling of
   the arrow encoding — but does **not** register it in the checker's `arrows` set. That set
-  drives the type *printer* (it is what renders a pair as `T -> U` instead of `tuple{T, T}`), so
+  drives the type *printer* (it is what renders an expr as `T -> U` instead of `tuple{T, T}`), so
   only a genuinely source-level arrow belongs in it: an arrow built as a unification *pattern*,
   such as the function-ness guard's `[[?d, ?c], [FunctionType, K]]`, must stay out, and the
   caller that prints inserts it.
-- The call's `[value, type]` pair is the checker's to build, never the builder's: `build`
+- The call's `[value, type]` expr is the checker's to build, never the builder's: `build`
   returns the value node it emitted. A builder that assembled a term by hand would be a
   second source of truth for the encoding.
 - `NativeOp::build` need not state a type at all: `SortOp` emits a bare `Sort` operator node
@@ -411,7 +411,7 @@ The contraction is that the core is **ignorant**: the lowlevel knows only the sh
 of "a `$name(args)` call that should delegate to your registry", and a plugin supplies the
 meaning. That is what makes the system extensible without a new kind system: a kernel is
 typed like a function, a plugin's value is one variant of the value union, and the checker
-adopts whatever pair the plugin returns.
+adopts whatever expr the plugin returns.
 
 `ValueType` is the value→type contract a value vocabulary must satisfy to flow through the
 checker: the type-constant markers it installs, the value→type mapping for constants, and
@@ -480,7 +480,7 @@ bodies over `From<TypeValue>`.
 ### Per-package metadata
 
 - `HighPackageMeta` is the per-package metadata slot: the package layer stores the single
-  exported `[value, type]` pair ref and the directly-exposed `(name, export)` bindings there,
+  exported `[value, type]` expr ref and the directly-exposed `(name, export)` bindings there,
   while the lowlevel's `Package` only carries it as an opaque `Default` slot, which keeps
   highlevel concepts out of the lowlevel registry machinery. The direct bindings are recorded
   so a *later* store over the same shared registry can rebuild the handle instead of

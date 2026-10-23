@@ -119,8 +119,8 @@ fn applied_equality_assert(arg: usize) -> Module<TestProgram> {
         let operands = array_node(m, block, &[param, one], None);
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
         m.add_assert(eq);
-        let pair = array_node(m, block, &[eq, one], None);
-        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(pair)).unwrap()));
+        let expr = array_node(m, block, &[eq, one], None);
+        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(expr)).unwrap()));
     });
     let arg = u128_node(&mut m, root, arg as u128);
     let call = call_node(&mut m, root, func_node, arg);
@@ -163,8 +163,8 @@ fn never_called_function_assert_stays_pending() {
         let operands = array_node(m, block, &[param, one], None);
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
         m.add_assert(eq);
-        let pair = array_node(m, block, &[eq, one], None);
-        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(pair)).unwrap()));
+        let expr = array_node(m, block, &[eq, one], None);
+        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(expr)).unwrap()));
     });
     // The function value is proven concrete (referenced, never applied).
     m.evaluate_node_deep(func_node, None);

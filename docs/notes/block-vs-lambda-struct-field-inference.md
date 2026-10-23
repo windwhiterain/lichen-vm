@@ -45,26 +45,26 @@ same shape.
 
 ## 2. What a reader of the instance looks at
 
-A struct type expression compiles to the pair `[shape, kind]`, and the shape is
-the array of **field types**. A field type written `_` is a fresh pair
+A struct type expression compiles to the expr `[shape, kind]`, and the shape is
+the array of **field types**. A field type written `_` is a fresh expr
 `[value cell, kind cell]` (the `Placeholder` arm).
 
 The printer reads a field's type through `type_printer`'s `elements()`: a
 two-element array whose second slot is the universe renders its **first** slot,
 and anything else falls through to `raw[...]`. So what decides `Type` versus
-`raw` is the field type pair's **value cell** — and whether the class it belongs
+`raw` is the field type expr's **value cell** — and whether the class it belongs
 to has a value at print time.
 
 ## 3. What was measured
 
 **The template is identical in both programs.** `K`'s body `struct{.x _}` builds
-the same field pair (a value cell and a kind cell, each a singleton class) in the
+the same field expr (a value cell and a kind cell, each a singleton class) in the
 block and in the lambda, so the template cannot be where the two differ.
 
 **The only structural difference is what else is unified with `T`.** In the
 lambda, the apply's parameter unify reaches `T`'s chain from the **type** side,
 and the field's value cell is a different class that nothing writes. In the
-block, `1 : T` is an ascription, and the ascription's unify descends the pair
+block, `1 : T` is an ascription, and the ascription's unify descends the expr
 elementwise and writes into **`T`'s term's value slot** — the very cell the
 field's value cell belongs to. That is the block's whole advantage: a write into
 the value slot, at check time. The lambda has no such write anywhere.
@@ -159,7 +159,7 @@ The write sequence, in order:
    clone's cached value is dropped (it is undecided), so it recomputes: the
    second batch. From here on, no unify in the run ever mentions it.
 3. **The parameter check.** The descent into `x`'s type-cell clone — which also
-   carries the committed array — unifies the argument's type pair against it and
+   carries the committed array — unifies the argument's type expr against it and
    binds **batch 1**. The right value arrives on the wrong generation: the result
    type was already wired to the recomputation.
 4. The printer reads the second batch's empty field cell and falls through to
@@ -174,14 +174,14 @@ and writes `Type` into the field's value cell immediately.
 **The constraint survives per call exactly when its unify partner is a template
 member.** That is why the same body with no `K` at all works:
 `j = x => {T = _; x: T; struct{.x _}(.x T) }; j 1` prints `struct{.x Type}`,
-because the field pair is a member of `j`'s own template and the topology rebuild
+because the field expr is a member of `j`'s own template and the topology rebuild
 re-establishes the check-time merge among the per-call clones.
 
 ## 8. The chosen direction: make the instantiate a per-call computation
 
 A struct instantiation whose field check is structurally valid compiles its
 **term to an operation node** (a `LowOperator::Instantiate`) instead of the plain
-constant pair the checker builds today. The operator's evaluation forces the
+constant expr the checker builds today. The operator's evaluation forces the
 callee, reads the struct shape out of the callee's fresh value, and **unifies the
 shape against the argument's type-slot array** — the same pairing the check-time
 `check_unify(value_shape, field_list)` already establishes, now re-established
@@ -204,15 +204,15 @@ arguments' type slots in definition order. Evaluation mirrors the `Apply` arm:
 evaluate the operand array and propagate `Parameterized`/`Error` markers exactly
 as `Apply`/`Index` do (**never** answer `Error` for an undecided callee — an
 `Error` caches as a decided value and certifies the node concrete); evaluate slot
-0 and read element 0 of its value pair; unify that shape against the argument's
-type slots; answer the pair `[field values, struct type]` through the write path
-so the node *is* the instance pair the checker used to build.
+0 and read element 0 of its value expr; unify that shape against the argument's
+type slots; answer the expr `[field values, struct type]` through the write path
+so the node *is* the instance expr the checker used to build.
 
 **The checker change.** In `check_instantiate`, keep everything up to and
 including the `check_unify(value_shape, field_list)` call; when `valid`, build the
-term as the operation node instead of the plain pair, and leave `state[e].ty` and
+term as the operation node instead of the plain expr, and leave `state[e].ty` and
 `state[e].val` as they are (the expression's type is the struct type itself).
-When `!valid`, keep today's plain pair: a mismatch was already recorded and there
+When `!valid`, keep today's plain expr: a mismatch was already recorded and there
 is no constraint to enforce per call.
 
 **Pitfalls, all measured.** The constraint must be on the read path — the

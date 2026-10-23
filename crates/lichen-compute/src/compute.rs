@@ -13,7 +13,7 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
 use lichen_highlevel::shape;
-use lichen_highlevel::shape::{low_type_of_slot, pair_type, pair_value};
+use lichen_highlevel::shape::{expr_type, expr_value, low_type_of_slot};
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
     KernelMark, KernelRoles, KernelShape, LaneHeight, LaneWidth, ResidentId, ScalarClass,
@@ -871,9 +871,9 @@ pub enum ComputeOperator {
     /// `[cfg]` — the lane's **column**, `i % cols`, over the launch's second extent.
     ///
     /// # Invariant
-    /// [`Self::Row`]'s, and the same read: the two differ in one instruction, and a pair
+    /// [`Self::Row`]'s, and the same read: the two differ in one instruction, and an expr
     /// would compute the half the body did not ask for — the kernel IR has no instruction
-    /// that leaves two values, so a pair would be a change to the instruction set instead.
+    /// that leaves two values, so an expr would be a change to the instruction set instead.
     Col,
     /// `[buffer, index]` — read one buffer element → `?b`.
     Read,
@@ -2051,7 +2051,7 @@ where
 /// class — a field whose type is undecided keeps the integer default.
 fn scalar_leaf_classes<P>(
     module: &mut Module<P>,
-    cfg_pair: NodeId,
+    cfg_expr: NodeId,
     roles: &KernelRoles,
 ) -> Result<Vec<ScalarClass>, String>
 where
@@ -2059,7 +2059,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let ty = pair_type(module, cfg_pair);
+    let ty = expr_type(module, cfg_expr);
     // A scalar role is a leaf at its own path: `[field]`, or `[in, g, s]`.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
         ty.and_then(|slot| shape::field_type_at(module, slot, path))
@@ -2122,13 +2122,13 @@ impl From<&str> for RoleUnread {
 /// older `cfg = (n, (buffers…))` shape, or an annotation still a cell). A parameter
 /// that *is* a struct term and names a field the ABI cannot hold is `Refusal`, so a
 /// caller cannot mistake a mistake for a "not yet" and read the struct as the old shape.
-fn parallel_roles<P>(module: &mut Module<P>, cfg_pair: NodeId) -> Result<KernelRoles, RoleUnread>
+fn parallel_roles<P>(module: &mut Module<P>, cfg_expr: NodeId) -> Result<KernelRoles, RoleUnread>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(type_slot) = pair_type(module, cfg_pair) else {
+    let Some(type_slot) = expr_type(module, cfg_expr) else {
         return Err(RoleUnread::Undecided);
     };
     // Undecided is not a mistake: a kernel compiled before its annotation
@@ -2148,7 +2148,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(type_slot) = pair_type(module, return_node) else {
+    let Some(type_slot) = expr_type(module, return_node) else {
         return Err(RoleUnread::Undecided);
     };
     roles_from_type(module, type_slot, RoleSource::Codomain)
@@ -2364,13 +2364,13 @@ fn role_refusal(path: &[usize], what: &str) -> RoleUnread {
 ///
 /// # Invariant
 /// A scalar `jit` kernel has one slot; a parallel kernel has the config slot then
-/// the index slot. Each slot carries the `[value, type]` pair, the value node, its
+/// the index slot. Each slot carries the `[value, type]` expr, the value node, its
 /// flattened domain shape, and the wasm local base offset.
 #[derive(Clone)]
 struct ParamSlot {
-    /// The `[value, type]` parameter pair node.
-    pair: NodeId,
-    /// The parameter's value node (`Index(pair, 0)`), where the shape marker is.
+    /// The `[value, type]` parameter expr node.
+    expr: NodeId,
+    /// The parameter's value node (`Index(expr, 0)`), where the shape marker is.
     value: NodeId,
     /// The flattened domain shape this slot reads as.
     shape: LowShape,
@@ -2397,7 +2397,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
-        let Some(path) = param_path(module, slot.pair, node)? else {
+        let Some(path) = param_path(module, slot.expr, node)? else {
             continue;
         };
         // A struct parameter's scalars are addressed by the role table: the
@@ -2415,7 +2415,7 @@ where
     Ok(None)
 }
 
-/// Lower `[param_pair] → function.return` for the kernel-safe subset into a
+/// Lower `[param_expr] → function.return` for the kernel-safe subset into a
 /// [`KernelFragment`].
 ///
 /// # Invariant
@@ -2435,9 +2435,9 @@ where
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
     };
-    let param_pair = module.functions[fid].parameter;
+    let param_expr = module.functions[fid].parameter;
     let ret = module.functions[fid].r#return;
-    // A body's return is its `[value, type]` pair; the result is the pair's value.
+    // A body's return is its `[value, type]` expr; the result is the expr's value.
 
     // SAFETY: `ret` is a live node of `module`; nothing here drops a block.
     let ret_value = match unsafe { module.array_items(ret) } {
@@ -2446,11 +2446,11 @@ where
     };
     // The parameter's two cells, read once before the pass needs the module.
 
-    // SAFETY: `param_pair` is a live node of `module`; nothing here drops a block.
-    let Some(param_value) = pair_value(module, param_pair) else {
-        return Err("parameter is not a [value, type] pair".into());
+    // SAFETY: `param_expr` is a live node of `module`; nothing here drops a block.
+    let Some(param_value) = expr_value(module, param_expr) else {
+        return Err("parameter is not a [value, type] expr".into());
     };
-    let param_type = pair_type(module, param_pair);
+    let param_type = expr_type(module, param_expr);
 
     // The domain is a **type read** through the interface, not a class read.
     let domain = shape::kernel_parameter_domain(module, function);
@@ -2471,7 +2471,7 @@ where
     let type_classes =
         domain_type_classes(module, &[Some(AnyNodeId::Dynamic(param_value)), param_type]);
     let params = vec![ParamSlot {
-        pair: param_pair,
+        expr: param_expr,
         value: param_value,
         shape: param_shape.clone(),
         base: 0,
@@ -2577,7 +2577,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // Peel the `value_of` extraction first: asking it whether it is a tuple
-    // would answer for the pair it wraps.
+    // would answer for the expr it wraps.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
     // SAFETY: `value` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
@@ -2635,7 +2635,7 @@ where
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
     };
-    let cfg_pair = module.functions[fid].parameter;
+    let cfg_expr = module.functions[fid].parameter;
     let body = module.functions[fid].r#return;
     // The kernel's result is the body value — a `Write`, or a tuple of them.
     // It is read as values, so it must have run.
@@ -2650,14 +2650,14 @@ where
 
     // The role table is decoded from the parameter's type, whose shape the low
     // vocabulary reads as a tuple of its fields.
-    let mut roles = parallel_roles(module, cfg_pair)?;
+    let mut roles = parallel_roles(module, cfg_expr)?;
     // The parameter's output paths are its own (`docs/notes/kernel-buffer-declarations.md`).
     let mut parameter_roles = roles.clone();
     let type_classes = domain_type_classes(
         module,
         &[
-            pair_value(module, cfg_pair).map(AnyNodeId::Dynamic),
-            pair_type(module, cfg_pair),
+            expr_value(module, cfg_expr).map(AnyNodeId::Dynamic),
+            expr_type(module, cfg_expr),
         ],
     );
     let type_classes_ref = &type_classes;
@@ -2675,10 +2675,10 @@ where
 
     // The slot is seeded with the ABI's signature: the parameter's leaves then
     // the index, each leaf classed by its field.
-    let cfg_value = pair_value(module, cfg_pair)
-        .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
+    let cfg_value = expr_value(module, cfg_expr)
+        .ok_or_else(|| "parallel cfg parameter is not a [value, type] expr".to_string())?;
     // Each scalar leaf's class is the parameter field's.
-    let scalar_classes = scalar_leaf_classes(module, cfg_pair, &roles)?;
+    let scalar_classes = scalar_leaf_classes(module, cfg_expr, &roles)?;
     // The body's operand classes are the interface's business.
     shape::prepare_template_low_types(module, fid);
     // The domain is the **flattened scalar leaves**, not the struct's low shape
@@ -2692,7 +2692,7 @@ where
     );
     let cfg_shape = kernel_domain(Some(cfg_shape), DomainStatement::Shape)?;
     let params = vec![ParamSlot {
-        pair: cfg_pair,
+        expr: cfg_expr,
         value: cfg_value,
         shape: cfg_shape,
         base: 0,
@@ -2812,7 +2812,7 @@ where
 {
     let mut node = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value(module, node))
+            .or_else(|| expr_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -2848,7 +2848,7 @@ where
 {
     let mut node = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value(module, node))
+            .or_else(|| expr_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -2878,7 +2878,7 @@ where
 /// # Invariant
 /// A position reaches the emitter wrapped: the slot-read destructuring leaves a
 /// constant `Index` over a materialized array, and that element is reached
-/// through the `[value, type]` pair or a `value_of` extraction. All three are
+/// through the `[value, type]` expr or a `value_of` extraction. All three are
 /// walked here, before the instructions are emitted. Bounded, not recursive: a
 /// deeper chain is not a wrapper this walk understands.
 fn write_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
@@ -2889,7 +2889,7 @@ where
 {
     let mut node = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value(module, node))
+            .or_else(|| expr_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -2963,7 +2963,7 @@ where
     ) {
         return None;
     }
-    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    let (target, index) = operand_expr(module, operation.operand).ok()?;
     let k = usize_value(module, index)?;
     let target = target.dynamic()?;
     let array_value = value_of_node(module, target).or(Some(target))?;
@@ -2987,7 +2987,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // A `value_of` extraction still carries the pair's value: peel it before
+    // A `value_of` extraction still carries the expr's value: peel it before
     // asking whether the rest is a tuple.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
     // SAFETY: `value` is a live node of `module`; nothing in this crate calls
@@ -3550,7 +3550,7 @@ where
 /// The value position of a **slot**, or [`None`] for a node that is not one.
 ///
 /// # Invariant
-/// A compound's element is a full-width `[value, type, attributes]` pair; a bare array
+/// A compound's element is a full-width `[value, type, attributes]` expr; a bare array
 /// is a value of its own (`docs/notes/compound-element-slots.md`).
 fn slot_value_of<P>(module: &Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
 where
@@ -3832,7 +3832,7 @@ where
     {
         // The emission's own rule, read off the same operand array, so the two
         // cannot disagree.
-        let Ok((left, right)) = operand_pair(module, operation.operand) else {
+        let Ok((left, right)) = operand_expr(module, operation.operand) else {
             return node_class(module, node);
         };
         let operands = match (
@@ -3917,7 +3917,7 @@ where
 /// The node whose value or low type states a term's class.
 ///
 /// # Invariant
-/// The `[value, type]` pair an expression is, the extraction over one, and the
+/// The `[value, type]` expr an expression is, the extraction over one, and the
 /// element a constant selection picks — walked to the term that states the answer.
 /// It is the unwrap [`node_class`] makes at every emit site, named once so there
 /// are not two spellings of one walk.
@@ -3935,7 +3935,7 @@ where
     };
     let mut value = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value(module, node))
+            .or_else(|| expr_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -4077,7 +4077,7 @@ where
     };
     if let Some(roles) = &slot.roles {
         // The peeled node names the buffer; the wrapper's own projection chain does not.
-        let path = param_path(module, slot.pair, node)?;
+        let path = param_path(module, slot.expr, node)?;
         let Some(path) = path else {
             return Ok(None);
         };
@@ -4099,7 +4099,7 @@ where
     ) {
         return Ok(None);
     }
-    let Some((target, index)) = operand_pair(module, operation.operand).ok() else {
+    let Some((target, index)) = operand_expr(module, operation.operand).ok() else {
         return Ok(None);
     };
     let Some(k) = usize_value(module, index) else {
@@ -4117,10 +4117,10 @@ where
     ) {
         return Ok(None);
     }
-    let Some((tt, ti)) = operand_pair(module, target_op.operand).ok() else {
+    let Some((tt, ti)) = operand_expr(module, target_op.operand).ok() else {
         return Ok(None);
     };
-    // The body's cfg reads go through `Index(cfg_pair, 0)`: compare the two
+    // The body's cfg reads go through `Index(cfg_expr, 0)`: compare the two
     // slots by equality class, not node identity.
     let Some(tt) = tt.dynamic() else {
         return Ok(None);
@@ -4165,7 +4165,7 @@ where
         return Ok(None);
     };
     // The peeled node names the buffer; the wrapper's own projection chain does not.
-    let Some(path) = param_path(module, slot.pair, node)? else {
+    let Some(path) = param_path(module, slot.expr, node)? else {
         return Ok(None);
     };
     Ok(roles.output_pos(&path))
@@ -4228,7 +4228,7 @@ where
                     Some(LowOperator::Index)
                 ) =>
             {
-                operand_pair(module, op.operand).ok()
+                operand_expr(module, op.operand).ok()
             }
             _ => None,
         };
@@ -4276,12 +4276,12 @@ where
     }
 }
 
-/// A `[value, type]` pair's value half, or the node itself when it is not a pair.
-fn param_value_of<P>(module: &Module<P>, pair: NodeId) -> Result<NodeId, String>
+/// A `[value, type]` expr's value half, or the node itself when it is not an expr.
+fn param_value_of<P>(module: &Module<P>, expr: NodeId) -> Result<NodeId, String>
 where
     P: Program,
 {
-    Ok(pair_value(module, pair).unwrap_or(pair))
+    Ok(expr_value(module, expr).unwrap_or(expr))
 }
 
 /// The name a struct field read selects: the compile-time constant a named read
@@ -4311,7 +4311,7 @@ where
     // carrying the name as its selector.
     let key = match module.node_operation(selector) {
         Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
-            Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?.1,
+            Some(LowOperator::TableGet) => operand_expr(module, operation.operand)?.1,
             // A computed index is a conditional's selector, not a field read.
             _ => return Ok(None),
         },
@@ -4346,7 +4346,7 @@ enum IndexStep {
 /// runs on a concrete instantiation.
 pub(crate) fn param_path<P>(
     module: &Module<P>,
-    param_pair: NodeId,
+    param_expr: NodeId,
     node: NodeId,
 ) -> Result<Option<Vec<usize>>, String>
 where
@@ -4375,7 +4375,7 @@ where
         ) {
             return Ok(None);
         }
-        let Ok((target, selector)) = operand_pair(module, operation.operand) else {
+        let Ok((target, selector)) = operand_expr(module, operation.operand) else {
             return Ok(None);
         };
         // A frozen node is not a step of a read of *this* parameter: the chain a
@@ -4383,15 +4383,15 @@ where
         let Some(target_node) = target.dynamic() else {
             return Ok(None);
         };
-        if target == AnyNodeId::Dynamic(param_pair) {
-            // The pair's value half is the parameter itself, not a field, so the
+        if target == AnyNodeId::Dynamic(param_expr) {
+            // The expr's value half is the parameter itself, not a field, so the
             // peel contributes no step.
-            match pair_value(module, param_pair) {
+            match expr_value(module, param_expr) {
                 Some(value) => {
                     current = value;
                     continue;
                 }
-                // A pair with no value half has nothing inside to walk, and the
+                // An expr with no value half has nothing inside to walk, and the
                 // path so far is what the caller's read reached.
                 None => break,
             }
@@ -4415,7 +4415,7 @@ where
         }
         // The innermost read's target is the parameter's value; **the test is the equality
         // class**.
-        if module.class_root(target_node) == module.class_root(param_value_of(module, param_pair)?)
+        if module.class_root(target_node) == module.class_root(param_value_of(module, param_expr)?)
         {
             break;
         }
@@ -4435,13 +4435,13 @@ where
             (!deref && !(zero && odd)).then_some(step)
         })
         .collect();
-    resolve_steps(module, param_pair, &kept)
+    resolve_steps(module, param_expr, &kept)
 }
 
 /// Resolve a read's collected steps against the parameter's type, outermost first.
 fn resolve_steps<P>(
     module: &Module<P>,
-    param_pair: NodeId,
+    param_expr: NodeId,
     steps: &[IndexStep],
 ) -> Result<Option<Vec<usize>>, String>
 where
@@ -4449,7 +4449,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(type_slot) = pair_type(module, param_pair) else {
+    let Some(type_slot) = expr_type(module, param_expr) else {
         // A scalar parameter has no field list and a read of it is the value: the
         // empty path.
         return resolve_without_type(steps);
@@ -4508,7 +4508,7 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
     Ok(Some(path))
 }
 
-/// Follow a `value_of` extraction — `Index(pair, 0)` — to the pair's value slot.
+/// Follow a `value_of` extraction — `Index(expr, 0)` — to the expr's value slot.
 ///
 /// # Invariant
 /// The checker accesses most values through such an extraction, so the JIT must look
@@ -4527,13 +4527,13 @@ where
     ) {
         return None;
     }
-    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    let (target, index) = operand_expr(module, operation.operand).ok()?;
     if usize_value(module, index)? != 0 {
         return None;
     }
     // A frozen target is where this peel stops: only a value crosses.
     let target = target.dynamic()?;
-    // A concrete `[value, type]` pair value → its value slot (element 0).
+    // A concrete `[value, type]` expr value → its value slot (element 0).
     // SAFETY: `target` is a live node of `module`.
     if let Some(items) = unsafe { module.array_items(target) } {
         return dyn_node(items.first()?.node).ok();
@@ -4575,7 +4575,7 @@ where
     // A kernel struct `.native` read: `Index(struct, 0)`, the bare artifact.
     if let Some(operation) = module.node_operation(node)
         && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
-            && let Ok((target, index)) = operand_pair(module, operation.operand)
+            && let Ok((target, index)) = operand_expr(module, operation.operand)
             && usize_value(module, index) == Some(0)
             && let Some(target) = target.dynamic()
             // SAFETY: `target` is a live node of `module`.
@@ -4626,11 +4626,11 @@ where
     false
 }
 
-/// The value node behind a `[value, type]` pair stored as a concrete array value.
+/// The value node behind a `[value, type]` expr stored as a concrete array value.
 ///
 /// # Invariant
-/// The checker stores some argument values as such pairs, where [`value_of_node`]
-/// handles the `Index(pair, 0)` form; the JIT must look through to the value before
+/// The checker stores some argument values as such exprs, where [`value_of_node`]
+/// handles the `Index(expr, 0)` form; the JIT must look through to the value before
 /// emitting.
 /// Flatten a parameter index `path` to a wasm local index, using the domain
 /// `shape`.
@@ -5186,7 +5186,7 @@ where
 /// An operand may be a node of a frozen module: an apply of a static function leaves
 /// the callee's unchanged subterms as references into it, so reading an operand is
 /// not a question about which module it is in.
-fn operand_pair<P>(
+fn operand_expr<P>(
     module: &Module<P>,
     operand: Option<NodeId>,
 ) -> Result<(AnyNodeId, AnyNodeId), String>
@@ -5648,7 +5648,7 @@ where
                 }
             }
         }
-        parameter_slot = pair_type(module, parameter);
+        parameter_slot = expr_type(module, parameter);
     }
     // The ceiling a positional body's tuple is built at, and the number the
     // undecided-apply refusal names.
@@ -5736,7 +5736,7 @@ where
             root
         }
     };
-    // The argument is a pair: the value side is the placeholder tuple, the type
+    // The argument is an expr: the value side is the placeholder tuple, the type
     // side left undecided.
     let undecided = module.add_node(block, None, None);
     let argument = array_node::<P>(
@@ -5981,7 +5981,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut result = module.evaluate_node_deep(apply, Some(block));
-    // The apply forces the returned pair, not the value it carries
+    // The apply forces the returned expr, not the value it carries
     // (`docs/notes/graph-recording-rounds.md`).
     if let Some(value) = result.as_ref()
         && let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value)
@@ -6285,7 +6285,7 @@ where
                     .chain(std::iter::once(r#type))
                     .chain(std::iter::repeat_n(
                         module.add_node(block, None, Some(width)),
-                        lichen_lowlevel::PAIR_ATTR_BASE,
+                        lichen_lowlevel::EXPR_ATTR_BASE,
                     ))
                     .map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)))
                     .collect();
@@ -6390,11 +6390,11 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
     }
     // A fragment's result arity is at least one: the guard states that rather than
     // resting on the emitter.
-    let pairs: Vec<(ScalarClass, i64)> = args
+    let exprs: Vec<(ScalarClass, i64)> = args
         .iter()
         .map(|argument| (argument.class, argument.bits))
         .collect();
-    let bits = run_on_engine(id, || assemble_launch_set(id), class, results, &pairs)?;
+    let bits = run_on_engine(id, || assemble_launch_set(id), class, results, &exprs)?;
     Ok(bits
         .into_iter()
         .map(|bits| ScalarValue { class, bits })
@@ -7846,7 +7846,7 @@ where
     ) -> NativeApply {
         let shape = ctx.array_node(&[args[0].value, args[1].value]);
         let kind = ctx.kind_expr(ctx.buffer_marker_node());
-        let term = ctx.pair(shape, kind);
+        let term = ctx.expr(shape, kind);
         NativeApply {
             value: term,
             decided: true,

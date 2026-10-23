@@ -51,8 +51,8 @@
     the state tuple**, with the counter at slot zero — so the marker is where an undecided trip \
     count is given its type. **Without it the second declared entry would not be a fact about \
     the loop at all, only a `raw` cell**, and this file would have no observable length.\n\n\
-    **What bounds the loop, measured, and it is not the pair of constants the ladder records.** \
-    The checker's budget is a tuned pair — `apply_depth_limit = 500` and `apply_total_limit = \
+    **What bounds the loop, measured, and it is not the expr of constants the ladder records.** \
+    The checker's budget is a tuned expr — `apply_depth_limit = 500` and `apply_total_limit = \
     2_000` (`crates/lichen-highlevel/src/checker.rs:384-389`) — and both refusals are worded as \
     **non-termination** rather than as a stop condition that was not met. Four minimal recursions \
     with a buffers-derived guard that never fires, each its own program, at `dev@c2c04546`: with \

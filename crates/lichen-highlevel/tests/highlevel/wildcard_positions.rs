@@ -1,4 +1,4 @@
-//! Where a lambda's value positions stand: the parameter pair's own slot. See
+//! Where a lambda's value positions stand: the parameter expr's own slot. See
 //! docs/notes/lowlevel-vm.md.
 
 use lichen_highlevel::ir::BinOp;
@@ -23,8 +23,8 @@ fn applied_parameter() -> Probe<ProgramImpl> {
     Probe::build(w.finish(root))
 }
 
-/// The pair `node` and its own value slot, with the slot's value.
-fn pair_value<P>(module: &Module<P>, node: NodeId) -> (NodeId, Option<LowValue>)
+/// The expr `node` and its own value slot, with the slot's value.
+fn expr_value<P>(module: &Module<P>, node: NodeId) -> (NodeId, Option<LowValue>)
 where
     P: HighProgram,
     P::Value: ValueType,
@@ -33,7 +33,7 @@ where
         .node_value(AnyNodeId::Dynamic(node))
         .and_then(|v| v.as_enum())
     else {
-        panic!("node {node:?} is not a pair");
+        panic!("node {node:?} is not an expr");
     };
     // SAFETY: a live payload of the module under test.
     let slot = lichen_testkit::dyn_node(unsafe { array.items() }[0].node);
@@ -55,8 +55,8 @@ fn an_applied_parameter_still_computes() {
 #[test]
 fn every_parameter_owns_an_undecided_value_position() {
     let probe = applied_parameter();
-    let (n_slot, n_value) = pair_value(&probe.checked().module, probe.pair_of("n"));
-    let (x_slot, x_value) = pair_value(&probe.checked().module, probe.pair_of("x"));
+    let (n_slot, n_value) = expr_value(&probe.checked().module, probe.slot_of("n"));
+    let (x_slot, x_value) = expr_value(&probe.checked().module, probe.slot_of("x"));
     assert_eq!(
         n_value, None,
         "the outer parameter's value position is undecided, not a value"

@@ -159,8 +159,8 @@ a static template. That is the same answer such a table gave back when the lowle
 tracked user-facing conditions itself, so nothing regresses for a host that never had an
 entry.
 
-`materialize_static_signature` copies the parameter **pair**, not just its type slot,
-because the unify arm treats a signature like any other `[value, type, attrs…]` pair —
+`materialize_static_signature` copies the parameter **expr**, not just its type slot,
+because the unify arm treats a signature like any other `[value, type, attrs…]` expr —
 which is what gives a frozen function's signature the same attribute reach a dynamic one
 has, instead of a weaker rule that only ever sees types. This is not a corner case: the
 whole prelude is a frozen module, and its functions' type nodes carry a **static

@@ -8,7 +8,7 @@
 > The value match has a
 > `LowValue::Function` arm beside `Array`, so two functions unify by descending
 > `[parameter, return]` and the `function_type_function` recogniser is no longer
-> part of unification; a class pair met again on the descent now agrees instead of
+> part of unification; a class expr met again on the descent now agrees instead of
 > recording a conflict. The wildcard experiments (a lambda's value positions
 > holding `@any`) are **rejected and reverted**, with the measurements below.
 > One suite failure remains: the diagnostic-shape pin, which is a pin to move
@@ -47,7 +47,7 @@
 ## 1. The question
 
 A lambda's term **is** its type (`f : f`): `check_lam` writes the same `[func_node,
-pair]` shape for both. So applying a curried lambda to a variable inside another
+expr]` shape for both. So applying a curried lambda to a variable inside another
 lambda is refused by the value comparison, not by a type disagreement:
 
 ```lichen
@@ -68,7 +68,7 @@ operation over a parameter** it is not.
 | commit | change |
 |---|---|
 | `ba67cbe5` | `LowValue::Function` becomes an arm of the value match beside `Array`, descending `[parameter, return]`; the `function_type_function` gate, `unify_function_types` and the node-keyed `function_signature` are deleted |
-| `b0e6b761` | a class pair met again on the descent **agrees** (`path.contains` answers true), because a function type's slot 1 is its own `↺`; the pinned lowlevel contract moves from `..._record_an_error_instead_of_looping` to `..._unify_instead_of_looping` |
+| `b0e6b761` | a class expr met again on the descent **agrees** (`path.contains` answers true), because a function type's slot 1 is its own `↺`; the pinned lowlevel contract moves from `..._record_an_error_instead_of_looping` to `..._unify_instead_of_looping` |
 | `70397dd5` | `crates/lichen-highlevel/tests/highlevel/wildcard_positions.rs` and `crates/lichen-language/tests/language/prelude_reads.rs` |
 | `56b41d46`, `98b5b7bb`, `16a773db`, `f17e78c3` | the wildcard filters: `alias_read` skips a wildcard target (slot **or** class), the `Index` arm and `evaluate_node_body` answer undecided for one, the clone mints an undecided cell for a wildcard however it stands, and an apply that produced one answers undecided |
 
@@ -170,8 +170,8 @@ what made per-call freshness.
   - The inner apply computes and writes the minted generation:
     `WIRE node=78 applied=87 applied_slot0=Function(3) result_slot0=Function(3)`.
   - `unify_clone_groups` of that instantiation unifies two *clones*, and they are not
-    the same shape: `GROUP-PAIR first=106 value_items=[91,106] clone=95
-    value_items=[91,46]`. Both stand for the closure's self-referential pair (their
+    the same shape: `GROUP-EXPR first=106 value_items=[91,106] clone=95
+    value_items=[91,46]`. Both stand for the closure's self-referential expr (their
     templates 46 and 45 are one class), but only 106 is self-referential — **95's second
     element is the template node 46**. The two writes that made them, tagged with the
     instantiation that made each: `CLONE-WRITE applied=Function(2) epoch=24 template=45
@@ -179,12 +179,12 @@ what made per-call freshness.
     clone=106 items=[91,106]`.
   - **Why two shapes exist: the clone decision is context-dependent, and one call's
     remap covers both contexts.** `node_apply`'s `depends_on_parameter` includes
-    `value_holds_foreign_function(value, ctx.applied)`, and the closure inside the pair
+    `value_holds_foreign_function(value, ctx.applied)`, and the closure inside the expr
     is `Function(2)` — which *is* the applied function in one context and a foreign
     closure in the other. `value_apply`'s closure branch builds the nested walk
     (`applied` = the closure, `closure_scope = Some(scope)`, `branch_top` = the fresh id)
     that **shares the parent's `remap`**, so the closure's scope is cloned first, in the
-    context where that closure is not foreign, and the pair node is then reached again by
+    context where that closure is not foreign, and the expr node is then reached again by
     the outer walk, where it is. Measured on the one node, every line carrying
     `remap=592092280928`: `DECIDE node=46 applied=Function(2) branch_top=Function(3)
     closure_scope=true epoch=24 depends=false` and `CLONE-WRITE applied=Function(2)
@@ -214,14 +214,14 @@ what made per-call freshness.
     4]`, `[1, 4, 3, 4]`). Whole-log counts also vary a few percent between runs — the walk is
     hash-ordered — so they are indicative, not exact.
   - Its descent then compares a *clone* with a *template*: descending `[91,
-    46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
+    46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that expr
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
     closure `Function(2)`. The recursion's own depth counter shows the nesting:
     `ARR depth=0 a=95[91,46] b=106[91,106]`, `ARR depth=1 a=46[44,46] b=106[91,106]`,
     `FN-ARM depth=2 a=44(Function(2) param=43 ret=57) b=91(Function(3) …)`, then
     `ARR depth=3 a=43[41,42] b=94[92,93]` for the cell interiors whose elements are the
     `92↔41`, `93↔42`, `94↔43` merges. The decision sits two levels inside the group
-    pair, on the clone/template boundary.
+    expr, on the clone/template boundary.
   - **The `LowValue::Function` arm is what merges them.** Two functions are one value
     when their `[parameter, return]` cells agree, and a clone's cells agree with its
     template's by construction. `add_equality` then merges the classes, and **a class is
@@ -280,7 +280,7 @@ what made per-call freshness.
     one. The merge therefore poisons the class for every later call through it, which is
     what "the class answers the template" means once the class is shared.
 - **One rule behind both merges.** The arm decides "same value" from `[parameter,
-  return]` alone, and that is measured on both symptoms: for the capture loss the pair
+  return]` alone, and that is measured on both symptoms: for the capture loss the expr
   it declares equal is a clone against its template
   (`FN-ARM depth=2 a=44(Function(2) …) b=91(Function(3) …)`), and for the capture merge —
   `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev
@@ -312,7 +312,7 @@ what made per-call freshness.
 - **The same `none`, without a function merge.** `mk = x => y => x; f = n => mk n 1;
   f 3` (three spellings of it in the scratch set) answers `none` as well, and it is
   **not** this cause. Measured on the clone merges that carry a closure: u3 has a
-  clone-against-template pair — `a=44(origin=None Function(2)) b=91(origin=Some(44)
+  clone-against-template expr — `a=44(origin=None Function(2)) b=91(origin=Some(44)
   Function(3))` — while this program has none, every `Function`-valued side being a
   clone (`a=63(origin=Some(30) Function(4)) b=92(origin=Some(30) Function(4))` and
   friends). The diagnostic gate that repairs the capture loss above therefore leaves
@@ -336,8 +336,8 @@ what made per-call freshness.
 
 Three premises, each reasonable on its own, collide:
 
-1. `f : f` — a lambda's term *is* its type. A closure is a self-referential pair
-   `[function node, that pair]` inside a **class**, and the class carries the function
+1. `f : f` — a lambda's term *is* its type. A closure is a self-referential expr
+   `[function node, that expr]` inside a **class**, and the class carries the function
    leaf value, so "what type is this" and "which closure is this" share one structure.
 2. The function kind's rule descends `[parameter, return]` — the **signature** — while a
    closure's *meaning* is its code **plus the environment of the call that made it**. The
@@ -407,7 +407,7 @@ so its effect on the programs is measured but never against the suites.
     and `static_module::static_parameter_topology_is_reestablished_among_clones`. Reverted.
 - **E. Compare captures in the function arm.** Unmeasured, and a design change.
   - Pros: it addresses the criterion itself rather than its consequence.
-  - Cons: a capture environment is not part of the `[parameter, return]` pair, so it needs a
+  - Cons: a capture environment is not part of the `[parameter, return]` expr, so it needs a
     representation; comparing captures by class would still call two calls' closures equal
     (the capture merge), and comparing them by instance would also block a clone from
     unifying with its template, which is what `f : f` needs — so as stated it is likely

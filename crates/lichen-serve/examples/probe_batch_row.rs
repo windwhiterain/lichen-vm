@@ -128,7 +128,7 @@ fn weight_rows(session: &Session) -> Result<(), String> {
 ///
 /// # Invariant
 /// Both sides are measured warm — one token each way first, so neither pays the page cache — and in
-/// both orders, because the first measurement of a pair carries whatever the card is still doing.
+/// both orders, because the first measurement of an expr carries whatever the card is still doing.
 fn what_a_batch_buys(session: &Session) -> Result<(), String> {
     let mut model = Qwen::open_with(session, Width::Narrowed)
         .map_err(|refusal| format!("the narrowed model did not open: {refusal}"))?;

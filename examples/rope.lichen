@@ -2,12 +2,12 @@
   order = "18"
   compute = import "compute.lichen"
   doc = "Rotary position embedding: `y[2i] = x[2i]·cos θ − x[2i+1]·sin θ` and \
-   `y[2i+1] = x[2i]·sin θ + x[2i+1]·cos θ`, the per-pair rotation that carries a position \
+   `y[2i+1] = x[2i]·sin θ + x[2i+1]·cos θ`, the per-expr rotation that carries a position \
    into an attention score. It is **three** kernels because the surface wants one kernel per \
-   output buffer and this operator has three of them — a cosine per pair, a sine per pair, \
+   output buffer and this operator has three of them — a cosine per expr, a sine per expr, \
    and the rotation — and their claims are what let the floor see the chain. The rotation \
-   runs **one lane per element**, not per pair, because a lane may write only one position: \
-   lane `j` is in pair `(j - j % 2) / 2`, its partner is `j + 1 - 2 * (j % 2)`, and the sign of \
+   runs **one lane per element**, not per expr, because a lane may write only one position: \
+   lane `j` is in expr `(j - j % 2) / 2`, its partner is `j + 1 - 2 * (j % 2)`, and the sign of \
    the cross term is `1.0 - 2.0 * int2float (j % 2)` — so the whole pairwise rotation is \
    one expression rather than two. **`sin` and `cos` did not exist in this language at all \
    until now, and they are range-reduced polynomials rather than IEEE's**, so the declared \
@@ -43,16 +43,16 @@ sin_raw = (k : ParS) => {
   ((OutS)(.s (compute.write ((compute.Write _)(.to b_s, .at i, .value (sin angle ~ "element"))))))
 }
 sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" OutS
-Pair  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .c (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Expr  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .c (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
 OutY  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-ParR  = struct{.n Int, .in Pair}
+ParR  = struct{.n Int, .in Expr}
 rotate_raw = (k : ParR) => {
   j = compute.range k.n
   odd = j % 2
-  pair = (j - odd) / 2
+  expr = (j - odd) / 2
   partner = j + 1 - 2 * odd
-  c = (compute.read ((compute.Read _)(.from k.in.c, .at pair)) : Float)
-  s = (compute.read ((compute.Read _)(.from k.in.s, .at pair)) : Float)
+  c = (compute.read ((compute.Read _)(.from k.in.c, .at expr)) : Float)
+  s = (compute.read ((compute.Read _)(.from k.in.s, .at expr)) : Float)
   here = (compute.read ((compute.Read _)(.from k.in.x, .at j)) : Float)
   other = (compute.read ((compute.Read _)(.from k.in.x, .at partner)) : Float)
   turned = here * c - (1.0 - 2.0 * int2float odd) * other * s
@@ -90,5 +90,5 @@ fill_x = compute.parallel fill_x_raw "cpu" xBuf
 x = (compute.plrun fill_x ((Fill)(.n 8)) : xBuf).x
 cosines = (compute.plrun cosine ((compute.A Turn)(.n 4, .I Turn(.position position, .inverse_frequency inverse_frequency))) : OutC)
 sines = (compute.plrun sine ((compute.A Turn)(.n 4, .I Turn(.position position, .inverse_frequency inverse_frequency))) : OutS)
-out = (compute.plrun rotate ((compute.A Pair)(.n 8, .I Pair(.x x, .c cosines.c, .s sines.s))) : OutY)
+out = (compute.plrun rotate ((compute.A Expr)(.n 8, .I Expr(.x x, .c cosines.c, .s sines.s))) : OutY)
 compute.collect out.y : array{Float, 8}

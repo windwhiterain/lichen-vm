@@ -101,7 +101,7 @@ The attribute's slot holds **exactly one function**, an ordinary lichen value:
 ```text
 x : Int ! (v => v > 3)   ≡   [x, Int, v => v > 3]
                              └────┬────────┘ └──┬──┘
-                          the pair's value,     the refinement slot
+                          the expr's value,     the refinement slot
                           type, and tail
 ```
 
@@ -111,7 +111,7 @@ One function is enough because a conjunction is one function written with `*`
 
 | | `Perspective` | `Doc` | refinement |
 |---|---|---|---|
-| slot holds | a lattice value | the doc's own pair | **one predicate function** |
+| slot holds | a lattice value | the doc's own expr | **one predicate function** |
 | `combine` | `Gcd`, propagated from children | a fresh undecided cell | **a fresh undecided cell: no propagation** |
 | `missing_value` | `0` | an undecided cell | **an undecided cell** |
 | `share_missing_slot` | `true` | `false` | **`false`** |
@@ -136,7 +136,7 @@ where it was written**, and an expression with no written refinement has none.
 
 **Reconciliation is a plain unify of the two *predicates*, not of the two
 slots.** An absent refinement's slot has the default `[fresh cell, int]` shape,
-and unifying that slot against the other side's slot compares a term pair with the
+and unifying that slot against the other side's slot compares a term expr with the
 predicate function's own self-referential type — two different shapes. The shared
 shape rule is [`slot_value_node`](../../crates/lichen-highlevel/src/attr.rs): compare
 the attribute's *value*, not its slot, stated once where the attribute's semantics
@@ -164,7 +164,7 @@ as it stands:
   callee's refinement survives without the checker.
 
 Two measured facts bound the mechanism. **An unknown class is not an error but an
-undecided value**: `TypeOperator::run` answers `Parameterized` for a pair it
+undecided value**: `TypeOperator::run` answers `Parameterized` for an expr it
 cannot compute, so before the refinement `add "a" "b"` *ran* and yielded an
 unresolved value — the assert is the only channel that turns "undecided" into
 "refused". And **the apply clone preserves equality classes**, so tying the
@@ -279,14 +279,14 @@ goes. Measured with exactly that `add`:
 Three mechanism points are load-bearing:
 
 - **An annotation names a type expression's *denotation*.** A type expression
-  that carries attributes has a *pair* as its term, and binding the parameter's
-  type slot to that pair — the obvious reading — is a type error. The type it
+  that carries attributes has a *expr* as its term, and binding the parameter's
+  type slot to that expr — the obvious reading — is a type error. The type it
   names is the **annotated expression's own term** (`Checker::type_denotation`),
   and the attribute is enforced by its own assert instead. Taking the group's
   first slot alone is the opposite trap: the signature reads clean but the class
-  cell is no longer reachable from the parameter pair, so the apply clone stops
+  cell is no longer reachable from the parameter expr, so the apply clone stops
   re-instantiating the condition and `f "a"` is *accepted*. A refinement written
-  on a type must keep the placeholder's `[shape, kind]` pair. The rule holds in
+  on a type must keep the placeholder's `[shape, kind]` expr. The rule holds in
   every type position — a tuple/struct field, a function-type side, and an array
   type's element.
 - **The refinement is enforced where it was written**, so a class refinement on a
@@ -297,12 +297,12 @@ Three mechanism points are load-bearing:
 - **A hole bound at the top level is one cell for the whole program; a hole bound
   inside the function body is per call.** `T = _` outside a lambda is shared, so
   `x : (T ! in_num); y : (T ! in_num)` ties every call together and the second
-  `add 1 2` / `add 1.5 2.5` pair fails with `expected Int, found Float` — while
+  `add 1 2` / `add 1.5 2.5` expr fails with `expected Int, found Float` — while
   the same tie written as an array element (or a body-local binding)
   re-instantiates per call. That is why the contract is one parameter over an
   operand array and not a shared top-level hole.
 
-An open class's annotated type is the placeholder's `[shape, kind]` pair of
+An open class's annotated type is the placeholder's `[shape, kind]` expr of
 cells, so its printed signature carries the printer's honest raw mark
 (`raw[?a, ?b] -> …`, [raw-rendering-mark](raw-rendering-mark.md)); a concrete
 class prints `Int -> …`.
@@ -498,7 +498,7 @@ about, or still open.
    its inlined form (`operands = [y, y]; operands[0] + operands[1]`) was measured
    kernel-clean.
 2. **An open class renders `raw[?a, ?b]`** — the operator's operand-group element
-   is the placeholder's `[class, kind]` pair, so every arithmetic lambda's
+   is the placeholder's `[class, kind]` expr, so every arithmetic lambda's
    signature prints the mark the *refined* form printed all along. That is the
    printer's **honest** reading of two cells the type chain never explained
    ([raw-rendering-mark](raw-rendering-mark.md) §2), not a new defect. The
@@ -518,7 +518,7 @@ about, or still open.
    prints `raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` in `Mode::Check` and
    `Mode::Evaluate` alike, and every arrow in it is already read: a throwaway probe
    over 19 lambda shapes (run on `dev@9d59dd01` and not kept) renders every lambda
-   `D -> C`, so no function type reaches the mark. The `?a`/`?b` pair is the
+   `D -> C`, so no function type reaches the mark. The `?a`/`?b` expr is the
    placeholder's two **distinct** classes — measured as equality representatives
    `178` and `179` — so one name would claim a unification the checker never made.
    It is also *structurally the element-slot shape*, so a rule that collapsed it
@@ -545,7 +545,7 @@ about, or still open.
    reported `y` as `?a` under `Mode::Check`; the bare-language control, where no
    prelude is in scope and `+` stays a `BinOp`, answered `Int` in both modes.
    **The arm that closed it**: `Module::static_function_type_apply` copies the
-   frozen signature — the parameter pair and the return type, and the arrays they
+   frozen signature — the parameter expr and the return type, and the arrays they
    hold — with the artifact's equality classes preserved, so `add`'s codomain (one
    class of its parameter's element cell) is decided by the argument the check
    binds. The body is never cloned, so no operation of it re-runs, and without
@@ -562,7 +562,7 @@ workstream's, for cost 1).
 
 **A routed operator's perspective is its operand group's meet, and it was masked until
 the certificate gate landed.** `+` lowers to `Apply(add, [left, right])`, and `add`
-states no return attribute; the applied pair the checker reads for the call nevertheless
+states no return attribute; the applied expr the checker reads for the call nevertheless
 carries an *undecided* attribute cell, and `Checker::stated_attributes` treats an
 undecided position as stated. So the call carried the **wildcard**, which unifies with
 everything — the annotation gate never reached the combine.
@@ -595,8 +595,8 @@ language 275, highlevel 136, compute 237/0/1.
    value. [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs) is "the
    **name** this attribute gives the value it attaches to" (bare; the value reads
    as `?name` through `render::value_label`), and
-   [`attr::pair_label`](../../crates/lichen-highlevel/src/attr.rs) is the shared
-   reader: a pair's arity is in the graph but *which* attribute each tail slot
+   [`attr::expr_label`](../../crates/lichen-highlevel/src/attr.rs) is the shared
+   reader: an expr's arity is in the graph but *which* attribute each tail slot
    belongs to is not, so it asks every attribute of the composed set whether it
    names that slot, in canonical order, first answer wins. `Refinement::render` is
    `! ` plus the predicate's name. Measured: an unlabelled predicate prints
@@ -756,22 +756,22 @@ line rather than the application — [core-prelude](core-prelude.md) §5).
   - The refusals follow from the same principle: a struct type reaching `a(k)` is
     refused like any other non-tuple, and a set reaching `s[i]` is refused because
     the read pins its container to an array type.
-- `attr::pair_label` exists because no schema tail is needed and none is readable: a
-  pair's **arity** is in the graph, but *which* attribute each of its tail slots
+- `attr::expr_label` exists because no schema tail is needed and none is readable: a
+  expr's **arity** is in the graph, but *which* attribute each of its tail slots
   belongs to is not — a one-entry tail is `[Doc]` or `[Perspective]`, and both are
   three elements long.  So the search asks **every** attribute of the composed set
   whether it names that slot, in canonical order, first answer wins — the same rule
   and the same order `lichen_render::render_attributes` uses — and it is sound
   because an attribute answers only about content it recognises as its own (a string
-  doc, `AttrExt::label`).  The answer is `None` when the pair is not an array,
+  doc, `AttrExt::label`).  The answer is `None` when the expr is not an array,
   carries no attribute, or carries none that names it, and a *static* (frozen) slot
   is skipped: an attribute reads a dynamic node, and inventing a name for a frozen
   one is worse than silence.
 - `Refinement::constraint` reads the slot's element 0 — the predicate expression's
   own value node — with no re-wrapping, so the node identity is preserved and the
   apply's subject is the very function the user wrote.  An apply node **is** its
-  return `[value, type]` pair, so the condition's own value is that pair's element 0,
-  the same read the checker's `value_of` builds.  Registering the pair itself would
+  return `[value, type]` expr, so the condition's own value is that expr's element 0,
+  the same read the checker's `value_of` builds.  Registering the expr itself would
   hand the assert channel an array, which is neither `1` nor *lazy*, and it would
   report a failure even while the applied value is still open.
 - The refinement's absent form is an undecided cell by intent rather than a

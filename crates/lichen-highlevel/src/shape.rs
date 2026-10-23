@@ -1,8 +1,8 @@
-//! The single authority for the pair/type encoding. See
+//! The single authority for the expr/type encoding. See
 //! `docs/notes/checker-encoding-instability.md`.
 //!
 //! # Invariant
-//! Every expression compiles to a `[value, type, attrs…]` pair, every kinded
+//! Every expression compiles to a `[value, type, attrs…]` expr, every kinded
 //! type expression to `[shape, [marker, universe]]`, and every type spine
 //! bottoms out at the self-referential universe `K = [Type, ↺]`.
 
@@ -36,18 +36,18 @@ use crate::program::{HighProgram, ValueType};
 macro_rules! for_each_kind_marker {
     ($mac:ident $( [ $($args:tt)* ] )?) => {
         $mac! { $( [ $($args)* ] )?
-            /// The `int` type constant — `USize` literals pair with `[int, K]`.
+            /// The `int` type constant — `USize` literals expr with `[int, K]`.
             TypeInt { 0, "int", int_marker, int_marker_node }
-            /// The `float` type constant — `Float` literals pair with
+            /// The `float` type constant — `Float` literals expr with
             /// `[float, K]`.
             TypeFloat { 9, "float", float_marker, float_marker_node }
             /// The `string` type constant — the builtin immutable string
-            /// value; `Str` literals pair with `[string, K]`.
+            /// value; `Str` literals expr with `[string, K]`.
             TypeString { 7, "string", string_marker, string_marker_node }
             /// The `Type` constant — the canonical universe node itself
             /// (`Type : Type`).
             TypeType { 1, "Type", type_marker, type_marker_node }
-            /// The kind marker of function type expressions — the pair's
+            /// The kind marker of function type expressions — the expr's
             /// second element is a `Function` value.
             TypeFunction { 2, "FunctionType", function_type_marker, function_type_marker_node }
             /// The kind marker of tuple type expressions — the shape is the
@@ -98,25 +98,25 @@ const _: () = {
     }
 };
 
-// --- pair layout: `[value, type, attrs…]`, one spelling of the slots ---------
+// --- expr layout: `[value, type, attrs…]`, one spelling of the slots ---------
 
-/// Element 0 of an expression's `[value, type, attrs…]` pair — the value.
-pub const PAIR_VALUE_SLOT: usize = 0;
-/// Element 1 of an expression's `[value, type, attrs…]` pair — the type.
-pub const PAIR_TYPE_SLOT: usize = 1;
+/// Element 0 of an expression's `[value, type, attrs…]` expr — the value.
+pub const EXPR_VALUE_SLOT: usize = 0;
+/// Element 1 of an expression's `[value, type, attrs…]` expr — the type.
+pub const EXPR_TYPE_SLOT: usize = 1;
 /// The first attribute slot: the schema tail's attribute `i` sits at
-/// `PAIR_ATTR_BASE + i` of the pair.
-pub const PAIR_ATTR_BASE: usize = 2;
+/// `EXPR_ATTR_BASE + i` of the expr.
+pub const EXPR_ATTR_BASE: usize = 2;
 
-/// The pair slot of the schema tail's `index`-th attribute.
+/// The expr slot of the schema tail's `index`-th attribute.
 pub const fn attr_slot(index: usize) -> usize {
-    PAIR_ATTR_BASE + index
+    EXPR_ATTR_BASE + index
 }
 
-/// The schema-tail index of pair attribute `slot` — the inverse of
+/// The schema-tail index of expr attribute `slot` — the inverse of
 /// [`attr_slot`].
 pub const fn attr_index(slot: usize) -> usize {
-    slot - PAIR_ATTR_BASE
+    slot - EXPR_ATTR_BASE
 }
 
 /// The **element-slot width** of a compound type: the value, the type, and one
@@ -127,7 +127,7 @@ pub const fn attr_index(slot: usize) -> usize {
 /// slots and a value's unify however few positions either one spells. See
 /// `docs/notes/compound-element-slots.md`.
 pub fn slot_width<P: HighProgram>() -> usize {
-    PAIR_ATTR_BASE + P::Attr::ORDER.len()
+    EXPR_ATTR_BASE + P::Attr::ORDER.len()
 }
 
 // --- kinded-type layout: `[shape, kind]` with kind `[marker, universe]` ------
@@ -285,8 +285,8 @@ where
         return false;
     };
     items.len() >= 2
-        && module.node_value(items[PAIR_VALUE_SLOT].node) == Some(P::Value::type_marker())
-        && matches!(items[PAIR_TYPE_SLOT].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
+        && module.node_value(items[EXPR_VALUE_SLOT].node) == Some(P::Value::type_marker())
+        && matches!(items[EXPR_TYPE_SLOT].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
 }
 
 /// Whether `id` is the canonical universe: a dynamic node by equality class,
@@ -504,11 +504,11 @@ where
     Some((items.first()?.node, items.get(1)?.node))
 }
 
-/// Whether a value is a struct marker: the pair `[payload, TypeStruct]`.
+/// Whether a value is a struct marker: the expr `[payload, TypeStruct]`.
 ///
 /// # Invariant
 /// The test is the **tag**, never the silhouette: the marker must be an
-/// ordinary two-element `[value, type]` pair whose [`STRUCT_MARKER_TAG_SLOT`]
+/// ordinary two-element `[value, type]` expr whose [`STRUCT_MARKER_TAG_SLOT`]
 /// holds the `TypeStruct` atom. The payload is not inspected — its cells may
 /// still be undecided while the marker is being built.
 pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -> bool
@@ -647,7 +647,7 @@ where
     // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     unsafe { array_items(module, slot) }?
-        .get(PAIR_TYPE_SLOT)
+        .get(EXPR_TYPE_SLOT)
         .map(|item| item.node)
 }
 
@@ -801,9 +801,9 @@ where
     let lichen_lowlevel::AnyFunctionId::Dynamic(function) = function else {
         return None;
     };
-    let pair = module.functions.get(function)?.parameter;
-    let type_slot = module.pair_type_item(pair)?;
-    // A type pair's value position is the shape and its type position the kind
+    let expr = module.functions.get(function)?.parameter;
+    let type_slot = module.expr_type_item(expr)?;
+    // A type expr's value position is the shape and its type position the kind
     // (`docs/notes/compound-element-slots.md`).
     low_type_of(module, type_slot).or_else(|| low_type_of_slot(module, type_slot))
 }
@@ -828,7 +828,7 @@ pub fn prepare_template_low_types<P: Program>(
         else {
             continue;
         };
-        // Only a pair carries a layout; width cannot tell it from a data tuple
+        // Only an expr carries a layout; width cannot tell it from a data tuple
         // (`docs/notes/array-attribute-view.md`).
         if array.layout() == 0 {
             continue;
@@ -836,14 +836,14 @@ pub fn prepare_template_low_types<P: Program>(
         // SAFETY: `array` is the payload of a value of this module.
         let items = unsafe { array.items() };
         // A term is **full width** (`docs/notes/attributes.md`).
-        let width = PAIR_ATTR_BASE + module.attribute_layout(array.layout()).len();
+        let width = EXPR_ATTR_BASE + module.attribute_layout(array.layout()).len();
         if items.len() != width {
             continue;
         }
-        let Some(shape) = low_type_of_slot(module, items[PAIR_TYPE_SLOT].node) else {
+        let Some(shape) = low_type_of_slot(module, items[EXPR_TYPE_SLOT].node) else {
             continue;
         };
-        let Some(value) = items[PAIR_VALUE_SLOT].node.dynamic() else {
+        let Some(value) = items[EXPR_VALUE_SLOT].node.dynamic() else {
             continue;
         };
         // The wildcard states nothing, so it has no shape to seed.
@@ -861,7 +861,7 @@ pub fn prepare_template_low_types<P: Program>(
     // (`docs/notes/compound-element-slots.md`).
     module.infer_template_low_types(function);
     for (value, shape) in seeds {
-        // An open pair is an undecided type: it states nothing to seed.
+        // An open expr is an undecided type: it states nothing to seed.
         let states_nothing = match &shape {
             lichen_lowlevel::LowShape::Tuple(items) => items.iter().all(Option::is_none),
             _ => false,
@@ -881,8 +881,8 @@ where
         .and_then(|node| module.low_type_of_node(node))
 }
 
-/// A function's **parameter pair** — the `[value, type]` term a lowering reads.
-pub fn function_parameter_pair<P: Program>(
+/// A function's **parameter expr** — the `[value, type]` term a lowering reads.
+pub fn function_parameter_expr<P: Program>(
     module: &Module<P>,
     function: lichen_lowlevel::AnyFunctionId,
 ) -> Option<lichen_lowlevel::NodeId> {
@@ -892,20 +892,20 @@ pub fn function_parameter_pair<P: Program>(
     Some(module.functions.get(function)?.parameter)
 }
 
-/// A pair's **value half**.
-pub fn pair_value<P: Program>(
+/// An expr's **value half**.
+pub fn expr_value<P: Program>(
     module: &Module<P>,
-    pair: lichen_lowlevel::NodeId,
+    expr: lichen_lowlevel::NodeId,
 ) -> Option<lichen_lowlevel::NodeId> {
-    module.pair_value_half(pair)
+    module.expr_value_half(expr)
 }
 
-/// A pair's **type half**.
-pub fn pair_type<P: Program>(
+/// An expr's **type half**.
+pub fn expr_type<P: Program>(
     module: &Module<P>,
-    pair: lichen_lowlevel::NodeId,
+    expr: lichen_lowlevel::NodeId,
 ) -> Option<AnyNodeId> {
-    module.pair_type_item(pair)
+    module.expr_type_item(expr)
 }
 
 /// Whether two references name **one value**: the encoding's identity is the
@@ -1041,7 +1041,7 @@ where
         ));
     }
     if marker == P::Value::function_type_marker() {
-        // A function type's shape is the `[domain, codomain]` pair.
+        // A function type's shape is the `[domain, codomain]` expr.
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
@@ -1076,7 +1076,7 @@ where
     )
 }
 
-/// Whether `node` holds a **kind marker** — the type position of a type pair.
+/// Whether `node` holds a **kind marker** — the type position of a type expr.
 fn is_a_kind_marker<P: Program>(module: &Module<P>, node: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -1101,24 +1101,24 @@ where
 ///
 /// # Invariant
 /// The two are told apart by **whether the decode succeeds**, not by a
-/// structural guess: a term pair and a type value have the same two-slot
+/// structural guess: a term expr and a type value have the same two-slot
 /// silhouette. What separates them is the terminal marker — the `Type` marker,
-/// the one kind [`low_type_of`] refuses — so a pair never decodes directly.
+/// the one kind [`low_type_of`] refuses — so an expr never decodes directly.
 pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Option<LowShape>
 where
     P::Value: ValueType,
 {
-    // A type pair's kind position holds a kind marker
+    // A type expr's kind position holds a kind marker
     // (`docs/notes/compound-element-slots.md`).
     if let AnyNodeId::Dynamic(node) = slot
         && module
-            .pair_type_item(node)
+            .expr_type_item(node)
             .is_some_and(|kind| is_a_kind_marker(module, kind))
         && let Some(shape) = low_type_of(module, slot)
     {
         return Some(shape);
     }
-    // A pair holds its type value at the value position; a type value is the
+    // An expr holds its type value at the value position; a type value is the
     // `[shape, kind]` array itself.
     let mut slot = slot;
     for _ in 0..8 {
@@ -1170,7 +1170,7 @@ where
 // --- diagnostic descent ---------------------------------------------------------
 
 /// The full-parse walk: append a [`LocStep`] per unify `step`, tagging each
-/// node as a pair slot or a shape position.
+/// node as an expr slot or a shape position.
 ///
 /// # Invariant
 /// Both sides of a unify are structurally parallel, so the tags are identical
@@ -1187,14 +1187,14 @@ pub(crate) fn tag_descent<P: Program>(
         let tag = if in_shape {
             in_shape = false;
             LocStep::Elem(step.index)
-        } else if step.index == PAIR_VALUE_SLOT {
+        } else if step.index == EXPR_VALUE_SLOT {
             if slot0_is_shape(module, cur) {
                 in_shape = true;
                 LocStep::Shape
             } else {
                 LocStep::Value
             }
-        } else if step.index == PAIR_TYPE_SLOT {
+        } else if step.index == EXPR_TYPE_SLOT {
             LocStep::Type
         } else {
             LocStep::Attr(attr_index(step.index))
@@ -1205,10 +1205,10 @@ pub(crate) fn tag_descent<P: Program>(
     path
 }
 
-/// Whether `node`'s element 0 is a list — a shape, not an expression's pair.
+/// Whether `node`'s element 0 is a list — a shape, not an expression's expr.
 ///
 /// # Invariant
-/// A diagnostic rendering hint, never a check: the heuristic misfires on a pair
+/// A diagnostic rendering hint, never a check: the heuristic misfires on an expr
 /// whose *value* is itself an array, tagging that `Value` descent as `Shape`.
 fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
     // SAFETY: `node` is a live node of `module`; nothing in this crate calls

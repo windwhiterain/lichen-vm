@@ -249,7 +249,7 @@ relocation the container provides.
   with checked arithmetic: the offset must be a whole number of items, the count
   must not overflow its byte length, `offset + byte_len` must lie inside the
   arena, and the base must lie inside its own buffer. A crafted `(offset, len)`
-  pair is then a clean `Err` — never a wrap, a panic, or a pointer outside the
+  expr is then a clean `Err` — never a wrap, a panic, or a pointer outside the
   arena.
 
 ### The arena layout the freeze produces
@@ -390,4 +390,4 @@ version check and recompile; there is no compatibility path.
   recovery message names, and the store keeps working by recompiling. A
   *still*-unreadable file after one recovery in the same process is the same
   corruption, not a new one, so the restarted state stands and an
-  `alloc`/`publish` pair still completes in memory.
+  `alloc`/`publish` expr still completes in memory.

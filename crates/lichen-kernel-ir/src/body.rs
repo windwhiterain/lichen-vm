@@ -78,7 +78,7 @@ pub struct Br {
     pub args: Vec<ValueId>,
 }
 
-/// A separated `(write, read)` pair: the data a barrier is, before it is a position.
+/// A separated `(write, read)` expr: the data a barrier is, before it is a position.
 ///
 /// # Invariant
 /// `write` names a [`KernelInstr::SliceWriteCall`] and `read` the [`KernelInstr::SliceReadCall`]
@@ -103,10 +103,10 @@ pub struct KernelBody {
     /// Whether this body inlined a transcendental definition, so its float arithmetic is exact.
     // `docs/notes/contraction-control.md`; on the body, so `fragment_digest` carries it.
     pub exact_float_arithmetic: bool,
-    /// The pairs a barrier is owed for, in no order that matters.
+    /// The exprs a barrier is owed for, in no order that matters.
     ///
     /// # Invariant
-    /// A pair's read must be reached by every lane: a barrier in divergent control flow is
+    /// An expr's read must be reached by every lane: a barrier in divergent control flow is
     /// invalid rather than imprecise, and [`KernelBody::validate`] refuses one.
     pub barriers: Vec<Barrier>,
 }
@@ -598,7 +598,7 @@ impl KernelBody {
     /// (1) The entry block exists, and every block a transfer names does; (2) every value
     /// a block reads exists, defined later in its own block or in one that dominates it;
     /// (3) a branch's `args` are exactly its target's `params`; (4) `classes` matches what
-    /// it produces, none for a write; (5) a barrier pairs a slice write with the read
+    /// it produces, none for a write; (5) a barrier exprs a slice write with the read
     /// observing it, in a block every lane reaches.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
@@ -723,11 +723,11 @@ impl KernelBody {
                 }
             }
         }
-        // A recorded barrier is a pair this body really holds, and one no lane can skip.
+        // A recorded barrier is an expr this body really holds, and one no lane can skip.
         let unavoidable = self.unavoidable_blocks(&dominance);
-        for pair in &self.barriers {
+        for expr in &self.barriers {
             if !matches!(
-                self.values.get(pair.write.0 as usize),
+                self.values.get(expr.write.0 as usize),
                 Some(ValueDef::Instr {
                     op: KernelInstr::SliceWriteCall(_),
                     ..
@@ -735,30 +735,30 @@ impl KernelBody {
             ) {
                 return Err(format!(
                     "the barrier ({:?}, {:?}) does not name a slice write",
-                    pair.write, pair.read
+                    expr.write, expr.read
                 ));
             }
             let Some(ValueDef::Instr {
                 op: KernelInstr::SliceReadCall(_),
                 args,
                 ..
-            }) = self.values.get(pair.read.0 as usize)
+            }) = self.values.get(expr.read.0 as usize)
             else {
                 return Err(format!(
                     "the barrier ({:?}, {:?}) does not name a slice read",
-                    pair.write, pair.read
+                    expr.write, expr.read
                 ));
             };
-            if args.get(2) != Some(&pair.write) {
+            if args.get(2) != Some(&expr.write) {
                 return Err(format!(
                     "the barrier's read {:?} does not observe the write {:?} it is paired with",
-                    pair.read, pair.write
+                    expr.read, expr.write
                 ));
             }
-            let Some(block) = self.block_of(pair.read) else {
+            let Some(block) = self.block_of(expr.read) else {
                 return Err(format!(
                     "the barrier's read {:?} is not an instruction of this body",
-                    pair.read
+                    expr.read
                 ));
             };
             if !unavoidable[block] {
@@ -766,7 +766,7 @@ impl KernelBody {
                     "the barrier's read {:?} sits in block {block}, which a lane can skip, so the \
                      barrier would be in divergent control flow — invalid rather than imprecise \
                      (`docs/notes/shared-memory-and-barriers.md` §9)",
-                    pair.read
+                    expr.read
                 ));
             }
         }

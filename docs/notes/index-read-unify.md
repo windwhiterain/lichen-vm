@@ -45,7 +45,7 @@ it leaves open, and the re-homing is its own paragraph:
 > **The missing write is the index read's carry from a container element cell that
 > is already decided** (`15 of 15` in `lazy_infinite.lichen`), which is
 > [compound-element-slots](compound-element-slots.md) §"The read path", in the same
-> `lichen-lowlevel` neighbourhood as the `pair_type_half` fix that closed the other
+> `lichen-lowlevel` neighbourhood as the `expr_type_half` fix that closed the other
 > three, and **not** a checker decision.
 
 Two claims, and both are load-bearing: (a) the cell that prints `?a` is
@@ -183,7 +183,7 @@ and the probe shows which was taken every time:
   container whose type is an **unevaluated `Index` chain**: there are no array
   items to read a slot out of. Known position, undecided container, lazy arm.
 - Inside the clone blocks `BlockId(3v1)`…`BlockId(10v1)` the container's type *is* a
-  concrete pair, so `check_index` takes its `Some` arm sixteen times. **The same
+  concrete expr, so `check_index` takes its `Some` arm sixteen times. **The same
   program resolves the read in the clones and declines it in the user's own block.**
 
 That is the whole asymmetry: the read resolves where the container's type was
@@ -274,7 +274,7 @@ out on the merits, and this note does not reopen it; it says the route §5 chose
 not the one that reaches it.
 
 **No production change** — for §1–§6, which is what that sentence covers. The
-probes were six `eprintln!` call sites — one pair in
+probes were six `eprintln!` call sites — one expr in
 `crates/lichen-highlevel/src/checker/indexing.rs` (`check_index`'s two `elem_cell`
 arms), one in `crates/lichen-highlevel/src/checker/structs.rs` (`slot_read`'s lazy
 arm), one in `crates/lichen-highlevel/src/checker.rs` (`check_term`'s tail),
@@ -304,7 +304,7 @@ There are **two** mask sites in the whole workspace, both in
 | site | what it marks | who reads it | what it does to a type cell today |
 |---|---|---|---|
 | `check_shallow_array_term`, the bare arm: `mask.push(depths[i] == usize::MAX)` | the **array position** of a bare `@shallow` | `evaluation.rs`'s `if item.shallow { continue; }` and `value_is_undecided`'s *"An array holding a shallow position can never be proven concrete"* | the position's `Index(apply, 0)` is never walked, so the apply never runs, so **neither** of the apply's two applications runs |
-| `wrap_shallow`, `array_node_masked(…, &[true, false])` | the **value slot** of each level of a `@shallow(n)` wrap | the same two reads | none: `@shallow(n)` already replaces the element's type with `self.fresh_cell()` in `check_shallow_array_term`, and its wrapped pair is `[value, type]` |
+| `wrap_shallow`, `array_node_masked(…, &[true, false])` | the **value slot** of each level of a `@shallow(n)` wrap | the same two reads | none: `@shallow(n)` already replaces the element's type with `self.fresh_cell()` in `check_shallow_array_term`, and its wrapped expr is `[value, type]` |
 
 So the type side is marked **indirectly and only for the bare form**: the mark
 rides on the value position, and an apply's *type* application
@@ -335,7 +335,7 @@ Running the type application alone decides **one** level. Measured on
 stating because it is what no `lichen-highlevel` change can walk around:
 
 - `Module::apply_type` (`crates/lichen-lowlevel/src/function.rs:139`) clones the
-  template's return pair and unifies the result cell with **the clone's** codomain.
+  template's return expr and unifies the result cell with **the clone's** codomain.
   The clone's tail is the *clone's own* result cell, in a class of its own.
 - `regroup_clones` / `unify_clone_groups`
   (`crates/lichen-lowlevel/src/apply.rs:182`, `:201`) re-establish the template's
@@ -449,7 +449,7 @@ type is a **finite notation for an infinite type** rather than a truncation of
 one, and which of the **three** readings that share the `…` and `?` vocabulary a
 given `…` is.  Two of the three remain; the third — an undecided field list —
 is **displaced by the two-sided probe** recorded below, which measured this
-section's own alternating-pair row as a cut and left the arm reachable from IR
+section's own alternating-expr row as a cut and left the arm reachable from IR
 only.  [raw-rendering-mark](raw-rendering-mark.md) §1 already owned the
 same cut for the raw fallback and the universe's self-loop, so the spec line
 cites it rather than restating it.
@@ -462,7 +462,7 @@ cites it rather than restating it.
 | `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, …}}}` |
 | `xs = [@shallow xs]` ; `xs` | — | `tuple{tuple{…}}` — the same cut on a one-element list spine |
 | `g = f => [f, @shallow g f]` ; `inf = g g` ; `inf` | `tuple{?a -> tuple{?a, ?b}, ?c}` | `?a -> tuple{?a, tuple{?a, tuple{?a, …}}}` — the cut inside an **arrow** |
-| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating pair ends on the **cut**, beside a decided field list (see "The `…` in `tuple{?a, …}`" below) |
+| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating expr ends on the **cut**, beside a decided field list (see "The `…` in `tuple{?a, …}`" below) |
 | `A = struct{.f Int, .g A}` ; `A` | `struct{.f Int, .g struct{.f Int, .g …}}` | **unchanged** — pre-existing, and pinned by `examples/struct_recursion.lichen`'s declared `output` |
 | `A = struct{.g B}; B = struct{.g C}; C = struct{.g A}` ; `A` | — | `struct{.g struct{.g struct{.g struct{.g …}}}}` — a 3-cycle, cut after four levels |
 | the same over `A…E` (a 5-cycle) | — | `struct{.g struct{.g struct{.g struct{.g struct{.g struct{.g …}}}}}}` |
@@ -486,10 +486,10 @@ run after each build was 2.2–2.4 s, which is the binary's pages being faulted
 in, not the printer.  The printer's own limit is a nesting depth, not a cycle
 ([code-audit](code-audit.md) `P4-10`, closed `wontfix:D9`).
 
-#### The `…` in `tuple{?a, …}`: the alternating pair's spelling, re-read
+#### The `…` in `tuple{?a, …}`: the alternating expr's spelling, re-read
 
 **What this section used to say, and why it was wrong.** The row above used to
-read "the alternating pair ends on the **undecided-field** `…`, not the cut" —
+read "the alternating expr ends on the **undecided-field** `…`, not the cut" —
 it took the `…` in `tuple{?a, …}` to be a field list the check had not fixed.
 That is the **cut**: measured on `feature/trl`, the shape slot at the level
 this program prints as `tuple{?a, …}` (depth 3 of 3, after three

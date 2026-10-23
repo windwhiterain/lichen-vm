@@ -1,4 +1,4 @@
-//! The barrier scan: the pairs a body's slice accesses separate.
+//! The barrier scan: the exprs a body's slice accesses separate.
 //! See `docs/notes/shared-memory-and-barriers.md` §4.
 
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ impl KernelFragment {
         Ok(())
     }
 
-    /// The pairs this fragment's slice accesses need a barrier between.
+    /// The exprs this fragment's slice accesses need a barrier between.
     ///
     /// # Invariant
     /// The extents the body's accesses are bounded by are this fragment's own
@@ -65,11 +65,11 @@ impl KernelFragment {
 }
 
 impl KernelBody {
-    /// The pairs this body's slice accesses need a barrier between.
+    /// The exprs this body's slice accesses need a barrier between.
     ///
     /// # Invariant
     /// `lane` is the parameter the invocation index arrives as and `slices` the extents the
-    /// fragment declares; a body states neither, so the caller does. A pair is returned when the
+    /// fragment declares; a body states neither, so the caller does. An expr is returned when the
     /// read observes the write across lanes, at addresses that may coincide, with no recorded
     /// barrier between them; a contended write, and an access whose index may leave its slice,
     /// are refused.
@@ -86,9 +86,9 @@ impl KernelBody {
         // **A recorded barrier is already between them**: the scan is a function of the body, not
         // of how often it has run.
         let mut separated: HashMap<u64, usize> = HashMap::new();
-        for pair in &self.barriers {
+        for expr in &self.barriers {
             if let (Some(slice), Some(&at)) =
-                (self.slice_ordinal(pair.read), position.get(&pair.read))
+                (self.slice_ordinal(expr.read), position.get(&expr.read))
             {
                 separated
                     .entry(slice)
@@ -96,7 +96,7 @@ impl KernelBody {
                     .or_insert(at);
             }
         }
-        let mut pairs = Vec::new();
+        let mut exprs = Vec::new();
         for &read in &order {
             let Some(ValueDef::Instr {
                 op: KernelInstr::SliceReadCall(_),
@@ -147,20 +147,20 @@ impl KernelBody {
             {
                 continue;
             }
-            pairs.push(Barrier { write, read });
+            exprs.push(Barrier { write, read });
             if let (Some(slice), Some(read_at)) = (read_slice, read_at) {
                 separated.insert(slice, read_at);
             }
         }
-        Ok(pairs)
+        Ok(exprs)
     }
 
     /// The slice accesses a barrier decision cannot be made from, refused by name.
     ///
     /// # Invariant
-    /// Run before any pair is recorded, so a contended write is named rather than reported as
-    /// an owed barrier and every read this scan pairs observes a real write — the obligation
-    /// [`Self::validate`] could not discharge, because it only sees recorded pairs.
+    /// Run before any expr is recorded, so a contended write is named rather than reported as
+    /// an owed barrier and every read this scan exprs observes a real write — the obligation
+    /// [`Self::validate`] could not discharge, because it only sees recorded exprs.
     fn refuse_bad_slice_accesses(
         &self,
         order: &[ValueId],

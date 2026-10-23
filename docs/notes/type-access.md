@@ -26,8 +26,8 @@ exactly two ways a type reaches a function, and each has its own replacement:
 2. **The type arrived in a parameter's value slot.**  Needing one of its
    elements is the signature of a **higher-order** type.  The parameter should
    not receive the type at all: it receives the type's *parameters*, and the
-   call site builds the type with a type function (`Pair = T => tuple{T, T}`,
-   then `Pair Int`; `S = T => struct{.a T}`).  The parameter is then an ordinary
+   call site builds the type with a type function (`Expr = T => tuple{T, T}`,
+   then `Expr Int`; `S = T => struct{.a T}`).  The parameter is then an ordinary
    value — a struct instance, a tuple — whose elements are readable.
 
 So the language keeps one rule: an element of a **value** is read (`a[i]`,
@@ -43,7 +43,7 @@ Both replacements were run through `lichen-compiler` at this removal:
 | program | result |
 |---|---|
 | `type_of = x => {t = _; x: t; t}` ; `S = struct{.a Int, .b string}` ; `s = S(.a 1, .b "h")` ; `type_of s.a` | `Int: Type` |
-| `Pair = T => tuple{T, T}` ; `Pair Int` | `tuple{Int, Int}: TypeTuple` |
+| `Expr = T => tuple{T, T}` ; `Expr Int` | `tuple{Int, Int}: TypeTuple` |
 | `f = x => x` ; `f{0}` — the retired spelling | `0: Int` (a block argument, not a type read) |
 | `tuple{Int, string}{0}` — the retired spelling | `error: expected ?a -> ?b, found TypeTuple` |
 

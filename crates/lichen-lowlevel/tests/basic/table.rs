@@ -4,7 +4,7 @@
 use super::*;
 use lichen_lowlevel::{Freeze, ModuleKey, StaticNodeId};
 
-/// A node holding a table value built from raw `(key, value)` node pairs.
+/// A node holding a table value built from raw `(key, value)` node exprs.
 fn table_value(
     m: &mut Module<TestProgram>,
     block: BlockId,
@@ -431,7 +431,7 @@ fn sref_of(freeze: &Freeze, node: NodeId) -> StaticNodeId {
 
 /// `[1, ↺]` — a self-referential two-element array, the `[Type, ↺]` universe
 /// shape.
-fn cyclic_pair(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
+fn cyclic_expr(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
     let node = m.add_node(block, None, None);
     let one = usize_node(m, block, 1);
     let items = m.alloc_array(
@@ -598,7 +598,7 @@ fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
     // The same infinite structure must hash equal, not just compare equal under `key_eq`.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let a = cyclic_pair(&mut m, root);
+    let a = cyclic_expr(&mut m, root);
     // `b = [1, [1, b]]`.
     let b = m.add_node(root, None, None);
     let one = usize_node(&mut m, root, 1);
@@ -633,7 +633,7 @@ fn a_cyclic_key_is_found_across_the_static_boundary() {
     // The lookup closes the stored cycle one level deeper, through a static ref.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let key = cyclic_pair(&mut m, root);
+    let key = cyclic_expr(&mut m, root);
     let value = usize_node(&mut m, root, 5);
     let table = table_value(
         &mut m,

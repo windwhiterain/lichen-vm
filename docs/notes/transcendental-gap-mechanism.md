@@ -356,7 +356,7 @@ the policy half.
 §3's 8193-angle uniform sweep, its 5200 zero-crossing arguments and its six fine crossings; §4's
 seven `spirv-val` verdicts, seven ACCEPT; and §1.2's opcode census over five disassembled modules.
 Every ulp figure is read off the two backends' **own** bit patterns, and every absolute figure off the
-same pair, at the same point.
+same expr, at the same point.
 
 **Inferred, from those numbers and not re-derived here.** That the recombination is a driver
 optimiser folding `q·HEAD + q·TAIL` into `q·(HEAD+TAIL)` — the identity is arithmetic and the two

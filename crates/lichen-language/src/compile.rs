@@ -73,7 +73,7 @@ pub fn compile_with_imports_with_cells(
 ///
 /// # Invariant
 ///
-/// A clean cell is lowered to a static read of its frozen pair, so its body is
+/// A clean cell is lowered to a static read of its frozen expr, so its body is
 /// never lowered, checked or evaluated. See `docs/notes/incremental-update.md`.
 pub(crate) fn compile_resolved_with_cells(
     program: &mut Program,
@@ -152,8 +152,8 @@ pub(crate) fn compile_resolved_with_cells(
 /// # Invariant
 ///
 /// A binding whose value spells an annotation is never returned: a static read
-/// materializes the artifact's two-wide pair, while an annotation's schema tail
-/// widens the source's pair, so the cell would be read back at the wrong arity.
+/// materializes the artifact's two-wide expr, while an annotation's schema tail
+/// widens the source's expr, so the cell would be read back at the wrong arity.
 /// See `docs/notes/incremental-update.md` §3.3.
 pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, (Path, String)> {
     let mut out = HashMap::new();
@@ -316,7 +316,7 @@ impl Compiler {
         let mut out = Vec::new();
         for stmt in statements {
             let id = match stmt {
-                // Clean cell: the frozen pair, read in place; no body is lowered.
+                // Clean cell: the frozen expr, read in place; no body is lowered.
                 Stmt::Binding(binding)
                     if binding
                         .binder
@@ -863,12 +863,12 @@ impl Compiler {
                 }
             }
             Expr::Table(entries, span) => {
-                // Each entry's key and value are their own nodes; the pairs feed the Table kind.
-                let mut pairs = Vec::with_capacity(entries.len());
+                // Each entry's key and value are their own nodes; the exprs feed the Table kind.
+                let mut exprs = Vec::with_capacity(entries.len());
                 for (key, value) in entries {
-                    pairs.push((self.compile_expr(key), self.compile_expr(value)));
+                    exprs.push((self.compile_expr(key), self.compile_expr(value)));
                 }
-                self.alloc_table(&pairs, span)
+                self.alloc_table(&exprs, span)
             }
             Expr::Set(members, span) => {
                 // The members compile like array elements; the kind makes it a set.

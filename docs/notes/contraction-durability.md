@@ -35,7 +35,7 @@ After run 3, **the cache directory did not exist**: the driver did not honour
 `__GL_SHADER_DISK_CACHE_PATH`. Those variables are **GL** controls, and this backend
 is Vulkan, so run 2's "disabled" and run 3's "relocated" are both **unverified as
 controls** — they did not fail, they simply may have done nothing. The honest
-reading is that runs 1-3 measured **three restarts**, not a warm-then-cold pair.
+reading is that runs 1-3 measured **three restarts**, not a warm-then-cold expr.
 
 A cold-cache run needs a **Vulkan-level** control — an ICD-private variable or a
 relocated `VK_*` cache path — and that has not been found. Until it is, "a cold

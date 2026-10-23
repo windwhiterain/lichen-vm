@@ -183,7 +183,7 @@ to the walk (`compute/body.rs:1009`), and it would additionally give up
 vocabulary. That is a larger step than adding `ln`, and it is **not** what this
 note recommends first.
 
-## 5. The step that unifies the hand-assembled pair — and the sentence it withdrew
+## 5. The step that unifies the hand-assembled expr — and the sentence it withdrew
 
 The user's decision includes switching the hand-assembled ones to the new op.
 For `sin` and `cos` that means moving them into `TRANSCENDENTALS` as
@@ -252,7 +252,7 @@ decision record forbids this work.
 
 Every example that exercises a transcendental prints **exactly** its declared
 line, before and after this change. The "before" column is the run taken at
-`f9b8852c` before anything was touched; the three transcendental pairs
+`f9b8852c` before anything was touched; the three transcendental exprs
 (`silu`, `rope`, `rmsnorm`) are the ones that would move if a definition's shape
 had moved.
 

@@ -303,10 +303,10 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
             &resolve,
             &mapped_block,
         );
-        for pair in &consumer.body.barriers {
+        for expr in &consumer.body.barriers {
             body.barriers.push(Barrier {
-                write: resolve(pair.write),
-                read: resolve(pair.read),
+                write: resolve(expr.write),
+                read: resolve(expr.read),
             });
         }
         // Only the consumer's marks are kept: a merged node carries no claim to read them.
@@ -560,9 +560,9 @@ impl Forwarded {
     /// The cone this value's recomputation at an address is built from.
     ///
     /// # Invariant
-    /// **The producer's own body is asked**, exactly as the pair asks the producer's: a value
+    /// **The producer's own body is asked**, exactly as the expr asks the producer's: a value
     /// that never reaches the invocation index is the same in every lane and is reused, and one
-    /// that does is refused where the pair refuses it.
+    /// that does is refused where the expr refuses it.
     fn cone(&self, fragment: &KernelFragment, read: ValueId) -> Result<Cone, ComposeRefusal> {
         let parameters = fragment.body.parameters();
         match fragment.body.index_local_cone(

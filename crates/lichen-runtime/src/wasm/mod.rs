@@ -28,7 +28,7 @@ pub fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
 }
 /// # Invariant
 /// A wasm import has one signature, so one `read` could not serve both classes:
-/// the pair is declared per class, and this is where the name is spelled. A
+/// the expr is declared per class, and this is where the name is spelled. A
 /// `BFloat16` is spelled its own name and not `f32`'s, so a module in the class
 /// fails to link rather than bind the float host import to a half's payload.
 pub fn buffer_import_name(class: ScalarClass, kind: &str) -> String {

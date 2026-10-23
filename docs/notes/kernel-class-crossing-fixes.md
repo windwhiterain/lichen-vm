@@ -60,7 +60,7 @@ What stays refused, and the refusal names the instruction position:
 `from == to` in a `Conv` is a **reclassification, not a no-op**: it is what the
 lowering writes for a value that already holds its result's representation.
 
-**Why the instruction carries the pair rather than a single class.** Which of the
+**Why the instruction carries the expr rather than a single class.** Which of the
 two crossing directions a `Conv` is *cannot* be read off its operand: `Int → Float`
 and `Float → Int` are the same shape to an operand, and the direction is the
 language's decision rather than a target's. A backend that re-derived it would be
@@ -72,7 +72,7 @@ is stated, not reconstructed. And a conversion is the **one** instruction whose
 operand and result are different classes, so naming "the class" would name one of
 them and leave the other guessed.
 
-**What the pair does not say is the representation.** It says what the language
+**What the expr does not say is the representation.** It says what the language
 asked for, not what the value's representation is, and the two differ at the ABI: a
 float fragment's index and count arrive in `f32` locals (the fragment's class is
 what the parameter list is typed by) while the language's number is an `Int`, so

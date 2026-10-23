@@ -2,20 +2,20 @@
 
 > Status: current
 > Points at: `crates/lichen-highlevel/src/attr.rs` (the extension point and the
-> canonical order), `shape.rs` (the pair layout: `attr_slot`), `ir.rs`
+> canonical order), `shape.rs` (the expr layout: `attr_slot`), `ir.rs`
 > (the `Schema`), `checker.rs` (`check_ann`), and
 > `crates/lichen-language/src/program.rs` (the `attrs` manifest — the one list
 > that fixes the order).
 > Inspired by
 > [Modular GPU Programming with Typed Perspectives](../reference/Modular%20GPU%20Programming%20with%20Typed%20Perspectives.pdf).
 
-A program already wraps every expression in a `[value, type]` pair. The attribute
+A program already wraps every expression in a `[value, type]` expr. The attribute
 system adds **optional extra slots** whose *shape* is a compile-time `Schema` and whose
 *semantics* come from a pluggable extension. It is lichen's first genuinely static idea.
 
 ## Schema: a compile-time type
 
-The ordinary "type" is a **runtime** value (the pair's slot 1). The **schema** is a
+The ordinary "type" is a **runtime** value (the expr's slot 1). The **schema** is a
 compile-time (static) type: it names *which* attributes ride on an expression and in
 which slots, and is consumed at lowering, then gone — never a runtime node, never
 unified, never cloned.
@@ -25,19 +25,19 @@ Schema<A> { tail: Vec<A> }    // [] => [value, type]; [Perspective] => [value, t
 ```
 
 `e # p` stamps the expression's schema with the attribute tail, so the expression is
-lowered to a **3-wide pair** instead of a 2-wide one. **Nothing has a fixed arity** —
-the highlevel reads the schema and builds the pair at exactly that arity, padding an
+lowered to a **3-wide expr** instead of a 2-wide one. **Nothing has a fixed arity** —
+the highlevel reads the schema and builds the expr at exactly that arity, padding an
 absent attribute with the extension's `missing_slot` at every unify site so the
 positional lowlevel unify just works.
 
-Every attribute's slot is the annotation value's **`[value, type]` term pair** — the
-uniform shape. A constraint reads its lattice value from that pair's element 0; a label
-uses the whole pair. This is what lets the checker's slot handling be attribute-agnostic
+Every attribute's slot is the annotation value's **`[value, type]` term expr** — the
+uniform shape. A constraint reads its lattice value from that expr's element 0; a label
+uses the whole expr. This is what lets the checker's slot handling be attribute-agnostic
 (`# 4` is a real expression `4 : Int`; `? doc` is a real expression `doc : Doc`).
 
 ## The canonical attribute order (where a slot comes from)
 
-A pair's attribute slots are a **layout**, and the layout is declared **once**: by the
+An expr's attribute slots are a **layout**, and the layout is declared **once**: by the
 host composition's `attrs` manifest, in order.
 
 ```
@@ -49,8 +49,8 @@ lang_compose_vocabulary! {
 
 That list *is* the canonical order. The composition derives from it
 
-- `LANG_ATTR_ORDER` — every attribute, in slot order (the `i`-th attribute is at pair
-  slot `attr_slot(i)`, i.e. `PAIR_ATTR_BASE + i` in `lichen-highlevel::shape`);
+- `LANG_ATTR_ORDER` — every attribute, in slot order (the `i`-th attribute is at expr
+  slot `attr_slot(i)`, i.e. `EXPR_ATTR_BASE + i` in `lichen-highlevel::shape`);
 - `AttrSet::order_index` — the index the frontend, the checker and every reader ask;
 - a build-time check that each index is its position.
 
@@ -64,29 +64,29 @@ step.
 
 Two consequences worth stating:
 
-- The order is a **compatibility contract**: it is what a compiled artifact's pairs
+- The order is a **compatibility contract**: it is what a compiled artifact's exprs
   encode, so reordering the manifest renumbers persisted layouts (the same rule the
   codec tags follow). It is pinned by a test.
-- **No hard limit** on the number of attributes exists in the encoding — a pair's arity
+- **No hard limit** on the number of attributes exists in the encoding — an expr's arity
   is whatever its schema tail says. The only guarantee is the one above: indices are
   dense and distinct by construction.
 
-An expression's pair is dense over the attributes it *actually carries*: a `? doc`
-alone is `[value, type, doc]`, so "slot 3" is the slot Doc takes in a pair that also
+An expression's expr is dense over the attributes it *actually carries*: a `? doc`
+alone is `[value, type, doc]`, so "slot 3" is the slot Doc takes in an expr that also
 carries a perspective. Readers go through the tail position, never through a hard
 number.
 
-**A pair is also a type value.** When an expression *is* a type — a type parameter, a
-struct constructor's argument — its `[value, type]` pair is the type the `[shape, kind]`
-encoding reads, so widening every pair to the canonical attribute width would make a
+**An expr is also a type value.** When an expression *is* a type — a type parameter, a
+struct constructor's argument — its `[value, type]` expr is the type the `[shape, kind]`
+encoding reads, so widening every expr to the canonical attribute width would make a
 type `[shape, kind, attrs…]` and break type-level functions. That is why an expression
-pair stays dense while a compound's *element slot* is full width (a slot is never a
+expr stays dense while a compound's *element slot* is full width (a slot is never a
 type value: `docs/notes/compound-element-slots.md`). The canonical positions still
-travel with the pair: a function's **parameter pair** states its requirement at the
-attribute's canonical position (the pair rides the artifact), and the **return
-certificate** is the applied clone's own return pair: the call's attribute is the
+travel with the expr: a function's **parameter expr** states its requirement at the
+attribute's canonical position (the expr rides the artifact), and the **return
+certificate** is the applied clone's own return expr: the call's attribute is the
 clone's stated attribute, exactly as the call's type is the clone's codomain. So a
-frozen call reads the requirement from the signature pair exactly as a source call does.
+frozen call reads the requirement from the signature expr exactly as a source call does.
 
 **The whole-argument default is the combine; a result that is an argument's part is a
 reference.** An expression's **provider** is `provided_slot` — the **combine** of what its
@@ -101,7 +101,7 @@ it is the default working, not a fact the vocabulary wrote.
 return certificate only when the callee's return states an attribute
 (`return_marker`/`return_field`); otherwise the call carries none and the consumer's
 combine is the whole reading. That gate is load-bearing for the **routed operators**: a
-surface `+` lowers to an `Apply` of the prelude's `add`, whose applied pair carries an
+surface `+` lowers to an `Apply` of the prelude's `add`, whose applied expr carries an
 *undecided* attribute cell. Read without the gate, that cell is a stated **wildcard**,
 and a wildcard unifies with everything — so `((1 # 4) + (2 # 6)) # 5` checked with the
 store loaded and was refused only in a bare build
@@ -115,7 +115,7 @@ buffer, so no kernel could write then read. The vocabulary therefore writes
 `perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and the return
 spells `# (perspective_of x.to)`. The checker recognizes the **shape**, never the callee's
 name: a call whose argument is the enclosing parameter (or one of its fields) is a
-**reference** (`Checker::attribute_reference`). The applied clone's return pair states the
+**reference** (`Checker::attribute_reference`). The applied clone's return expr states the
 call's attribute: a reference to the whole parameter is decided against the argument's
 provided slot, and a reference the clone can decide (a field of a **dynamic** callee's
 bound parameter) is decided per call site. A frozen callee's reference is only
@@ -147,9 +147,9 @@ condition the attribute imposes on the annotated expression's own value (registe
 through the assert channel), `label()` is the **name** it gives that value (a
 labelled value *reads* as `?name`), and `render()` spells the attribute in a
 signature. `render()` receives the composed extension registry as well as the slot,
-because an attribute whose slot holds a **nested pair** — a refinement's slot *is*
-its predicate's pair — must look for a name inside it, and which attributes that
-pair carries is not in the graph (`attr::pair_label`; see
+because an attribute whose slot holds a **nested expr** — a refinement's slot *is*
+its predicate's expr — must look for a name inside it, and which attributes that
+expr carries is not in the graph (`attr::expr_label`; see
 [operator-polymorphism](operator-polymorphism.md) §8.1).
 
 ## Perspective
@@ -185,17 +185,17 @@ model: the certificate for which expressions are uniform across an aligned lane 
 sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
 the lattice's bottom: the value is uniform over exactly its own thread. A frozen
-callee's parameter requirement is the **parameter pair's** stated attribute at its
-canonical position (the pair rides the artifact); the return certificate is the applied
-clone's return pair, materialized per call (`Checker::check_app`, `Module::applied_pairs`).
+callee's parameter requirement is the **parameter expr's** stated attribute at its
+canonical position (the expr rides the artifact); the return certificate is the applied
+clone's return expr, materialized per call (`Checker::check_app`, `Module::applied_exprs`).
 So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
 
 **The attribute slot is a type-shaped slot now, and the isomorphism is where that landed.**
-The paragraph this replaces said the slot held only a *cell*, that nothing in the pair
+The paragraph this replaces said the slot held only a *cell*, that nothing in the expr
 could be re-evaluated at a call site, and that a reference such as `perspective_of x.to`
 therefore could not name its field. **The slot isomorphism changed the representation**:
-every expression's pair is full width, every attribute position carries a value (the
+every expression's expr is full width, every attribute position carries a value (the
 perspective's default is `0`, the lattice identity), the checker compares the attribute
 where the order lives, and a requirement stated about a **parameter** inside a body is
 recorded and replayed at each apply (`Checker::deferred_requirements`). Measured at
@@ -208,11 +208,11 @@ isomorphism: every expression carries the default, the order is the checker's".
 
 **A compound's elements are complete slots.** The superior's verdict: a struct's
 fields — and an array's, a set's or a tuple's elements — are the complete `[value, type,
-attributes]` pair, so a compound's value is an array of slots. Every construction site
-puts the element expression's pair in the value; the element's attributes are its pair's
+attributes]` expr, so a compound's value is an array of slots. Every construction site
+puts the element expression's expr in the value; the element's attributes are its expr's
 attributes. A read (`a(k)`, `a.name`, `a[i]`) takes the element slot's value position and
 carries the element's attributes at their canonical positions
-(`Checker::element_pair`); an undecided element states its attribute as a lazy `Index` of
+(`Checker::element_expr`); an undecided element states its attribute as a lazy `Index` of
 its own slot, so an apply binds it and a certificate reads it. `Module::element_value_node`
 is the one element read for consumers: a slot's value position, the node itself for a
 bare value. Measured: `write_persp` reads `?a # 0`, `read_persp`/`read_persp2` `?a # 32`.
@@ -230,7 +230,7 @@ in the tree, so that half is an open question with no reading behind it rather t
 seam; anyone re-measuring it should restore the probe first.
 
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
-attribute is right in the type slot it is right in *any* attribute slot, so a pair's
+attribute is right in the type slot it is right in *any* attribute slot, so an expr's
 unify descends the attribute positions exactly as it descends the type slot — no skip,
 no second dispatch. What differs is the *rule* at that position: a type must be equal,
 an attribute is a refinement, so the call's requirement is checked by the attribute's
@@ -252,7 +252,7 @@ A plain type used to demand the absent top of the value it annotated (the type's
 missing slot was reconciled as `0` against the value's `# 1`), which refused every
 `(read … : Float)` the moment the seeds stated the bottom; `unify_type_attributes`
 now reconciles only the markers the **type expression carries**. And a call's term is
-its apply node rather than a pair, so its propagated slot lives in the state and is
+its apply node rather than an expr, so its propagated slot lives in the state and is
 read by `value_attr_for` when an annotation preserves it.
 
 ### A lane-group requirement (the uniform-load shape)
@@ -494,9 +494,9 @@ leaves the check on the unify arm, where a free cell is a wildcard. Whether a
 requirement may bind a runtime-dependent provider is a separate question, and it
 is the one this design leaves standing.
 
-Adding an attribute to the tail widens the pair, and that is the right trade for
+Adding an attribute to the tail widens the expr, and that is the right trade for
 metadata a *value* carries. Metadata that must stay **pinned to one expression** is not
-an attribute: a slot is padded, propagated and meet-combined, and the pair that holds
+an attribute: a slot is padded, propagated and meet-combined, and the expr that holds
 it is unreachable from the value it annotates, so graph fusion's interface claim rides a
 **mark** (`~`) in a side table beside the expression tree instead — see
 [graph-fusion](graph-fusion.md) §3.
@@ -520,7 +520,7 @@ an existing `? a` without conflict — the checker never special-cases a label's
 *unification*, only its metadata slot. A label's value is any first-class lichen value
 (by convention a struct instance); the renderer reads the value's field *names* from
 its **type chain** (the label's runtime slot carries the annotation value's
-`[value, type]` term pair), so nothing about a label's shape is hardcoded.
+`[value, type]` term expr), so nothing about a label's shape is hardcoded.
 
 `?` takes a **general expression**, exactly as `#` does: the value is just the
 expression's value, and there is no label-specific literal. A **`Doc`** is therefore a
@@ -574,9 +574,9 @@ the crate was split out of `lichen-language` along with the rest of the frontend
 - Subtype relaxation was originally a stage-2 non-goal; it is now implemented via
   `check_unify_relaxed` + `AttrExt::is_subtype`.
 - A label's runtime render slot carries the annotation expression's `[value, type]`
-  pair, and a constraint's does too — the one uniform slot shape. A constraint reads its
-  lattice value from that pair's element 0 (the checker stores the pair in `attr[e]`,
-  the apply-time unify and subtype read the value); a label reads the whole pair (its
+  expr, and a constraint's does too — the one uniform slot shape. A constraint reads its
+  lattice value from that expr's element 0 (the checker stores the expr in `attr[e]`,
+  the apply-time unify and subtype read the value); a label reads the whole expr (its
   renderer walks the value's type chain).
 - **A slot is an attribute's position in the composition's `attrs` manifest, not a
   number a plugin declares.** The slot used to be declared three times over (the
@@ -603,7 +603,7 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   write at a lane-varying index certify `# 1` and the later read's `# warp` requirement
   would refuse the buffer, so that shape states a reference and is not a divisor.
   The second half is the **certificate gate**: `check_app` copies a return certificate
-  only when the callee's return states one (`return_marker`). The applied pair of a
+  only when the callee's return states one (`return_marker`). The applied expr of a
   callee that states nothing carries an *undecided* attribute cell, and
   `stated_attributes` reads that as stated — so a routed `a + b` carried the wildcard
   and accepted every annotation. The gate is what makes the routed operators' combine
@@ -676,7 +676,7 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   `lichen-perspective`'s `persp_attr_ext`).
 - `unify_slots` implementations that compare the attribute's *value* map through
   `slot_value_node` first: a perspective compares lattice numbers and a refinement
-  compares predicates.  A slot whose value is not a pair (`None`, or a bare value)
+  compares predicates.  A slot whose value is not an expr (`None`, or a bare value)
   is returned as it stands, so a caller needs no case analysis.
 - `Checker::build` is the path a host reaches when it composes an attribute set but
   does not pass the matching extension.  The schema's attribute cannot be lowered
@@ -684,7 +684,7 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   inside the checker.  The build is missing **one** thing, so it reports **one**
   diagnostic however many sites read an attribute: the apply's own slot check is
   skipped rather than reported again.  A refused annotation still compiles to the
-  schema's full width, and its attribute slot is a fresh undecided pair of the same
+  schema's full width, and its attribute slot is a fresh undecided expr of the same
   hole shape the other check-time guards leave.
 - `:` and `#` are the **loosest** operators — they wrap the whole expression to
   their right — so a compound whose operands are individually perspective-annotated

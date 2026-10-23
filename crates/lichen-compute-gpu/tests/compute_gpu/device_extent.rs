@@ -82,7 +82,7 @@ fn counts_the_passing_elements() -> KernelFragment {
         vec![one, zero, second_kept],
         vec![ScalarClass::Int],
     );
-    let pair = body.add_op(
+    let expr = body.add_op(
         entry,
         KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
         vec![first, latter],
@@ -97,7 +97,7 @@ fn counts_the_passing_elements() -> KernelFragment {
     let write = body.add_op(
         entry,
         KernelInstr::SliceWriteCall(ScalarClass::Int),
-        vec![zero, slot, pair],
+        vec![zero, slot, expr],
         vec![ScalarClass::Int],
     );
 

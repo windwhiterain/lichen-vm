@@ -408,7 +408,7 @@ fn mutually_self_referential_arrays_unify_instead_of_looping() {
     m.write_node_value(a, val_a);
     m.write_node_value(b, val_b);
     m.unify(a, b);
-    // A repeated pair is one structure, not a disagreement — the shape a
+    // A repeated expr is one structure, not a disagreement — the shape a
     // function type's `[Function(fid), ↺]` has.
     assert!(m.unify_errors.is_empty());
     assert_eq!(m.equality_representative(a), m.equality_representative(b));

@@ -37,7 +37,7 @@ panics listing the names the program *does* have.
 state they describe is the finding rather than a failure:
 
 - `try_value_of` / `try_node_of` — an undecided value is a finding, and an apply's
-  `state.val` is empty by construction, so its answer lives in its pair's own value
+  `state.val` is empty by construction, so its answer lives in its expr's own value
   slot rather than in the apply's value;
 - `class_of(name)` — a class's members each keep their own slot value, which can
   differ from the class's answer, so a probe can read the members rather than the
@@ -59,7 +59,7 @@ actually written. With `&mut self` every sub-expression has to be hoisted into a
 
 **The names are the testkit's, not the IR's.** `IR::expr` is still
 `Expr { kind }` and `ExprId` still a dense index: the production frontend pays
-nothing for them, and a name can never reach the pair layout. The *lowering*
+nothing for them, and a name can never reach the expr layout. The *lowering*
 half is not the testkit's — the node→expression attribution is
 `Build`'s, because that is a fact about a build and not about a test. See
 [lowering-map](lowering-map.md).

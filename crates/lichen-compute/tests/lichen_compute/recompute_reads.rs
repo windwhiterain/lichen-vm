@@ -53,18 +53,18 @@ scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {ELEMENTS}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par2 = struct{{.n Int, .in In2}}
-pair_raw = (k : Par2) => {{
+expr_raw = (k : Par2) => {{
   i = compute.range k.n
   left = (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)
   right = (compute.read ((compute.Read _)(.from k.in.p, .at i + 1)) : Float)
   z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((left + right) ~ "element"))))))
 }}
-pair = compute.parallel (pair_raw ~ "claim:Elementwise(element)") "gpu" OutZ
+expr = compute.parallel (expr_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{{.n Int, .in In}}
 step = (s : GArg) => {{
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun pair ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
+  compute.plrun expr ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
 }}
 built = compute.graph step
 "#
@@ -77,7 +77,7 @@ built = compute.graph step
 /// Each body declares its buffer with `compute.buf` and returns the write as the codomain
 /// field's value (`docs/notes/kernel-buffer-declarations.md`).
 fn recording() -> String {
-    format!("{}(scale, pair, built)\n", program())
+    format!("{}(scale, expr, built)\n", program())
 }
 
 /// The recording as a program that runs it and answers, over `elements` data elements.
@@ -142,7 +142,7 @@ const DEFINED: usize = COUNT - 1;
 const ELEMENTS: usize = COUNT + 1;
 
 /// The answer `z[i] = 2 d[i] + 2 d[i + 1]` has over `d = 1 … ELEMENTS`.
-fn pair_answer() -> Vec<f32> {
+fn expr_answer() -> Vec<f32> {
     (0..COUNT)
         .map(|position| 2.0 * (position + 1) as f32 + 2.0 * (position + 2) as f32)
         .collect()

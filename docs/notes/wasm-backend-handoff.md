@@ -252,7 +252,7 @@ This **replaced** the emitter's own section-by-section assembly rather than sitt
 beside it. What had to be reproduced exactly, because the host's linker resolves by
 name and the cross-kernel call indices are computed from it:
 
-- imports `env.read_i64`, `env.write_i64` (and the `f32` pair) — **each class's
+- imports `env.read_i64`, `env.write_i64` (and the `f32` expr) — **each class's
   `read` first, then its `write`** — so `base = 2 × buffered_classes.len()`;
 - one function per fragment, in the `ordered` BFS order, with `main` (the root)
   exported;

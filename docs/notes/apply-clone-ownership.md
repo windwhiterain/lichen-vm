@@ -213,7 +213,7 @@ generation rule, not a checker constraint that follows it.
 - The declared parameter attribute (`x # n => e`) is a **template** constraint: the
   apply's check compares each argument's attribute against the declared value node
   (`Checker::function_param_attr`, then the attribute's `AttrExt::unify_slots`).
-  The live attribute cell in the parameter pair is deliberately left **undecided**:
+  The live attribute cell in the parameter expr is deliberately left **undecided**:
   binding it to the declared value would let the deep pass bake it (it is a
   concrete value), so the per-apply clone would reference the template's cell
   instead of resetting it, and the lowlevel apply's positional unify would enforce
@@ -224,7 +224,7 @@ generation rule, not a checker constraint that follows it.
   `5 # 4`; the declared value itself stays only in `Checker::function_param_attr`.
 - The function shell exists before any of its nodes, and its stack entry goes in
   with it: the allocation helper tags and registers *every* node against the
-  function currently being built, so the parameter's cells and pair are this
+  function currently being built, so the parameter's cells and expr are this
   template's from the start and nothing has to be moved, re-tagged or overwritten
   afterwards. The clone walk's membership test (`finish_function` asserts it) is
   satisfied by construction rather than by a later repair pass.

@@ -66,7 +66,7 @@ impl Analysis {
         &mut self.build.module
     }
 
-    /// The root expression's pair, value and type.
+    /// The root expression's expr, value and type.
     pub fn root(&self) -> (NodeId, NodeId, NodeId) {
         (
             self.build.root_term,
@@ -94,7 +94,7 @@ impl Analysis {
         kind[..end].trim().to_string()
     }
 
-    /// An expression's compiled slots: the pair, and its value and type halves.
+    /// An expression's compiled slots: the expr, and its value and type halves.
     pub fn slots(
         &self,
         expression: ExprId,

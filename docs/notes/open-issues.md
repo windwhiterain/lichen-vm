@@ -16,7 +16,7 @@ change of the failure, not the count:
 | point | reading |
 |---|---|
 | `9ed0ee4b`, the attribute squash | the ten `graph_jit` tests **pass** — 10/10, measured in a detached worktree |
-| `4645b439`, the pair-shaped slot | JIT **29/40**, "was 20/40": the drop happened in the compound-slot commits *after* the squash |
+| `4645b439`, the expr-shaped slot | JIT **29/40**, "was 20/40": the drop happened in the compound-slot commits *after* the squash |
 | now | JIT **30/40**; nine of the ten stop in the low type, one on its refusal message |
 
 So the earlier diagnosis — [graph-recording-rounds](graph-recording-rounds.md), measured on
@@ -36,7 +36,7 @@ compute suite is **97 passed** (was 81 at `7ac3e639`'s predecessor measurement).
 **Both perspective shapes are green now.** `195600fa` restored the definition-time
 record (`return_marker`/`return_field`: the marker and the parameter field a body's
 reference follows), which carries the *field* reference (`write`'s `perspective_of
-x.to`); `02770d31` materializes the frozen return pair through the **signature's** remap,
+x.to`); `02770d31` materializes the frozen return expr through the **signature's** remap,
 so its attribute graph references the parameter clone the type-side check binds and the
 *whole-parameter* reference (then `read`'s `perspective_of x`, since retired: the
 consumer's recursive `combine` derives the same meet —
@@ -44,14 +44,14 @@ consumer's recursive `combine` derives the same meet —
 Measured: `perspective_requirements` **4/4**, compute **99 passed**, language 275,
 highlevel 136, lowlevel 164 (1 ignored), graph JIT 1/10.
 
-**The write's value reaches the marked body through a pair peel.** The backtrace from the
+**The write's value reaches the marked body through an expr peel.** The backtrace from the
 loop lowering: `buffer_write → write_call → value → … → conditional → value_item → value →
 apply → lower_loop`. So the write's `.value` operand is the **fold's inlined `if`**, not
 the call: `NativeArg.value = value_of(field)` takes a compound field's *value*, which for a
-call argument is the call's **pair value** and, undecided, its class's definition — the
+call argument is the call's **expr value** and, undecided, its class's definition — the
 function's return expression. The emitter then lowers that body as a loop. The next fix is
 upstream of the emitter: the write's value operand must be the call **expression**, not its
-pair-peeled value.
+expr-peeled value.
 
 **The nested binding is correct; a plain kernel's comparison compiles.** Two measurements
 this round: (a) a **plain kernel** writing `i >= 7` compiles (`--- ok true`), so the emitter
@@ -87,9 +87,9 @@ the list. The tail (pack_placement, the merge/fan families) is separate work.
 **The reader channel is in, and the correspondence is the one missing piece.** Landed
 (`b0d5c8e`): `compile_fragment` collects the class roots the parameter's **type** tree names,
 the body accepts a walk base that stands on one of them (or on a domain leaf), and the
-dereference gained a width reading — a pair or a slot is `2 + attributes` wide, a tuple's
+dereference gained a width reading — an expr or a slot is `2 + attributes` wide, a tuple's
 elements are slots. Measured **neutral (225)**, because the type tree's nodes and the value
-tree's nodes are in different classes: the walk's base (an element pair, class 671) is in
+tree's nodes are in different classes: the walk's base (an element expr, class 671) is in
 neither. A scan of the template's **slots** would give the correspondence, but reading a
 node's array items is `unsafe` and crashed (`STATUS_ACCESS_VIOLATION`) on the frozen handles a
 package slot can carry, so it was removed rather than shipped. The two ways to finish are a
@@ -105,14 +105,14 @@ refused six perspective programs with `expected Int, found Int`. The requirement
 the order lives — `unify_declared_value` plus the deferred requirement replayed at the apply — and
 all four suites measure green (compute 219, highlevel 136, lowlevel 164 with 1 ignored, language
 275). **A measured shape worth keeping: an attributed parameter's type and attributes meet in its own
-pair.** At `lambda.rs:127` the parameter's **type cell** is empty and the denotation is a pair, and
+expr.** At `lambda.rs:127` the parameter's **type cell** is empty and the denotation is an expr, and
 `parameter_type`'s kind is not `Annotation` — which is why the "inner type" candidate was neutral:
 there is no inner annotation to unwrap. The attributes of `i : Int # 32` are the **parameter's**
 schema tail, and `type_denotation(parameter_type, Some(parameter))` combines them with `Int` into
-the pair the type slot holds. The failure that misled the four probes was not this pair at all: it
+the expr the type slot holds. The failure that misled the four probes was not this expr at all: it
 was the runtime's attribute compare (the section above).
 
-**Resolved: the six came from widening the runtime's pair unify, not from the parameter type.**
+**Resolved: the six came from widening the runtime's expr unify, not from the parameter type.**
 The probes on the type cell were neutral because the type slot was never the site. The
 `DiagKind::Runtime` reading, then the mismatch values (`value_a = USize(32)`,
 `value_b = USize(0)`), named it: `apply_parameter_check` was comparing the attribute positions
@@ -124,17 +124,17 @@ default `0` refused. Narrowing that loop to `0..2` and leaving the order to the 
 denotation to the plain type was measured neutral, and so was every other type-side candidate,
 because the failing unify does not involve the type slot at all: the diagnostic is a
 `DiagKind::Runtime` apply-time parameter check, and its two values are `32` and `0` — the
-attribute requirement against the default. That is the lowlevel pair unify, fixed by narrowing it
+attribute requirement against the default. That is the lowlevel expr unify, fixed by narrowing it
 to `0..2`.
 
 **The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
 type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) => f i`,
 span line 3 col 3), and the probe that reads both sides of `unify_declared_value` shows them equal
-(`declared USize(32)`, `found` the pair whose value is `32`), so the attribute compare is not the
+(`declared USize(32)`, `found` the expr whose value is `32`), so the attribute compare is not the
 one failing. The failing unify is the apply's **type** check: `f`'s parameter type is written
 `Int # 32`, and `type_denotation`'s stated rule returns **the annotated value's own term** for a
-type expression that carries attributes — a pair — so the argument's `Int` is compared with a pair
-and the message prints the pair's type twice. Whether that denotation rule or the apply's type
+type expression that carries attributes — an expr — so the argument's `Int` is compared with an expr
+and the message prints the expr's type twice. Whether that denotation rule or the apply's type
 check should change is the parallel session's design call, and it is the only thing between the six
 and green.
 
@@ -144,7 +144,7 @@ the parameter's declared slot") and six tests; the tests `f = (x : Int # 32) => 
 `g = (i : Int # 32) => f i` / `g 0` and `f = x # 4 => x; f 5` are refused with **`expected Int,
 found Int`** — a comparison of two *type* values where the attribute's *numbers* belong. Both
 sides reach `slot_value_node`, so one side's slot is a type term instead of the number: the
-`declared` pair is `state[parameter_attribute].term` (correctly `[32, Int]`), which leaves the
+`declared` expr is `state[parameter_attribute].term` (correctly `[32, Int]`), which leaves the
 **provided** side — `provided_slot`/`state[argument].attr` — as the one that answers a type. That
 is the next edit, in the same path this session has been working.
 
@@ -157,7 +157,7 @@ every apply of it; the test
 without the change and refuses with `expected 32, found 1` with it.
 
 **The markerless parameter takes the caller's attribute, and the body's requirement is replayed.**
-`2c809363`: `check_app` reads the argument's provided slot only when the callee's parameter pairs a
+`2c809363`: `check_app` reads the argument's provided slot only when the callee's parameter exprs a
 marker; a parameter written without one left the cell undecided, so the marker now falls back to
 the **caller's own merged tail** (measured: an `# 1` argument's annotation carries
 `merged_tails = [Perspective]` and `state[].attr` is set). The body's own requirement is then
@@ -165,24 +165,24 @@ handled by the deferred-requirement table (`4dfe3e36`), which records it where t
 consumes it and replays it at every apply. Together they make the isomorphism observable: the test
 `a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it` fails without the replay and
 refuses with `expected 32, found 1` with it.
-**The caller's attribute reaches the apply's pair now, and the refusal needs a deferred body
+**The caller's attribute reaches the apply's expr now, and the refusal needs a deferred body
 check.** `2c809363`: `check_app` reads the argument's provided slot only when the callee's
 parameter paired a marker; a parameter written without one left the cell undecided. The marker now
 falls back to the **caller's own merged tail** (measured: an `# 1` argument's annotation carries
-`merged_tails = [Perspective]` and `state[].attr` is set), so the apply's argument pair carries
+`merged_tails = [Perspective]` and `state[].attr` is set), so the apply's argument expr carries
 the caller's slot. Green: compute 218/0, highlevel 136/0, lowlevel 164/0. The observable refusal
-is one structural step further: the callee's **body** is checked before the apply unifies the pair
+is one structural step further: the callee's **body** is checked before the apply unifies the expr
 with the parameter, so a requirement written in the body (`compute.read`'s `# warp`) never sees the
 caller's value — that needs the attribute reconciliation **deferred to the apply**, not a reader
 change.
 
 **Correction to the first reading**: the check-time flow *does* exist —
-`check_app` builds the argument pair with the caller's provided slot
-(`lambda.rs` `argument_attr` / `attribute_pair`) and compares it with the stated requirement
+`check_app` builds the argument expr with the caller's provided slot
+(`lambda.rs` `argument_attr` / `attribute_expr`) and compares it with the stated requirement
 (`unify_declared_value`). What it does **not** do is read the *argument* when the **callee states
-nothing**: `parameter_marker` comes from the callee's parameter pair's *first stated* attribute, so
-a parameter written without one (`(b : (compute.Buf Int))`) yields `None`, the pair is a plain
-`slot_pair`, and the caller's own `# 1` never enters the callee's cells — the *undecided* cell is
+nothing**: `parameter_marker` comes from the callee's parameter expr's *first stated* attribute, so
+a parameter written without one (`(b : (compute.Buf Int))`) yields `None`, the expr is a plain
+`slot_expr`, and the caller's own `# 1` never enters the callee's cells — the *undecided* cell is
 simply never propagated to. That is the gap the isomorphism still has, and the superior's rule
 names the fix: **a hole is undecided, and undecided is what unification propagates**. The
 **default attribute array** is not part of it: it would hide the unification instead of doing it.
@@ -243,7 +243,7 @@ test's scope question — whether the definition's own `T` should read `Float` �
 the five paths: the good ones are two positions for a two-level parameter (`[0,0]`, `[1,0]`), and
 the two that got offset 0 where 1 was right are **three** (`[0,0,1]`) — one extra, at the front.
 `offset_of` retries without the leading position **only when the walk outran the shape and that
-position is a `0`**, which is exactly the pair's own value projection; the zero guard is what
+position is a `0`**, which is exactly the expr's own value projection; the zero guard is what
 keeps the three tests the unguarded retry broke green. Measured **225 passed / 1 failed**, twice.
 
 **The projection retry is exactly half right, and the class cells are fresh.** Two measurements
@@ -284,10 +284,10 @@ measured and reverted: retrying the shape walk without its leading position brok
 are right (220/6), and making the walk strict so the retry could fire broke three more (219/7).
 
 **The wrapper render follows the full-width slot, and the width reading is back: 219/7 → 221/5.**
-`63e4af5d`: the render test's expected strings were the two-position pair; slots are `2 +
-attributes` wide now, so the render is five positions per pair with the wildcard attributes
-printed as `@any`. `d59fa81a`: the type-position reading alone misses a pair whose second
-position is still an undecided cell, and the walk then records the pair projection as a path
+`63e4af5d`: the render test's expected strings were the two-position expr; slots are `2 +
+attributes` wide now, so the render is five positions per expr with the wildcard attributes
+printed as `@any`. `d59fa81a`: the type-position reading alone misses an expr whose second
+position is still an undecided cell, and the walk then records the expr projection as a path
 step — the nested-tuple program's `p(0)(1)` took offset 0 and answered **8** where **9** is right.
 A slot with a layout is `2 + attributes` wide while a bare tuple carries no layout, so the width
 reading separates them, and both readings are kept. Measured **221/5** on its best run (the two
@@ -306,7 +306,7 @@ outer launch never sees a result. Rewriting that test as a dispatch assertion wa
 launch was refused by name before its parameter could be supplied; `argument_decided` walks the
 argument and separates an **empty** position (undecided → the launch stays lazy) from a **wrong
 value** (decided → the refusal is the answer), and the launch arm returns `None` on the former.
-`jit_cross_kernel_tuple_argument_through_the_wrapper` passes. The first test of the pair still
+`jit_cross_kernel_tuple_argument_through_the_wrapper` passes. The first test of the expr still
 dispatches nothing: `k1 = compute.jit (r => k0 r(1))` is a cross-kernel *call*, so its outer
 `compute.launch` reaches no dispatch at all.
 
@@ -324,11 +324,11 @@ The first dispatches nothing at all for the same reason: `k1 = compute.jit
 dispatch. That is the deferral machinery's line, and rewriting the first test as a dispatch
 assertion was measured wrong (`stubs.calls()` stays empty) and reverted.
 
-**A pair's second position is its type, and that is the dereference's one honest reading.**
+**An expr's second position is its type, and that is the dereference's one honest reading.**
 `acff0fe6`: the walk's three readings — a two-position shape with an open second position, the
 class value's `2 + attributes` width, and an array's shape — all mistake a **bare two-element
-tuple** for a pair, because a tuple of two slots is two wide as well. The reading that separates
-them is the second position's own kind: a **pair's second position decodes as a type**
+tuple** for an expr, because a tuple of two slots is two wide as well. The reading that separates
+them is the second position's own kind: a **expr's second position decodes as a type**
 (`low_type_of_slot` answers), a tuple's second element is another slot. With it the nested-tuple
 program *runs* instead of being refused with "a kernel body's index cannot be placed", and
 `nested_config`'s device test reaches its own assertions. The suite stays at **218/8** because
@@ -350,9 +350,9 @@ still reads 217/9 then 218/8 on one tree, and the two runs differ by exactly one
 other, both record tests this campaign wrote. Neither installs a backend outside the stub's
 slot, so the leak is elsewhere: the graph and fragment registries are one per process too.
 
-**A position past a scalar is a projection: the nested-config pair passes.** `161032fe`: the
+**A position past a scalar is a projection: the nested-config expr passes.** `161032fe`: the
 offset walk refused when the parameter's shape was exhausted before the positions were, which is
-exactly what a pair projection looks like from the shape's side; the offset it reached stands.
+exactly what an expr projection looks like from the shape's side; the offset it reached stands.
 Both `nested_config` tests that failed on the offset now pass **in isolation**, and the suite read
 **218/8** on the first run after the change and 217/9 on the next, unchanged tree. That swing is
 now the dominant noise: `nested_config`, `fuse_licence`, `compile_order_class` and `graph_jit`
@@ -463,7 +463,7 @@ walk with the widths: a read of an array's element (`2582 → 2566`, class shape
 `Array(Some(USize), 2)`) has steps 0 and 1 *onto the element's slot*, so both are the slot's own
 positions and the walk must dereference step 0 and refuse step 1. That rule is added
 (`13375eda`) and measured **neutral (202/24)**: the nested-config refusal is the
-**offset**, not the dereference — the chain reaches the parameter's own pair (250, class 2981)
+**offset**, not the dereference — the chain reaches the parameter's own expr (250, class 2981)
 and passes the root check, then `offset_of` answers `None`. The `[0,0,1]`-against-a-two-element
 shape reading from the previous round is that same offset defect.
 
@@ -476,7 +476,7 @@ names `max`. Measured **fold_datum 1/3 → 3/3**, compute **200/26 → 202/24**.
 kernel body's reads.** `f6ab07e6`'s note said the root check refuses the nested base; a second
 probe shows the message has two sources. In `compute::jit_nested_tuple_domain` the chain ends on
 the inner tuple and the root check refuses. In `nested_config::a_nested_config_records_each_leaf_
-for_what_it_is` the chain ends on the parameter's **own pair** (NodeId 250, class 2981, whose
+for_what_it_is` the chain ends on the parameter's **own expr** (NodeId 250, class 2981, whose
 value is the domain 248/class 334), so `on_a_slot` is true and the root check passes — what
 answers `None` there is the **offset**: `offset_of` cannot walk `positions` over the parameter's
 shape. A read-container map (`read_containers`, recorded in `slot_read`) was built to give the
@@ -490,7 +490,7 @@ reverted; the finding is that the offset path is the second defect and it is tes
 wide.** Probing the walk on `compute::jit_nested_tuple_domain` with the narrow seed
 (`f6ab07e6`): `667 → 669` is a slot so its step 0 dereferences, `669 → 671` is a bare array (a
 tuple) so its step 1 is pushed, and the walk **ends on 671** — the inner tuple — which is
-exactly right. What refuses it is the **root check**: `671` is not the parameter's pair
+exactly right. What refuses it is the **root check**: `671` is not the parameter's expr
 (`49`/class `795`), not one of the domain's leaves, and `element_type_of(671)` is `None` because
 the read that produced it is not one the checker recorded (the lazy branch skipped the
 recording; that is fixed, the lookup still misses). Two acceptance criteria were measured and
@@ -499,9 +499,9 @@ the dereference is not involved. The offset itself would be right: the path `[1]
 `1`, which is `p(0)(1)`.
 
 **The seed now runs after the inference and states only what it decides — the class-shape
-conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the pair seeds, runs
+conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the expr seeds, runs
 `infer_template_low_types` **first**, and seeds only a class the inference left shapeless; an
-undecided pair (`Tuple([None, None])`) states nothing. Measured **200/26** against the previous
+undecided expr (`Tuple([None, None])`) states nothing. Measured **200/26** against the previous
 **201/25**, and the difference is exact: **five fixed** — including
 `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`, the test that asserted the
 class-shape invariant, plus the two tiling tests, one fusion test and a plain-leg probe (since deleted) — and
@@ -510,8 +510,8 @@ class-shape invariant, plus the two tiling tests, one fusion test and a plain-le
 `nested_config::a_nested_config_records_each_leaf_for_what_it_is` and
 `fuse_licence::a_read_at_a_computed_address…`. All four are the nested-tuple **placement**: the
 body's path walk still ends refusing with "a kernel body's index cannot be placed", now reaching
-the parameter's own pair (NodeId 49, class 795) before refusing. So the remaining work on that
-line is the walk's dereference rule, which cannot tell a pair from a two-element tuple whose
+the parameter's own expr (NodeId 49, class 795) before refusing. So the remaining work on that
+line is the walk's dereference rule, which cannot tell an expr from a two-element tuple whose
 type is still open.
 
 **The tiling family proves its report: compute 201 / 25.** `c6c2ab69`: the two pipeline tests
@@ -601,7 +601,7 @@ tried in one build. A `domain_type_classes` map of the class roots named by the 
 base class that map names. The walk's base for `p(0)(1)` is still rejected: its class root is
 **not** any class the type tree names, because the checker never unified the **value** tree's
 nodes with the **type** tree's nodes — the type node 48's tree is `{48, 60, 61, 11}`, and the
-value-side element pair stands in classes of its own. That is the piece of the method that is
+value-side element expr stands in classes of its own. That is the piece of the method that is
 missing: the correspondence between an element's value node and its type node, which the
 **checker** has to state. Once it does, the seed has nothing to bridge and can go. The
 type-class acceptance alone is **neutral** (225, no regression) and was reverted with the rest.
@@ -609,8 +609,8 @@ type-class acceptance alone is **neutral** (225, no regression) and was reverted
 **The walk ends on the domain's node, which holds no value at compile time.** Tracing
 `parameter_path` on `compute::jit_nested_tuple_domain`: the outer read's walk goes
 `667 → 669 → 671` and stops at **671**, while the parameter's value is **47** — so the base the
-walk reaches is a *nested element's pair*, not the domain, and `on_a_slot`/`on_a_leaf` are both
-false (the domain's class root is 71, the slot pair's 795). A domain-membership test that
+walk reaches is a *nested element's expr*, not the domain, and `on_a_slot`/`on_a_leaf` are both
+false (the domain's class root is 71, the slot expr's 795). A domain-membership test that
 descends the domain's **value** tree answers nothing, because the parameter's value node is a
 placeholder with no value at compile time; only its *shape* is known. So the placement needs
 the domain's **type structure** (the decoded `LowShape`, which carries no node ids), and the
@@ -618,15 +618,15 @@ seed is what currently makes the nested bases match their classes. This is the d
 round has to settle; the three experimental variants (node value, class value, kind-based
 dereference, domain membership) were all measured **neutral at 222** and are reverted.
 
-**The five are refused where the body tells a pair from a tuple.** Reading `parameter_path`: the
+**The five are refused where the body tells an expr from a tuple.** Reading `parameter_path`: the
 outer read `p(0)(1)` walks its target (the inner `Index`), sees `step == 1`, takes the
 *dereference* branch because the class shape says "a two-position tuple with an open second
-position", and returns `Ok(None)` — "a pair's type (1) is not a value this body emits". But
+position", and returns `Ok(None)` — "an expr's type (1) is not a value this body emits". But
 `p(0)` is the **tuple read** whose *value* is the inner tuple `(Int, Int)`, so its step 1 is the
-tuple's **second element slot**, not a pair's type. A pair and a tuple are both arrays with a
-layout, and the class shape `Tuple([None, None])` is precisely the pair *and* a two-element
+tuple's **second element slot**, not an expr's type. An expr and a tuple are both arrays with a
+layout, and the class shape `Tuple([None, None])` is precisely the expr *and* a two-element
 tuple, so the detector cannot tell them apart: that ambiguity is the defect, and the
-discriminator is the **second position's own kind** (a pair's second position is a type, a
+discriminator is the **second position's own kind** (an expr's second position is a type, a
 tuple's elements are slots). Trying the node's own value or the class's value for the detector
 was measured **neutral** (222) in both forms, because the walk reaches the same ambiguity.
 
@@ -641,21 +641,21 @@ and a plain-leg probe (since deleted) — and **breaks five**, all nested shapes
 `nested_config::a_nested_config_runs_on_the_device_through_the_graph`. Their shared refusal is
 "a kernel body's index cannot be placed: its target is a computation and its index is the
 constant 1" — the body's dereference detector reads the **class** shape
-(`Tuple([None, None])`) to recognise a pair's value, and a computation's class has no shape
+(`Tuple([None, None])`) to recognise an expr's value, and a computation's class has no shape
 without the seed. A structural replacement for that detector (the node's value is an array
 with a layout) was measured **neutral** (222), so the shape the detector wants must come from
-the **pair's type slot**, which is what the seed copies into the class
-(`shape::low_type_of_slot` at the parameter's pair). That is the next change, on the read
+the **expr's type slot**, which is what the seed copies into the class
+(`shape::low_type_of_slot` at the parameter's expr). That is the next change, on the read
 side, where the verdict points.
 
 **The two statements are both the provider's: the seed and the inference.** A backtrace at the
 conflict names the caller chain `refine ← seed ← prepare_template_low_types` for the first
 conflict, and after a last-seed-wins variant the second names
 `refine ← infer_template_low_types ← prepare_template_low_types` on node 1684 — so the
-collision is **inside one provider call**: `prepare_template_low_types` seeds the pair's value
-from the pair's type slot, and then `infer_template_low_types` states the same class from the
+collision is **inside one provider call**: `prepare_template_low_types` seeds the expr's value
+from the expr's type slot, and then `infer_template_low_types` states the same class from the
 node's operands, more specifically. Under the verdict the *first* statement is the one that
-should not exist (the pair's value has a corresponding type node), and the inference is the
+should not exist (the expr's value has a corresponding type node), and the inference is the
 legitimate one — but removing the seed costs **three** tests (measured 225 → 222), so the
 inference does not yet state what the seed states for those three. The next work is therefore
 **the inference's transfer for those nodes**, so the seed can go without losing them.
@@ -680,11 +680,11 @@ seed-container whose later statement fills an open position. Letting two seeds *
 other** (a seed is the provider's statement for the same node, so the two states are one
 statement, not a seed meeting an observation) resolves that first conflict and is measured
 **neutral (225)** — the next conflict, on 1684, is reached only after it. The verdict's stricter
-reading — a pair's value **has a corresponding type node**, so `prepare_template_low_types` must
+reading — an expr's value **has a corresponding type node**, so `prepare_template_low_types` must
 not seed it — was measured too: **compute 225 → 222**, a regression of three, so the seed is
 load-bearing for those three and the defect is not simply "that call should go". What remains
 unknown is **which nodes the highlevel is supposed to seed** under the verdict: the templates
-here are all pairs, so a literal reading seeds almost nothing, and the three regressions say
+here are all exprs, so a literal reading seeds almost nothing, and the three regressions say
 something still needs the shape the type slot already states.
 
 **The seed relaxation was asked again (round 93) and the superior's verdict is recorded
@@ -913,7 +913,7 @@ in the launch path for a class-crossing body, not a misidentified slot.
 **Two attempts at the frozen-body overflow, both measured, both reverted.** (a) A
 **read-depth guard** on `evaluate_node` (a counter plus `MAX_READ_DEPTH = 512`) does not stop
 it — the recursion is not reached through `evaluate_node` at all. (b) Making the **role paths
-carry the slot step** (`walk_role` pushes `PAIR_VALUE_SLOT` after each field) is the
+carry the slot step** (`walk_role` pushes `EXPR_VALUE_SLOT` after each field) is the
 structural shape that would make the peel unnecessary, but it costs **16 tests**
 (compute 120 → 104): the paths are consumed by several readers that already account for the
 slot, so the change must move every reader in the same step, not one walker. The local peel
@@ -1017,8 +1017,8 @@ undecided. For the recorded launch the operand evaluates to a value but its verd
 it holds no value). So the next probe is the placeholder struct: a `GraphInput` cell is
 decided by construction, and something under it reads undecided.
 
-**Inside the recording no operator runs at all, and the pair's value read answers nothing.**
-Two more measurements on the same test: (a) the returned pair's first item (`Index(5732)`)
+**Inside the recording no operator runs at all, and the expr's value read answers nothing.**
+Two more measurements on the same test: (a) the returned expr's first item (`Index(5732)`)
 evaluates to **`None`** even though its target (`5734`) holds an array and its selector is
 the constant `0` — so the descent stops at that read; (b) instrumenting the extension
 operator's `run` shows it is **never called while recording** (`is_recording()` true), and
@@ -1031,17 +1031,17 @@ whose evaluation is the operator call the recording never makes.
 `graph_jit::a_graph_recorded_for_one_backend_runs_on_another`: every apply **instantiates**
 (`APPLY fn … instantiated true`, including the graph body's apply); after the recording's
 apply the module holds **four launch nodes owned by no function** (`6113`, `6188`, `6414`,
-`6478`) — the recording's **clones** — and every one has an empty value; the returned pair's
+`6478`) — the recording's **clones** — and every one has an empty value; the returned expr's
 items are all `shallow false`; and instrumenting `evaluate_node_deep_inner` shows the deep
 walk **never visits a `ParLaunch` node** (zero hits). So the clone exists and the deep pass
-does not reach it: the next probe is the value read the pair's item 0 names
+does not reach it: the next probe is the value read the expr's item 0 names
 (`Index(5732)`), whose evaluation gates the descent.
 
 **Corrected: no launch ever has a value, and the recording's apply creates none.** The
 user's objection is right — a function that never ran returns nothing decided. Measured: the
 module holds **only the templates' launch nodes** (owners `9/10/11/14/22`), **every one with
 an empty value**, and after the recording's apply the module still holds no launch node with
-a value; forcing the value the returned pair carries (`d53b07e1`) does not change that. 
+a value; forcing the value the returned expr carries (`d53b07e1`) does not change that. 
 
 **The graph family's root: the body's launches are decided before the recording.** Probes
 on `graph_jit::a_graph_recorded_for_one_backend_runs_on_another` with the recording in
@@ -1133,7 +1133,7 @@ compile's class merge, most likely through the refinement/assert path
 (`operands : array{(_ ! in_num), 2}`).
 
 **The type side no longer copies the frozen body; the remaining clone is the value side's.**
-Both type-side static applications copied the frozen **return pair whole** — and that pair's
+Both type-side static applications copied the frozen **return expr whole** — and that expr's
 value is the *body*, so the type side dragged `greater_or_equal`'s graph into the caller and
 its parameter reads were bound by the type arguments. They now copy only the type and
 attribute positions (the value is a hole), measured **114 → 115**. The remaining opaque
@@ -1145,11 +1145,11 @@ argument binding.
 **The inlined body is `greater_or_equal`, and the emitter reaches it as a `definition`.**
 `core.lichen` writes `greater_or_equal = operands => { operands : array{(_ ! in_num), 2};
 operands[0] >= operands[1] }`, so `s(0) >= 7` becomes an apply whose single argument is the
-pair, and the `Geq` node is that body's `BinOp`, cloned into the caller by
+expr, and the `Geq` node is that body's `BinOp`, cloned into the caller by
 `static_function_type_apply`'s `static_node_apply(r#return, …)` with the signature's
 remap. The emitter reaches it through `definition` (not `apply`), so it reads the operand
 array as `[left, right]` — correct for the `BinOp` form — and the wrong node is the left,
-which the remap bound to the `compute.read` callee path instead of the argument pair's first
+which the remap bound to the `compute.read` callee path instead of the argument expr's first
 element. The next probe is `materialize_static_signature_with_classes`' parameter remap.
 
 **The `Geq` node is a cloned frozen body, not a check-time comparison.** Only one `Geq`
@@ -1210,21 +1210,21 @@ apply of the same call, and the unstated one is the **type-side** apply `check_a
 defect is that the loop's lowering reaches a **type-side** apply for a value. A routing
 that lowers the sibling measured neutral (114) and was not kept, because it scans the
 module per unresolved apply; the fix must identify the pairing from data the emitter
-already holds (the recorded `apply_edges` are checker-only, so the module needs the pair
+already holds (the recorded `apply_edges` are checker-only, so the module needs the expr
 relation).
 
-**The loop body's failing callee is a read of an undecided pair.** Probing the refusal
+**The loop body's failing callee is a read of an undecided expr.** Probing the refusal
 itself: the apply's callee is `Index(691, 0)` where `691` is an **empty cell** — no value,
 no operation, so `array_items_of` answers `None` — and `static_function_of_callee` returns
-`None` for it. So the callee the loop's lowering holds is a `value_of` **read** whose pair
+`None` for it. So the callee the loop's lowering holds is a `value_of` **read** whose expr
 was never filled in the clone, not the shared wildcard and not the type-side apply (those
 are the *template's* pairing, measured last round). The fix therefore belongs at the
 callee's **definition resolution**: the emitter must follow the read to what defines the
-pair (the frozen function value) before deciding it is unresolvable.
+expr (the frozen function value) before deciding it is unresolvable.
 
 **The empty callee is the *type-side* apply, by design.** The fold's template holds the
-applies in **pairs** for one call site: `610` with the callee `556` = `Function(Static)`
-and the argument pair `605` — the **value-side** apply — and `613` with the callee `611` =
+applies in **exprs** for one call site: `610` with the callee `556` = `Function(Static)`
+and the argument expr `605` — the **value-side** apply — and `613` with the callee `611` =
 an **empty cell**, the same result-type cell `608` and the same function type `557` — the
 **type-side** apply whose callee is `check_app`'s `undecided_callee` ("the same four
 elements over an undecided callee: the type applies, the body does not"). The same pairing
@@ -1246,10 +1246,10 @@ template array by its *owner and shape*, not by an id.
 
 **The wildcard mints are the `_` arguments, and the apply's array stays four elements.**
 Probing the clone walk's wildcard mints shows them at index 0/2/3/4 of 5-item `layout 1`
-arrays — **pairs** whose value is the shared wildcard, i.e. the `_` wildcard arguments of
+arrays — **exprs** whose value is the shared wildcard, i.e. the `_` wildcard arguments of
 `(compute.Write _)` / `(compute.Read _)`; those are legitimate. The apply the emitter sees
-still has its **four-element** operand array (`[callee, argument pair, result cell, function
-type]`), so the earlier "operand array is a pair" reading was wrong: the callee's **value**
+still has its **four-element** operand array (`[callee, argument expr, result cell, function
+type]`), so the earlier "operand array is an expr" reading was wrong: the callee's **value**
 is the wildcard's clone, and the template apply must have been built with an unstated
 callee. Correcting this before the next probe.
 
@@ -1262,11 +1262,11 @@ own operand-array construction.
 
 **The empty callee is the apply's only unstated operand.** The template apply's four
 operands read `[<none>, array, array, array]` — the callee alone has no value, while the
-argument pair, the result type cell and the function type are all decided arrays; the two
+argument expr, the result type cell and the function type are all decided arrays; the two
 sibling applies in the same body read a static function in that position. So the template
-stores a wildcard as the callee value; the clone then mints its empty cell. `slot_pair`'s
-attribute tail is where wildcards are minted for pairs, so the next question is whether the
-apply's callee operand *is* a pair's attribute slot rather than the function value — the
+stores a wildcard as the callee value; the clone then mints its empty cell. `slot_expr`'s
+attribute tail is where wildcards are minted for exprs, so the next question is whether the
+apply's callee operand *is* an expr's attribute slot rather than the function value — the
 operand order of `value_apply` is the thing to re-read.
 
 **The empty callee is a wildcard minted by the clone walk.** A backtrace on the 383rd
@@ -1282,7 +1282,7 @@ find.
 **The empty callee is owned by the marked function and has no origin.** Probed:
 `693`'s owner is the fold, `origin` is `None`, block 3 — a **fresh** node created while
 checking the fold's template, not a clone and not a `materialize_leaf` (those carry the
-`Function(Static)` value). `refused_pair` is ruled out as the source: it sets the value
+`Function(Static)` value). `refused_expr` is ruled out as the source: it sets the value
 and the type to the *same* cell, and the apply's type operand (`694`) differs from `693`.
 The next probe is a backtrace on the checker's cell creation for the callee expression,
 not a guess.
@@ -1301,7 +1301,7 @@ would carry the `Function(Static)` value) and make it carry the static function.
 write's container (the record's element read) defines — through `define_in` — to
 **`NodeId(1583)`**, a `LowOperator::Apply` whose `callee_function` is the marked function
 (the fold). So the call is *in the graph*; the emitter only misses it because it lowers
-the value peel (`Index(pair, 0)`), whose definition is the return expression (the `if`).
+the value peel (`Index(expr, 0)`), whose definition is the return expression (the `if`).
 Lowering the **call** there instead (a `call_of_value_read` resolver in `write_call`) moves
 the refusal to the next layer — "kernel body Apply is supported only for a cross-kernel
 (kernel-value) callee" — on the loop body's own `read` call, whose callee cell is not
@@ -1319,8 +1319,8 @@ registry), not a per-test fact, and the bisect over it is invalid. The suite's 1
 therefore an upper bound on independent failures.
 
 **The seed rule is the superior's: a node with a type slot is not seeded.** Following
-that ruling, `prepare_template_low_types` no longer seeds the pair (its type slot states
-the shape); only the pair's **value** — a node without a type slot — takes the seed.
+that ruling, `prepare_template_low_types` no longer seeds the expr (its type slot states
+the shape); only the expr's **value** — a node without a type slot — takes the seed.
 Measured neutral (compute 117, lowlevel 164, other suites green). The `graph_jit`
 class-shape panic that motivated a refinement relaxation is **not** from that seed: it
 comes from a value seed whose stated type has an **open** position that an observation
@@ -1355,29 +1355,29 @@ next work is the **loop path's runtime** for the plan/tiled shapes, not the fall
 the record. The two coordinated changes that would fix this chain are recorded for the
 next round: (a) `function_apply` returns `None` (lazy) for a marked function whose
 conversion refuses instead of unrolling it, so the record keeps the call, and (b)
-`parameter_value_path` follows the chain to the parameter and pops the pair peel so the
+`parameter_value_path` follows the chain to the parameter and pops the expr peel so the
 emitter's own conversion succeeds. Both touch Invariants (the unroll fallback and the
 refusal verdict) and need the superior's ruling before they are made.
 
 **The record's `.value` slot already holds the return expression.** Followed
 structurally: the write's operand is `Index(Index(record, 2), 0)`; the record's value array
-is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not a pair — so
+is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not an expr — so
 `check_record`'s `state[field].term` for the `.value` field was already the call's *value*
-(its return expression), not the apply's pair. A resolver that follows
-`Index(Index(array, k), 0)` to the array's item and looks it up in `applied_pairs` fires
-(the chain is found) but finds no applied pair there, so it changes nothing (117) and was
-reverted. The next fix is at the **call's term**: `check_app` must leave the call's pair as
+(its return expression), not the apply's expr. A resolver that follows
+`Index(Index(array, k), 0)` to the array's item and looks it up in `applied_exprs` fires
+(the chain is found) but finds no applied expr there, so it changes nothing (117) and was
+reverted. The next fix is at the **call's term**: `check_app` must leave the call's expr as
 the field's term so the record keeps the call.
 
 **The write's value loses the call at the record, measured.** The write's third operand is
-`Index(3225, 0)`; `3225` is the write's field pair, its class's defining member is the
-**step's Add** (the fold body), and `3225` is **not** in `applied_pairs` — so no path in
+`Index(3225, 0)`; `3225` is the write's field expr, its class's defining member is the
+**step's Add** (the fold body), and `3225` is **not** in `applied_exprs` — so no path in
 the emitter reaches the call. The cause is upstream of the emitter: the record's element
-slot was filled with the argument's **value** (`pair_value_half` of the call's pair = the
+slot was filled with the argument's **value** (`expr_value_half` of the call's expr = the
 function's return expression), so the call expression itself is not in the record and
 cannot be recovered. An `applied_call` interception in the emitter (a value read of an
-applied pair lowers the call) is written and measured neutral (117) — the pair is never an
-applied pair here — and was reverted. The fix must keep the call's **pair** in the record's
+applied expr lowers the call) is written and measured neutral (117) — the expr is never an
+applied expr here — and was reverted. The fix must keep the call's **expr** in the record's
 element slot, which is the encoding question this arc is about.
 
 **The loop conversion's refusal still masks the opaque.** Re-tested the alias retry on
@@ -1390,11 +1390,11 @@ value it produces; its expanded body is the implementation), measured neutral (1
 write's value class holds no Apply for the pack program.
 
 **Nested tuple domains work (+2).** Two changes make `tuple{tuple{Int, Int}, Int}`
-compile and run: the transfer's `Index` now states the **element slot pair** for a
+compile and run: the transfer's `Index` now states the **element slot expr** for a
 compound *value*'s read (the policy `docs/notes/lowlevel-low-types.md` already states —
 "A compound's elements are complete slots … `Index(compound, k)`'s transfer states
 `Tuple([element, Unknown])`" — and the code indexed the slot as if it were the tuple), and
-`low_type_of_slot` decodes a **type pair** by the kind marker its type position holds.
+`low_type_of_slot` decodes a **type expr** by the kind marker its type position holds.
 compute went **115 → 117** (136 failed), and the language 275 / highlevel 136 / lowlevel
 164 suites stay green.
 
@@ -1402,18 +1402,18 @@ compute went **115 → 117** (136 failed), and the language 275 / highlevel 136 
 its result by the **container's kind**: a tuple or struct element states its own type cell
 (`slot_read`'s `element_ty`), an array keeps the array element type. Measured: no test
 flips (compute 115), the embedded prelude still checks, and language 275 / highlevel 136
-stay green. The nested domain is still refused: with the type-pair decode added as well,
-the class-shape assertion still fires on the pair wrapping the **outer** read — so the
+stay green. The nested domain is still refused: with the type-expr decode added as well,
+the class-shape assertion still fires on the expr wrapping the **outer** read — so the
 offending type comes from the *tuple read* path (`structs.rs`, which already uses
 `slot_read`'s `ty_node`) or from the class seed on the container value, not from
 `check_index`.
 
 **The nested conflict is a checker typing, and the obvious repair breaks the prelude.**
-`prepare_template_low_types` seeds a pair's *value* with its type slot's shape, and the
-pair wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the
+`prepare_template_low_types` seeds an expr's *value* with its type slot's shape, and the
+expr wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the
 container's type, not the element's. `check_index` types every element read with
 `elem_cell` (the **array** element type path
-`[TYPE_SHAPE_SLOT, ARRAY_TYPE_ELEMENT_SLOT, PAIR_TYPE_SLOT]`) and throws away
+`[TYPE_SHAPE_SLOT, ARRAY_TYPE_ELEMENT_SLOT, EXPR_TYPE_SLOT]`) and throws away
 `slot_read`'s own `element_ty` (`let _ = element_ty`); for a tuple/struct container the
 type must be the element **slot's** own type cell. Swapping to `element_ty` makes the
 embedded prelude fail to check ("this value is not a container — it has no element to
@@ -1423,8 +1423,8 @@ cell for tuple/struct containers and the array element type only for arrays.
 **A nested tuple domain decodes, then conflicts with the class channel.** With the
 domain reader fixed, the simple `tuple{Int, Int}` jit compiles; the nested program
 (`tuple{tuple{Int, Int}, Int}`) still refused. A discriminator that recognises a **type
-pair** by the kind marker in its type position (so `low_type_of_slot` decodes nested type
-pairs too) makes the nested program *decode* — and both remaining jit tests then **panic**
+expr** by the kind marker in its type position (so `low_type_of_slot` decodes nested type
+exprs too) makes the nested program *decode* — and both remaining jit tests then **panic**
 at `equality.rs`'s class assertion: `a class states one shape`, left
 `Tuple([Some(USize), Some(USize)])`, right `USize`. So the nested element's class is seeded
 as the tuple while a leaf read observes a scalar: the domain reader and the class channel
@@ -1445,20 +1445,20 @@ not yet as "the inlining stops".
 
 **The loop conversion's false refusal is measured, and three repairs were tried.** The
 emitter's first `loop_conversion` runs before the parameter's value cell is unified with
-the pair peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
+the expr peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
 read, and `state()` refuses a conversion whose later runs (3 of 5) succeed. Three repairs
 were measured against the 115 baseline, and **all three regress the same three tests**
 (`plan_staging::a_declared_plan_stages_the_reduction_and_answers_the_closed_form`,
 `plan_staging::a_plan_the_fragment_refutes_is_refused_by_name`,
 `tiled_reduction::a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop`):
-following the chain to the parameter and popping the pair peel (correct classification,
+following the chain to the parameter and popping the expr peel (correct classification,
 112), accepting the positional state when `arity > 1` (112), and both together. Those
 conversions must stay **refused**, so the fix is not the verdict but the unification: the
-state's value cell must be unified with the pair peel *before* the emitter's first
+state's value cell must be unified with the expr peel *before* the emitter's first
 conversion. The next step is to find which later evaluation performs that unification.
 
-**The parameter's type slot is a type pair, and the domain reader fixed 16.** A type
-expression is encoded as a **term pair** whose value position is its shape and whose type
+**The parameter's type slot is a type expr, and the domain reader fixed 16.** A type
+expression is encoded as a **term expr** whose value position is its shape and whose type
 position is its kind (`TypeValue(TypeTuple)` …), so `kernel_parameter_domain` decoded the
 value position alone and answered `None` for every annotated parameter — the jit family's
 "parameter's class is not decided". Decoding the *slot itself* first
@@ -1503,16 +1503,16 @@ fix is upstream: the checker's evaluation must not leave that clone in the kerne
 **The emitter's empty clone is fixed, and the next blocker is measured.** A kernel body
 holds clone nodes the checker's own undecided apply left behind (owner the body function,
 origin a template node, no value and no operation); the emitter refused them as opaque.
-It now emits an empty clone from its template. `parameter_path` also refuses a pair's type
+It now emits an empty clone from its template. `parameter_path` also refuses an expr's type
 (`1`) and attribute (`2+`) positions as path steps. No test flips; the minimal `@loop`
 kernel now stops at "a kernel body's index cannot be placed": a read of `Index(<a
-computation>, 1)` whose chain ends at the marked function's parameter pair — the type
-position of a pair read as a value. The next step is the caller that asks for a type
+computation>, 1)` whose chain ends at the marked function's parameter expr — the type
+position of an expr read as a value. The next step is the caller that asks for a type
 node's value.
 
 **The path walk is rewritten, and the blockers moved.** `parameter_value_path` now reads
 the chain from the value side (`state_path`): element positions alternate with the slot's
-value position, so a pair peel and every slot peel are dropped and a pair's type or
+value position, so an expr peel and every slot peel are dropped and an expr's type or
 attribute position ends the match. `check_reads` also distinguishes a **use** (an operand)
 from a value's own **items** (the encoding), so a record's value cell is no longer refused
 as a whole-state read. Measured: no test flips, all suites green; the attribute read that
@@ -1522,19 +1522,19 @@ classified — the next thing to identify (it is a different recursion than `fol
 
 **The refusing read's chain, measured.** For `pack_placement`'s reduction, the node the
 conversion refuses reads `Index(Index(Index(parameter, 0), 0), 4)`:
-`Index(parameter, 0)` is the parameter **pair's** value, the next `0` is the state
+`Index(parameter, 0)` is the parameter **expr's** value, the next `0` is the state
 **tuple's element 0** (the element *slot*), and the `4` is that slot's **attribute 4** —
-the pair's attribute tail, not a state position. `parameter_value_path` treats the last
-Index on the pair as the peel and returns `[4]`, so an attribute read is validated as
+the expr's attribute tail, not a state position. `parameter_value_path` treats the last
+Index on the expr as the peel and returns `[4]`, so an attribute read is validated as
 state element 4 against arity 2. Guarding on the value's layout does not work: at
 conversion time the values are undecided (`None`), so the walk needs the slot/attribute
 split from the **type** side, not the value side. That is the next fix.
 
 **One conversion mismatch is fixed, one measured.** `parameter_value_path`'s two
-"chain ends at the parameter" branches now strip the pair's value position the same way
+"chain ends at the parameter" branches now strip the expr's value position the same way
 (`loop_conversion.rs`), so a state read no longer surfaces as a spurious `[0, …]` prefix
 and stops being refused by the wildcard arm. No test flips on that alone. The remaining
-refusal is a read whose chain is `Index(Index(pair, 0), 4)` against a state of arity 2 —
+refusal is a read whose chain is `Index(Index(expr, 0), 4)` against a state of arity 2 —
 a five-slot structure read as state position four — so the next question is which
 function's parameter that read belongs to (the conversion's roots include nodes of the
 kernel the recursion sits in).
@@ -1564,7 +1564,7 @@ next keystone.
 **The cfg leaf walk is the next compute seam** (measured, not landed). `value_at_path`
 (job of the role walk in `compute.rs`) takes the element node where the value is: since
 the compound encoding, `items_of` over a compound returns **slots**, so a scalar leaf
-reads a slot pair instead of its value. Peeling a slot (a `layout != 0` pair's first
+reads a slot expr instead of its value. Peeling a slot (a `layout != 0` expr's first
 item) turns `a_body_reads_a_scalar_leaf_of_its_input_struct` green and lets the
 cross-kernel programs read `(1, 2, 8, …)`, but two cross-kernel tests then **overflow
 their test thread's stack** (`a_cross_kernel_call_agrees_across_the_two_backends`,
@@ -1596,7 +1596,7 @@ documented rather than left open:
 plan program's remaining opaque is reached through `lower_loop_tests` → `value` →
 `lower_definition` → `arithmetic` → `value_item` → `value`: the conversion's
 `tests[0].condition` is `Index(apply, 0)` — the **call's value read** (`Index(1249, 0)`,
-`1249` an `Apply` whose pair's value is an array) — where the `if`'s own condition
+`1249` an `Apply` whose expr's value is an array) — where the `if`'s own condition
 (`s(0) >= 7`) belongs. So the computation chain is wrong at the **spine walk**: the
 conversion recorded a call's value as the test's condition, and the emitter then traced
 through it into the type-side structure. The next probe is the conversion's `walk_test`
@@ -1612,21 +1612,21 @@ apply of the same call, and the unstated one is the **type-side** apply `check_a
 defect is that the loop's lowering reaches a **type-side** apply for a value. A routing
 that lowers the sibling measured neutral (114) and was not kept, because it scans the
 module per unresolved apply; the fix must identify the pairing from data the emitter
-already holds (the recorded `apply_edges` are checker-only, so the module needs the pair
+already holds (the recorded `apply_edges` are checker-only, so the module needs the expr
 relation).
 
-**The loop body's failing callee is a read of an undecided pair.** Probing the refusal
+**The loop body's failing callee is a read of an undecided expr.** Probing the refusal
 itself: the apply's callee is `Index(691, 0)` where `691` is an **empty cell** — no value,
 no operation, so `array_items_of` answers `None` — and `static_function_of_callee` returns
-`None` for it. So the callee the loop's lowering holds is a `value_of` **read** whose pair
+`None` for it. So the callee the loop's lowering holds is a `value_of` **read** whose expr
 was never filled in the clone, not the shared wildcard and not the type-side apply (those
 are the *template's* pairing, measured last round). The fix therefore belongs at the
 callee's **definition resolution**: the emitter must follow the read to what defines the
-pair (the frozen function value) before deciding it is unresolvable.
+expr (the frozen function value) before deciding it is unresolvable.
 
 **The empty callee is the *type-side* apply, by design.** The fold's template holds the
-applies in **pairs** for one call site: `610` with the callee `556` = `Function(Static)`
-and the argument pair `605` — the **value-side** apply — and `613` with the callee `611` =
+applies in **exprs** for one call site: `610` with the callee `556` = `Function(Static)`
+and the argument expr `605` — the **value-side** apply — and `613` with the callee `611` =
 an **empty cell**, the same result-type cell `608` and the same function type `557` — the
 **type-side** apply whose callee is `check_app`'s `undecided_callee` ("the same four
 elements over an undecided callee: the type applies, the body does not"). The same pairing
@@ -1648,10 +1648,10 @@ template array by its *owner and shape*, not by an id.
 
 **The wildcard mints are the `_` arguments, and the apply's array stays four elements.**
 Probing the clone walk's wildcard mints shows them at index 0/2/3/4 of 5-item `layout 1`
-arrays — **pairs** whose value is the shared wildcard, i.e. the `_` wildcard arguments of
+arrays — **exprs** whose value is the shared wildcard, i.e. the `_` wildcard arguments of
 `(compute.Write _)` / `(compute.Read _)`; those are legitimate. The apply the emitter sees
-still has its **four-element** operand array (`[callee, argument pair, result cell, function
-type]`), so the earlier "operand array is a pair" reading was wrong: the callee's **value**
+still has its **four-element** operand array (`[callee, argument expr, result cell, function
+type]`), so the earlier "operand array is an expr" reading was wrong: the callee's **value**
 is the wildcard's clone, and the template apply must have been built with an unstated
 callee. Correcting this before the next probe.
 
@@ -1664,11 +1664,11 @@ own operand-array construction.
 
 **The empty callee is the apply's only unstated operand.** The template apply's four
 operands read `[<none>, array, array, array]` — the callee alone has no value, while the
-argument pair, the result type cell and the function type are all decided arrays; the two
+argument expr, the result type cell and the function type are all decided arrays; the two
 sibling applies in the same body read a static function in that position. So the template
-stores a wildcard as the callee value; the clone then mints its empty cell. `slot_pair`'s
-attribute tail is where wildcards are minted for pairs, so the next question is whether the
-apply's callee operand *is* a pair's attribute slot rather than the function value — the
+stores a wildcard as the callee value; the clone then mints its empty cell. `slot_expr`'s
+attribute tail is where wildcards are minted for exprs, so the next question is whether the
+apply's callee operand *is* an expr's attribute slot rather than the function value — the
 operand order of `value_apply` is the thing to re-read.
 
 **The empty callee is a wildcard minted by the clone walk.** A backtrace on the 383rd
@@ -1684,7 +1684,7 @@ find.
 **The empty callee is owned by the marked function and has no origin.** Probed:
 `693`'s owner is the fold, `origin` is `None`, block 3 — a **fresh** node created while
 checking the fold's template, not a clone and not a `materialize_leaf` (those carry the
-`Function(Static)` value). `refused_pair` is ruled out as the source: it sets the value
+`Function(Static)` value). `refused_expr` is ruled out as the source: it sets the value
 and the type to the *same* cell, and the apply's type operand (`694`) differs from `693`.
 The next probe is a backtrace on the checker's cell creation for the callee expression,
 not a guess.
@@ -1703,7 +1703,7 @@ would carry the `Function(Static)` value) and make it carry the static function.
 write's container (the record's element read) defines — through `define_in` — to
 **`NodeId(1583)`**, a `LowOperator::Apply` whose `callee_function` is the marked function
 (the fold). So the call is *in the graph*; the emitter only misses it because it lowers
-the value peel (`Index(pair, 0)`), whose definition is the return expression (the `if`).
+the value peel (`Index(expr, 0)`), whose definition is the return expression (the `if`).
 Lowering the **call** there instead (a `call_of_value_read` resolver in `write_call`) moves
 the refusal to the next layer — "kernel body Apply is supported only for a cross-kernel
 (kernel-value) callee" — on the loop body's own `read` call, whose callee cell is not
@@ -1721,8 +1721,8 @@ registry), not a per-test fact, and the bisect over it is invalid. The suite's 1
 therefore an upper bound on independent failures.
 
 **The seed rule is the superior's: a node with a type slot is not seeded.** Following
-that ruling, `prepare_template_low_types` no longer seeds the pair (its type slot states
-the shape); only the pair's **value** — a node without a type slot — takes the seed.
+that ruling, `prepare_template_low_types` no longer seeds the expr (its type slot states
+the shape); only the expr's **value** — a node without a type slot — takes the seed.
 Measured neutral (compute 117, lowlevel 164, other suites green). The `graph_jit`
 class-shape panic that motivated a refinement relaxation is **not** from that seed: it
 comes from a value seed whose stated type has an **open** position that an observation
@@ -1746,29 +1746,29 @@ next work is the **loop path's runtime** for the plan/tiled shapes, not the fall
 the record. The two coordinated changes that would fix this chain are recorded for the
 next round: (a) `function_apply` returns `None` (lazy) for a marked function whose
 conversion refuses instead of unrolling it, so the record keeps the call, and (b)
-`parameter_value_path` follows the chain to the parameter and pops the pair peel so the
+`parameter_value_path` follows the chain to the parameter and pops the expr peel so the
 emitter's own conversion succeeds. Both touch Invariants (the unroll fallback and the
 refusal verdict) and need the superior's ruling before they are made.
 
 **The record's `.value` slot already holds the return expression.** Followed
 structurally: the write's operand is `Index(Index(record, 2), 0)`; the record's value array
-is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not a pair — so
+is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not an expr — so
 `check_record`'s `state[field].term` for the `.value` field was already the call's *value*
-(its return expression), not the apply's pair. A resolver that follows
-`Index(Index(array, k), 0)` to the array's item and looks it up in `applied_pairs` fires
-(the chain is found) but finds no applied pair there, so it changes nothing (117) and was
-reverted. The next fix is at the **call's term**: `check_app` must leave the call's pair as
+(its return expression), not the apply's expr. A resolver that follows
+`Index(Index(array, k), 0)` to the array's item and looks it up in `applied_exprs` fires
+(the chain is found) but finds no applied expr there, so it changes nothing (117) and was
+reverted. The next fix is at the **call's term**: `check_app` must leave the call's expr as
 the field's term so the record keeps the call.
 
 **The write's value loses the call at the record, measured.** The write's third operand is
-`Index(3225, 0)`; `3225` is the write's field pair, its class's defining member is the
-**step's Add** (the fold body), and `3225` is **not** in `applied_pairs` — so no path in
+`Index(3225, 0)`; `3225` is the write's field expr, its class's defining member is the
+**step's Add** (the fold body), and `3225` is **not** in `applied_exprs` — so no path in
 the emitter reaches the call. The cause is upstream of the emitter: the record's element
-slot was filled with the argument's **value** (`pair_value_half` of the call's pair = the
+slot was filled with the argument's **value** (`expr_value_half` of the call's expr = the
 function's return expression), so the call expression itself is not in the record and
 cannot be recovered. An `applied_call` interception in the emitter (a value read of an
-applied pair lowers the call) is written and measured neutral (117) — the pair is never an
-applied pair here — and was reverted. The fix must keep the call's **pair** in the record's
+applied expr lowers the call) is written and measured neutral (117) — the expr is never an
+applied expr here — and was reverted. The fix must keep the call's **expr** in the record's
 element slot, which is the encoding question this arc is about.
 
 **The loop conversion's refusal still masks the opaque.** Re-tested the alias retry on
@@ -1781,11 +1781,11 @@ value it produces; its expanded body is the implementation), measured neutral (1
 write's value class holds no Apply for the pack program.
 
 **Nested tuple domains work (+2).** Two changes make `tuple{tuple{Int, Int}, Int}`
-compile and run: the transfer's `Index` now states the **element slot pair** for a
+compile and run: the transfer's `Index` now states the **element slot expr** for a
 compound *value*'s read (the policy `docs/notes/lowlevel-low-types.md` already states —
 "A compound's elements are complete slots … `Index(compound, k)`'s transfer states
 `Tuple([element, Unknown])`" — and the code indexed the slot as if it were the tuple), and
-`low_type_of_slot` decodes a **type pair** by the kind marker its type position holds.
+`low_type_of_slot` decodes a **type expr** by the kind marker its type position holds.
 compute went **115 → 117** (136 failed), and the language 275 / highlevel 136 / lowlevel
 164 suites stay green.
 
@@ -1793,18 +1793,18 @@ compute went **115 → 117** (136 failed), and the language 275 / highlevel 136 
 its result by the **container's kind**: a tuple or struct element states its own type cell
 (`slot_read`'s `element_ty`), an array keeps the array element type. Measured: no test
 flips (compute 115), the embedded prelude still checks, and language 275 / highlevel 136
-stay green. The nested domain is still refused: with the type-pair decode added as well,
-the class-shape assertion still fires on the pair wrapping the **outer** read — so the
+stay green. The nested domain is still refused: with the type-expr decode added as well,
+the class-shape assertion still fires on the expr wrapping the **outer** read — so the
 offending type comes from the *tuple read* path (`structs.rs`, which already uses
 `slot_read`'s `ty_node`) or from the class seed on the container value, not from
 `check_index`.
 
 **The nested conflict is a checker typing, and the obvious repair breaks the prelude.**
-`prepare_template_low_types` seeds a pair's *value* with its type slot's shape, and the
-pair wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the
+`prepare_template_low_types` seeds an expr's *value* with its type slot's shape, and the
+expr wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the
 container's type, not the element's. `check_index` types every element read with
 `elem_cell` (the **array** element type path
-`[TYPE_SHAPE_SLOT, ARRAY_TYPE_ELEMENT_SLOT, PAIR_TYPE_SLOT]`) and throws away
+`[TYPE_SHAPE_SLOT, ARRAY_TYPE_ELEMENT_SLOT, EXPR_TYPE_SLOT]`) and throws away
 `slot_read`'s own `element_ty` (`let _ = element_ty`); for a tuple/struct container the
 type must be the element **slot's** own type cell. Swapping to `element_ty` makes the
 embedded prelude fail to check ("this value is not a container — it has no element to
@@ -1814,8 +1814,8 @@ cell for tuple/struct containers and the array element type only for arrays.
 **A nested tuple domain decodes, then conflicts with the class channel.** With the
 domain reader fixed, the simple `tuple{Int, Int}` jit compiles; the nested program
 (`tuple{tuple{Int, Int}, Int}`) still refused. A discriminator that recognises a **type
-pair** by the kind marker in its type position (so `low_type_of_slot` decodes nested type
-pairs too) makes the nested program *decode* — and both remaining jit tests then **panic**
+expr** by the kind marker in its type position (so `low_type_of_slot` decodes nested type
+exprs too) makes the nested program *decode* — and both remaining jit tests then **panic**
 at `equality.rs`'s class assertion: `a class states one shape`, left
 `Tuple([Some(USize), Some(USize)])`, right `USize`. So the nested element's class is seeded
 as the tuple while a leaf read observes a scalar: the domain reader and the class channel
@@ -1836,20 +1836,20 @@ not yet as "the inlining stops".
 
 **The loop conversion's false refusal is measured, and three repairs were tried.** The
 emitter's first `loop_conversion` runs before the parameter's value cell is unified with
-the pair peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
+the expr peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
 read, and `state()` refuses a conversion whose later runs (3 of 5) succeed. Three repairs
 were measured against the 115 baseline, and **all three regress the same three tests**
 (`plan_staging::a_declared_plan_stages_the_reduction_and_answers_the_closed_form`,
 `plan_staging::a_plan_the_fragment_refutes_is_refused_by_name`,
 `tiled_reduction::a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop`):
-following the chain to the parameter and popping the pair peel (correct classification,
+following the chain to the parameter and popping the expr peel (correct classification,
 112), accepting the positional state when `arity > 1` (112), and both together. Those
 conversions must stay **refused**, so the fix is not the verdict but the unification: the
-state's value cell must be unified with the pair peel *before* the emitter's first
+state's value cell must be unified with the expr peel *before* the emitter's first
 conversion. The next step is to find which later evaluation performs that unification.
 
-**The parameter's type slot is a type pair, and the domain reader fixed 16.** A type
-expression is encoded as a **term pair** whose value position is its shape and whose type
+**The parameter's type slot is a type expr, and the domain reader fixed 16.** A type
+expression is encoded as a **term expr** whose value position is its shape and whose type
 position is its kind (`TypeValue(TypeTuple)` …), so `kernel_parameter_domain` decoded the
 value position alone and answered `None` for every annotated parameter — the jit family's
 "parameter's class is not decided". Decoding the *slot itself* first
@@ -1894,16 +1894,16 @@ fix is upstream: the checker's evaluation must not leave that clone in the kerne
 **The emitter's empty clone is fixed, and the next blocker is measured.** A kernel body
 holds clone nodes the checker's own undecided apply left behind (owner the body function,
 origin a template node, no value and no operation); the emitter refused them as opaque.
-It now emits an empty clone from its template. `parameter_path` also refuses a pair's type
+It now emits an empty clone from its template. `parameter_path` also refuses an expr's type
 (`1`) and attribute (`2+`) positions as path steps. No test flips; the minimal `@loop`
 kernel now stops at "a kernel body's index cannot be placed": a read of `Index(<a
-computation>, 1)` whose chain ends at the marked function's parameter pair — the type
-position of a pair read as a value. The next step is the caller that asks for a type
+computation>, 1)` whose chain ends at the marked function's parameter expr — the type
+position of an expr read as a value. The next step is the caller that asks for a type
 node's value.
 
 **The path walk is rewritten, and the blockers moved.** `parameter_value_path` now reads
 the chain from the value side (`state_path`): element positions alternate with the slot's
-value position, so a pair peel and every slot peel are dropped and a pair's type or
+value position, so an expr peel and every slot peel are dropped and an expr's type or
 attribute position ends the match. `check_reads` also distinguishes a **use** (an operand)
 from a value's own **items** (the encoding), so a record's value cell is no longer refused
 as a whole-state read. Measured: no test flips, all suites green; the attribute read that
@@ -1913,19 +1913,19 @@ classified — the next thing to identify (it is a different recursion than `fol
 
 **The refusing read's chain, measured.** For `pack_placement`'s reduction, the node the
 conversion refuses reads `Index(Index(Index(parameter, 0), 0), 4)`:
-`Index(parameter, 0)` is the parameter **pair's** value, the next `0` is the state
+`Index(parameter, 0)` is the parameter **expr's** value, the next `0` is the state
 **tuple's element 0** (the element *slot*), and the `4` is that slot's **attribute 4** —
-the pair's attribute tail, not a state position. `parameter_value_path` treats the last
-Index on the pair as the peel and returns `[4]`, so an attribute read is validated as
+the expr's attribute tail, not a state position. `parameter_value_path` treats the last
+Index on the expr as the peel and returns `[4]`, so an attribute read is validated as
 state element 4 against arity 2. Guarding on the value's layout does not work: at
 conversion time the values are undecided (`None`), so the walk needs the slot/attribute
 split from the **type** side, not the value side. That is the next fix.
 
 **One conversion mismatch is fixed, one measured.** `parameter_value_path`'s two
-"chain ends at the parameter" branches now strip the pair's value position the same way
+"chain ends at the parameter" branches now strip the expr's value position the same way
 (`loop_conversion.rs`), so a state read no longer surfaces as a spurious `[0, …]` prefix
 and stops being refused by the wildcard arm. No test flips on that alone. The remaining
-refusal is a read whose chain is `Index(Index(pair, 0), 4)` against a state of arity 2 —
+refusal is a read whose chain is `Index(Index(expr, 0), 4)` against a state of arity 2 —
 a five-slot structure read as state position four — so the next question is which
 function's parameter that read belongs to (the conversion's roots include nodes of the
 kernel the recursion sits in).
@@ -1955,7 +1955,7 @@ next keystone.
 **The cfg leaf walk is the next compute seam** (measured, not landed). `value_at_path`
 (job of the role walk in `compute.rs`) takes the element node where the value is: since
 the compound encoding, `items_of` over a compound returns **slots**, so a scalar leaf
-reads a slot pair instead of its value. Peeling a slot (a `layout != 0` pair's first
+reads a slot expr instead of its value. Peeling a slot (a `layout != 0` expr's first
 item) turns `a_body_reads_a_scalar_leaf_of_its_input_struct` green and lets the
 cross-kernel programs read `(1, 2, 8, …)`, but two cross-kernel tests then **overflow
 their test thread's stack** (`a_cross_kernel_call_agrees_across_the_two_backends`,

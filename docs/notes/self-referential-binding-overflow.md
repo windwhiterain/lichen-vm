@@ -76,8 +76,8 @@ in the last column.
 |---|---|---|
 | `rc = rc * 2.0` | **`0xC00000FD`** | **the minimal shape**: one binding, one self-reference |
 | `rc = qb * rc` | **`0xC00000FD`** | the same, reading itself on the left |
-| `rc = 1.0/qb; rc = rc * 2.0` | **`0xC00000FD`** | the reported pair minus the Newton arithmetic — **the arithmetic is not needed** |
-| `rc = 1.0/qb; rc = rc * (2.0 - qb*rc)` | **`0xC00000FD`** | the reported pair, verbatim |
+| `rc = 1.0/qb; rc = rc * 2.0` | **`0xC00000FD`** | the reported expr minus the Newton arithmetic — **the arithmetic is not needed** |
+| `rc = 1.0/qb; rc = rc * (2.0 - qb*rc)` | **`0xC00000FD`** | the reported expr, verbatim |
 | `rc = 1.0/qb; rc = (rc * 2.0) : Float` | **`0xC00000FD`** | **an annotation changes nothing** |
 | `rc = 1.0/qb; rc = rc + 1.0; rc = rc * 2.0` | **`0xC00000FD`** | three bindings behave like two |
 | `qb = 3.0; rc = qb * 2.0` (no self-reference) | `0`, answers | **the trigger is the self-reference**, not the re-binding |
@@ -108,7 +108,7 @@ recursion does terminate, by the depth budget (§5). What survives of A is only 
 genuinely self-referential, and **that** is what the kernel walk re-enters.
 
 **Candidate B — the unifier builds a cyclic type and some walk recurses forever. RULED OUT.** The
-type is not the thing that recurses: the checker cuts the type-level cycle with a skeleton pair
+type is not the thing that recurses: the checker cuts the type-level cycle with a skeleton expr
 (§6), the same two lines outside a kernel print `none: Float` rather than looping, and at a
 generous stack the program stops with a refusal that names **a kernel-body walk**, not a unifier,
 a printer, an evaluator or a drop. A bare `rc = rc` is refused by name with *"a kernel body
@@ -181,8 +181,8 @@ terms that also promise no overflow.** [`docs/language-spec.md`](../language-spe
 > block, and may recurse with them. The frontend reserves a placeholder id per block-wide binding,
 > enters all the names before compiling any value, then fills each placeholder with its value's
 > node — so a self/mutual reference makes the IR a cycle there (the graph contains a back-edge),
-> which the checker totalizes by pre-registering a skeleton pair and binding the skeleton's cells
-> to the finished pair (**no recursion, no overflow**).
+> which the checker totalizes by pre-registering a skeleton expr and binding the skeleton's cells
+> to the finished expr (**no recursion, no overflow**).
 
 Three things follow, and **the first is the one the user overturned**:
 
@@ -195,7 +195,7 @@ Three things follow, and **the first is the one the user overturned**:
    implements the decision.
 2. **The cycle is expected and the checker is supposed to absorb it.** `rc = rc * 2.0` outside a
    kernel body answered `none: Float`, which was the spec's promise kept. The checker does its
-   half: [`check_term`](../../crates/lichen-highlevel/src/checker.rs) pre-registers a skeleton pair
+   half: [`check_term`](../../crates/lichen-highlevel/src/checker.rs) pre-registers a skeleton expr
    for any `block_roots` member — *"A cycle forms only through a block-wide placeholder"*, gated on
    `block_roots` alone. **The checker is not where this breaks** — and after the refusal it is not
    even reached for this shape, while the **mutual** cycle that the ruling leaves alone still
@@ -488,7 +488,7 @@ scope"*, and it answers a self-referential rebinding correctly today.
 
 > The readings below are the state **before** the user's commit `5a9b97da`; §11.6 has the after
 > state. That commit refuses a cycle among **scalar** block bindings and keeps a cycle among
-> **struct or type** bindings legal, because the checker's skeleton pair and the deep pass each cut
+> **struct or type** bindings legal, because the checker's skeleton expr and the deep pass each cut
 > their own cycle.
 
 **`a = b` and `b = qb * a` in a `compute.parallel` body used to die with `0xC00000FD`; `5a9b97da`
@@ -621,7 +621,7 @@ not one of those sections, and §11.4 names the two that are still wrong rather 
 
 **`5a9b97da` — "resolve: refuse a cycle among scalar block bindings, where the group is its own
 input" — extends the resolver's rule from a name to a cycle.** The commit message keeps a cycle
-among **struct or type** bindings legal, because the checker's skeleton pair and the deep pass each
+among **struct or type** bindings legal, because the checker's skeleton expr and the deep pass each
 cut their own cycle, as the mutually-recursive-structs tests measure.
 
 **Measured on `dev@602480ed`**, the same `cpu`-backend driver as §11.3, one program per process:

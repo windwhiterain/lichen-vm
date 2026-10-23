@@ -79,9 +79,9 @@ struct ApplyCtx<'a> {
     closure_scope: Option<&'a [NodeId]>,
     /// The function being applied — the recursion point, whose own value node stays in place.
     applied: FunctionId,
-    /// The applied function's parameter pair, always cloned: the check runs per call.
+    /// The applied function's parameter expr, always cloned: the check runs per call.
     parameter: NodeId,
-    /// The parameter pair's value slot: re-minted per call, and never carried into.
+    /// The parameter expr's value slot: re-minted per call, and never carried into.
     parameter_slot: Option<NodeId>,
     /// Template keys a minted walk inserted; the enclosing pass drops them with the
     /// mint, so it groups only its own clones.
@@ -98,10 +98,10 @@ struct ApplyCtx<'a> {
     minted: &'a mut HashMap<FunctionId, FunctionId>,
 }
 
-/// One **instantiation** of a function's template: the return pair's clone and the
+/// One **instantiation** of a function's template: the return expr's clone and the
 /// template→clone map.
 pub(super) struct Instantiation {
-    /// The clone of the function's return pair — what an apply evaluates.
+    /// The clone of the function's return expr — what an apply evaluates.
     pub applied: NodeId,
     /// Template node → its node of this instantiation; read through
     /// [`Instantiation::node_of`].
@@ -151,9 +151,9 @@ impl<P: Program> Module<P> {
             return None;
         };
         let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
-        // A closure's type cell is the call's own; the pair sync below owns the verdict.
+        // A closure's type cell is the call's own; the expr sync below owns the verdict.
         if let Some(cell) = cell
-            && let Some(codomain) = self.pair_type_item(instantiation.applied)
+            && let Some(codomain) = self.expr_type_item(instantiation.applied)
         {
             let codomain = self.as_dynamic(codomain, block);
             self.evaluate_node(Dyn(codomain), Some(block));
@@ -200,17 +200,17 @@ impl<P: Program> Module<P> {
         // The result is the clone's return type, resolved before the bind; the
         // deep pass replicates to no class member.
         let applied = instantiation.applied;
-        // The clone's return pair: the applied call's own pair, which states the
+        // The clone's return expr: the applied call's own expr, which states the
         // attribute as the source return does.
-        self.applied_pairs.insert(node, applied);
+        self.applied_exprs.insert(node, applied);
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
-        // Only a clone whose pair is absent is evaluated; forcing one that answers costs an
+        // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
         // apply the deep budget counts.
-        if self.pair_type_item(applied).is_none() {
+        if self.expr_type_item(applied).is_none() {
             self.evaluate_node(Dyn(applied), Some(block));
         }
-        let Some(codomain) = self.pair_type_item(applied) else {
+        let Some(codomain) = self.expr_type_item(applied) else {
             return false;
         };
         let codomain = self.as_dynamic(codomain, block);
@@ -262,13 +262,13 @@ impl<P: Program> Module<P> {
             AnyFunctionId::Static(function) => {
                 // Nothing reports here, but the applied return graph still records the
                 // call's own attribute state.
-                self.materialize_static_return_apply(function, argument, block, node);
+                self.materialize_static_return_apply(function, block, node);
                 false
             }
         }
     }
 
-    /// Instantiate `function`'s template for `argument`: clone the return pair, then
+    /// Instantiate `function`'s template for `argument`: clone the return expr, then
     /// apply the check the mode names.
     ///
     /// # Invariant

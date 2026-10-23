@@ -49,9 +49,9 @@ impl SchemaHash {
             return None;
         }
         let mut bytes: Hash = [0; 32];
-        for (byte, pair) in bytes.iter_mut().zip(digits.as_bytes().chunks(2)) {
-            let pair = std::str::from_utf8(pair).ok()?;
-            *byte = u8::from_str_radix(pair, 16).ok()?;
+        for (byte, expr) in bytes.iter_mut().zip(digits.as_bytes().chunks(2)) {
+            let expr = std::str::from_utf8(expr).ok()?;
+            *byte = u8::from_str_radix(expr, 16).ok()?;
         }
         Some(SchemaHash(bytes))
     }
@@ -814,7 +814,7 @@ pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>
 /// The weakly-connected components of one run of claimed nodes, each in evaluation order.
 ///
 /// # Invariant
-/// **One component per pair the relation joins, in either direction**, and the run is walked
+/// **One component per expr the relation joins, in either direction**, and the run is walked
 /// **backwards**, so a node joins the component of every producer it reads: a recorded graph cannot
 /// express an edge before its producer, so one sweep is enough. A component is named by its
 /// **earliest** node, which is what puts the components in evaluation order.

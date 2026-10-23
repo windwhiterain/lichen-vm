@@ -70,8 +70,8 @@ So a tag, a structured form and a raw form are all reachable from the same
 printer, and step 6 is the cascade admitting it may recognise nothing at all.
 
 The tuple is the row that reaches step 4. `fields_any` renders a shape
-elementwise, and each shape element is a `[value, type]` pair — whose rendering
-yields the pair's **type** half. That is why the shape of `tuple{Int, Int}` prints
+elementwise, and each shape element is a `[value, type]` expr — whose rendering
+yields the expr's **type** half. That is why the shape of `tuple{Int, Int}` prints
 `Type` per field rather than `Int`.
 
 ## 3. What is not traced
@@ -116,9 +116,9 @@ at the point the diagnostic renders, so the item closes as recorded rather than 
 
 The found side is the apply's `argument_type` (`apply.rs`'s `apply_parameter_check` records it in
 `ApplyError`, and the `Runtime` arm of `render.rs` prints it), which is the **type slot** of the argument's
-pair. Re-measured on `dev@dd13f417`, one call per row:
+expr. Re-measured on `dev@dd13f417`, one call per row:
 
-| argument | argument pair | type slot | printed |
+| argument | argument expr | type slot | printed |
 |---|---|---|---|
 | `struct{.a Int}` | `[n29, n36]` | `n36` = `[[payload, TypeStruct], ↺]` | `TypeStruct` |
 | `array{Int, 3}` | `[n30, n31]` | `n31`, kind-shaped | `TypeArray` |

@@ -33,7 +33,7 @@ Four checkable parts, each with the way it fails:
 
 * **P1 — the checker satisfies it structurally.** `crates/lichen-highlevel/src/diagnostic.rs` carries a
   `DiagKind` taxonomy and `UnifyEntry { a, b, loc, kind }` (`:196-213`), so a unification failure renders an
-  expected/found pair rather than free prose, and `AssertSpelling` exists to say more than the channel's
+  expected/found expr rather than free prose, and `AssertSpelling` exists to say more than the channel's
   generic *"expected 1, found …"* (`:215-223`). The **parser** satisfies P1 only while the expected-label
   union is short, and fails it when the union is long.
 * **P2 — the checker satisfies it**: failure sites pin the mismatch to a specific spine slot

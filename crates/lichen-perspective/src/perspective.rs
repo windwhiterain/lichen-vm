@@ -100,7 +100,7 @@ where
                 // SAFETY: `operands` is the payload of the operand value the
                 // VM just evaluated, so its block outlives this run.
                 for item in unsafe { operands.items() } {
-                    // A child slot is a `[value, type]` pair; its element 0 is
+                    // A child slot is a `[value, type]` expr; its element 0 is
                     // the lattice value.  A bare value is accepted too.
                     let Some(n) = module
                         .node_value(item.node)
@@ -158,11 +158,11 @@ where
     }
 
     /// Perspective combine: a `Gcd` node over the children's `[value, type]`
-    /// pairs.  An absent child is `0`, neutral in gcd.
+    /// exprs.  An absent child is `0`, neutral in gcd.
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId {
         let operands = ctx.array_node(children);
         let gcd = ctx.op_node(P::Operator::from(GcdOp::Gcd), Some(operands));
-        ctx.pair(gcd, ctx.int_type())
+        ctx.expr(gcd, ctx.int_type())
     }
 
     /// Perspective unify: the slots must unify, and two differing values hold

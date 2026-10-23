@@ -8,7 +8,7 @@ produced the measurement were **removed before this note was committed** — the
 is closed — so §2's *What proved it* names every write side and the trace positions, which is what makes
 the measurement re-derivable. The defect itself was **fixed** afterwards: `7eedb125` (*highlevel: a written type term is decided before the definition pass*) un-ignored the three assertions in `crates/lichen-compute/tests/lichen_compute/buf_element_class_recorded.rs`, and they are **ordinary passing tests now** (3 passed, 0 ignored) — `the_compiled_fragment_names_the_declared_element_class`, `the_module_holds_a_decided_float_element_type`, `the_recorded_node_carries_the_declared_element_class`.
 
-## 1. The cell is not the element node — it is that node's pair **value half**
+## 1. The cell is not the element node — it is that node's expr **value half**
 
 `crates/lichen-compute/src/compute.rs:2013-2017` reads
 
@@ -21,13 +21,13 @@ parameter_type_ref(module, field)
 For `attend`'s `.v (compute.Buf Float)`, `field_type(..., 1)` is `NodeId(2404v1)`, and that node
 **holds its value in both programs**. The probe prints it:
 
-| program | `2404` cell | `2404` class | `2405` (pair item 0) cell | `2405` class | decoded |
+| program | `2404` cell | `2404` class | `2405` (expr item 0) cell | `2405` class | decoded |
 |---|---|---|---|---|---|
 | CONTROL (passing), at `attend`'s walk | `Array(..)` | `Array(..)` | `Some(TypeValue(TypeFloat))` | `Some(TypeFloat)` | `Float` |
 | STEP (failing), at `attend`'s walk | `Array(..)` | `Array(..)` | **`None`** | **`None`** | `Unknown` |
 
 So the lazily-filled cell is `NodeId(2405v1)` — the **value half** of the element type's
-`[value, type]` pair — reached by the pair indirection at
+`[value, type]` expr — reached by the expr indirection at
 `crates/lichen-highlevel/src/shape.rs:866-876`. `low_type_of_slot` reads the **cell**
 (`module.node_value`, `shape.rs:862`), and the cell is empty.
 
@@ -91,18 +91,18 @@ Running it on both programs (the recorder §5 describes how to rebuild):
 
 ```
 CONTROL (root is `(scores, attend)`, passing)
-  7350  == compile_parallel_fragment #0  fid=FunctionId(1v1)  cfg_pair=NodeId(142v1)   <- scores
+  7350  == compile_parallel_fragment #0  fid=FunctionId(1v1)  cfg_expr=NodeId(142v1)   <- scores
   7355      -- after lower_index_function
   7422  MERGE NodeId(2405v1)(decided=false) ~ NodeId(5262v1)(decided=true)
          unify stack: ["crates\lichen-lowlevel\src\apply.rs:139"]
   7447  MERGE ... unify stack: ["crates\lichen-lowlevel\src\apply.rs:78"]
-  7854  == compile_parallel_fragment #1  fid=FunctionId(3v1)  cfg_pair=NodeId(1135v1)  <- attend
+  7854  == compile_parallel_fragment #1  fid=FunctionId(3v1)  cfg_expr=NodeId(1135v1)  <- attend
   7856    buf path=[3, 1] element_type_node=2404v1 element_class=Some(Float)
 
 STEP (has `built = compute.graph step`, failing)
-  7961  == compile_parallel_fragment #0  fid=FunctionId(3v1)  cfg_pair=NodeId(1135v1)  <- attend
+  7961  == compile_parallel_fragment #0  fid=FunctionId(3v1)  cfg_expr=NodeId(1135v1)  <- attend
   7965    buf path=[3, 1] element_type_node=2404v1 element_class=None
-  8736  == compile_parallel_fragment #1  fid=FunctionId(1v1)  cfg_pair=NodeId(142v1)   <- scores
+  8736  == compile_parallel_fragment #1  fid=FunctionId(1v1)  cfg_expr=NodeId(142v1)   <- scores
   8865  MERGE NodeId(2405v1)(decided=false) ~ NodeId(6384v1)(decided=true)
          unify stack: ["crates\lichen-lowlevel\src\apply.rs:139"]
 ```
@@ -242,8 +242,8 @@ and the shape fired. A change that decides a class cannot move a refusal that ne
 
 **And the id the “`compute.Buf` application” was found by does not transfer across commits.**
 Re-measured on `dev@938f83b8` at `apply_parameter_check`: `StaticFunctionId(22)`'s argument
-expression is an `ExprKind::Placeholder` (`check_app` names the pair's own nodes, `value =
-NodeId(602)`, `type = NodeId(603)`, matching the open pair at the run-time check). So the two open
+expression is an `ExprKind::Placeholder` (`check_app` names the expr's own nodes, `value =
+NodeId(602)`, `type = NodeId(603)`, matching the open expr at the run-time check). So the two open
 sides measured at that apply are the program's `_` — open **by design**, nothing to evaluate — not an
 `Int` whose decision went missing; a real type argument would put a value in its slot, which is what
 the unify's “one side knows a value” arm would then write. The open question is §4.2's: why attempt 1
@@ -470,11 +470,11 @@ built = compute.graph ((a : GArg) => {
 built
 ```
 
-It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-compute/tests/lichen_compute/`
+It compiles **`in [Int] out [Int]`**. The **expr** is committed: `crates/lichen-compute/tests/lichen_compute/`
 `buf_element_class_recorded.lichen` (shows it) and `buf_element_class_direct.lichen` (does not), whose
 kernel, parameter and buffers are **byte-identical** — **the root expression is the only difference**
 (`k` against the `compute.graph` step). Each is its own test binary, so a single process's compile order
-cannot be what decides either answer. The historical record of the defect is the pair of assertions below, which
+cannot be what decides either answer. The historical record of the defect is the expr of assertions below, which
 were #[ignore]d with their reason so the suite stayed green while the defect was open; **the fix (7eedb125) removed the ignores**, and one command now shows them passing:
 
 ```

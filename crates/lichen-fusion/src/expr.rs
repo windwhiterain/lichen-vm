@@ -41,7 +41,7 @@ impl Variable {
     ///
     /// # Invariant
     /// It is [`Self::producer`]'s `0`, because the name is the whole identity: a consumer of one
-    /// producer reads the slot it always has, so a pair's canonical form does not move.
+    /// producer reads the slot it always has, so an expr's canonical form does not move.
     pub const PRODUCER: Variable = Variable("r");
     /// The launch's first runtime scalar `s_0`, the number it fixes beside its extent.
     ///
@@ -76,7 +76,7 @@ impl Variable {
     /// The value the `ordinal`-th absorbed input's producer forwards, or `None` past the table.
     ///
     /// # Invariant
-    /// **One slot per absorbed input ordinal**, and `0` is [`Self::PRODUCER`] — the pair's own
+    /// **One slot per absorbed input ordinal**, and `0` is [`Self::PRODUCER`] — the expr's own
     /// spelling — so the shape widens without moving anything a chain already read. `None` past
     /// [`FAN_IN_INPUTS`] rather than a name the table does not hold.
     pub const fn producer(ordinal: usize) -> Option<Variable> {
@@ -225,7 +225,7 @@ impl Expr {
     /// # Invariant
     /// Simultaneous, never recursive: a binding's value is substituted as written, so an
     /// expression cannot grow by substituting a variable into itself, which is what makes
-    /// this total on every pair of expressions.
+    /// this total on every expr of expressions.
     pub fn substitute(&self, bindings: &BTreeMap<Variable, Expr>) -> Expr {
         match self {
             Expr::Constant(value) => Expr::Constant(*value),
@@ -259,7 +259,7 @@ impl Expr {
     }
 }
 
-/// Substituted with each pair in turn, so a caller need not build the map.
+/// Substituted with each expr in turn, so a caller need not build the map.
 pub fn substitute_all(expr: &Expr, bindings: &[(Variable, Expr)]) -> Expr {
     let map: BTreeMap<Variable, Expr> = bindings.iter().cloned().collect();
     expr.substitute(&map)
@@ -278,7 +278,7 @@ impl PartialEq for Expr {
     /// Structural, with literals compared by [`f64::total_cmp`].
     ///
     /// # Invariant
-    /// Agrees with [`Ord`] on every pair, which is what lets the canonicalizer sort
+    /// Agrees with [`Ord`] on every expr, which is what lets the canonicalizer sort
     /// operands and the refusals render one: `0.0` and `-0.0` are different expressions,
     /// and a `NaN` literal equals itself rather than comparing unequal to everything.
     fn eq(&self, other: &Expr) -> bool {

@@ -287,10 +287,10 @@ pub fn compose_fan_out(
             &resolve,
             &mapped_block,
         );
-        for pair in &consumer.body.barriers {
+        for expr in &consumer.body.barriers {
             body.barriers.push(Barrier {
-                write: resolve(pair.write),
-                read: resolve(pair.read),
+                write: resolve(expr.write),
+                read: resolve(expr.read),
             });
         }
         // Only the first consumer's marks are kept: a merged node carries no claim to read them.
@@ -354,18 +354,18 @@ pub fn compose_fan_out(
 /// leaf, which carries the *consumer's* number, and nothing here compares the two. The consumer's
 /// leaves are then free: each is bound to the value its own node was launched with.
 pub fn spliced_scalars(producer: &KernelShape, consumer: &KernelShape) -> Option<usize> {
-    let pair = [ScalarClass::Int, ScalarClass::Int];
-    if producer.leaf_classes() != pair {
+    let expr = [ScalarClass::Int, ScalarClass::Int];
+    if producer.leaf_classes() != expr {
         return None;
     }
     let leaves = consumer.leaf_classes();
-    if leaves.len() < pair.len() || leaves.first() != Some(&ScalarClass::Int) {
+    if leaves.len() < expr.len() || leaves.first() != Some(&ScalarClass::Int) {
         return None;
     }
     if leaves.last() != Some(&ScalarClass::Int) {
         return None;
     }
-    let extra = leaves.len() - pair.len();
+    let extra = leaves.len() - expr.len();
     if extra == 0 && producer != consumer {
         return None;
     }
@@ -584,7 +584,7 @@ pub enum ComposeRefusal {
     /// One producer's value reaches one body at more than one input position.
     ///
     /// # Invariant
-    /// The pair's [`Self::AbsorbedEdgeIsNotOne`] is about **one** producer and **one** consumer;
+    /// The expr's [`Self::AbsorbedEdgeIsNotOne`] is about **one** producer and **one** consumer;
     /// this is the same fact inside a fan-in, where the reader has several producers to choose
     /// between, so it carries the two indices that disagree.
     OneProducerFeedsTwoInputs {
@@ -1284,9 +1284,9 @@ pub(crate) fn compact(body: &mut KernelBody, marks: &mut [KernelMark]) {
             Terminator::Br(_) => {}
         }
     }
-    for pair in &body.barriers {
-        pending.push(pair.write);
-        pending.push(pair.read);
+    for expr in &body.barriers {
+        pending.push(expr.write);
+        pending.push(expr.read);
     }
     for mark in marks.iter() {
         pending.push(mark.value);
@@ -1388,9 +1388,9 @@ pub(crate) fn compact(body: &mut KernelBody, marks: &mut [KernelMark]) {
             };
         }
     }
-    for pair in &mut body.barriers {
-        pair.write = renumbered(&map, pair.write);
-        pair.read = renumbered(&map, pair.read);
+    for expr in &mut body.barriers {
+        expr.write = renumbered(&map, expr.write);
+        expr.read = renumbered(&map, expr.read);
     }
     for mark in marks.iter_mut() {
         mark.value = renumbered(&map, mark.value);

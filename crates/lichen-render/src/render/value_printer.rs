@@ -219,7 +219,7 @@ where
                 self.printer.slot_any(shape[1].node)
             ));
         }
-        // A struct type never reaches here: its kind is the struct marker pair,
+        // A struct type never reaches here: its kind is the struct marker expr,
         // handled earlier.
         None
     }

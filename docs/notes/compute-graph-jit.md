@@ -259,7 +259,7 @@ Three facts make that work:
   normally hands back a `Buffer` (an arena payload) or a `DeviceBuffer`. A
   recording cannot hand back either: a buffer payload is arena data with a
   block's lifetime, and a resident id names device memory rather than a position
-  in the value table. So there are two `ComputeValue` variants, and the pair is
+  in the value table. So there are two `ComputeValue` variants, and the expr is
   what the whole build is made of:
 
   | variant | carries | stands for |
@@ -280,8 +280,8 @@ Three facts make that work:
 
 **Where the walk finds the callee.** An `Apply` names its callee as the **first**
 item of a `[callee, argument, _]` operand array, and the callee slot holds a
-`value_of`-style `Index(pair, 0)` whose **own cached value is already the
-function** — following that `Index` one step further lands on the pair rather than
+`value_of`-style `Index(expr, 0)` whose **own cached value is already the
+function** — following that `Index` one step further lands on the expr rather than
 on the function, so reading the node's own value is the whole of it. Nothing needs
 evaluating: the compute operator node's own operand array is `[kernel, cfg]` and is
 readable as it stands, which is what keeps a *build* from running a dispatch.
@@ -700,7 +700,7 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`. Two buffers under `.in` record; a
   buffer beside `.in` does not.
   **The surface says it now** (`8cb866aa`): the author annotates the step's own parameter
-  (`step = (s : GArg) => …` with `GArg = struct{.n Int, .in Pair}` — the language's existing
+  (`step = (s : GArg) => …` with `GArg = struct{.n Int, .in Expr}` — the language's existing
   form, because a parameterised `graph` signature steers nothing and would make the type
   required). The declared type **checks**; it does not steer, so `build_graph` still derives
   the roles and only the refused answer changes channel: the record carries
@@ -722,7 +722,7 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   back" refusal: the report carries `span: Some((4, 9))` (`3, 9` in a body without the metadata
   header) and `check.loc = Some(Loc { expr: 12, path: [] })`, and the span is the same whether or
   not the recording site passes the step's node. The location comes from `Build::lowerings()`,
-  which is `node_edges` **plus** every expression's pair/value/type slot layout: a lambda's value
+  which is `node_edges` **plus** every expression's expr/value/type slot layout: a lambda's value
   node is an expression slot, so it was attributed all along. What the recording site's node
   changes is only the diagnostic's `a`/`b` (the default node against the step's node), which no
   renderer reads. The remaining question is whether *another* refusal is unattributed; that is a

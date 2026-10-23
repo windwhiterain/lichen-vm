@@ -29,7 +29,7 @@
    `compute.row`/`compute.col` divide by — so `K` has to sit **after** `cols`, not between `.n` and it.
    Putting it between them does not refuse: `[.n, .k, .cols]` answered `[58.0, 64.0, 31.0, 139.0]`
    instead of `[58.0, 64.0, 139.0, 154.0]`, because the coordinates then divided by `k = 3` and every
-   lane took its row and column from the wrong pair. An `@loop` fold
+   lane took its row and column from the wrong expr. An `@loop` fold
    counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
    the last addend is the `k = 0` product; over exact integers the order changes nothing, and it is
    stated here because it is the order the body actually has.

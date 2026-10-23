@@ -127,7 +127,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let param = m.add_node(root, None, None);
-    // The out-of-bounds index sits in the return pair, so the definition pass hits it.
+    // The out-of-bounds index sits in the return expr, so the definition pass hits it.
     let a = u128_node(&mut m, root, 10);
     let b = u128_node(&mut m, root, 20);
     let arr = array_node(&mut m, root, &[a, b], None);

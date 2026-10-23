@@ -5,7 +5,7 @@
     score, `examples/softmax.lichen`'s normalise, and `examples/attention.lichen`'s weighted \
     values, in that order, each reading the buffer the last one wrote. **Four stages, five \
     kernels, one query, `capacity = 4`, `dim = 2`, `t = 2`.** Every example below this one on \
-    the ladder in `docs/notes/llm-operators.md` is one operator or one operator's pair, and the \
+    the ladder in `docs/notes/llm-operators.md` is one operator or one operator's expr, and the \
     two slices before this one each measured a wall in the **hand-off** between two. This file \
     is the first program here whose subject is the hand-off itself, and what it found is that \
     the hand-off is cheap — the transposed half is not.\n\n\

@@ -96,7 +96,7 @@ fn a_closure_stored_in_an_outside_array_is_still_callable() {
 
 #[test]
 fn a_gc_block_calls_a_curried_binding_per_element() {
-    // The example's program: a @gc block calling a curried pair, twice in one array.
+    // The example's program: a @gc block calling a curried expr, twice in one array.
     let out = run::evaluate(
         "add = x => y => x + y\ndouble = n => @gc { a = n + 1\nb = add a a\nb }\n@gc [double 3, double 7]",
     )

@@ -131,7 +131,7 @@ A written arrow compiles to a lambda, and a function's own type is the
 self-referential node `[Function(fid), ↺]`. `low_type_of` used to decode only the
 older `[shape, kind]` arrow term: slot 0 holds a `LowValue::Function` and slot 1
 is the node itself, so the decode fell through to `LowShape::Unknown`, and
-`low_type_of_slot`'s pair-indirection retry failed too because slot 0 is a
+`low_type_of_slot`'s expr-indirection retry failed too because slot 0 is a
 `Function` leaf rather than an array.
 
 Measured structure of the parameter's type cell:
@@ -150,7 +150,7 @@ Measured structure of the parameter's type cell:
 though the parameter was annotated and its first position *is* decided.
 
 **The fix.** `Module::function_type_signature` reads the function type's domain
-and codomain **type cells** — the parameter pair's type slot, not the pair,
+and codomain **type cells** — the parameter expr's type slot, not the expr,
 because a template's parameter value cell is empty until an apply binds it, and
 `Function::return_type` — and `low_type_of` gained the one arm that asks it,
 gated on the lowlevel's own recogniser. Both spellings of a function type now
@@ -181,9 +181,9 @@ Gating it was what left a frozen function type decoding as
 2. **The domain refusals' coverage.** The three domain refusals above are
    measured by probe, not by a test: a test for the struct-domain and the
    open-position texts is a maintainer's decision, like (1).
-3. **`pair_type_half` over a static type half of a *dynamic* pair — measured
+3. **`expr_type_half` over a static type half of a *dynamic* expr — measured
    unreachable.** The recogniser takes a `NodeId` and the arm is gated on
-   `AnyNodeId::Dynamic`, so a static type half of a dynamic parameter pair leaves the
+   `AnyNodeId::Dynamic`, so a static type half of a dynamic parameter expr leaves the
    whole signature `None`. An env-gated probe in that arm over all four suites
    (`lichen-lowlevel` 146/13, `lichen-highlevel` 140/0, `lichen-language` 72 lib +
    265/11, `lichen-compute` 19 lib + 203/15/2) took **0 hits**: no program in the

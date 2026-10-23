@@ -83,11 +83,11 @@
     fusion floor. **(b) The device leg** used to refuse a GEMV whose \
     reduction is shorter than its output; that rule is gone and this program runs on the device \
     (4 of 4, bit-exact), so the decode shape is not blocked by a length. **(c) A position to advance.** \
-    A GEMV carries no position of its own — `t` belongs to the cache kernel — but the pair needs \
+    A GEMV carries no position of its own — `t` belongs to the cache kernel — but the expr needs \
     one to advance, and the language holds no mutable state between calls. Beyond those three, \
     nothing: the arithmetic, the layout and the chaining are all expressible today, as measured.\n\n\
     **One workaround, and it is a preference.** The lane enumerates the outputs directly, `m` \
-    being the lane index, and never takes a coordinate pair. It could have enumerated `M × 1` and \
+    being the lane index, and never takes a coordinate expr. It could have enumerated `M × 1` and \
     taken `m` from `compute.row k`, which is the spelling `examples/matmul.lichen` and \
     `examples/attention.lichen` use and which would have exercised the second extent — but `m` is \
     the row of a one-row matrix, and asking for it costs an instruction per lane to learn \

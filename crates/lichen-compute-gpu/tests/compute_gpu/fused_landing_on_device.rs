@@ -415,7 +415,7 @@ impl DeviceFactsSource for NarrowSubgroups {
 /// # Invariant
 /// The same refusal [`super::warp_exchange`] pins at the emitter, one gate earlier: the
 /// emitter refuses when a slice access is reached, the loader refuses before any dispatch
-/// happens at all, and both name the count and the width so a report says which pair
+/// happens at all, and both name the count and the width so a report says which expr
 /// disagreed.
 #[test]
 fn a_warp_slice_wider_than_this_devices_subgroup_is_refused_by_name() {

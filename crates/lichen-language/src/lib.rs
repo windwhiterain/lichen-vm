@@ -151,7 +151,7 @@ pub fn compile_with_cells(
 ///
 /// # Invariant
 ///
-/// Only a solved pair of a clean build is retained: an undecided one has no
+/// Only a solved expr of a clean build is retained: an undecided one has no
 /// answer to keep, and a cell frozen from a failed build would carry that
 /// failure's silence once its body is skipped on the read back.
 fn freeze_cells<P>(
@@ -170,17 +170,17 @@ fn freeze_cells<P>(
     }
     let mut registry = registry.write().unwrap_or_else(PoisonError::into_inner);
     for cell in compiled_cells {
-        let Some(pair) = build.state[cell.expr.0 as usize].term else {
+        let Some(expr) = build.state[cell.expr.0 as usize].term else {
             continue;
         };
-        if build.module.node_value(AnyNodeId::Dynamic(pair)).is_none() {
+        if build.module.node_value(AnyNodeId::Dynamic(expr)).is_none() {
             continue;
         }
         let key = registry.allocate_cell_key();
         // The hash is unset on this path: no cell key is computed yet (heavy-value-cache §3).
         let mode = cells.freeze_mode(&cell.name);
-        let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32], mode);
-        let index = freeze.node_map[&pair];
+        let freeze = registry.freeze_closure_mapped(&build.module, key, &[expr], [0; 32], mode);
+        let index = freeze.node_map[&expr];
         cells.record(cell.path, source_id, StaticNodeId { module: key, index });
     }
 }

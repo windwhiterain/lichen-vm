@@ -270,7 +270,7 @@ pub struct BasicBlock {
     pub terminator: Terminator,
 }
 
-/// A separated write/read pair.
+/// A separated write/read expr.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(C)]
 #[facet(deny_unknown_fields)]
@@ -294,7 +294,7 @@ pub struct Body {
     pub entry: u64,
     /// Whether the body inlined a transcendental definition, so its float arithmetic is exact.
     pub exact_float_arithmetic: bool,
-    /// The pairs a barrier is owed for.
+    /// The exprs a barrier is owed for.
     pub barriers: Vec<Barrier>,
 }
 

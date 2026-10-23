@@ -9,10 +9,10 @@ of it.
 
 ## The core idea: `[value, type]`
 
-Every expression evaluates to a **pair of two graph nodes**: the value and its type.
-Because the pair is *just data*, the checker and the runtime are the same thing —
+Every expression evaluates to a **expr of two graph nodes**: the value and its type.
+Because the expr is *just data*, the checker and the runtime are the same thing —
 unifying is a runtime operation, so **checking happens while building**. Types are
-first-class values (`Int`, `Type`, function/tuple/array types) living in the pair's
+first-class values (`Int`, `Type`, function/tuple/array types) living in the expr's
 type slot; `Type : Type` holds — the type chain closes in a cycle at `Type`,
 which is its terminal, not a supertype — and a **function's type is the function
 itself** (`f : f`), so its chain closes at `f` the same way

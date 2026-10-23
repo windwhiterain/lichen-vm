@@ -124,9 +124,9 @@ boundary and a one-ulp difference in the quotient's last bit is all that separat
 roundings. The `/5` movers are the `…001` significands and the `/7` movers are the wider set a
 divisor with no short period produces.
 
-**Measured: the rule holds on independent pairs too.** 64 (numerator, divisor) pairs taken from
+**Measured: the rule holds on independent exprs too.** 64 (numerator, divisor) exprs taken from
 **M** and **D** with the divisor index stepped by 37 — coprime with 64, so the two grids are
-paired independently rather than elementwise — move the same way, and **no pair exceeds 1 ulp**.
+paired independently rather than elementwise — move the same way, and **no expr exceeds 1 ulp**.
 
 ### 2.2 `rmsnorm`'s divisor, swept
 
@@ -162,7 +162,7 @@ simply one of the 184 arguments where it does not.
 
 ### 2.3 `softmax`'s divisor, swept
 
-**Measured: the last line alone**, `exp (x) / total`, over 256 (exponent, divisor) pairs from the
+**Measured: the last line alone**, `exp (x) / total`, over 256 (exponent, divisor) exprs from the
 softmax grid: **170 / 256 bit-exact (66.4%), 86 differ, worst 118 ulp**. The distribution splits
 in two — 77 of the movers are the division's 1 ulp, and 9 are the `exp`'s tail, the same tail
 [§3.1](#31-exp-alone) measures.
@@ -376,8 +376,8 @@ sixteen modules to twenty-eight.
 ## 7. What was measured, what is inferred, and what is unknown
 
 **Measured, in full.** [§2.1](#21-the-divider-alone)'s seven divisor columns and the 64
-independent pairs; [§2.2](#22-rmsnorms-divisor-swept)'s three bodies and the `sqrt`'s grouping;
-[§2.3](#23-softmaxs-divisor-swept)'s 256 pairs and twelve rows; [§3.1](#31-exp-alone)'s three
+independent exprs; [§2.2](#22-rmsnorms-divisor-swept)'s three bodies and the `sqrt`'s grouping;
+[§2.3](#23-softmaxs-divisor-swept)'s 256 exprs and twelve rows; [§3.1](#31-exp-alone)'s three
 sweeps and the three-operator reference table; [§3.2](#32-sin-and-cos-alone)'s four sweeps;
 [§3.3](#33-which-instruction-moved-silu-the-per-instruction-answer)'s four spellings and the
 per-point attribution; [§4](#4-family-the-reductions)'s 408 reduction points; and 12 `spirv-val`

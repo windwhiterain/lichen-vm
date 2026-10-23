@@ -282,7 +282,7 @@ fn region_parser<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// Pair a region's elements with their absolute token-index ranges.
+/// Expr a region's elements with their absolute token-index ranges.
 fn region_result(
     elems: Vec<(BlockStmt, (usize, usize))>,
     start: usize,
@@ -1288,7 +1288,7 @@ fn array_literal<'a, Er: GrammarError<'a>>(
 }
 
 /// `(k ==> v, …)` — the body of a constant table literal, `==>` separating the
-/// pair unambiguously.
+/// expr unambiguously.
 fn table_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
@@ -1305,7 +1305,7 @@ fn table_value_atom<'a, Er: GrammarError<'a>>(
             None => {
                 emit.emit(Er::message(
                     me.span(),
-                    "a table entry must be a `key ==> value` pair",
+                    "a table entry must be a `key ==> value` expr",
                 ));
                 // Recover like any parse error: the entry's key compiles,
                 // its value is a masked error block.
@@ -1334,7 +1334,7 @@ fn set_value_atom<'a, Er: GrammarError<'a>>(
 ///
 /// # Invariant
 /// A set's element position is one slot serving every member, so the type form
-/// writes exactly one element and the walk pairs it with each member
+/// writes exactly one element and the walk exprs it with each member
 /// (`docs/notes/compound-element-slots.md`).
 fn set_type_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],

@@ -2637,7 +2637,7 @@ impl GpuContext {
             self.device
                 .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
         })?;
-        // The same cached pair `dispatch` binds against, so a pipeline and the
+        // The same cached expr `dispatch` binds against, so a pipeline and the
         // descriptor sets that use it cannot disagree.
         let layouts = match self.layouts(binding.total(), push) {
             Ok(layouts) => layouts,

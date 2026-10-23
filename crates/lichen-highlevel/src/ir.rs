@@ -16,7 +16,7 @@ use crate::marks::InterfaceInstance;
 use crate::program::{HighProgramLiteral, TypeOperator};
 
 /// The static schema of an expression: which attributes ride on its runtime
-/// pair. See `docs/notes/attributes.md`.
+/// expr. See `docs/notes/attributes.md`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Schema<A> {
     pub tail: Vec<A>,
@@ -267,13 +267,13 @@ impl From<Vec<LocStep>> for LocPath {
 /// One step of the recursive location descent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LocStep {
-    /// The value slot of a `[value, type]` pair (element 0).  For an atomic
+    /// The value slot of a `[value, type]` expr (element 0).  For an atomic
     /// type expression this is that type's marker.
     Value,
-    /// The type slot of a `[value, type]` pair (element 1).  Repeating reaches
+    /// The type slot of a `[value, type]` expr (element 1).  Repeating reaches
     /// the type's type, ad infinitum.
     Type,
-    /// An attribute-tail slot of an expression pair (element 2 + index).
+    /// An attribute-tail slot of an expression expr (element 2 + index).
     Attr(usize),
     /// Entering a tuple/array/struct structure — a compound type's element 0,
     /// the list of its fields/elements.
@@ -328,7 +328,7 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// # Invariant
     /// **A side table, not a kind.** A mark rides an expression without becoming one, so
     /// every `match` on [`ExprKind`] is unchanged and no reader that does not want a mark
-    /// ever meets one. The payload is text, so a mark can never reach the pair layout
+    /// ever meets one. The payload is text, so a mark can never reach the expr layout
     /// ([docs/notes/graph-fusion.md] §3).
     pub marks: HashMap<ExprId, Vec<String>>,
     /// The interface instance each kernel expression declares, keyed by that expression.
@@ -354,7 +354,7 @@ pub struct Expr<L> {
 /// built-in leaf literal wraps a raw value token.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExprKind<L> {
-    /// A literal leaf — a `value : type` pair declared together.
+    /// A literal leaf — a `value : type` expr declared together.
     ///
     /// # Invariant
     /// The literal builds its value and type nodes through the curated
@@ -564,7 +564,7 @@ pub enum ExprKind<L> {
     ///
     /// # Invariant
     /// The checker skips it (no cells, no unification, no cascade) and compiles it
-    /// to a pair of fresh, never-unified cells, so it cannot emit a *type*-level
+    /// to an expr of fresh, never-unified cells, so it cannot emit a *type*-level
     /// "expected X, found Y" from inside itself.
     ErrorBlock,
     /// The real array type `{ element_type, length }`, kinded
@@ -574,7 +574,7 @@ pub enum ExprKind<L> {
         length: ExprId,
     },
     /// A value imported from a package in the shared registry; the IR carries only
-    /// the exported pair node ref.
+    /// the exported expr node ref.
     ///
     /// # Invariant
     /// The checker materializes the ref and extracts the value/type leaves; the
@@ -588,7 +588,7 @@ pub enum ExprKind<L> {
     /// # Invariant
     /// `op` is a *private* name resolved only against that module's registry, so
     /// two plugins each registering `$jit` never collide. The checker compiles each
-    /// argument and adopts the pair the plugin's builder returns.
+    /// argument and adopts the expr the plugin's builder returns.
     NativeCall { op: &'static str, args: ChildRange },
     /// `@gc e` — `e` compiled into a scope of its own, released once `e` is
     /// deeply decided (`docs/notes/gc-block.md`).

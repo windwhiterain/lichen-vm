@@ -19,7 +19,7 @@ is exactly this collision. The chain, each step measured on
   propagated one. Their element 0 is a **recording placeholder** on each side, `GraphValue(1)` against
   `GraphValue(0)`, so the two arrays are not structurally equal;
 - the unify reports the conflict: `UnifyError` built by `record_error`, whose roots are `(node, node)` **by
-  construction** in `write_node_answer`, with the real pair in `a`/`b`.
+  construction** in `write_node_answer`, with the real expr in `a`/`b`.
 
 So the two sides are two evaluations of one correspondence, each minting its own cell, and the engine
 refuses their disagreement. That refusal is the ruling's point.

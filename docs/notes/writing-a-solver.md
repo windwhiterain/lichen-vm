@@ -90,7 +90,7 @@ needs. In a row-major grid the **vertical** taps are the padding and the **horiz
 caller-supplied border, and a 1D body needs none of them.
 
 `examples/convolution2d.lichen` carries two of these side by side — the flat address over a
-zero-bordered grid, and the replicate clamp over a value on the edge — because that pair is the
+zero-bordered grid, and the replicate clamp over a value on the edge — because that expr is the
 cheapest way to see what a boundary decision costs.
 
 **What may sit where, measured** (all three measured on the device; the two

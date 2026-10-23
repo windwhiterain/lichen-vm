@@ -15,7 +15,7 @@ fn message(source: &str) -> String {
     compile(source).diagnostics[0].message.clone()
 }
 
-/// The root's static perspective slot. It is a `[value, type]` pair whose
+/// The root's static perspective slot. It is a `[value, type]` expr whose
 /// lattice value is element 0.
 fn root_persp(source: &str) -> usize {
     let build = compile(source)
@@ -27,7 +27,7 @@ fn root_persp(source: &str) -> usize {
         .expect("the root carries a perspective slot");
     let mut module = build.module;
     let value = module.evaluate_node_deep(slot, None).unwrap();
-    // A slot is a `[value, type]` term pair; the lattice value is element 0.
+    // A slot is a `[value, type]` term expr; the lattice value is element 0.
     let value = match value.as_enum() {
         Some(LowValue::Array(items)) => {
             // SAFETY: `items` is the payload of the value just evaluated, whose block
@@ -41,7 +41,7 @@ fn root_persp(source: &str) -> usize {
                 .expect("the perspective value is decided")
         }
         other => {
-            // A bare slot (not yet a pair) already holds the lattice value.
+            // A bare slot (not yet an expr) already holds the lattice value.
             let _ = other;
             value
         }
@@ -54,7 +54,7 @@ fn root_persp(source: &str) -> usize {
 
 #[test]
 fn a_leaf_annotation_binds_its_perspective() {
-    // `1 # 4` — a leaf's slot is simply `p`; the pair is 3-wide.
+    // `1 # 4` — a leaf's slot is simply `p`; the expr is 3-wide.
     assert!(ok("1 # 4"));
     assert_eq!(root_persp("1 # 4"), 4);
 }

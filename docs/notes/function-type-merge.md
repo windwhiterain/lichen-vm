@@ -13,7 +13,7 @@
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (the function/array unify
 > arm, the function-type recognisers, the signature reads),
 > `crates/lichen-highlevel/src/checker/lambda.rs` (`check_signature`, and the
-> `check_lam` wiring that makes a lambda's type its own pair),
+> `check_lam` wiring that makes a lambda's type its own expr),
 > `crates/lichen-highlevel/src/checker.rs` (`struct_type_type`,
 > `fresh_nominal_id`, `struct_marker_node`),
 > `crates/lichen-highlevel/src/checker/structs.rs` (the struct type's emitting
@@ -31,7 +31,7 @@ a lambda whose parameter is annotated `A` and whose return is annotated `B`
 is.
 
 A function value's *own* type is then the same thing, and it needs no second
-node: `check_lam` binds the function pair's type cell to the pair itself, so a
+node: `check_lam` binds the function expr's type cell to the expr itself, so a
 function's type is the self-referential node
 
 ```text
@@ -50,7 +50,7 @@ Two consequences, and both are deliberate:
   closes at the function the way it closes at `Type`, so a function's type is the
   function (`overview.md`).
 - **A function's signature is not in the type node.** It lives in the function
-  template: the parameter is the `[value, type, attrs…]` pair the body binds and
+  template: the parameter is the `[value, type, attrs…]` expr the body binds and
   the apply clone walk clones (`Function::parameter`), and the return side is
   `Function::return_type` — the return's *type* cell, because `r#return` may be
   an unevaluated operation node whose own slots do not name the type. An apply
@@ -68,7 +68,7 @@ an occurs check.
 ## Functions unify like arrays
 
 When both operands are function types, the unifier descends the two signatures
-positionally: the parameter pairs unify against each other — value against value,
+positionally: the parameter exprs unify against each other — value against value,
 type against type, attribute against attribute — and the two return type cells
 unify. When the elements agree the two classes merge, the same merge two arrays
 with equal elements make. There is **no host hook and no clone**: the old
@@ -77,7 +77,7 @@ may be written*, and it answered differently for a dynamic function and a frozen
 module's, which is how a wrapper in an imported module ended up reported as an
 undecided struct. The lowlevel now needs to be told nothing about function types.
 
-The descent names the parameter **pair**, not its type slot alone, so a signature
+The descent names the parameter **expr**, not its type slot alone, so a signature
 carries attributes and can constrain the *values* that flow through it:
 `?a: Int => ?a: Int` puts one cell in both positions, so unifying a function
 against it makes the argument and the result the same cell. That capability is
@@ -88,7 +88,7 @@ Three shapes the arm has to tell apart, and the judgement is the invariant rathe
 than a roster:
 
 - **Both sides a function type** — descend as above.
-- **A *degenerate* function type** — a `[Function(fid), t]` pair whose type slot
+- **A *degenerate* function type** — a `[Function(fid), t]` expr whose type slot
   names a *different* function. It is not a self-cycle, and the positional match
   is the right answer for it; `examples/closure.lichen` builds one, because a
   lambda whose body returns a nested closure gives the outer function a return
@@ -119,7 +119,7 @@ against its original compared two `Function` values and conflicted.
 
 ## A struct type's nominal identity is its written occurrence
 
-A struct type expression compiles to the pair `[shape, kind]`, and its nominal
+A struct type expression compiles to the expr `[shape, kind]`, and its nominal
 identity is a marker of the form
 
 ```text
@@ -206,28 +206,28 @@ of one expression applied to one argument, and they must unify.
   a function's type beside the function's own — and a `[dom, cod]` shape has nowhere
   to hang an attribute, which is why [attributes](attributes.md) records
   "attributes do not flow through a function" as a non-goal. In the merged form the
-  two sides are the parameter's `[value, type, attrs…]` pair and the return's term,
+  two sides are the parameter's `[value, type, attrs…]` expr and the return's term,
   so `?a: Int => ?a: Int` puts one cell in both positions and constrains the
   **values** passing through, not merely their types. The pattern the apply's
   function-ness guard builds is a real function for the same reason: a function type
   is the only function type there is, so no second shape is left for a pattern to
   wear.
-- The function's own term is one node, not a separate type node beside the pair: a
-  distinct `[Function(fid), ftype]` would be value-equal to the pair
+- The function's own term is one node, not a separate type node beside the expr: a
+  distinct `[Function(fid), ftype]` would be value-equal to the expr
   `[Function(fid), ftype]` and collide with it under the apply clone's topology
   re-establishment. The signature (parameter and return) lives in the function
   template, reached through `fid`, and unifying the type descends into those two
-  cells directly. The pre-body pair — whose type slot held the placeholder `ty_cell`
+  cells directly. The pre-body expr — whose type slot held the placeholder `ty_cell`
   so the function-ness guard skipped during checking — is mutated in place into the
   self-referential `[Function(fid), ↺]`, the same shape as the universe
-  `K = [Type, ↺]`: slot 0 the function's own value node, slot 1 the pair itself, so
+  `K = [Type, ↺]`: slot 0 the function's own value node, slot 1 the expr itself, so
   the type chain cycles at the function (`f : f : f : …`).
 - A signature's `domain` and `codomain` compile before the shell opens: the two type
   expressions' nodes belong to the *enclosing* template and are cloned per call like
   any other node in scope, and the shell's own parent is that enclosing function,
   which is what keeps a signature written inside a lambda body re-instantiated per
   call rather than shared. A signature is never applied — it exists to be unified
-  against — so its body is the bare return pair: no assert, no capture, nothing to
+  against — so its body is the bare return expr: no assert, no capture, nothing to
   run.
 - A lambda's `parent` link is the frontend's decision, not the checker's: `parent`
   is the enclosing function, so a nested closure's nodes read as members of the
@@ -253,7 +253,7 @@ of one expression applied to one argument, and they must unify.
   canonical universe (`Type : Type`), which is what makes the composed vocabulary's
   literal build a one-arm answer for that whole branch. `TypeId` is the exception
   that is not a kind marker: a nominal type id living at `shape[0]` of a
-  `TypeStruct`-kinded pair, where equal ids unify, different ids do not, and an id
+  `TypeStruct`-kinded expr, where equal ids unify, different ids do not, and an id
   never unifies with the structural markers.
 - The `TypeOperator` semantics the code now only names. `Add`/`Sub`/`Mul`/`Div` and
   the four order comparisons compute over one of the language's two scalar classes

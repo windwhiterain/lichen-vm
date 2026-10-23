@@ -465,9 +465,9 @@ as a value** — a buffer is named, never emitted.
 - **A state read in the template names the marked function's parameter**, not the
   entering call's argument, so the identity is read through the conversion's own
   state paths (`parameter_value_path`), and the entering element is the argument's
-  **value** — the tuple of slots — rather than the pair (`Lower::version_identity`).
-- **A write's value operand is a routed call's result pair**, which is not a value
-  a body can emit; the pair's value half — the call — is (`Lower::write_call`).
+  **value** — the tuple of slots — rather than the expr (`Lower::version_identity`).
+- **A write's value operand is a routed call's result expr**, which is not a value
+  a body can emit; the expr's value half — the call — is (`Lower::write_call`).
 
 **Measured after them**: the loop program answers **`[1.0, 1.0]`** on the cpu (three
 iterations store 3.0, 2.0 and 1.0 at each lane's own index, and the last store
@@ -505,7 +505,7 @@ the *surface*, and for three reasons:
    replaced by it. Building the operator first would build a special case of the
    thing being built.
 2. It cannot express what the language already has: `mutual_recursion.lichen`'s
-   `is_even`/`is_odd` pair is a two-node cycle with no count parameter, and the
+   `is_even`/`is_odd` expr is a two-node cycle with no count parameter, and the
    general case the roadmap wants — a natural recursive formulation — is not of
    the form `T -> T` repeated `n` times. Each such site would also need the
    type annotation [`P1-33`](code-audit.md) names.
@@ -572,13 +572,13 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   are `LoopRefusal::{NotRecursive, MutualComponent, NonTailCall, NoBaseCase,
   StateShape}`, each with the name a diagnostic carries. Verified against the
   checker's real templates by `loop_marker.rs` (a scalar state and a two-element
-  tuple state both convert; a non-tail call and a mutual pair name their rules)
+  tuple state both convert; a non-tail call and a mutual expr name their rules)
   and by hand-built shapes in `tests/basic/loop_conversion.rs`. The probe
   `examples/recursion.rs` prints one verdict per shape.
 - **The state read's path is read from the value side, and a frozen position
   answers** — `Module::parameter_value_path` walks the chain from the value side,
-  alternating element positions with the slot's value position (`0`), so the pair
-  peel and every slot peel are dropped and a pair's type or attribute position
+  alternating element positions with the slot's value position (`0`), so the expr
+  peel and every slot peel are dropped and an expr's type or attribute position
   ends the match rather than naming a state element
   ([compound-element-slots](compound-element-slots.md)).
   **The position is read through `Module::read_position`, so a frozen one
@@ -614,8 +614,8 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   container rule is now the emitter's own (`emit_node`'s `value_of` arm): an
   operator target at constant 0 is a `value_of` peel, and only a target that
   *holds an array value* is a container. The previous rule peeled the target with
-  `pair_value_half` first, which misreads the conditional's **bare two-element
-  arms array** as a `[value, type]` pair — so `selection_of` answered `None` for
+  `expr_value_half` first, which misreads the conditional's **bare two-element
+  arms array** as a `[value, type]` expr — so `selection_of` answered `None` for
   every `[else, then][selector]` the checker compiles, and `operands_of`'s `Index`
   arm peeled the operand array the same way. Both are fixed; the conditional
   resolves as `Selection::Computed`, `Index(apply, 0)` as `Views(apply)`.
@@ -636,13 +636,13 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
     applications deep. Forced outside the loop that chain is the *apply*
     budget's business, which refused counts the loop exists to afford.
   - **The result is built, not read off the template's return.** Evaluating the
-    return produces the same `[value, type]` pair, but it leaves the selection's
+    return produces the same `[value, type]` expr, but it leaves the selection's
     *untaken* step arm — an apply of the same function — in the graph, and the
     next deep pass walks it and unrolls one level, then that level's arm, and so
     on: the trip count the loop had just avoided paying was charged to the apply
     budget *after* the answer was already known (measured: a 1_000-count loop
     answered, then ~2_000 nested applications exhausted the budget). The loop
-    therefore assembles the pair from the base's value half and the return's own
+    therefore assembles the expr from the base's value half and the return's own
     type half, which is the whole of what an apply's result is.
   **The budget: an iteration is one application, and the saving is nesting.**
   The loop charges the *real* counters — one application per iteration, exactly
@@ -691,7 +691,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   unroll meets the nesting guard; an endless convertible loop is refused by the
   work budget; a marked but unconvertible recursion still expands),
   `lichen-highlevel`'s `loop_marker.rs` and `checker.rs` (a raised work bound
-  runs a 3_000-count loop; a raised *pair* of bounds is what a long terminating
+  runs a 3_000-count loop; a raised *expr* of bounds is what a long terminating
   recursion asks for, and each bound refuses the shape it is for) and
   `lichen-highlevel/tests/loop_run.rs` on real programs (600 answers as a loop
   where the same source unmarked is refused by the *nesting* guard, 3_000 is
@@ -841,7 +841,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   terminator:
 
   - **one `OpPhi` per declared block parameter**, with one
-    `(value, predecessor label)` pair per incoming edge, assembled from the edges
+    `(value, predecessor label)` expr per incoming edge, assembled from the edges
     the predecessors recorded. The first edge to arrive fixes one kind per
     parameter — an `OpPhi` has one type — and every later edge is coerced to it,
     so a literal or a comparison arriving at a merge is materialised in the
@@ -866,7 +866,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   | a loop body entered without passing its header | `OpLoopMerge`'s continue target must be dominated by its header |
   | a selection whose arms meet only by leaving the function or the loop — a `return`, a `break` | it has no join inside itself, so no merge block: the merge would be the block the arms meet at *outside* it |
   | a `CondBr` to one block with two different value lists | an unconditional branch cannot say which arrived |
-  | an unreachable block | it has no arrival, so its `OpPhi` would have no pair |
+  | an unreachable block | it has no arrival, so its `OpPhi` would have no expr |
   | the entry block as a loop header | its parameters are the function's own, not a phi |
 
   **Three statements of the settled mapping needed correcting, and the code is
@@ -900,7 +900,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   `a_write_inside_a_loop_is_refused_by_name` pins `WriteInsideLoop`. The
   disassembly of the third is what the design predicted: the header's
   `OpLoopMerge %merge %body`, a `%pass` that both arms branch to and that carries
-  the backedge to the header, and one `OpPhi` pair per predecessor everywhere.
+  the backedge to the header, and one `OpPhi` expr per predecessor everywhere.
   `dispatch.rs`'s three citations of the old single-`OpLabel` invariant now cite
   the write-reachability one, which a selection arm still satisfies and a loop
   body does not.
@@ -1077,8 +1077,8 @@ done** — the acceptance case at item 5 runs on both backends:
    value half, once, for both the arithmetic and the compute operators. That is
    what makes `ComputeOperator::Read` emitable at this site: the frozen body
    names projections of its *parameter* (`$read(x.from, x.at)`), and the argument
-   is a `[value, type]` pair whose value half holds `[.from, .at]` as its two
-   elements, which `buffer_read` already reads as the operand pair it is written
+   is a `[value, type]` expr whose value half holds `[.from, .at]` as its two
+   elements, which `buffer_read` already reads as the operand expr it is written
    against. The compute arm used to pass the apply's own `[callee, argument,
    result]` array, which no operator reads that way.
 
@@ -1378,7 +1378,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      arms — same blocks, same parameters, same `ValueId`s, in the same order — and
      the plan's `targets`, `loop_bodies` and `merges` are the same for both, so the
      arm the plan calls the body is the step either way. Everything else in the
-     module was right: one `OpPhi` pair per incoming edge, the continue target the
+     module was right: one `OpPhi` expr per incoming edge, the continue target the
      step, the merge the exit. **`spirv-val` cannot see this** — a header that
      branches to its body on its exit condition is a legal module, and the validator
      accepts it in both spellings — so what covers the arm order without a device is
@@ -1486,11 +1486,11 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    the emitter walks it, and the definition pass does not guarantee that.** The
    reader is reached only if the checker's definition pass has **not** already run
    the recursion. `Module::function_apply` calls `apply_loop` for a marked,
-   convertible recursion, and `loop_run.rs`'s `Exit` arm **writes the answered pair
+   convertible recursion, and `loop_run.rs`'s `Exit` arm **writes the answered expr
    onto the apply node** (`write_node_value`). The apply then carries both its
    `Apply` operation and a concrete `[value, type]`, and `lichen-compute`'s
-   `value_of_node`/`pair_value_half` resolve the recorder's `Index(pair, 0)` to that
-   pair — so the walk descends the **unrolled** chain of state and arithmetic nodes
+   `value_of_node`/`expr_value_half` resolve the recorder's `Index(expr, 0)` to that
+   expr — so the walk descends the **unrolled** chain of state and arithmetic nodes
    and `Lower::apply` is never entered. Instrumenting both entry points and running
    both programs: in `a_kernel_loop_nest_carries_a_runtime_state` (whose seed is a
    buffer read, so the checker's `loop_iteration` reports `Undecided` and writes no
@@ -1543,7 +1543,7 @@ that cannot be used.** A loop needs two things and they are not the same thing:
 
 - **control flow** — a backedge, which is a branch;
 - **values that survive the backedge** — SPIR-V's `OpPhi` at the header, one
-  `(value, predecessor-label)` pair per incoming edge; wasm's `local.set`/`local.get`.
+  `(value, predecessor-label)` expr per incoming edge; wasm's `local.set`/`local.get`.
 
 An earlier draft of this section specified only the first, on the assumption that a
 loop could borrow a Function-storage-class `OpVariable` for its carried value. **It

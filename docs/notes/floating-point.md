@@ -92,7 +92,7 @@ This is deliberately **not** the relation the language's `==` uses — that is
 One entry in `for_each_kind_marker!`:
 
 ```rust
-/// The `float` type constant — `Float` literals pair with `[float, K]`.
+/// The `float` type constant — `Float` literals expr with `[float, K]`.
 TypeFloat { 9, "float", float_marker, float_marker_node }
 ```
 
@@ -136,9 +136,9 @@ That is the **opposite** of §3.1's decision, on purpose.
 
 ### 3.4 The parser and the literal's type
 
-A literal builds a `[value, type]` pair. `Int(5)` builds `[USize(5), [int, K]]`;
+A literal builds a `[value, type]` expr. `Int(5)` builds `[USize(5), [int, K]]`;
 `Float(1.5)` builds `[Float(1.5), [float, K]]`, and the parser's literal arm is
-the one place that pair is built. The literal's type is its own class, with
+the one place that expr is built. The literal's type is its own class, with
 nothing to choose.
 
 ### 3.5 The printer
@@ -453,7 +453,7 @@ that).
   `Float` fragment carries the `Int` index in an `f32` holding the exact integer:
   the wasm backend emits **nothing** where the value it holds is already a float,
   while SPIR-V emits `OpConvertUToF` because its index is a 32-bit integer. That
-  pair of answers is precisely what only a comparison of the two real backends
+  expr of answers is precisely what only a comparison of the two real backends
   keeps.
 
 **Still refused, and each is the right answer:**

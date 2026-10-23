@@ -50,13 +50,13 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | retired:P1-49 — the message fix landed and its machinery (the supply keys and the field-naming sentence) was deleted with the lazy reorder; the refusal removes the miss entirely |
 | P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | subsumed:P1-49 — the ruling refuses the undetermined callee; measured: `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, a later `.b` read panics with `index 1 out of bounds (array length 1)` |
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | retired:P1-49 — the sentence landed and its plumbing (`Diag::supplied_names`, the supply-key map) was deleted with the lazy reorder; the refusal removes the miss entirely |
-| P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
+| P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the expr's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
 | P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 | P1-51 | high | lowlevel | A surviving function's template list names released nodes after a collect | fixed — measured on the example corpus before the fix: `FunctionId(3v1)`, homed in `4v1`, listed 23 nodes of the released `5v1`. A node's owner records its function, so `garbage_collect` now keeps every node of a function whose home outlives the block (`owned_by_surviving_function`) and moves it into the target; after the fix the corpus leaves no dangling function node, and the contracts are pinned in `basic::gc_safety` |
-| P1-52 | high | lowlevel, language | A collect releases a node a live parent-block payload names | fixed — the language layer guarantees the boundary: `check_gc` gives the parent `Index(pair, 0)`/`Index(pair, 1)` reads, so `x = [@gc 1, 2]` names a parent node instead of the scope's value cell; pinned by `block_boundary`, which scans every payload and operand of a language corpus (0 violations). The engine does not validate the contract, so a hand-built module can still break it — the ignored `basic::gc_safety` repro records that host contract (`D21`) |
+| P1-52 | high | lowlevel, language | A collect releases a node a live parent-block payload names | fixed — the language layer guarantees the boundary: `check_gc` gives the parent `Index(expr, 0)`/`Index(expr, 1)` reads, so `x = [@gc 1, 2]` names a parent node instead of the scope's value cell; pinned by `block_boundary`, which scans every payload and operand of a language corpus (0 violations). The engine does not validate the contract, so a hand-built module can still break it — the ignored `basic::gc_safety` repro records that host contract (`D21`) |
 
 ## P1 — correctness
 
@@ -238,7 +238,7 @@ APPLY fn=5v1 … template_param=162v1 leaf=USize(48)      argument leaf=USize(18
 `1v1` is `f` and `3v1` the inner `b => …`; **`5v1` is a fresh closure clone**,
 and *its declared parameter already holds 48* — the first argument of the
 enclosing call, not the 18 this apply is checking. The unify is
-`unify(cloned_param, argument)` at the pair's leaf: 48 against 18. So the
+`unify(cloned_param, argument)` at the expr's leaf: 48 against 18. So the
 statement to take forward is: **when an apply instantiates the curried closure
 that `f`'s body will apply again, the clone's parameter is seeded with the
 enclosing apply's argument**, which is exactly the class of defect the note's
@@ -685,9 +685,9 @@ struct type`). **Route measured, and both halves are the same trap.** The requir
 **Perspective attribute** (`# n` parses as `AnnPiece::Perspective`;
 `Perspective::unify_slots` is `check_unify_relaxed` with the divisibility subtype),
 so "the field's `# 4` against the argument's `# 2`" is an attribute-slot unify; the
-pin (`5 : Int`) is `check_element_pair_values`, the element-value walk. Both are
-**checker-time** and both are syntactic (`check_element_pair_attributes` /
-`check_element_pair_values` take `ExprId`s, and the field's slot only exists as a
+pin (`5 : Int`) is `check_element_expr_values`, the element-value walk. Both are
+**checker-time** and both are syntactic (`check_element_expr_attributes` /
+`check_element_expr_values` take `ExprId`s, and the field's slot only exists as a
 lazy runtime read when the callee is a parameter), so a per-field unify inserted at
 the resolution would merge into the undecided read instead of refusing — the trap
 P4-12 measured. Note the *type* half is already covered: a field-type mismatch is a
@@ -847,20 +847,20 @@ consistent with the rule, so the defect is narrow: `f 1` is accepted
 the rule's letter — `0` declared is not the top for a *value* — but the sentence says
 nothing about perspectives). The message prints the two *types* equal, so it is not
 the perspective unify's `expected 4, found 2` either: the failing unify is a type
-unify over two `Int`s, and the perspective-annotated argument's pair reaches it with
+unify over two `Int`s, and the perspective-annotated argument's expr reaches it with
 something the plain one does not.
 
 **Fixed.** Induced and measured: the refusing unify is the **engine's** apply-time
 parameter check (`apply_parameter_check`: `self.unify(cloned_param, argument)`), and
-the clash it records is the pair's attribute element —
+the clash it records is the expr's attribute element —
 `USize(0)` against `USize(4)` after two descent steps, printed as the two *types* of
 those values, which is why the sentence read `expected Int, found Int`. The checker's
-relaxed `Perspective::unify_slots` had already accepted the pair (a probe showed its
+relaxed `Perspective::unify_slots` had already accepted the expr (a probe showed its
 unify-error delta is zero), so the two checks disagreed on the same contract, and the
 engine's side is the wrong one twice over: the *clone's* parameter attribute is the
 absent `0`, not the declared `4`, and attribute reconciliation is the checker's.
-The fix compares the **value and type** elements when either pair carries an attribute
-tail, leaving plain pairs on the whole-pair unify exactly as before. Measured after:
+The fix compares the **value and type** elements when either expr carries an attribute
+tail, leaving plain exprs on the whole-expr unify exactly as before. Measured after:
 `f (1 # 4)` and `f (1 # 8)` are accepted (`1: Int`), `f (1 # 2)` answers
 `expected 4, found 2`, and `f 1` and a bound `y = 1 # 4; f y` are accepted. A plain
 parameter with a `# 4` argument answered `expected 0, found 4` here (the rule's
@@ -914,7 +914,7 @@ sentence) — their rows are `retired:P1-49`.
 callee that is *not determined* at the normalize. A placeholder callee
 (`_(.type Float, .length 192)`) is determined there by the **expected type** the
 context states — at a call, the parameter's type — so `check_app` pins the
-placeholder's own pair to that struct type before the argument is checked, and the
+placeholder's own expr to that struct type before the argument is checked, and the
 instantiation is checked against it as a named callee's. Where the context states no
 expected type, nothing is pinned and the refusal above stands. A callee that is a
 *parameter* is untouched: no context states its type, so it stays refused.
@@ -1062,7 +1062,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   same key-comparison contract — a self-referential key needs a *canonical*
   unfolding so that two coinductively equal keys unfold identically, and the
   cycle token `hash_inner` uses must then agree with `key_eq`'s coinduction
-  rather than counting depth. Expect the pair to be the hardest item in the
+  rather than counting depth. Expect the expr to be the hardest item in the
   queue: the unfolding has to be well-defined for a cyclic graph.
   **Re-verified at `8b94e13c`, and the equality side measured**: `key_eq`'s own
   contract is "a table keys by identity, a function by its id" (`table.rs:395-397`)
@@ -1564,7 +1564,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   language layer guarantees the boundary; the engine does not validate.** A referrer may name
   its own block, an ancestor (the ancestor outlives it), a parentless block (never released),
   or a child scope's declared root. The language front end holds it **by construction**:
-  `check_gc` gives the parent `Index(pair, 0)` and `Index(pair, 1)` reads of the scope's pair,
+  `check_gc` gives the parent `Index(expr, 0)` and `Index(expr, 1)` reads of the scope's expr,
   so the declared root is the only child node a parent names, and reading that handle is what
   collects the scope. Measured: the `block_boundary` pin scans every payload and operand of a
   language corpus and finds 0 violations (it failed on `x = [@gc 1, 2]` before the change).

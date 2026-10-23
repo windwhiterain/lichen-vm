@@ -174,7 +174,7 @@ where
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
         // A bare struct kind `[[payload, TypeStruct], K]`: render its tag, since
-        // its marker is a pair.
+        // its marker is an expr.
         if is_struct_kind(self.module, node) {
             return "TypeStruct".to_string();
         }
@@ -193,7 +193,7 @@ where
         {
             return format!("{dom} -> {cod}");
         }
-        // A struct type: the kind is the standard marker pair, whose id renders
+        // A struct type: the kind is the standard marker expr, whose id renders
         // `#n` to distinguish same-shaped structs.
         if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
@@ -311,7 +311,7 @@ where
                 self.any_node(elements[1].node)
             );
         }
-        // Fallback: dump the raw elements, a pair's two meaningful slots only
+        // Fallback: dump the raw elements, an expr's two meaningful slots only
         // (`docs/notes/array-attribute-view.md`).
         let width = logical_width(self.module, node, elements.len());
         let parts: Vec<String> = elements
@@ -411,18 +411,18 @@ where
     ///
     /// The cells read undecided for a polymorphic function (`?a -> ?a`) and
     /// bound for a monomorphic one.  `None` for a static function-type or
-    /// non-pair entry points.
+    /// non-expr entry points.
     pub(crate) fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
         match fid {
             AnyFunctionId::Dynamic(function) => {
                 let function = &self.module.functions[function];
-                let param_ty = self.pair_type_any(function.parameter)?;
-                // The stored cell is the codomain without forcing the return pair; a
+                let param_ty = self.expr_type_any(function.parameter)?;
+                // The stored cell is the codomain without forcing the return expr; a
                 // hand-built function may leave it unset.
                 let return_ty = if self.module.nodes.contains_key(function.return_type) {
                     AnyNodeId::Dynamic(function.return_type)
                 } else {
-                    self.pair_type_any(function.r#return)?
+                    self.expr_type_any(function.r#return)?
                 };
                 Some((self.any_node(param_ty), self.any_node(return_ty)))
             }
@@ -433,16 +433,16 @@ where
         }
     }
 
-    /// Element 1 (the type slot) of a `[value, type, attrs…]` pair; `None` for a
-    /// short pair.
+    /// Element 1 (the type slot) of a `[value, type, attrs…]` expr; `None` for a
+    /// short expr.
     ///
     /// # Invariant
     /// A static slot stays a static ref: a frozen type (`Int` from the prelude) is
-    /// what a `Check` build's pair often holds, and `any_node` renders it.
-    fn pair_type_any(&self, pair: NodeId) -> Option<AnyNodeId> {
-        // SAFETY: `pair` is a live node of the module being rendered; this
+    /// what a `Check` build's expr often holds, and `any_node` renders it.
+    fn expr_type_any(&self, expr: NodeId) -> Option<AnyNodeId> {
+        // SAFETY: `expr` is a live node of the module being rendered; this
         // printer releases no block.
-        let items = unsafe { self.module.array_items(pair) }?;
+        let items = unsafe { self.module.array_items(expr) }?;
         items.get(1).map(|item| item.node)
     }
 
@@ -596,7 +596,7 @@ where
             Some(LowValue::Array(array)) => {
                 let items = unsafe { array.items() };
                 // A static function-type node, or a member carrying one, prints
-                // the template's signature rather than the raw pair.
+                // the template's signature rather than the raw expr.
                 if let Some(fid) = self.static_function_type_function(sref)
                     && let Some((dom, cod)) = self.function_signature(fid)
                 {
@@ -628,7 +628,7 @@ where
         if elements.len() >= 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
         }
-        // A struct type: the kind is the standard marker pair, and a name table
+        // A struct type: the kind is the standard marker expr, and a name table
         // rides in the payload's names slot.
         if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
@@ -810,7 +810,7 @@ where
     /// The tail is the universe too, but need not be this very node: a kind read
     /// from a frozen module is a replica whose items are refs into the writing
     /// module, so its tail names that module's canonical self-loop.  Reading
-    /// through the ref lets a `[shape, [Type, ↺]]` pair that crossed a module
+    /// through the ref lets a `[shape, [Type, ↺]]` expr that crossed a module
     /// boundary render as its head rather than the raw mark.
     fn is_static_universe(&self, id: AnyNodeId) -> bool {
         let AnyNodeId::Static(sref) = id else {
@@ -863,7 +863,7 @@ where
         .node_value(AnyNodeId::Dynamic(node))
         .and_then(|value| value.as_enum())
     {
-        Some(LowValue::Array(array)) if array.layout() != 0 => shape::PAIR_ATTR_BASE.min(len),
+        Some(LowValue::Array(array)) if array.layout() != 0 => shape::EXPR_ATTR_BASE.min(len),
         _ => len,
     }
 }

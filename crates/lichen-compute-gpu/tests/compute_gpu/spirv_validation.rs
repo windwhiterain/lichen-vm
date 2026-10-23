@@ -585,7 +585,7 @@ fn index_to_float() -> KernelFragment {
 /// `out[i] = int2float (float2int in[i])` — both directions in one float module.
 ///
 /// # Invariant
-/// The pair is what the IR's `Conv { from, to }` is for: read off the module the two directions look
+/// The expr is what the IR's `Conv { from, to }` is for: read off the module the two directions look
 /// the same, and a backend that guessed them from the fragment's class would swap the programs. Here
 /// the float truncates toward zero (`OpConvertFToU`) and the integer widens back (`OpConvertUToF`).
 fn crosses_both_ways() -> KernelFragment {
@@ -1775,7 +1775,7 @@ fn stages_a_slice() -> KernelFragment {
 /// The value `body` defines with a slice write, or with the read that observes it.
 ///
 /// # Invariant
-/// `from_flat` numbers one value per step, and a barrier's pair must be the body's own values:
+/// `from_flat` numbers one value per step, and a barrier's expr must be the body's own values:
 /// this reads them back rather than counting the steps that produced them.
 fn slice_value(body: &KernelBody, write: bool) -> ValueId {
     let at = body
@@ -1823,7 +1823,7 @@ fn a_body_that_stages_validates() {
     let seen = opcodes(&words);
     assert!(
         seen.contains(&CONTROL_BARRIER),
-        "the recorded pair emits a barrier: {seen:?}"
+        "the recorded expr emits a barrier: {seen:?}"
     );
     if !validate("the staged module", &words) {
         eprintln!("the staged module was not validated");

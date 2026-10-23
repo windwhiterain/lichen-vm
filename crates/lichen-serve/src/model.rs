@@ -598,7 +598,7 @@ built
 ///
 /// # Invariant
 /// A lane is one element of one head and reads its partner at `i ± 64`, which stays inside the head
-/// because the head's own offset cancels: the first half pairs forward and subtracts, the second pairs
+/// because the head's own offset cancels: the first half exprs forward and subtracts, the second exprs
 /// back and adds. The angle is the position times `theta` raised to `-j/64`, which the language's own
 /// `exp` and `ln` build, so no table reaches the device.
 pub const ROPE_STEP: &str = r#"
@@ -881,7 +881,7 @@ built
 ///
 /// # Invariant
 /// The position count is the caller's, so nothing here is written for two: one dispatch scores every
-/// `(head, position)` pair by folding the head's width, one sums each head's exponentials by folding the
+/// `(head, position)` expr by folding the head's width, one sums each head's exponentials by folding the
 /// positions, one divides them into weights, and one mixes the cached values by folding the positions
 /// again. A lane writes exactly once in each, so the four are separate dispatches.
 pub const ATTEND_CACHE_STEP: &str = r#"

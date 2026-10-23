@@ -315,7 +315,7 @@ second does **not** read the first's result runs, and answers:
 `examples/sample.lichen` measures).
 
 **Both of those still reproduce**, re-typed at `dev@eb3132ae` — the control's row bit for bit, and
-the refusal with the same message and a different pair of identifiers, the value and the block
+the refusal with the same message and a different expr of identifiers, the value and the block
 number being what the program changes:
 
 ```text

@@ -45,14 +45,14 @@ reorders the plan:
   the set the launch note listed — three of its twelve have stopped being walls since §8–§10
   landed.
 - **Unknown** (§8): why the driver faults; whether `WorkgroupId` behaves alike; whether a
-  different recipe avoids it; whether `Policy::Batch` and `Count::Device` can carry a pair.
+  different recipe avoids it; whether `Policy::Batch` and `Count::Device` can carry an expr.
 
 ## 1. Every site that is still one dimension, re-derived
 
 The distinction is the one [two-dimensional-launch](two-dimensional-launch.md) §1 sets: **by
 construction** means the type or the emitted module has nowhere to put a second dimension, so
 admitting one changes a type; **by convention** means a single `usize`/`u32` stands where a
-pair could. This list is re-derived against `991e59bb`, not inherited.
+expr could. This list is re-derived against `991e59bb`, not inherited.
 
 ### 1.1 By construction — six
 
@@ -76,7 +76,7 @@ pair could. This list is re-derived against `991e59bb`, not inherited.
 | `lichen-compute-gpu/src/dispatch.rs:340-350` | `launch_workgroups`: `count % lane_width` and `count.div_ceil(lane_width)`. **The site §4 indicts.** One `usize`, one axis. |
 | `lichen-compute-gpu/src/dispatch.rs:1052, 1353` | `padded = workgroups * target.lane_width.lanes()` — the buffer rounding, one axis. |
 | `lichen-compute-gpu/src/dispatch.rs:370-372` | `max_workgroup_lanes = max_compute_work_group_invocations.min(max_compute_work_group_size[0])` — **`[1]` and `[2]` are never read**, so a height has no ceiling at all. |
-| `lichen-kernel-ir/src/lib.rs:583-595` | `LaneWidth(u32)`: "the lane count one workgroup runs". One number where a pair belongs. |
+| `lichen-kernel-ir/src/lib.rs:583-595` | `LaneWidth(u32)`: "the lane count one workgroup runs". One number where an expr belongs. |
 | `lichen-kernel-ir/src/lib.rs:963-973` | `Slice { class, count, space }` — "the bound and the declared array are one number". Dual: convention in the struct, construction in the emitted `OpTypeArray` (§1.1). |
 | `lichen-compute/src/compute.rs:1953-1961` | `parallel_roles`: `in` → Input, `out` → Output, **everything else → `LeafRole::Scalar`**. A fourth role variant would carry an axis; there is none. |
 | `lichen-compute/src/compute.rs:1874-1883` | "a parallel parameter's **first** scalar is the launch extent, and an extent is Int". The *number* of scalars became unbounded in §9 of the launch note; the *position* is still ordinal 0. |
@@ -117,14 +117,14 @@ tree, three of the four have changed status:
 
 | the launch note said | now |
 |---|---|
-| "`EXECUTION_MODE_LOCAL_SIZE` becomes a pair" | **measured unnecessary**: the instruction takes three literals and `(16, 4, 1)` compiles, validates and runs (§4). |
+| "`EXECUTION_MODE_LOCAL_SIZE` becomes an expr" | **measured unnecessary**: the instruction takes three literals and `(16, 4, 1)` compiles, validates and runs (§4). |
 | "a second built-in is bound and read" | **half false**: binding is free and free of effect; **reading it faults on this device** (§4), and the cause is unknown. |
 | "`Slice` counts per lane in two dimensions" | **unchanged and true**, and it is the real one (§1.1 row 1). |
-| "`Plan::group_width` becomes a pair" | **unchanged and true** (§1.1 row 5). |
+| "`Plan::group_width` becomes an expr" | **unchanged and true** (§1.1 row 5). |
 | "`TargetFacts` grows a field — which changes every kernel id" | **unchanged, and now measured** (§5): 74 sites, one version bump. |
 
 **The smallest honest step is therefore not the emitter.** It is `TargetFacts` growing a workgroup
-*pair* — with **no emitter change, no launch change and no `Slice` change** — because that is the
+*expr* — with **no emitter change, no launch change and no `Slice` change** — because that is the
 only part of the work which is (a) irreversible, (b) not blocked by anything unknown, and (c)
 **demonstrable on its own**: the tree still compiles, every digest-keyed test moves together, a
 `v1` artifact is refused by name at the version gate, and the **first time any code checks a
@@ -155,7 +155,7 @@ number this crate collects and never reads", `device.rs:8-12`).
 - **Pinned pack text** — `crates/lichen-compiler/tests/pack_install.rs:104, 358, 390`, the
   `"group_width": 64` inside `"plan": { "staging": [ … ] }`.
 - **The digest-identity tests** — `crates/lichen-kernel-ir/tests/kernel_ir/fragment_identity.rs` asserts
-  which pairs of fragments are the *same* artifact. Adding a field keeps every such assertion
+  which exprs of fragments are the *same* artifact. Adding a field keeps every such assertion
   true and moves every number.
 - **The device gate** — `DeviceFacts` gains a field, `check` (`:223`) gains a comparison, and its
   only construction site outside the GPU crate is the test at
@@ -175,7 +175,7 @@ number this crate collects and never reads", `device.rs:8-12`).
    `(16, 4, 1)` was scheduled; the refusal did not fire.
 2. `dispatch.rs:53-57` — *"A dispatch rounds up to whole workgroups and runs the surplus lanes
    with zero-padded input, so a surplus lane of a staged body writes a value a real lane of its
-   workgroup reads and no diagnostic sees it. Both numbers are named because the pair is what is
+   workgroup reads and no diagnostic sees it. Both numbers are named because the expr is what is
    wrong."* Under a rectangle the obligation is a **`rows × cols`** region and "both numbers"
    become four.
 3. `plan.rs:186-191` — *"a group narrower than the workgroup needs a barrier narrower than the
@@ -300,7 +300,7 @@ a real patch would not). Every one is `TargetFacts { int_width: …, lane_width:
 
 **The stored artifact.** `TargetFacts` is mirrored as `schema::Target`
 (`lichen-runtime/src/fused/schema.rs:301-310`) with `#[facet(deny_unknown_fields)]`, and the
-conversion is a **two-way pair** at `lichen-runtime/src/fused/convert.rs:372-387`. `FORMAT_VERSION`
+conversion is a **two-way expr** at `lichen-runtime/src/fused/convert.rs:372-387`. `FORMAT_VERSION`
 is `schema.rs:435`, currently `1`.
 
 **The version gate is already in place and already measured.** `load_fused_kernel`
@@ -318,7 +318,7 @@ text is refused … a hand-made `subgroup_width: 16` refuses a 32-element `Warp`
   repo's own precedent for its *other* artifact family is exactly this — `artifact-cache.md:289-293`
   reads *"The reader accepts only the current value… there is no compatibility path"* — with cases
   `8` and `9` at `:299-308` recorded as **silent misreads** that are the reason a bump was not
-  skipped. Six pinned artifact strings (§3) and the conversion pair are the edits. What it does
+  skipped. Six pinned artifact strings (§3) and the conversion expr are the edits. What it does
   **not** retire: there is no on-disk store of emitted modules at all
   (`taking-a-kernel-to-a-server.md:163-166`), so a bump costs a recompile and nothing else.
 - **(b) Re-key the digest** — hash a named list of facts rather than the `Debug` string. This does
@@ -349,14 +349,14 @@ alike from a distance.
 (`lichen-language/src/persist.rs:37` = `10`) is a **different artifact family** — the frozen
 program, not the kernel — and nothing here touches it. `taking-a-kernel-to-a-server.md`'s
 `fragment_digest` reference (`:18`) and its `target` row (`:142`) stay true; its
-*"no versioned `read_fragment`/`write_fragment` pair"* (`:160-162`) is still missing, and a 2-D
-workgroup makes that pair more valuable rather than less, because a server that ships fragments
+*"no versioned `read_fragment`/`write_fragment` expr"* (`:160-162`) is still missing, and a 2-D
+workgroup makes that expr more valuable rather than less, because a server that ships fragments
 across a driver boundary is exactly where `LocalInvocationId` earns or loses.
 
 ## 6. An ordered plan, and the one slice to take first
 
 **First slice, and the only one I recommend taking before anything else: `TargetFacts` grows a
-workgroup pair, and nothing else moves.**
+workgroup expr, and nothing else moves.**
 
 Concretely — `TargetFacts { int_width, lane_width, lane_height }`, or a `LanePair { x, y }` in
 place of the scalar; the digest re-keyed in the same commit; `schema::Target` and
@@ -405,12 +405,12 @@ than widening both in one step.
    the tail-lane episode again.
 5. **`Slice` as a rectangle** — nested `OpTypeArray`, two-index `OpAccessChain` (§1.1 row 1) — and
    `KernelBody::barrier_scan`'s index-escape check over a 2-D read set.
-6. **`Plan::group_width` as a pair** and `check_plan`'s rectangle rule (§1.1 row 5), with the
+6. **`Plan::group_width` as an expr** and `check_plan`'s rectangle rule (§1.1 row 5), with the
    `D17` hand-off of §3 item 11 settled **first**, by whoever lands it.
 7. **The tiler** — `Folding::tiled`'s domain `(extent, index)` and `Fold { stride, modulo }`
    (`tiled.rs:343-347, 380, 399`), with `tile ≡ body` pinned at the same tightness it has today
    (`llm-operators.md:216-217`: *"bit-for-bit only for `max`/`min`"*).
-8. **The 2-D launch** — `Count` carrying a pair, `LaunchExtent` taking two, `run_batch` and
+8. **The 2-D launch** — `Count` carrying an expr, `LaunchExtent` taking two, `run_batch` and
    `Count::Device` refusing or carrying one. Last, because everything above is a fact about the
    machine and this is a fact about the program.
 
@@ -473,7 +473,7 @@ test list.
 - **Whether `Policy::Batch` can carry two extents** in one submission without
   `run_batch`'s `BatchRefusal::Cannot` (`kernel-ir/lib.rs:463-465`). Carried forward unanswered
   from `two-dimensional-launch.md` §7; I did not probe it.
-- **Whether `Count::Device` can carry a pair.** Its `# Invariant` (`graph.rs:303-310`) says the
+- **Whether `Count::Device` can carry an expr.** Its `# Invariant` (`graph.rs:303-310`) says the
   number is *where it is*, and an indirect dispatch hands the shader nothing — so a rectangle would
   need both axes read out of the buffer, and I did not read the dispatcher's indirect path.
 - **How much a persisted fused artifact costs to retire**, if any are persisted anywhere. I read

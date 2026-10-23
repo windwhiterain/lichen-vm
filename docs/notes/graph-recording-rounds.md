@@ -156,7 +156,7 @@ asserts that a refusal is issued, and an unnamed return is that refusal working.
 about the **refusal text**, not about a red status: after the change, each of those programs must fail to name
 its return **for the same reason**, and the assertion that pins the reason is the literal in the test —
 `"a collect is asked here"` and `"after the graph has run"` in
-`what_a_recorded_body_may_not_reach_for_is_refused_by_name` (`graph_jit.rs:342-348`), and the matching pair in
+`what_a_recorded_body_may_not_reach_for_is_refused_by_name` (`graph_jit.rs:342-348`), and the matching expr in
 the host-read half of the same test. A reason that changes is a lost diagnostic; a reason that disappears is a
 test that turns green, which is also a failure of the acceptance.
 
@@ -209,7 +209,7 @@ diagnostic; the test file itself is the authority, so this table is a pointer wi
   failure mode that a "does it pass?" check cannot see, and it is the reason this clause is written separately.
 ### The frozen set is (literal, count), read from the source
 
-The acceptance does not freeze "the six strings are still somewhere in the messages". It freezes **six pairs of
+The acceptance does not freeze "the six strings are still somewhere in the messages". It freezes **six exprs of
 (literal, how many messages contain it)**, because two failures are invisible to a presence check:
 
 - a fragment that **disappears** — that message has lost part of its reason;
@@ -291,7 +291,7 @@ The failure-name set is the one measured on the same commit: `lichen-compute` **
 `a_graph_dispatches_exactly_what_the_program_dispatches`. The other seven pass, which is the point the two-way
 clause makes: their refusal is expected and an unnamed return is it working.
 
-The six `(literal, messages containing it)` pairs are read from the source as the acceptance requires; the
+The six `(literal, messages containing it)` exprs are read from the source as the acceptance requires; the
 per-message occurrence counts are the source's own, since a passing assertion cannot be observed from outside
 without a probe. What the passing test establishes is presence in every message it checks.
 
@@ -314,7 +314,7 @@ commits** on A′'s account. Each reading answers its own question, and only in 
 - **Did `consumer_guard` turn green, and the other sixteen stay?** The `lichen-compute` failure-name set,
   measured **on each commit as a full run** (`201 passed / 17 failed / 2 ignored` on both, with `consumer_guard`
   leaving the set). Two full runs are two measurements, not one code's before and after.
-- **Did any refusal text change silently?** The six `(literal, count)` pairs, read from the source's own `assert`
+- **Did any refusal text change silently?** The six `(literal, count)` exprs, read from the source's own `assert`
   blocks, on the after commit.
 
 **The `consumer_guard` before reading**, taken the same way on `a4593102`:
@@ -546,12 +546,12 @@ compound's elements carrying complete `[value, type, attributes]` slots, the ten
 parallel index function carries a decided scalar class". Three readings, each taken
 with a temporary print and reverted:
 
-- the applied pair the checker records is `[value, type, wildcards…]`, and its **value
+- the applied expr the checker records is `[value, type, wildcards…]`, and its **value
   position is a two-item frozen array** — the annotation's value, not the `$write`
   operation — so `write_value_node`'s walk finds no write;
 - `Shape::clone_static_signature_node` now copies a frozen node's **operation**, so a
   reader that resolves operators can see one; this did not move the ten, which is what
-  points at the frozen return pair's own value;
+  points at the frozen return expr's own value;
 - scanning the index function's **block subtree** for the write call does not find it:
   the applies found there belong to the graph body (`.I/.O` structs), not to `f1`'s
   body, so the write call's node is homed elsewhere than `Function::block`'s subtree.
@@ -560,7 +560,7 @@ with a temporary print and reverted:
 this walk.
 
 **Two more negatives (round five, same ten).** Disabling `materialize_static_return_apply`
-— the applied-pair clone the certificate work added — leaves the ten red, so the clone is
+— the applied-expr clone the certificate work added — leaves the ten red, so the clone is
 not their cause. A whole-module scan for the write call (every block, every apply, the
 argument's type through `struct_fields`) also finds nothing: the argument's type cell does
 not resolve to field names at check time (`names=None` for every apply that is not a
@@ -573,7 +573,7 @@ write: its parameter *type cell* is a static cell whose class representative hol
 value** (`rep=…610 value=None`) — the artifact kept the prelude's signature undecided — and
 the caller's argument *type cell* does not resolve to field names either (`names=None`), so
 neither the artifact's names nor the call's own type states `Write`. What *is* decided at the
-call is the argument's **value**: the struct literal's field pairs, whose third slot's value
+call is the argument's **value**: the struct literal's field exprs, whose third slot's value
 is the write's value expression (`i + 10`, an `Int`). The remaining route is to let the
 checker hand that class to the rule (it is the one reader that knows the write's value
 expression), or to freeze the prelude `Portable` so a decided node keeps its operator —
@@ -595,12 +595,12 @@ Measured on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`
 with temporary prints, since removed:
 
 - `compile_parallel_fragment` **is** entered for each kernel (two entries per check),
-  and its body pair has a value: the return pair's items are
+  and its body expr has a value: the return expr's items are
   `[value, type, <wildcards>]`.
-- The walk from `functions[fid].r#return` reads the pair, then its **value item is an
+- The walk from `functions[fid].r#return` reads the expr, then its **value item is an
   empty node** — no operation, no value (`3905: op=None value=None`). Nothing further
   is reachable, so the body contains no `Apply` to walk: the `compute.write` call's
-  result was materialized as a **caller-side pair whose value is a fresh cell**, not as
+  result was materialized as a **caller-side expr whose value is a fresh cell**, not as
   the frozen write operation.
 - That is the same seam the class refusal reports: `write_value_node` finds no write
   because the value the checker materialized for the call is undecided, and the deep
@@ -619,7 +619,7 @@ Measured, prints since removed:
   `module.node_operation` about dynamic nodes.
 - The output node the rule is handed is a clone whose **origin chain ends at the
   apply that instantiated the write** — a dynamic `Apply` whose value is a five-item
-  pair — so the *caller-side* apply, and through it this call's argument, is
+  expr — so the *caller-side* apply, and through it this call's argument, is
   reachable from the output the codomain names.
 - Therefore the later design choices are: resolve a static write reference in
   `write_node` (the frozen module is readable through the registry), or take the
@@ -632,7 +632,7 @@ The rule-side alternative — take the class from the reachable apply's argument
 tried and measured:
 
 - From the output's origin chain the write's apply is reached and its operand's
-  argument pair is read (`[value, type, wildcards…]`), but the pair's **value item is
+  argument expr is read (`[value, type, wildcards…]`), but the expr's **value item is
   an empty cell**: no operation, no value.
 - Calling `evaluate_node_deep` on the argument does not decide it — a cell with no
   operation has nothing to run — so the struct's three field slots stay unreachable

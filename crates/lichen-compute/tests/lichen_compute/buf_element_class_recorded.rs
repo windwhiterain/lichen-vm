@@ -79,7 +79,7 @@ fn the_module_holds_a_decided_float_element_type() {
 ///
 /// The buffer's type carries its element type, its length and its payload, so the
 /// element class is that type's first shape position — `Float` here on both sides.
-/// Nothing about the declaration changed between the two programs of the pair, so a
+/// Nothing about the declaration changed between the two programs of the expr, so a
 /// compiler that reads the element from the declaration answers `Float` for both.
 #[test]
 fn the_compiled_fragment_names_the_declared_element_class() {

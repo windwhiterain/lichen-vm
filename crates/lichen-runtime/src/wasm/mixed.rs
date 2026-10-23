@@ -178,7 +178,7 @@ fn check(
             // What it leaves is the version a read names, which is no value of a class.
             Ok(OperandClass::Opaque)
         }
-        // The two class crossings as one instruction: the pair makes the direction
+        // The two class crossings as one instruction: the expr makes the direction
         // explicit rather than guessed.
 
         // The operand must be the class it converts from; `from == to` is a

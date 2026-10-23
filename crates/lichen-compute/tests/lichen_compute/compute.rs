@@ -313,8 +313,8 @@ k6 = compute.jit (p : tuple{Int, Int} => (p(0) > p(1)) ^ (p(0) == p(1)))
         1,
         "the `!=` comparison yields 1"
     );
-    assert_eq!(common::usize_of(&elements[4]), 1, "the `|` pair yields 1");
-    assert_eq!(common::usize_of(&elements[5]), 1, "the `^` pair yields 1");
+    assert_eq!(common::usize_of(&elements[4]), 1, "the `|` expr yields 1");
+    assert_eq!(common::usize_of(&elements[5]), 1, "the `^` expr yields 1");
 }
 
 #[test]
@@ -596,7 +596,7 @@ r = (compute.launch k (2, 3) : tuple{Int, Int})
 
 #[test]
 fn jit_three_value_codomain_returns_three_values() {
-    // A distinct wasm signature from the two-value one, keyed on the arity *pair*.
+    // A distinct wasm signature from the two-value one, keyed on the arity *expr*.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (x : Int => (x, x + 1, x + 2))
@@ -687,7 +687,7 @@ compute.jit
         "raw[?a, raw[?b, ?c, ?d, ?e, ?f], @any, @any, @any] -> raw[?g, raw[?h, ?i, ?j, ?k, ?l], @any, @any, @any] => struct{.native raw[?m, ?n, ?o, ?p, ?q], .I raw[?b, ?c, ?d, ?e, ?f], .O raw[?h, ?i, ?j, ?k, ?l]}: raw[?a, raw[?b, ?c, ?d, ?e, ?f], @any, @any, @any] -> raw[?g, raw[?h, ?i, ?j, ?k, ?l], @any, @any, @any] -> struct{.native raw[?m, ?n, ?o, ?p, ?q], .I raw[?b, ?c, ?d, ?e, ?f], .O raw[?h, ?i, ?j, ?k, ?l]}",
         "jit wrapper value/type"
     );
-    // Both cells are the `.I`/`.O` field read's pair, which still marks when
+    // Both cells are the `.I`/`.O` field read's expr, which still marks when
     // undecided (raw-rendering-mark.md §2).
     assert_eq!(
         render(
@@ -1081,14 +1081,14 @@ k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
-    let small_pair = common::array_values(&small_module, &small);
+    let small_expr = common::array_values(&small_module, &small);
     assert_eq!(
-        common::usize_array(&small_module, &small_pair[0]),
+        common::usize_array(&small_module, &small_expr[0]),
         vec![3, 4, 5, 6],
         "the sequential run's first output"
     );
     assert_eq!(
-        common::usize_array(&small_module, &small_pair[1]),
+        common::usize_array(&small_module, &small_expr[1]),
         vec![0, 2, 4, 6],
         "the sequential run's second output"
     );
@@ -1107,9 +1107,9 @@ k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4096, .I In(.a 0))) : Out)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
-    let big_pair = common::array_values(&big_module, &big);
-    let big_first = common::usize_array(&big_module, &big_pair[0]);
-    let big_second = common::usize_array(&big_module, &big_pair[1]);
+    let big_expr = common::array_values(&big_module, &big);
+    let big_first = common::usize_array(&big_module, &big_expr[0]);
+    let big_second = common::usize_array(&big_module, &big_expr[1]);
     assert_eq!(
         &big_first[..8],
         &[3, 4, 5, 6, 7, 8, 9, 10],
@@ -1647,14 +1647,14 @@ k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 (compute.collect outs.x : array{Int, 3}, compute.collect outs.y : array{Int, 3})
 "#);
-    let pair = common::array_values(&module, &value);
+    let expr = common::array_values(&module, &value);
     assert_eq!(
-        common::usize_array(&module, &pair[0]),
+        common::usize_array(&module, &expr[0]),
         vec![0, 2, 4],
         "the field that holds the write to `y` holds `y`'s own values"
     );
     assert_eq!(
-        common::usize_array(&module, &pair[1]),
+        common::usize_array(&module, &expr[1]),
         vec![0, 1, 2],
         "and the field that holds the write to `x` holds `x`'s own values"
     );
@@ -1755,7 +1755,7 @@ compute.collect outs.z : array{Int, 4}
 /// codomain fills the output. A write whose value is discarded is an effect outside
 /// the value: the freeze drops it (`docs/notes/kernel-buffer-declarations.md`).
 ///
-/// The two programs differ in the codomain's value alone, so the pair says which
+/// The two programs differ in the codomain's value alone, so the expr says which
 /// write filled the buffer.
 #[test]
 fn a_statement_write_is_dropped_and_the_codowns_write_fills_the_output() {

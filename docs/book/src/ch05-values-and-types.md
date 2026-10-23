@@ -1,15 +1,15 @@
 # The Value and Its Type
 
-Every expression in lichen evaluates to a **pair**: a value and its type.
+Every expression in lichen evaluates to a **expr**: a value and its type.
 The compiler prints both halves, and the earlier chapters have already
-shown the shape of that output. This chapter is about what the pair
+shown the shape of that output. This chapter is about what the expr
 *is*: why types are values, how an expression's type is found, what an
 open cell means, and why `Type : Type` makes lichen's type system
 different from a conventional one.
 
 This is the chapter to slow down for. The rest of the book builds on it.
 
-## Every answer is a pair
+## Every answer is an expr
 
 A program's output is two things:
 
@@ -28,7 +28,7 @@ types. The compiler knows both halves for every expression it evaluates.
 
 The two halves are not computed by two systems. In lichen, checking a
 program **is** evaluating it: the compiler builds a graph in which every
-expression is a pair of two nodes — its value and its type — and
+expression is an expr of two nodes — its value and its type — and
 unification is what keeps the two consistent. That is why the type is
 printed at all, and why a program's answer includes it.
 
@@ -171,7 +171,7 @@ prints `(?a, ?b): tuple{?a, ?b}`, and two uses of one hole print
 show the unification topology. `raw` is the printer's other fallback: a
 value whose type the check **decided** but cannot read as a form (a kernel
 handle the struct type never named, a bare `[in, out]` shape). The mark is
-never an answer: it says the value/type pair cannot be printed, and a
+never an answer: it says the value/type expr cannot be printed, and a
 correct program does not produce one. The strict read rule (Chapter 4)
 refuses the reads that would have left a value undecided. Chapter 14 lists
 the mark among the printer's words for a defect.
@@ -281,11 +281,11 @@ with `Type` is an ordinary type error. The flip side of this design is
 that `Type : Type` admits recursive types and first-class types — and
 that the decidability of a lichen program is the program's own
 responsibility, not the type system's. Chapter 12 is about recursive
-types; Chapter 13 records what a perspective adds to the pair.
+types; Chapter 13 records what a perspective adds to the expr.
 
 ## Summary
 
-- Every expression evaluates to a pair, a value and its type; the compiler
+- Every expression evaluates to an expr, a value and its type; the compiler
   prints both.
 - A type is a value; the atom types have type `Type`, and compound types
   have kind types such as `TypeTuple` and `TypeStruct`.
@@ -306,7 +306,7 @@ types; Chapter 13 records what a perspective adds to the pair.
 1. Write `type_of` from the chapter and read the types of `5`, `Float`,
    `(1, 2)`, `[1, 2]`, and `Type`.
 2. Explain why `(1 : Type)` is refused, in terms of the chain of types.
-3. Write `pair_up = x => (x, x)` and read its type with `type_of`. Which
+3. Write `expr_up = x => (x, x)` and read its type with `type_of`. Which
    cell names appear in the printed type, and why?
 4. Explain why a `raw`-marked answer is a defect rather than a result, and
    name the annotation that removes one.

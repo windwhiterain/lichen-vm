@@ -325,7 +325,7 @@ fn mixed_arm_conditional() -> KernelFragment {
 ///
 /// # Invariant
 /// An `OpSelect` has one result type and both arms feed it, so the refusal **carries the two
-/// classes**: which pair met is what tells a fragment's author which arm to convert, and picking
+/// classes**: which expr met is what tells a fragment's author which arm to convert, and picking
 /// either arm would answer a program the body does not state.
 #[test]
 fn a_select_whose_arms_disagree_is_refused_by_name() {
@@ -341,7 +341,7 @@ fn a_select_whose_arms_disagree_is_refused_by_name() {
         SpirvRefusal::SelectArmClassesDisagree {
             classes: vec![ScalarClass::Int, ScalarClass::Float],
         },
-        "the refusal names the pair that met, in class order"
+        "the refusal names the expr that met, in class order"
     );
     let message = refusal.to_string();
     assert!(

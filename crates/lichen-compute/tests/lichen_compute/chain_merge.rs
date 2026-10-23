@@ -327,7 +327,7 @@ fn consulted(graph: &Graph) -> (Option<Graph>, Vec<String>) {
 /// A chain of three merges into one node, under the floor's own licence, and holds the fold.
 ///
 /// # Invariant
-/// The surviving node holds **exactly** `compose` applied twice, so a chain is the pair's own
+/// The surviving node holds **exactly** `compose` applied twice, so a chain is the expr's own
 /// operation twice over and not a second mechanism's answer. With no pack installed the licence is
 /// the floor's, which is what the three `Reduction` claims buy and a fan-out never gets.
 #[test]
@@ -365,7 +365,7 @@ fn a_chain_of_three_merges_into_one_node_under_the_floor() {
     let Node::Kernel(node) = &rewritten.nodes()[0];
     let composed = compose(
         &compose(&instances[0].fragment, &instances[1].fragment, ABSORBED)
-            .expect("the recorded first pair composes"),
+            .expect("the recorded first expr composes"),
         &instances[2].fragment,
         ABSORBED,
     )
@@ -470,7 +470,7 @@ fn a_returned_middle_output_is_refused_by_name_and_nothing_merges() {
              graph returns, and the merge deletes the node that produces it"
                 .to_string()
         ],
-        "the refusal names the **middle** node's output, which the pair's own check never saw"
+        "the refusal names the **middle** node's output, which the expr's own check never saw"
     );
 }
 

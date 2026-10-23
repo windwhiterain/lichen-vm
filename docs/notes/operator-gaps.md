@@ -6,7 +6,7 @@ that decides the reading — most of these are not the operator line's to fix.
 
 **Verification points.** The entries were measured while their features were built, re-measured at
 `dev@4b60622f`, re-checked at `dev@7ccb2480`, and again at `dev@fe21eaa4` after the `::` chain landed
-`the :: chains root at the pair, so a deferred type access resolves`. **Nothing moved**, and the reason
+`the :: chains root at the expr, so a deferred type access resolves`. **Nothing moved**, and the reason
 is worth keeping: that fix resolves a **type access** through a deferred chain, while rows two and
 three are an unannotated recursion's own cells and row one is the kernel template. Two mechanisms that
 look adjacent from the outside and are not.  The type accesses themselves were removed later
@@ -19,7 +19,7 @@ which is a different mechanism from an unannotated recursion's cells.
 
 **The re-read at `dev@c3eefe04` (the slot isomorphism's tip) moved three rows and one probe**, and each
 row below now carries that reading beside the one it replaces. The isomorphism is
-[array-attribute-view](array-attribute-view.md)'s landing: every pair is full width, a failed apply
+[array-attribute-view](array-attribute-view.md)'s landing: every expr is full width, a failed apply
 unify no longer narrows the checked set, and a requirement a body states about its own parameter is
 replayed at each apply. Two rows narrowed to a *check* refusal where they used to answer, one row's
 refusal moved from the host lowering to the backend's class walk, and the second row's probe had lost

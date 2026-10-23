@@ -213,7 +213,7 @@ fn a_tiled_reduction_tiles_the_declared_sum() {
     assert_eq!(
         tiled_fragment.body.barriers.len(),
         1,
-        "the tiled body records the write-to-read pair its barrier separates"
+        "the tiled body records the write-to-read expr its barrier separates"
     );
     let owed = tiled_fragment
         .barrier_scan(tiled_fragment.body.parameters()[1])

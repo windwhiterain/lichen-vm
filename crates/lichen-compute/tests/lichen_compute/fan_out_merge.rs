@@ -146,7 +146,7 @@ fn root_items(value: &LangValue) -> &[ArrayItem] {
 ///
 /// # Invariant
 /// The run's answer is the array of the recording's returns in its own order, so each is
-/// collected through its own ordinal and the pair is the run's whole answer. The two consumers
+/// collected through its own ordinal and the expr is the run's whole answer. The two consumers
 /// compute the same numbers, so the ordinals are told apart by the counterfactual and not by the
 /// values: it moves one consumer's constant alone and moves one of these two buffers alone.
 fn outputs(module: &Module<LangProgram>, value: &LangValue) -> (Vec<f32>, Vec<f32>) {

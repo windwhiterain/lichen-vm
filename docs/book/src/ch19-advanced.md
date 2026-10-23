@@ -61,7 +61,7 @@ name**: it can be neither bound nor referenced without the prefix, and what
 a statement binds is the operator's result. Second, **plugins cannot
 collide**: two plugins may each register a `$jit` and each resolves only
 for its own source. The checker compiles the arguments, adopts the
-`[value, type]` pair the plugin's builder returns, and knows nothing else
+`[value, type]` expr the plugin's builder returns, and knows nothing else
 about what the operator does. That is a private contract between a plugin
 and its own source.
 

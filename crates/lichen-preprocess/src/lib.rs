@@ -93,7 +93,7 @@ pub struct ResolvedImport<E> {
     pub name: String,
     /// The (line, column) of the import statement in the original file.
     pub span: Span,
-    /// The package's exported final [value, type] pair node.
+    /// The package's exported final [value, type] expr node.
     pub export: E,
     /// The canonical path of the imported package.
     pub path: PathBuf,

@@ -179,7 +179,7 @@ an element typed `?a` where `Int` is declared.
 and the value printer ask the same empty cell the same question, and
 `raw 1: ?a` is that one answer printed twice
 ([undecided-type-cell](undecided-type-cell.md) §2). Behind it are **three**
-mechanisms, one per pair — a routed comparison, a lazy read, a frozen-module read —
+mechanisms, one per expr — a routed comparison, a lazy read, a frozen-module read —
 measured with one program per discriminator and recorded with the CLI's output
 alongside the suite's in [undecided-type-cell](undecided-type-cell.md) §1, §3 and
 §4. The four are also **not** the `@loop` finding: the marker changes nothing for

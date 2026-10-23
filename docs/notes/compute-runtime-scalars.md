@@ -158,7 +158,7 @@ Two things had to land with the struct argument:
   `TableGet`, which is the case the two-pass `param_path` exists for.
 
 **The types must be lambdas, not type values.** `Read = struct{.from _, .at _}` is
-a *value*: one occurrence, one pair of `_` cells, and the first instantiation
+a *value*: one occurrence, one expr of `_` cells, and the first instantiation
 specializes them — the next one fails, and the frozen-module path panicked
 outright. `KT = _x => struct{.I _, .O _}` is a *function*, so every `(KT _)`
 clones its inner `_`. That is why the wrappers are written

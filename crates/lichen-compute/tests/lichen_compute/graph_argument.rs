@@ -27,7 +27,7 @@ fn head() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Pair = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Expr = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Side = struct{{.p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
@@ -64,7 +64,7 @@ built
 
 /// The same step over an argument naming **two** buffers, both read.
 const TWO_BUFFERS: &str = r#"
-GArg = struct{.n Int, .in Pair}
+GArg = struct{.n Int, .in Expr}
 step = (s : GArg) => {
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.a))) : OutE)
   compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.b, .p first.e)))

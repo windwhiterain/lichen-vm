@@ -57,7 +57,7 @@ go to zero for **any scope that contains an application**:
 
 - `@gc f 41` keeps three undecided nodes forever: the checker's `undecided_callee` cell, the
   **type-apply** node built over it (`check_app` allocates both per application and nothing
-  ever binds the cell), and a clone of the return pair. They are undecided *by
+  ever binds the cell), and a clone of the return expr. They are undecided *by
   construction*, not by laziness.
 - a scope holding a statement its tail never reads keeps that statement's nodes undecided
   forever when the statement is an operation — measured 7 for `{ y = f 0; 7 }`. The call is
@@ -189,8 +189,8 @@ programs are unit tests (`gc_block::a_closure_released_from_a_scope_is_still_cal
 **Fixed — the language layer holds the block boundary** (`P1-52`, decided `D21`). The
 collector may release only what no surviving structure names; the contract is that a referrer
 may name its own block, an ancestor, a parentless block, or a child scope's declared root.
-The front end holds it by construction: `check_gc` gives the parent `Index(pair, 0)` and
-`Index(pair, 1)` reads of the scope's pair, so the parent names the declared root only. The
+The front end holds it by construction: `check_gc` gives the parent `Index(expr, 0)` and
+`Index(expr, 1)` reads of the scope's expr, so the parent names the declared root only. The
 `block_boundary` pin scans every payload and operand of a language corpus and measures 0
 violations (it failed on `x = [@gc 1, 2]` before the change). *Rejected by measurement —*
 *a parent cell aliased to the inner's:* `@gc f 41` answered `none` (the engine does not

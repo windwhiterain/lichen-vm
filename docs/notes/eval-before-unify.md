@@ -62,7 +62,7 @@ final — including when the answer was "I cannot tell yet".
 
 ## 2. The measured matrix
 
-Each pair below differs **only in statement order**.
+Each expr below differs **only in statement order**.
 
 ### 2.1 A binop's result type: decided in both orders now
 
@@ -136,12 +136,12 @@ is what stands there now, and its two paths are both about the **kind** rather
 than the type: a decided container unifies its kind read against
 `tuple_kind_requirement()`, and an open one registers an `IsTupleType`
 condition as a per-apply assert.  Neither path writes a tuple type into the
-cell, so no undecided cell is ever pinned to a `[?shape, [TypeTuple, K]]` pair.
+cell, so no undecided cell is ever pinned to a `[?shape, [TypeTuple, K]]` expr.
 
 **The wording moved on (measured).** The tables of §2.2 and §2.4 quote what the
 requirement reads now, re-measured through the front end on `dev`: `f = x => x(0)`
 ; `f [10, 20]` refuses with `error: expected a tuple type, found array{Int, 2}`, the
-§2.2 pair refuses twice with `error: expected a tuple type, found array{Int, 3}`,
+§2.2 expr refuses twice with `error: expected a tuple type, found array{Int, 3}`,
 and `f = x => x[0]` ; `f (10, 20)` with `error: expected an array type, found
 tuple{Int, Int}`. What these tables used to quote is the requirement **as a
 pattern**: `f4c2b93a` ("checker: a positional read requires the tuple *kind*, never
@@ -167,7 +167,7 @@ f = x => { p = x: Int; a = x 1; a }   -- annotate first
 
 Both orders refuse — applying an `Int` has a runtime net (`evaluation.rs`'s
 `Apply` arm records the failure) because a function is distinguishable from a
-scalar at runtime. §2.2's pair differs in **whether the program is accepted at
+scalar at runtime. §2.2's expr differs in **whether the program is accepted at
 all**, which is why a deferred check needs a net at the later tier.
 
 ### 2.4 The pin route is sound; the guard route was not
@@ -398,7 +398,7 @@ parameter check and so still runs the body it refuses. Re-measured on
 `expected a struct type, found array{Int, 2}` at the **definition's** read (`1:5`,
 not the call site) — while `f (S(.a 1))` answers `1: Int` and `t::a` over an array
 refuses at the call (`expected TypeStruct, found array{Int, 2}`, `3:3`). The two
-runtime pairs are **not** one record duplicated: a probe on the eval errors names
+runtime exprs are **not** one record duplicated: a probe on the eval errors names
 different blamed nodes for the two evaluations — `IndexTarget { target: 84 }` and
 `TableMiss { table: 80, key: 88 }` against `IndexTarget { target: 109 }` and
 `TableMiss { table: 105, key: 113 }`, the definition's evaluation and the apply
@@ -425,7 +425,7 @@ the parameter check does meet), and the paren read keeps its unify.
 **The paren read did not need it** (landed): narrowing `a(k)` to tuples made its
 accepted set one kind, so its check is a plain **unify** — `check_field` pins an
 undecided container to a fresh tuple type and refuses a decided non-tuple
-outright, stating the same requirement. The predicate pair
+outright, stating the same requirement. The predicate expr
 `is_positional_type_any`/`is_positional_type` was the disjunction and is gone with
 it. The §6.2 option-1 machinery is what the **named** read's undecided tier takes
 instead, because its accepted set *cannot* be narrowed to one kind.
@@ -538,7 +538,7 @@ requirement for the undecided tier as a unify on the container's **kind slot**
 alone (against a fresh struct kind — the decided tier's own statement) refuses
 nothing: `f = x => x.a; f [10, 20]` and its call-result form each keep the two
 runtime table messages. The unify already **merges**, but the pin is invisible to
-the apply: `apply_parameter_check` unifies the parameter's `[value, type]` pair,
+the apply: `apply_parameter_check` unifies the parameter's `[value, type]` expr,
 whose type element is the container's own type cell, while the requirement node is
 a derived read the checker allocates outside it. A pinned read holds a decided
 array and is never re-evaluated, and suppressing the pin changes nothing either.
@@ -567,8 +567,8 @@ runtime `Index` evaluates its **subscript before its target**
 (`crates/lichen-lowlevel/src/evaluation.rs`). The binding form worked only because
 its top-level evaluation ran the apply first.
 
-**Landed**: the read's lazy chains now root at the container **pair's type item**
-(`Index(pair, 1)`, so evaluating them runs the apply, which decides the cell). The
+**Landed**: the read's lazy chains now root at the container **expr's type item**
+(`Index(expr, 1)`, so evaluating them runs the apply, which decides the cell). The
 readings after the change: `(f 1).a` is `7: Int`, `(f 1).a` with the field taken
 from the argument is `1: Int`, `(f 1).b` on a two-field struct is `2.5: Float`, and
 `(f 1).b` where the field is missing reports the runtime table miss instead of
@@ -620,10 +620,10 @@ were deleted at the author's direction.
 **The open piece is the deferred access itself**: `T::x` where `T`'s value is a struct
 type must read the field type, and today it yields `none`. The `::` chains root at the
 container's **type item**; for an instance's `type_of` the type value lives one level
-in (its *value*), which is the shape the `.a` fix resolved by rooting at the pair.
+in (its *value*), which is the shape the `.a` fix resolved by rooting at the expr.
 *(Superseded by the probe and the fix below.)*
 
-**Probed, then fixed by rooting the chains at the pair.** On the first registry
+**Probed, then fixed by rooting the chains at the expr.** On the first registry
 program (`v = f.f (_(.x 1, .y 2))` ; `T = type_of v` ; `(v.x, v.y, T::x == Int,
 T::y == Int)`) the read's nodes were printed on every evaluation: `container_ty` is
 concrete from the first pass, and by the third the chain had run end to end —
@@ -632,7 +632,7 @@ concrete from the first pass, and by the third the chain had run end to end —
 evaluation stuck. Rooting the names path at the term changed nothing; the lever was
 **what the chain forces**: the runtime `Index` evaluates its subscript first, so a
 names chain rooted at the type **cell** never evaluates the binding that fills it.
-Rooting the `::` chains at the container **pair's type item** (`Index(pair, 1)`, the
+Rooting the `::` chains at the container **expr's type item** (`Index(expr, 1)`, the
 same shape as the `.a` fix) makes that evaluation force the binding: both programs
 now read `(1, 2, 1, 1)`, the two `registry` tests pass, and `S1::a` (a type
 expression) plus `f = x => x::a` applied to `S1` are unchanged at `Int: Type`.
@@ -677,7 +677,7 @@ accepted only a struct but claimed a tuple and an array as well. Two spellings
 suffice — positional for `a(k)`, named for `.a`/`::a` — and the named read's
 registered condition reuses the named one rather than inventing a fourth wording.
 The `TableGet` arm needed no recorded-failure form after all: the checker side
-closed it by leaving a refused read **unbuilt** (`Checker::refused_pair`), so no
+closed it by leaving a refused read **unbuilt** (`Checker::refused_expr`), so no
 `TableGet` against a non-table is ever built and the lowlevel arm stays the
 invariant its message claims.
 
@@ -759,7 +759,7 @@ type, which is what `apply_type` binds it to as well.
 
 `@any` is **one shared node**, and `unify_inner` short-circuits on it before
 comparing anything. A struct field's value position is that node, so
-`check_element_pair_attributes`' unify returned at the wildcard arm and the
+`check_element_expr_attributes`' unify returned at the wildcard arm and the
 declared attribute was never compared — the walk was fine, it was a walk that
 did nothing:
 
@@ -797,7 +797,7 @@ the only thing that prints one.
   access, the element, the name table's `TableGet` and the container's own
   value. A deep pass would also descend the operand's whole reachable subtree and
   publish a concreteness verdict over it — for a type operand, the *entire type
-  value*, every field pair and every field's type expression, for every type access —
+  value*, every field expr and every field's type expression, for every type access —
   which is both stronger than the claim needs and wrong in kind, since it decides
   concreteness for nodes the check never asked about.
 - `check_field`'s decided tier is refused outright: its kind is readable, so the
@@ -877,7 +877,7 @@ the only thing that prints one.
   value, so the container now looks decided while the pin's name table is a fresh
   cell.
 - An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no statically
-  readable pair — it is an apply node, not an array — so its evaluation is forced
+  readable expr — it is an apply node, not an array — so its evaluation is forced
   for the nominality check and the field-list read. A callee that depends on an
   undecided parameter stays lazy (the checks defer to the apply), and a
   non-terminating one is the program's own problem: no diagnostic is owed, and the
@@ -885,7 +885,7 @@ the only thing that prints one.
   never force twice — `force_failed` records the first refusal.
 - The apply's result type cell is undecided unless the apply's evaluation syncs it:
   the cell rides in the apply's operand, and the runtime apply unifies the return
-  pair with the apply node — the apply node *is* the return pair — and binds the
+  expr with the apply node — the apply node *is* the return expr — and binds the
   cell to the return type, so a concrete result syncs its type while a polymorphic
   template's lazy result leaves it undecided.
 - `ExprKind::Function::parameter_type` is compiled *in body scope*, so in-body
@@ -900,14 +900,14 @@ the only thing that prints one.
   grammar: the highlevel is deliberately source-blind — it never sees a source span
   — so a location must be expressible purely in terms of the expression's
   structure. The highlevel *does* parse each level of that structure, tagging it as
-  either an expression's `[value, type]` pair (a `LocStep::Value` /
+  either an expression's `[value, type]` expr (a `LocStep::Value` /
   `LocStep::Type` / `LocStep::Attr` slot) or a tuple/array/struct shape (a
   `LocStep::Elem`). There is no distinct "kind" in lichen: `kind` is just the
   type's type, one more `[value, type]` pairing, and that chain is unbounded
   (`Type : Type`), so a `LocStep::Type` may repeat arbitrarily.
 - A call's result type cell is a lazy record, so an annotation on a call result
   *binds* the cell at check time and nothing more. The check happens later and
-  elsewhere: the apply's evaluation syncs that cell with the callee's return pair,
+  elsewhere: the apply's evaluation syncs that cell with the callee's return expr,
   and a disagreement between the annotation and the real return type is what gets
   reported.
 - `if x > 0 then int else float` is a dependent type: an unevaluated `Index` over

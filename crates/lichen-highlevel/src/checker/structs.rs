@@ -52,7 +52,7 @@ where
         // Force it before deciding whether the read can be checked.
         self.module.evaluate_node_deep(container_ty, None);
         let container_value = self.value_of(container);
-        // A lazy region's read states no type requirement: its pair is open.
+        // A lazy region's read states no type requirement: its expr is open.
         let lazy = self.lazy_region(container_value);
         // The requirement names the container's **kind**, never its type.
         if lazy {
@@ -80,22 +80,22 @@ where
         let position = self.constant_position(key);
         let (element, value_node, ty_node) =
             self.slot_read(container_ty, container_value, key_value, position);
-        // A lazy region's read states no attribute: its pair is the wildcard pair.
-        let pair = if lazy {
-            self.pair_of(value_node, ty_node)
+        // A lazy region's read states no attribute: its expr is the wildcard expr.
+        let expr = if lazy {
+            self.expr_of(value_node, ty_node)
         } else {
-            self.element_pair(value_node, ty_node, element)
+            self.element_expr(value_node, ty_node, element)
         };
-        self.state[e].term = Some(pair);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
         self.state[e].attr = self.stated_element_slot(element);
-        pair
+        expr
     }
 
-    /// Whether a node holds a shallow mark's pair: two items, the first lazy.
-    fn masked_pair(&self, node: NodeId) -> bool {
+    /// Whether a node holds a shallow mark's expr: two items, the first lazy.
+    fn masked_expr(&self, node: NodeId) -> bool {
         let mut current = Some(node);
         while let Some(node) = current {
             if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) {
@@ -114,7 +114,7 @@ where
         false
     }
 
-    /// A lazy region's own pair: the read addresses the pair, not a slot's value.
+    /// A lazy region's own expr: the read addresses the expr, not a slot's value.
     ///
     /// # Invariant
     /// The operands are the read's own, so both predate the read.
@@ -122,8 +122,8 @@ where
         // The container's value *is* the region when it is the wrapper; a read's
         // value is the array that read resolves to.
         match self.array_of(value) {
-            Some(array) => self.is_region(array) || self.masked_pair(array),
-            None => self.is_region(value) || self.masked_pair(value),
+            Some(array) => self.is_region(array) || self.masked_expr(array),
+            None => self.is_region(value) || self.masked_expr(value),
         }
     }
 
@@ -146,7 +146,7 @@ where
     ///
     /// # Invariant
     /// A read's own value is decided at evaluation, which a check may not force; its
-    /// constant selection and a call's template pair are the same value without it.
+    /// constant selection and a call's template expr are the same value without it.
     fn array_of(&self, node: NodeId) -> Option<NodeId> {
         if unsafe { self.module.array_items_of(AnyNodeId::Dynamic(node)) }.is_some() {
             return Some(node);
@@ -156,10 +156,10 @@ where
         {
             return Some(selected);
         }
-        // A call's value is the array its template's return pair holds.
+        // A call's value is the array its template's return expr holds.
         let function = self.module.callee_function(node)?;
         self.module
-            .pair_value_half(self.module.functions[function].r#return)
+            .expr_value_half(self.module.functions[function].r#return)
     }
 
     /// The array item a constant read selects: `[v0, v1][k]` is `vk`.
@@ -185,7 +185,7 @@ where
             .and_then(|node| node.dynamic())?;
         let key = items.get(1)?.node.dynamic()?;
         let position = self.module.usize_value(key)?;
-        // The container's array, through the node, a constant read, or a call's pair.
+        // The container's array, through the node, a constant read, or a call's expr.
         let array = self.array_of(container)?;
         let values = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(array)) }?;
         values
@@ -210,7 +210,7 @@ where
         key: NodeId,
         position: Option<usize>,
     ) -> (NodeId, NodeId, NodeId) {
-        // A lazy region's pair is narrower than a slot: the element is its value.
+        // A lazy region's expr is narrower than a slot: the element is its value.
         let lazy = self.lazy_region(container_value);
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let element = self.op_node(
@@ -354,12 +354,12 @@ where
         // A constant is not an optimisation: a kernel body is walked by
         // operands, and a `TableGet` is no value to resolve.
         self.read_site = Some(self.loc(e, 0));
-        // Index reads its subscript first: root the chains at the pair.
+        // Index reads its subscript first: root the chains at the expr.
         let ty_source = {
-            let pair = self.state[container]
+            let expr = self.state[container]
                 .term
                 .expect("the container must be compiled");
-            let ops = self.array_node(self.current_block, &[pair, self.one()]);
+            let ops = self.array_node(self.current_block, &[expr, self.one()]);
             self.op_node(
                 self.current_block,
                 P::Operator::from(LowOperator::Index),
@@ -395,13 +395,13 @@ where
         };
         let (element, value_node, ty_node) =
             self.slot_read(ty_root, container_value, key, position);
-        let pair = self.element_pair(value_node, ty_node, element);
-        self.state[e].term = Some(pair);
+        let expr = self.element_expr(value_node, ty_node, element);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
         self.state[e].attr = self.stated_element_slot(element);
-        pair
+        expr
     }
 
     /// The positional index of a named struct field; `None` for a non-struct,
@@ -482,11 +482,11 @@ where
         let id = self.fresh_nominal_id(e);
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, &names);
         let value_node = self.array_node(self.current_block, &vals);
-        let pair = self.pair_of(value_node, struct_ty);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(value_node, struct_ty);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(struct_ty);
-        pair
+        expr
     }
 
     /// A placeholder callee takes the struct type the **context requires**.
@@ -512,22 +512,22 @@ where
         let Some(value) = self.node_value(expected) else {
             return;
         };
-        // A type is a pair; anything else states no type to pin.
+        // A type is an expr; anything else states no type to pin.
         if !matches!(
             lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value),
             Some(LowValue::Array(_))
         ) {
             return;
         }
-        // The placeholder's own pair is the callee: pinning it to the expected
+        // The placeholder's own expr is the callee: pinning it to the expected
         // type makes the instantiation that type.
         self.check_expr(type_expr);
-        let pair = self.state[type_expr]
+        let expr = self.state[type_expr]
             .term
             .expect("the placeholder is compiled");
         // The expected side leads, so the expected type's own value is the one
-        // the pair keeps.
-        let (_, errors) = self.module.try_unify(expected, pair);
+        // the expr keeps.
+        let (_, errors) = self.module.try_unify(expected, expr);
         // The callee is a hole: it takes the requirement and disagrees with
         // nothing, so the unify has no failure to report.
         self.module.unify_errors.truncate(errors.start);
@@ -536,7 +536,7 @@ where
     /// The type a call's parameter requires: the call's **expected type**.
     ///
     /// # Invariant
-    /// The parameter pair's **type slot** is the requirement; its value slot is
+    /// The parameter expr's **type slot** is the requirement; its value slot is
     /// the argument the call supplies, which states no type.
     fn expected_argument_type(&mut self, function: ExprId) -> Option<NodeId> {
         let function_ty = self.state[function].ty?;
@@ -545,13 +545,13 @@ where
             AnyFunctionId::Dynamic(fid) => self.module.functions[fid].parameter,
             AnyFunctionId::Static(sref) => {
                 self.module
-                    .materialize_static_signature_pair(sref, false, self.current_block)?
+                    .materialize_static_signature_expr(sref, false, self.current_block)?
             }
         };
         // SAFETY: `parameter` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
         let items = unsafe { self.module.array_items(parameter) }?;
-        items.get(shape::PAIR_TYPE_SLOT)?.node.dynamic()
+        items.get(shape::EXPR_TYPE_SLOT)?.node.dynamic()
     }
 
     /// A struct instantiation `C(f1, …, fn)`, recognised syntactically and
@@ -570,17 +570,17 @@ where
     ) -> NodeId {
         self.check_expr(type_expr);
         self.check_expr(value);
-        let type_pair = self.state[type_expr].term.unwrap();
-        // An unevaluated callee has no readable pair; force its evaluation so
+        let type_term = self.state[type_expr].term.unwrap();
+        // An unevaluated callee has no readable expr; force its evaluation so
         // the checks below see the struct type.
 
         // An undecided-parameter callee stays lazy, and a non-terminating
         // one trips the VM's guard and stays lazy.
 
-        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // SAFETY: `type_term` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
-        if unsafe { self.module.array_items(type_pair) }.is_none() && !self.force_failed {
-            self.module.evaluate_node_deep(type_pair, None);
+        if unsafe { self.module.array_items(type_term) }.is_none() && !self.force_failed {
+            self.module.evaluate_node_deep(type_term, None);
             self.force_failed = self.module.budget_exhausted.is_some();
         }
         let callee_ty = self.state[type_expr].ty.unwrap();
@@ -596,8 +596,8 @@ where
             // Non-struct (structs are nominal): record a diagnostic at the
             // callee's type slot, never a runtime panic.
             self.record_guard(
-                type_pair,
-                type_pair,
+                type_term,
+                type_term,
                 self.loc(type_expr, 1),
                 DiagKind::InstantiateCallee,
                 None,
@@ -605,35 +605,35 @@ where
             // Nominality: only a struct type instantiates. The instance still
             // gets a term, so the descent stays total.
             let value_node = self.value_of(value);
-            let pair = self.pair_of(value_node, type_pair);
-            self.state[e].term = Some(pair);
+            let expr = self.expr_of(value_node, type_term);
+            self.state[e].term = Some(expr);
             self.state[e].val = Some(value_node);
-            self.state[e].ty = Some(type_pair);
-            return pair;
+            self.state[e].ty = Some(type_term);
+            return expr;
         }
         if !concrete {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(
-                type_pair,
-                type_pair,
+                type_term,
+                type_term,
                 self.loc(type_expr, 1),
                 DiagKind::InstantiateCalleeUndetermined,
                 None,
             );
             let value_node = self.value_of(value);
-            let pair = self.pair_of(value_node, type_pair);
-            self.state[e].term = Some(pair);
+            let expr = self.expr_of(value_node, type_term);
+            self.state[e].term = Some(expr);
             self.state[e].val = Some(value_node);
-            self.state[e].ty = Some(type_pair);
-            return pair;
+            self.state[e].ty = Some(type_term);
+            return expr;
         }
         // The shape *is* the positional field-type list; mid-recursion it is
         // undecided, so the check goes through a probe cell.
 
-        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // SAFETY: `type_term` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
         let field_list =
-            match unsafe { self.module.array_items(type_pair) }.and_then(|items| items.first()) {
+            match unsafe { self.module.array_items(type_term) }.and_then(|items| items.first()) {
                 Some(item) => {
                     let shape = self.module.as_dynamic(item.node, self.current_block);
                     // SAFETY: `shape` was just materialized into the current
@@ -649,10 +649,10 @@ where
                         }
                     }
                 }
-                // Lazy shape read: `Index(type_pair, 0)`. The deferred unify merges
+                // Lazy shape read: `Index(type_term, 0)`. The deferred unify merges
                 // the classes, so the callee checks the real fields.
                 _ => {
-                    let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
+                    let ops = self.array_node(self.current_block, &[type_term, self.zero()]);
                     self.op_node(
                         self.current_block,
                         P::Operator::from(LowOperator::Index),
@@ -661,7 +661,7 @@ where
                 }
             };
         let (value_node, value_shape, valid, argument_types) = if any_named {
-            let named = self.named_instantiate(e, type_pair, value, arg_names);
+            let named = self.named_instantiate(e, type_term, value, arg_names);
             self.unify_named_instantiate_elements(type_expr, value, &named.assign);
             let elem_ids = self.compound_children(value).unwrap_or_default();
             let tys: Vec<NodeId> = elem_ids
@@ -712,16 +712,16 @@ where
                 && shape::struct_names_any(
                     &mut self.module,
                     self.type_expr,
-                    AnyNodeId::Dynamic(type_pair),
+                    AnyNodeId::Dynamic(type_term),
                 )
                 .is_some()
-                // The pass pairs one name with one element; a hand-built value keeps
+                // The pass exprs one name with one element; a hand-built value keeps
                 // the old path.
                 && self
                     .compound_children(value)
                     .is_some_and(|children| children.len() == arg_names.len())
             {
-                let named = self.named_instantiate(e, type_pair, value, arg_names);
+                let named = self.named_instantiate(e, type_term, value, arg_names);
                 structural = named.valid;
             }
             let types: Vec<Option<NodeId>> = self
@@ -757,11 +757,11 @@ where
         if !any_named {
             self.unify_instantiate_elements(type_expr, value);
         }
-        let pair = self.pair_of(value_node, type_pair);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(value_node, type_term);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
-        self.state[e].ty = Some(type_pair);
-        pair
+        self.state[e].ty = Some(type_term);
+        expr
     }
 
     /// Reconcile a **positional** instantiation's arguments against the
@@ -788,8 +788,8 @@ where
         };
         let mut seen = ElementWalk::default();
         for (field, argument) in fields.into_iter().zip(arguments) {
-            self.check_element_pair_attributes(field, argument, &mut seen);
-            self.check_element_pair_values(field, argument, &mut seen);
+            self.check_element_expr_attributes(field, argument, &mut seen);
+            self.check_element_expr_values(field, argument, &mut seen);
         }
     }
 
@@ -800,7 +800,7 @@ where
     /// The pairing is the **definition's** order: the IR keeps `S(.b …, .a …)`
     /// in call order, so pairing by position would take the wrong field. An
     /// empty map is every early return's — a recorded mismatch or a deferred
-    /// reorder — so the walk pairs nothing there.
+    /// reorder — so the walk exprs nothing there.
     fn unify_named_instantiate_elements(
         &mut self,
         type_expr: ExprId,
@@ -822,8 +822,8 @@ where
             let Some(argument) = supplied.and_then(|index| arguments.get(index)) else {
                 continue;
             };
-            self.check_element_pair_attributes(field, *argument, &mut seen);
-            self.check_element_pair_values(field, *argument, &mut seen);
+            self.check_element_expr_attributes(field, *argument, &mut seen);
+            self.check_element_expr_values(field, *argument, &mut seen);
         }
     }
 
@@ -842,13 +842,13 @@ where
         positions: &[Option<usize>],
         arguments: &[ExprId],
     ) {
-        let Some(type_pair) = self.state[type_expr].term else {
+        let Some(type_expr) = self.state[type_expr].term else {
             return;
         };
-        let Some(pair_items) = (unsafe { self.module.array_items(type_pair) }) else {
+        let Some(expr_items) = (unsafe { self.module.array_items(type_expr) }) else {
             return;
         };
-        let Some(shape) = pair_items.first().map(|item| item.node) else {
+        let Some(shape) = expr_items.first().map(|item| item.node) else {
             return;
         };
         let shape = self.module.as_dynamic(shape, self.current_block);
@@ -872,7 +872,7 @@ where
                 if value == Some(LowValue::Any) {
                     continue;
                 }
-                // The requirement is the slot's **value**: its `[value, type]` pair's
+                // The requirement is the slot's **value**: its `[value, type]` expr's
                 // first element may itself be a frozen reference.
                 let Some(LowValue::Array(items)) = value else {
                     continue;
@@ -886,7 +886,7 @@ where
                 if self.node_value(declared).is_none() {
                     continue;
                 }
-                let loc = self.loc(argument, shape::PAIR_ATTR_BASE);
+                let loc = self.loc(argument, shape::EXPR_ATTR_BASE);
                 self.unify_declared_value(argument, marker, declared, loc);
             }
         }
@@ -945,7 +945,7 @@ where
     fn named_instantiate(
         &mut self,
         e: ExprId,
-        type_pair: NodeId,
+        type_expr: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
     ) -> NamedInstance {
@@ -963,15 +963,15 @@ where
         if shape::struct_names_any(
             &mut self.module,
             self.type_expr,
-            AnyNodeId::Dynamic(type_pair),
+            AnyNodeId::Dynamic(type_expr),
         )
         .is_none()
         {
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
                     self.record_guard(
-                        type_pair,
-                        type_pair,
+                        type_expr,
+                        type_expr,
                         self.loc(elem_ids[i], 0),
                         DiagKind::StructAnonymousField,
                         *name,
@@ -988,9 +988,9 @@ where
         // The definition's field count; `None` mid-recursion, which defers the
         // missing/excess checks to the probe unify.
 
-        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // SAFETY: `type_expr` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
-        let def_len = unsafe { self.module.array_items(type_pair) }
+        let def_len = unsafe { self.module.array_items(type_expr) }
             .and_then(|items| items.first())
             // SAFETY: the field item's node is a live node of this module;
             // nothing in this crate calls `Module::drop_block`.
@@ -1004,15 +1004,15 @@ where
         // Named arguments claim their name's positional index.
         for (i, name) in arg_names.iter().enumerate() {
             if let Some(name) = name {
-                match self.named_field_index_any(AnyNodeId::Dynamic(type_pair), name) {
+                match self.named_field_index_any(AnyNodeId::Dynamic(type_expr), name) {
                     Some(pos) => {
                         if pos >= assign.len() {
                             assign.resize(pos + 1, None);
                         }
                         if assign[pos].is_some() {
                             self.record_guard(
-                                type_pair,
-                                type_pair,
+                                type_expr,
+                                type_expr,
                                 self.loc(elem_ids[i], 0),
                                 DiagKind::StructDuplicateField,
                                 Some(name),
@@ -1024,8 +1024,8 @@ where
                     }
                     None => {
                         self.record_guard(
-                            type_pair,
-                            type_pair,
+                            type_expr,
+                            type_expr,
                             self.loc(elem_ids[i], 0),
                             DiagKind::StructUnknownField,
                             Some(name),
@@ -1049,8 +1049,8 @@ where
                 } else if assign.len() >= def_len.unwrap_or(assign.len() + 1) {
                     // Every definition position is claimed; this is an excess.
                     self.record_guard(
-                        type_pair,
-                        type_pair,
+                        type_expr,
+                        type_expr,
                         self.loc(elem_ids[i], 0),
                         DiagKind::StructExcessField,
                         None,
@@ -1070,10 +1070,10 @@ where
             }
             for (pos, slot) in assign.iter().enumerate().take(def_len) {
                 if slot.is_none() {
-                    let name = self.struct_field_name(type_pair, pos);
+                    let name = self.struct_field_name(type_expr, pos);
                     self.record_guard(
-                        type_pair,
-                        type_pair,
+                        type_expr,
+                        type_expr,
                         self.loc(e, 0),
                         DiagKind::StructMissingField,
                         name,
@@ -1118,11 +1118,11 @@ where
 
     /// The field name at a definition position, from the name table (`None` for
     /// an anonymous struct).
-    fn struct_field_name(&mut self, type_pair: NodeId, pos: usize) -> Option<&'static str> {
+    fn struct_field_name(&mut self, type_expr: NodeId, pos: usize) -> Option<&'static str> {
         let table = shape::struct_names_any(
             &mut self.module,
             self.type_expr,
-            AnyNodeId::Dynamic(type_pair),
+            AnyNodeId::Dynamic(type_expr),
         )?;
         // SAFETY: `table` is read from a live node of this module; nothing in
         // this crate calls `Module::drop_block`.
@@ -1147,7 +1147,7 @@ where
     /// A struct is polymorphic: the nominal id belongs in the **kind** slot (with
     /// `TypeStruct` as an inner tag), never the value shape, which is just the
     /// field-type list. The marker sits in the kind's marker slot like every
-    /// other kind's, so a struct type's kind is a standard `[marker, K]` pair.
+    /// other kind's, so a struct type's kind is a standard `[marker, K]` expr.
     pub(super) fn check_type_struct(&mut self, e: ExprId) -> NodeId {
         let (fields_range, names_range) = match self.ir[e].kind {
             ExprKind::TypeStruct { fields, names } => (fields, names),
@@ -1162,12 +1162,12 @@ where
             slots.push(self.element_slot_of(el));
         }
         let id = self.fresh_nominal_id(e);
-        let (shape, kind, pair) = self.struct_type_type(id, &slots, &names);
-        self.require_struct_field_names(&names, &elements, pair);
-        self.state[e].term = Some(pair);
+        let (shape, kind, expr) = self.struct_type_type(id, &slots, &names);
+        self.require_struct_field_names(&names, &elements, expr);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
-        pair
+        expr
     }
 
     /// Refuse a struct **definition** with an unnamed field, at that field's

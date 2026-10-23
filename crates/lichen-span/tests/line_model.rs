@@ -131,7 +131,7 @@ fn line_text_names_the_valid_empty_line_after_a_trailing_newline() {
 }
 
 #[test]
-fn the_span_type_stays_a_transparent_pair() {
+fn the_span_type_stays_a_transparent_expr() {
     // The alias is load-bearing: these conversions and every consumer pass the
     // tuple around directly.
     let span: Span = line_col(&line_starts("ab\n"), 3);

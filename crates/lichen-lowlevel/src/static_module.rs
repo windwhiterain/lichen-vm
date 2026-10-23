@@ -74,8 +74,8 @@ impl<P: Program> Module<P> {
             .clone()
     }
 
-    /// Whether the frozen body returns its parameter: its return pair *is* the
-    /// parameter pair.
+    /// Whether the frozen body returns its parameter: its return expr *is* the
+    /// parameter expr.
     pub fn static_function_returns_parameter(&self, function: StaticFunctionRef) -> bool {
         self.static_module(function.module)
             .functions
@@ -234,18 +234,18 @@ impl<P: Program> Module<P> {
         &self,
         sref: StaticFunctionRef,
     ) -> Option<(AnyNodeId, AnyNodeId)> {
-        let (param_pair, return_type) = {
+        let (param_expr, return_type) = {
             let module = self.static_module(sref.module);
             let function = module.functions.get(sref.index.0)?;
             (function.parameter, function.return_type)
         };
-        // The parameter pair's slot 1 is the parameter type cell.
-        let param_pair_ref = StaticNodeId {
+        // The parameter expr's slot 1 is the parameter type cell.
+        let param_expr_ref = StaticNodeId {
             module: sref.module,
-            index: param_pair,
+            index: param_expr,
         };
         let param_type = match self
-            .static_read(param_pair_ref)
+            .static_read(param_expr_ref)
             .and_then(|value| value.as_enum())
         {
             // SAFETY: `array` is a payload in a registered static module's arena, which
@@ -267,15 +267,15 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// The parameter *pair* is materialized, not just its type slot: the unify arm
-    /// treats a signature like any other `[value, type, attrs…]` pair, which gives a
+    /// The parameter *expr* is materialized, not just its type slot: the unify arm
+    /// treats a signature like any other `[value, type, attrs…]` expr, which gives a
     /// frozen signature the attribute reach a dynamic one has. The leaves are copies —
     /// a static signature is immutable, so the frozen original never binds.
     pub fn materialize_static_signature(
         &mut self,
         sref: StaticFunctionRef,
     ) -> Option<(NodeId, NodeId)> {
-        let (param_pair, return_type) = {
+        let (param_expr, return_type) = {
             let module = self.static_module(sref.module);
             let function = module.functions.get(sref.index.0)?;
             (function.parameter, function.return_type)
@@ -284,7 +284,7 @@ impl<P: Program> Module<P> {
         let parameter = self.materialize_leaf(
             StaticNodeId {
                 module: sref.module,
-                index: param_pair,
+                index: param_expr,
             },
             block,
         );

@@ -163,7 +163,7 @@ impl UnaryOp {
     /// The operator read as an inverse of `self`, or `None` when there is none.
     ///
     /// # Invariant
-    /// Only involutions pair here (`Neg`, `Exp` with `Ln`), and the absence is the refusal:
+    /// Only involutions expr here (`Neg`, `Exp` with `Ln`), and the absence is the refusal:
     /// `Sqrt` inverts on a half-line and `Square` and `Relu` do not invert at all, so an
     /// approximation of any of them is a wrong answer carrying a proof attached to it.
     pub const fn inverse(self) -> Option<UnaryOp> {

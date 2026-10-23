@@ -55,7 +55,7 @@ where
                 let element = self.element_slot(None, Some(element_cell), None);
                 let shape = self.array_node(self.current_block, &[element]);
                 let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-                let set_ty = self.slot_pair(self.current_block, shape, kind);
+                let set_ty = self.slot_expr(self.current_block, shape, kind);
                 self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
             BinOp::Add
@@ -82,11 +82,11 @@ where
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
         let value = self.op_node(self.current_block, operator, Some(operands));
-        let pair = self.pair_of(value, result);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(value, result);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(result);
-        pair
+        expr
     }
 
     /// The class two arithmetic operands share, and the assert that keeps it a numeric one.
@@ -168,7 +168,7 @@ where
     /// # Invariant
     /// The decode is [`crate::shape::low_type_of_slot`]: it answers
     /// [`LowShape::Float`] for a slot naming the float type — directly, or
-    /// through the pair an annotated parameter's type cell holds — and
+    /// through the expr an annotated parameter's type cell holds — and
     /// `None` for a cell that has not bound. So an undecided
     /// operand selects no class.
     fn names_float_class(&self, ty: NodeId) -> bool {
@@ -233,11 +233,11 @@ where
             P::Operator::from(operator),
             Some(operands),
         );
-        let pair = self.pair_of(node, result);
-        self.state[e].term = Some(pair);
+        let expr = self.expr_of(node, result);
+        self.state[e].term = Some(expr);
         self.state[e].val = Some(node);
         self.state[e].ty = Some(result);
-        pair
+        expr
     }
 
     /// Unify a slot against `class` **only when the slot already states a class**.

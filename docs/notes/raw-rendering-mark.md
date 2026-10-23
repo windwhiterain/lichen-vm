@@ -110,7 +110,7 @@ mark. Naming them is what makes the mark mean something: it says the printer
   frozen module is a *replica*: its two items are refs into the module that
   wrote it, so its tail names **that** module's canonical `[Type, ↺]` rather than
   the replica itself. Requiring the tail to be the very node — the rule until this was
-  measured — made every such pair fall back to `raw[…]`: a package's
+  measured — made every such expr fall back to `raw[…]`: a package's
   `double = x => x + x` printed `(43, 44): tuple{raw[Int, Type], raw[Int, Type]}` where
   the same program printed `tuple{Int, Int}` before the operator's contract was written
   in lichen. The head check is what keeps "is the universe" apart from "contains

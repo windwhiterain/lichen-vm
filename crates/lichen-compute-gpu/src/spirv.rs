@@ -150,7 +150,7 @@ mod capability {
     /// # Invariant
     /// **Its own capability rather than `Float32`**: the core float capability covers arithmetic,
     /// and the atomic add is an extended instruction with its own gate, which the Khronos grammar
-    /// pairs with `SPV_EXT_shader_atomic_float_add`.
+    /// exprs with `SPV_EXT_shader_atomic_float_add`.
     pub const ATOMIC_FLOAT32_ADD: u32 = 6033;
     /// The 16-bit integer a brain float is stored as.
     ///
@@ -213,7 +213,7 @@ const SCOPE_DEVICE: u32 = 1;
 /// `SpvScopeSubgroup`: the scope a `Warp` exchange's barrier is ordered at.
 const SCOPE_SUBGROUP: u32 = 3;
 const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
-/// `AcquireRelease | WorkgroupMemory`, the semantics a `Warp` pair's barrier is ordered at.
+/// `AcquireRelease | WorkgroupMemory`, the semantics a `Warp` expr's barrier is ordered at.
 ///
 /// # Invariant
 /// **The acquire/release bits are what make the exchange sound and are not the workgroup
@@ -816,7 +816,7 @@ struct Ids {
     /// # Invariant
     /// **Both are declared in every module, whatever `class` is.** A float module's `Int` is its
     /// 32-bit index and it materialises a boolean into that class as readily as an integer module
-    /// materialises one into `Float`, so a pool that declared either pair only for its own class
+    /// materialises one into `Float`, so a pool that declared either expr only for its own class
     /// emits an operand no instruction defines.
     one_integer: u32,
     zero_integer: u32,
@@ -840,7 +840,7 @@ struct Ids {
     /// **The slice space is the fragment's**: a slice access's ordinal indexes the variables of the
     /// function that reads it, so a callee's staging is not its caller's.
     shared: Vec<u32>,
-    /// One `(count, constant id)` pair per distinct slot length, in the order the shapes name them.
+    /// One `(count, constant id)` expr per distinct slot length, in the order the shapes name them.
     ///
     /// # Invariant
     /// An `OpTypeArray` names its length by id and a length can serve several shapes, so a constant
@@ -1481,12 +1481,12 @@ fn emit_function(
             lanes: fragment.target.lane_width.lanes(),
         });
     }
-    // The reads a barrier is owed for, one per recorded pair.
+    // The reads a barrier is owed for, one per recorded expr.
     let barrier_reads: HashSet<ValueId> = fragment
         .body
         .barriers
         .iter()
-        .map(|pair| pair.read)
+        .map(|expr| expr.read)
         .collect();
     // The entry block's label is the first id this function owns.
     let entry_label = next;
@@ -1988,7 +1988,7 @@ fn emit_function(
                             slots.insert(definition, scalar(result, arms));
                         }
                         // **The direction is the instruction's**, which is why the IR carries
-                        // the pair: both crossings have one operand shape.
+                        // the expr: both crossings have one operand shape.
                         KernelInstr::Conv { from, to } => {
                             let (from, to) = (from, to);
                             let seen = operand(0)?;
@@ -2765,7 +2765,7 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
 /// # Invariant
 /// `KernelInstr::Select` states no class, so the arms are the only evidence and each is read
 /// through [`value_class`] — an integer index stays one whatever the module computes. `visiting` is
-/// the phi's own, which also bounds a pair of arms that feed each other's class. Two arms of
+/// the phi's own, which also bounds an expr of arms that feed each other's class. Two arms of
 /// different classes are [`SpirvRefusal::SelectArmClassesDisagree`]: an `OpSelect` has one
 /// result type.
 fn select_class(
@@ -2792,15 +2792,15 @@ fn select_class(
 /// One emitted block.
 ///
 /// # Invariant
-/// `params` has one slot per declared parameter and `edges` one pair per
+/// `params` has one slot per declared parameter and `edges` one expr per
 /// predecessor, which is what an `OpPhi` needs; both are filled in as the
 /// predecessors' terminators are emitted, so a block entered from a block written
-/// later still receives its pair.
+/// later still receives its expr.
 #[derive(Default)]
 struct Block {
     /// One `OpPhi` result per declared parameter.
     params: Vec<Slot>,
-    /// `(predecessor label, the values that edge passes)`, one pair per edge.
+    /// `(predecessor label, the values that edge passes)`, one expr per edge.
     edges: Vec<(u32, Vec<Slot>)>,
     /// Everything after the phis, the terminator included.
     code: Vec<Inst>,
@@ -3459,14 +3459,14 @@ impl Emitter<'_> {
                 };
             }
         }
-        // **One `OpPhi` pair per predecessor**, so two edges out of one block are
-        // one pair and cannot say which values arrived.
+        // **One `OpPhi` expr per predecessor**, so two edges out of one block are
+        // one expr and cannot say which values arrived.
         if let Some(seen) = self.blocks[to].edges.iter().find(|(pred, _)| *pred == from) {
             if seen.1.iter().zip(args.iter()).any(|(a, b)| a.id != b.id) {
                 return Err(SpirvRefusal::ControlFlow {
                     detail: format!(
                         "two edges out of block {from} into block {} pass different values, and one \
-                         phi pair per predecessor cannot say which",
+                         phi expr per predecessor cannot say which",
                         self.plan.labels[to]
                     ),
                 });
@@ -3947,7 +3947,7 @@ fn assemble(
     );
     // The scalar `1` and `0` a comparison is materialised into, over both classes.
 
-    // Both pairs, unconditionally: either module class asks for either pair.
+    // Both exprs, unconditionally: either module class asks for either expr.
     constants.extend([
         Inst::new(
             op::CONSTANT,
@@ -3972,7 +3972,7 @@ fn assemble(
         ));
     }
     // The barrier's scope and semantics: the ids its operands name, at each of the two scopes
-    // a staged pair is ordered at.
+    // a staged expr is ordered at.
     if !shared.is_empty() || warp {
         constants.extend([
             Inst::new(
@@ -4308,7 +4308,7 @@ fn as_lane_id(
 /// **The value is the lane's own**: a write emits nothing, because the exchange reads each lane's
 /// register rather than an address, so the staged value is what the next read shuffles from. The
 /// subgroup barrier is not emitted here — a read states the scope it is ordered at only when a
-/// recorded pair is owed for it, which is what keeps an unordered read from carrying one.
+/// recorded expr is owed for it, which is what keeps an unordered read from carrying one.
 fn exchange_through_a_warp(
     held: Option<Slot>,
     shape: Slice,
@@ -4364,7 +4364,7 @@ fn widen_a_half(ids: &Ids, half: u32, code: &mut Vec<Inst>, next: &mut u32) -> u
 /// The 16-bit integer a `Float` is stored into a `BFloat16` buffer as.
 ///
 /// # Invariant
-/// **The mirror of [`widen_a_half`]**, and the pair is the only place a brain float changes
+/// **The mirror of [`widen_a_half`]**, and the expr is the only place a brain float changes
 /// width: the shift drops the low sixteen bits rather than rounding them, because the target is
 /// exactly the high half the value came from.
 fn narrow_a_half(ids: &Ids, value: u32, code: &mut Vec<Inst>, next: &mut u32) -> u32 {

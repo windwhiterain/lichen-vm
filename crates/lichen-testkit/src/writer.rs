@@ -504,7 +504,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// `name` — a value imported from a package, named by the export it is.
     ///
     /// # Invariant
-    /// The ref is the package's exported pair, which the checker materializes: the
+    /// The ref is the package's exported expr, which the checker materializes: the
     /// payload itself stays in the package's static arena, so the IR carries the
     /// ref and not the value.
     pub fn static_ref(&self, name: &str, export: lichen_lowlevel::StaticNodeId) -> ExprId {

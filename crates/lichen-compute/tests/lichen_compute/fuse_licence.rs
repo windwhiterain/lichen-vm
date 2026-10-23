@@ -30,7 +30,7 @@ const COUNT: usize = 8;
 const ABSORBED: u32 = 1;
 
 /// The pack a runner installs for this region.
-const PACK: &str = "elementwise-pair";
+const PACK: &str = "elementwise-expr";
 
 /// The recording's producer, in the stub's own call order.
 ///

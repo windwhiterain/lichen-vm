@@ -1,9 +1,9 @@
-//! The pair's other member: the same kernel, rooted rather than recorded.
+//! The expr's other member: the same kernel, rooted rather than recorded.
 //! See `docs/notes/compile-order-class.md`.
 //!
 //! # Invariant
 //!
-//! **This is the variant member of the pair**, and it differs from
+//! **This is the variant member of the expr**, and it differs from
 //! `buf_element_class_recorded.lichen` in its last line alone: the root is `k` rather
 //! than a `compute.graph` step that dispatches `k`. The two programs declare the same
 //! `In`, `OutE`, `Par` and the same `raw`, byte for byte, and compile the same body.

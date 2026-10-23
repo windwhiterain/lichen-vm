@@ -898,7 +898,7 @@ Named rather than implied, because each is a decision rather than a gap:
   buffers and nothing else, so a node whose fragment declares a runtime scalar is
   refused by leaf count (`ScalarLeavesMismatch`). The block itself is written; the
   graph IR has no value to put in it.
-- **A loop body that reads a kernel's own parameter pair.** Unrelated to this
+- **A loop body that reads a kernel's own parameter expr.** Unrelated to this
   target and unchanged by it: a `@loop` helper whose state a kernel body
   destructures is refused at lowering ("a kernel body's index cannot be placed"),
   so at the language level a loop body cannot yet reach a runtime scalar. The IR

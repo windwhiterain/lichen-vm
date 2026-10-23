@@ -167,7 +167,7 @@ fn a_spliced_sin_is_the_definition_the_cpu_runs() {
     println!("ran on {}", context.device_name());
 }
 
-/// `cos` over the same arguments, so the pair reads beside them.
+/// `cos` over the same arguments, so the expr reads beside them.
 /// Bound was 6; same change and same note.
 #[test]
 fn a_spliced_cos_is_the_definition_the_cpu_runs() {

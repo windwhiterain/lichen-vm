@@ -103,19 +103,19 @@ requirements (`# warp`) then refuse a config declared less uniform than a warp. 
 config is uniform by construction, so every `# p` is true *of the config*; what the
 annotation changes is what the body is allowed to rely on. Nothing was added to make this
 work — the slot isomorphism (§ of [array-attribute-view](array-attribute-view.md)) is what
-made the pair the annotation builds merge like any other.
+made the expr the annotation builds merge like any other.
 
 **The earlier reading, kept because the isomorphism is what removed it.** At `3231542a`
 the same program failed with a **runtime** diagnostic: the generic apply-time
 parameter-check rendering (`diagnostic.rs::mismatch`'s apply arm), located at the
 argument's expression with descent path `Attr(0)`, whose two sides were function types —
 `raw[?a, raw[?b, ?c]] -> raw[?d, ?e]` against `struct{…} -> ?j`. What was ruled out by
-instrumentation then: the annotation provider path, the element-pair and type-attribute
+instrumentation then: the annotation provider path, the element-expr and type-attribute
 reconciliations, and the frozen-parameter tail check did not fire; disabling the frozen
 return-attribute propagation did not change it; `check_unify` and `check_unify_relaxed`
-never saw the failing pair. A computed type with a perspective worked in the bare language
+never saw the failing expr. A computed type with a perspective worked in the bare language
 (`A = T 5; f = (s : A # 4) => s.n`), so "computed type + perspective" was not the trigger
-— the apply's pair unify was, and the isomorphism removed that arm
+— the apply's expr unify was, and the isomorphism removed that arm
 (`apply_parameter_check` now compares the value and the type only, and the order is the
 checker's).
 
@@ -123,8 +123,8 @@ checker's).
 
 **Superseded: the isomorphism settled this without any of the three.** What landed is
 option 3's reading — the annotation is a value uniformity, checked where every other
-attribute is — and it needed none of option 2's merge tolerance, because the pair the
-annotation builds is the same pair every expression carries. Option 1 (a named refusal)
+attribute is — and it needed none of option 2's merge tolerance, because the expr the
+annotation builds is the same expr every expression carries. Option 1 (a named refusal)
 has nothing left to refuse: the check already answers by name, in the lattice's own
 words. The list below is the shape the question had before the measurement moved, kept so
 the answer can be read against it.
@@ -185,7 +185,7 @@ scope reading stays parked with the kernel-type merge, and no operator needs it.
   (`# 32` required of a `# 1` parameter fails, `# 32` of a `# 32` passes), and a compound
   argument's provided slot is the meet of its components. This is the flow the read/write
   rules need on the operand side; their *results* still wait on a derived return
-  certificate (a function's return pair carrying the provided slot when the body states
+  certificate (a function's return expr carrying the provided slot when the body states
   no annotation) — without it a wrapper's return can only be a fixed certificate, because
   the body cannot see which caller's values it will run on.
 - **A read's perspective is its operands', a write's is its input's.** `compute.read`'s
