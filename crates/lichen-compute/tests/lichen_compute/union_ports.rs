@@ -25,39 +25,40 @@ const COUNT: usize = 8;
 /// `fuse_licence.rs` worked around by declaring an input its consumer never reads. Each body
 /// declares its output with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
 fn natural() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutR = struct{.r (compute.Buf Float)}
-Par  = struct{.n Int, .in In}
-producer_raw = (k : Par) => {
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par  = struct{{.n Int, .in In}}
+producer_raw = (k : Par) => {{
   i = compute.range k.n
-  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  r = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
-}
+}}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{.e (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-consumer_raw = (k : Par2) => {
+In2  = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+consumer_raw = (k : Par2) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) : Float) ~ "element")) ~ "combine"))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((fold (k.n, 0.0 ~ "identity")) + 1.0))))))
-}
+}}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.e first.r)))
-}
+}}
 built = compute.graph step
 (producer, consumer, built)
 "#
-    .to_string()
+    )
 }
 
 /// The root tuple's items, read from the value the program answered.
