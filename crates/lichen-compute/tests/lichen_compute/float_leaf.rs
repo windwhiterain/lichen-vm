@@ -44,8 +44,11 @@ const ELEMENTS: usize = 32;
 ///
 /// # Invariant
 /// `.n` is the **first** scalar leaf, so it is the extent whatever follows it; `.scale` sits
-/// beside it rather than under `.in`/`.out`, which is what makes it a launch value and not a
+/// beside it rather than under `.in`, which is what makes it a launch value and not a
 /// buffer. `kind` is the class of `.scale`, so the same shape declares the mismatch case.
+/// The parameter carries no `.out` group: the body declares the output with
+/// `compute.slice` and the write is the codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn scaled(kind: &str) -> String {
     format!(
         r#"
@@ -54,7 +57,7 @@ fn scaled(kind: &str) -> String {
 ---
 In1  = struct{{.a (compute.Buf Float)}}
 Out1 = struct{{.z (compute.Buf Float)}}
-Par  = struct{{.n Int, .cols Int, .scale {kind}, .in In1, .out Out1}}
+Par  = struct{{.n Int, .cols Int, .scale {kind}, .in In1}}
 Arg  = struct{{.n Int, .cols Int, .scale {kind}, .I In1}}
 GA   = struct{{.n Int, .cols Int, .scale {kind}, .in In1}}
 scale_raw = (k : Par) => {{
@@ -62,7 +65,8 @@ scale_raw = (k : Par) => {{
   r = i / k.cols
   c = i % k.cols
   v = (compute.read ((compute.Read _)(.from k.in.a, .at (r + c))) : Float)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v * k.scale ~ "element")))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (v * k.scale ~ "element"))))))
 }}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step = (s : GA) => {{
@@ -89,12 +93,13 @@ fn mismatched(leaf: &str, kind: &str) -> String {
 ---
 In1  = struct{{.a (compute.Buf {kind})}}
 Out1 = struct{{.z (compute.Buf {kind})}}
-Par  = struct{{.n Int, .scale {leaf}, .in In1, .out Out1}}
+Par  = struct{{.n Int, .scale {leaf}, .in In1}}
 Arg  = struct{{.n Int, .scale {leaf}, .I In1}}
 GA   = struct{{.n Int, .scale {leaf}, .in In1}}
 mismatch_raw = (k : Par) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (k.scale ~ "element")))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element {kind}))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (k.scale ~ "element"))))))
 }}
 mismatch = compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step = (s : GA) => {{
@@ -109,40 +114,53 @@ built
 /// `mismatched`'s source, run with `2` where a `Float` leaf reads, or `1.5` where an
 /// `Int` one does.
 fn run_mismatched(leaf: &str, kind: &str, passed: &str) -> (Vec<String>, Option<LangValue>) {
-    let elements = (0..ELEMENTS)
-        .map(|at| {
-            if kind == "Float" {
-                format!("{at}.0")
-            } else {
-                format!("{at}")
-            }
-        })
-        .collect::<Vec<String>>()
-        .join(", ");
     reported_run(&format!(
-        "{head}\na = (compute.buffer ([{elements}] : array{{{kind}, {ELEMENTS}}}) : (compute.Buf \
-         {kind}))\ncompute.collect (compute.graphrun built ({rows}, {passed}, a))\n",
+        "{head}\n{data}compute.collect (compute.graphrun built ({rows}, {passed}, a.z))\n",
         head = mismatched(leaf, kind),
+        data = filled(kind, datum(kind)),
         rows = ROWS,
     ))
 }
 
-/// An input of `ELEMENTS` floats, `at` in each.
-fn buffer() -> String {
-    let elements = (0..ELEMENTS)
-        .map(|at| format!("{at}.0"))
-        .collect::<Vec<String>>()
-        .join(", ");
-    format!("(compute.buffer ([{elements}] : array{{Float, {ELEMENTS}}}) : (compute.Buf Float))")
+/// The value the input buffer holds at lane `i`.
+///
+/// # Invariant
+/// `int2float i` for a `Float` buffer and `i` for an `Int` one, so the fill kernel writes
+/// the list the old array literal held: `0, 1, …` in the buffer's own class.
+fn datum(kind: &str) -> &'static str {
+    if kind == "Float" { "int2float i" } else { "i" }
+}
+
+/// The fill kernel that builds the input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the data is the
+/// list the old `compute.buffer` held. The kernel runs on the host's own backend, because
+/// a host builds its data before a device ever sees it, and its parameter declares no
+/// `.in` group at all.
+fn filled(element: &str, data_at_i: &str) -> String {
+    format!(
+        r#"
+Fill  = struct{{.n Int}}
+fill_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element {element}))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value ({data_at_i} ~ "element"))))))
+}}
+filler = compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" Out1
+a = (compute.plrun filler ((Fill)(.n {elements})) : Out1)
+"#,
+        elements = ELEMENTS,
+    )
 }
 
 /// The same kernel launched directly, over the buffer and the three scalars.
 fn direct() -> String {
     format!(
-        "{head}\na = {data}\nout = (compute.plrun scale ((Arg)(.n {rows}, .cols {cols}, \
-         .scale {scale}, .I In1(.a a))) : Out1)\ncompute.collect out.z\n",
+        "{head}\n{data}out = (compute.plrun scale ((Arg)(.n {rows}, .cols {cols}, \
+         .scale {scale}, .I In1(.a a.z))) : Out1)\ncompute.collect out.z\n",
         head = scaled("Float"),
-        data = buffer(),
+        data = filled("Float", datum("Float")),
         rows = ROWS,
         cols = COLS,
         scale = SCALE,
@@ -152,10 +170,10 @@ fn direct() -> String {
 /// The same kernel recorded, and run over the buffer and the three scalars.
 fn through_graph() -> String {
     format!(
-        "{head}\na = {data}\ncompute.collect (compute.graphrun built ({rows}, {cols}, \
-         {scale}, a))\n",
+        "{head}\n{data}compute.collect (compute.graphrun built ({rows}, {cols}, \
+         {scale}, a.z))\n",
         head = scaled("Float"),
-        data = buffer(),
+        data = filled("Float", datum("Float")),
         rows = ROWS,
         cols = COLS,
         scale = SCALE,

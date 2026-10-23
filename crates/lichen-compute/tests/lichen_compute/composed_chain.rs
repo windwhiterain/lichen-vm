@@ -198,21 +198,23 @@ const SOURCE: &str = r#"
 ---
 In   = struct{.d (compute.Buf Float)}
 OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT _)(.I In, .O OutR)
+Par  = struct{.n Int, .in In}
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
+  r = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) + s(1)) ~ "combine")
-  compute.write ((compute.Write _)(.to lane.out.r, .at at, .value acc (lane.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at at, .value acc (lane.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (lane : Par2) => {
   running = (compute.read ((compute.Read _)(.from lane.in.p, .at 0)) : Float)
   at = compute.range lane.n
+  z = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) - running) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to lane.out.z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity"))))))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutZ
 GArg = struct{.n Int, .in In}
