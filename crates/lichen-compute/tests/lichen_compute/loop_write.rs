@@ -12,28 +12,33 @@ use lichen_kernel_ir::{KernelInstr, Terminator, ValueDef};
 use super::common;
 
 /// The program, with the kernel body substituted.
+///
+/// # Invariant
+/// The body reads no buffer, so the program holds no input group and the host builds no
+/// data: a buffer a host cannot fill is not one the program needs
+/// (`docs/notes/kernel-buffer-declarations.md`).
 const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.unused (compute.Buf Float)}
-Out = struct{.y (compute.Buf Float)}
-Par = struct{.n Int, .taps Int, .in In, .out Out}
-Arg = struct{.n Int, .taps Int, .I In}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+Par = struct{.n Int, .taps Int}
+Arg = struct{.n Int, .taps Int}
 raw = (c : Par) => {
   i = compute.range c.n
 @BODY@
 }
 k = compute.parallel raw "cpu" Out
-x = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
-out = (compute.plrun k ((Arg)(.n 2, .taps 3, .I In(.unused x))) : Out)
+out = (compute.plrun k ((Arg)(.n 2, .taps 3)) : Out)
 compute.collect out.y : array{Float, 2}
 "#;
 
 /// One plain write: the control the fold is compared against.
-const CONTROL: &str = r#"  compute.write ((compute.Write _)(.to c.out.y, .at i, .value 2.0))"#;
+const CONTROL: &str = r#"  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 2.0)))))"#;
 
 /// A fold whose step writes the countdown into the buffer it carries.
-const LOOP: &str = r#"  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _)(.to s(1), .at i, .value (int2float s(0))))))
-  fold (c.taps, c.out.y)"#;
+const LOOP: &str = r#"  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _)(.to s(1), .at i, .value (int2float s(0))))))
+  ((Out)(.y (fold (c.taps, y))))"#;
 
 /// The elements the program answers.
 fn answer(body: &str) -> Vec<f32> {
