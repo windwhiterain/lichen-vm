@@ -616,8 +616,8 @@ impl<P: Program> Module<P> {
     ) -> P::Value {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
-                // Each element rides with its shallow flag; a baked static ref is referenced in place.
-                // The item buffer is the module's, so a run's clones do not allocate one each.
+                // Each element rides with its shallow flag; a baked static ref is
+                // referenced in place.
                 let mut items = self.item_clone_scratch.pop().unwrap_or_default();
                 items.clear();
                 // SAFETY: `array` is `value`'s live payload and this pass releases no block.

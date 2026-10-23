@@ -367,7 +367,7 @@ impl<P: Program> Module<P> {
     /// [`Module::fill_class_holes`].
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
         // Walking the member list itself: a write leaves the topology alone, so no
-        // snapshot is needed and no member buffer is allocated.
+        // snapshot is needed.
         let mut member = Some(representative);
         while let Some(current) = member {
             member = self.nodes[current].meta().next();
@@ -696,9 +696,8 @@ impl<P: Program> Module<P> {
         any_path: &mut AncestorPairs<AnyNodeId>,
         root: (NodeId, NodeId),
     ) -> bool {
-        // One payload compared with itself is one value: nothing to descend and no class
-        // to merge. A frozen array read through two paths is the same handle, which is how
-        // a frozen cycle reaches itself without a pair the path guard could name.
+        // One payload with itself is one value: nothing to descend; a frozen array
+        // read through two paths is the same handle.
         if a == b {
             return true;
         }
@@ -717,19 +716,15 @@ impl<P: Program> Module<P> {
         let mut ok = true;
         let mut descend =
             |this: &mut Self, index: usize, na: AnyNodeId, nb: AnyNodeId, ok: &mut bool| -> bool {
-                // Two views of one frozen node are one value: there is nothing to compare
-                // and no dynamic class to merge. A frozen cycle reaches itself this way
-                // (each read of a static ref is a fresh pair), so without this the descent
-                // regresses to the depth bound instead of cutting.
+                // Two views of one frozen node are one value: nothing to compare, and
+                // a frozen cycle reaches itself this way.
                 if let (AnyNodeId::Static(left), AnyNodeId::Static(right)) = (na, nb)
                     && left == right
                 {
                     return true;
                 }
-                // A pair already on the descent is one structure: the frame that is
-                // comparing it owns its interior, so the repeated visit adds nothing and
-                // would only reach the depth bound. `path` is the same rule keyed on class
-                // pairs; this one names the frozen refs that have no class to name them.
+                // A pair already on the descent is one structure: the frame
+                // comparing it owns its interior.
                 let guarded =
                     matches!(na, AnyNodeId::Static(_)) || matches!(nb, AnyNodeId::Static(_));
                 if guarded {
@@ -768,8 +763,7 @@ impl<P: Program> Module<P> {
             }
         }
         // The two layouts are sorted, so their union is merged in place: the walk
-        // allocates nothing per array pair, and an entry's slot is its own position, so
-        // nothing is searched.
+        // allocates nothing per array pair.
         let (mut position_a, mut position_b) = (0usize, 0usize);
         let (len_a, len_b) = (self.layout_len(&a), self.layout_len(&b));
         loop {

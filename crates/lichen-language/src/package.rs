@@ -503,9 +503,8 @@ where
     /// Each dependency loads recursively before this package compiles, so its
     /// refs are absolute from birth and the freeze sees their keys registered.
     pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
-        // A registered native virtual package: served by its file name, no disk file.
-        // One still pending is compiled here, so a program that imports none never pays
-        // for one.
+        // A native virtual package: served by its file name; a pending one is
+        // compiled here, so an unimported one never costs.
         if let Some(file_name) = path.file_name() {
             let file_name = Path::new(file_name);
             if self
@@ -1216,8 +1215,8 @@ where
         });
     }
 
-    /// Compile the pending native package `path` names, if one is pending; a no-op
-    /// otherwise, so the caller can ask unconditionally.
+    /// Compile the pending native package `path` names; a no-op otherwise, so the
+    /// caller can ask unconditionally.
     fn materialize_pending_native(&mut self, path: &Path) -> Result<(), String> {
         let Some(index) = self
             .pending_native

@@ -145,8 +145,8 @@ fn main() {
         .collect();
     files.sort();
 
-    // The store's own stages, so the fixed per-run cost is attributed rather than measured
-    // whole: the plugin's wrapper and the core prelude are two separate compiles.
+    // The store's own stages, so the fixed per-run cost is attributed rather than
+    // measured whole.
     if std::env::var("STAGES").is_ok() {
         fn stage(label: &str, started: Instant, allocs: usize, bytes: usize) {
             println!(

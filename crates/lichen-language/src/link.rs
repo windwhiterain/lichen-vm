@@ -471,8 +471,8 @@ impl LibrarySource {
     /// generated for one vocabulary and loaded by another.
     ///
     /// Every entry is `#[rustfmt::skip]`: the body is the author's verbatim text,
-    /// so reformatting it would make a later render differ from this one and
-    /// `cargo fmt --check` would fail on a file nobody wrote by hand.
+    /// so reformatting it would make a later render differ and `cargo fmt --check`
+    /// would fail.
     pub fn render<P: lichen_lowlevel::Program>(&self, build: &str) -> String {
         let program = std::any::type_name::<P>();
         let families: Vec<Family> = self

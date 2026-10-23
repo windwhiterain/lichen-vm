@@ -61,9 +61,8 @@ impl<P: Program> Module<P> {
                 let supplieds: Vec<_> = unsafe { self.array_items(argument) }
                     .map(|items| items.iter().map(|item| item.node).collect())
                     .unwrap_or_default();
-                // **Every position is compared**: an attribute's failure is pardoned by the
-                // highlevel, which knows which attribute the pair position belongs to
-                // (`docs/notes/array-attribute-view.md`).
+                // **Every position is compared**: the highlevel pardons an attribute's
+                // failure (`docs/notes/array-attribute-view.md`).
                 let width = parameters.len().max(supplieds.len());
                 for slot in 0..width {
                     let (Some(&left), Some(&right)) = (parameters.get(slot), supplieds.get(slot))
@@ -83,9 +82,8 @@ impl<P: Program> Module<P> {
             return false;
         }
 
-        // Record the apply context and **continue**: a failed unify must not shrink the
-        // checked set, so the body still runs (`docs/notes/array-attribute-view.md`).
-        // One error per apply node.
+        // Record it and **continue**: a failed unify must not shrink the
+        // checked set (`docs/notes/array-attribute-view.md`).
 
         // SAFETY: `parameter_type_source` is a live node of this module.
         let parameter_type = unsafe { self.array_items(parameter_type_source) }

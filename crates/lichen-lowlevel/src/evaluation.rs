@@ -103,8 +103,7 @@ impl<P: Program> Module<P> {
             return;
         }
         // A snapshot, because reading a member may merge the class this walk is over;
-        // the buffer is the module's, so a run's reads do not allocate one each. A
-        // nested read takes the module's empty slot and puts back its own.
+        // the buffer is the module's.
         let mut members = self.class_snapshots.pop().unwrap_or_default();
         members.clear();
         members.extend(self.class_members(representative));

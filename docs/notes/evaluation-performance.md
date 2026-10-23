@@ -17,6 +17,10 @@ bytes allocated, the peak live bytes, and the store's own share. The run's phase
 split by compiling the same source a second time without imports, which is the check
 alone.
 
+The `STAGES` environment variable adds the store's own two stages — `register_compute`
+(the plugin's wrapper) and `prelude_import` (the core prelude) — which are two separate
+compiles, so the fixed per-run cost is attributed rather than measured whole.
+
 Baseline on this machine (dev at `847c40d5`):
 
 | reading | value |
