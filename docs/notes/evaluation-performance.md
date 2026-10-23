@@ -111,6 +111,48 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 2: the frozen pair guard, the node slot, and the per-apply buffers
+
+Three changes, each measured on its own, all on the same probe:
+
+1. **The path guard now names frozen refs.** `unify_inner` descends a pair of frozen
+   nodes as *one bare value against another*, so the class-level `path` set — which is
+   keyed on `NodeId` — cannot record it, and the same pair recurs level after level to
+   the depth bound. `Module::unify_any_path` is the same guard keyed on `AnyNodeId`,
+   carried only for the pairs a `Static` ref names (two dynamic ids are already the class
+   guard's), and pooled on the module beside `unify_path`. The rule it applies is the one
+   `path` already applies: a pair already on the descent is one structure, and the frame
+   comparing it owns its interior, so the repeated visit adds nothing. Measured on
+   `fib 10`: `unify_inner` **178 629 → 42 459** (−76 %), and `recursion.lichen`
+   **53.4 → 43.4 ms**.
+   *The maintainer approved this extension explicitly; the alternative that shares a
+   materialized static leaf instead was declined, because a leaf is a cell a unification
+   may write and sharing it changes cell identity.*
+2. **The node slot is 144 bytes, not 160.** `Node::low_shape` was `Option<LowShape>` — 24
+   bytes of a node paid for a slot that is `None` on nearly every node — and is now
+   `Option<Box<LowShape>>`: the payload moves to the heap, where a shape is rare and
+   already class-routed. Measured: `fib 10`'s peak live 15.77 → **14.86 MiB**, the
+   corpus' 17.66 → **17.10 MiB**.
+3. **The per-apply buffers are the module's.** Class-first member snapshots and array
+   clone item buffers were a fresh `Vec` per read and per clone; both are now a stack the
+   walk pops and pushes back empty, because both can re-enter themselves (a member's read
+   starts another class walk; an array's items can hold another array). Measured on
+   `fib 10`: **46 118 → 40 387** allocations; its bytes allocated 37.6 → 34.3 MiB.
+
+| reading | round 1 | round 2 | vs. the original |
+|---|---|---|---|
+| `recursion.lichen` | 56 ms | **43 ms** | 174 → 43 ms (4.1×) |
+| its `unify_inner` steps | 178 629 | **42 459** | 1 053 084 → 42 459 (24.8×) |
+| its allocations | 63 206 | **40 387** | 754 827 → 40 387 (18.7×) |
+| its peak live | 16 779 KiB | **14 865 KiB** | 16 789 → 14 865 KiB |
+| corpus (46 programs) | 686 ms | **518 ms** | 1 108 → 518 ms (2.1×) |
+| corpus bytes allocated | 821 468 KiB | **627 616 KiB** | 976 755 → 627 616 KiB |
+| corpus peak live | 17 663 KiB | **17 097 KiB** | 17 661 → 17 097 KiB |
+
+The corpus' allocation count is flat across round 2 (2.064 M → 2.061 M): its
+allocation-heavy programs are the compute examples, whose cost is static-function
+materialization and the checker's own graph, not the array-pair walk this round cut.
+
 ## What is knowingly unchanged
 
 - **The 8 red examples are pre-existing.** At the baseline commit, `decode`,
@@ -125,11 +167,16 @@ semantics.
 
 ## What is left
 
-- **The deep chains that remain**: 178 629 `unify_inner` calls for `fib 10`, of which
-  111 250 are still at depth ≥ 15. The surviving pair is *(dynamic node, frozen ref)*,
-  which no current guard names; a path guard over `AnyNodeId` pairs would cut it. It is
-  a candidate, not a landed change.
-- **The per-run fixed cost** was the next target, and it landed:
-  [lazy-plugin-registration](lazy-plugin-registration.md) makes the compute sub-language's
-  wrapper compile on the import that names it, which took a 91-byte program from 6.9 ms to
-  2.4 ms and its peak live from 3 727 KiB to 1 017 KiB.
+- **The node count, not the node slot, is where the peak now is.** `fib 10` ends with
+  65 391 live nodes for a six-line program: 16 130 are the clone walk's, 17 020 are fresh
+  undecided cells minted for a shared wildcard node, and ~12 000 came from reading a
+  frozen ref, which materializes a fresh leaf each time. Sharing a *decided* static read
+  would cut most of that and the peak with it, but a leaf is a cell a unification writes,
+  so it is a semantic change and is not taken.
+- **The compute examples' allocation profile** is not the array-pair walk: `worldgen`
+  allocates 624 490 times while `recursion.lichen` now allocates 40 387. That is the next
+  measurement, and it belongs to the checker's static-function materialization.
+- The per-run fixed cost landed in
+  [lazy-plugin-registration](lazy-plugin-registration.md): the wrapper compiles on the
+  import that names it, which took a 91-byte program from 6.9 ms to 2.4 ms and its peak
+  live from 3 727 KiB to 1 017 KiB.

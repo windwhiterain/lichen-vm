@@ -126,7 +126,7 @@ impl<P: Program> Module<P> {
 
     /// The class's **low type** through its representative. See docs/notes/lowlevel-low-types.md.
     pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
-        self.nodes.get(self.class_root(node))?.low_shape.as_ref()
+        self.nodes.get(self.class_root(node))?.low_shape.as_deref()
     }
 
     /// The value the node's **class** holds, read through the representative.
@@ -176,12 +176,16 @@ impl<P: Program> Module<P> {
     /// invariant, `docs/notes/lowlevel-low-types.md`).
     pub fn refine_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
         let root = self.class_root(node);
-        let Some(current) = self.nodes.get(root).map(|entry| entry.low_shape.clone()) else {
+        let Some(current) = self
+            .nodes
+            .get(root)
+            .map(|entry| entry.low_shape.as_deref().cloned())
+        else {
             return false;
         };
         match current {
             None => {
-                self.nodes.get_mut(root).expect("a live class").low_shape = Some(shape);
+                self.nodes.get_mut(root).expect("a live class").low_shape = Some(Box::new(shape));
                 true
             }
             Some(current) => {
@@ -334,6 +338,8 @@ impl<P: Program> Module<P> {
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
+        let mut any_path = std::mem::take(&mut self.unify_any_path);
+        any_path.clear();
         let held = self.nodes[node].value;
         let agrees = self.unify_inner(
             Side::value(Some(value)),
@@ -341,8 +347,10 @@ impl<P: Program> Module<P> {
             &mut path,
             0,
             &mut steps,
+            &mut any_path,
             (node, node),
         );
+        self.unify_any_path = any_path;
         if agrees {
             self.write_node_value_if_absent(node, Some(value));
         }
@@ -411,11 +419,14 @@ impl<P: Program> Module<P> {
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = std::mem::take(&mut self.unify_path);
         let mut steps = std::mem::take(&mut self.unify_steps);
+        let mut any_path = std::mem::take(&mut self.unify_any_path);
         path.clear();
         steps.clear();
-        let representative = self.unify_borrowed(a, b, &mut path, &mut steps);
+        any_path.clear();
+        let representative = self.unify_borrowed(a, b, &mut path, &mut steps, &mut any_path);
         self.unify_path = path;
         self.unify_steps = steps;
+        self.unify_any_path = any_path;
         representative
     }
 
@@ -426,8 +437,17 @@ impl<P: Program> Module<P> {
         b: NodeId,
         path: &mut AncestorPairs<NodeId>,
         steps: &mut Vec<UnifyStep>,
+        any_path: &mut AncestorPairs<AnyNodeId>,
     ) -> NodeId {
-        self.unify_inner(Side::node(a), Side::node(b), path, 0, steps, (a, b));
+        self.unify_inner(
+            Side::node(a),
+            Side::node(b),
+            path,
+            0,
+            steps,
+            any_path,
+            (a, b),
+        );
         disjoint::find(&mut self.nodes, a)
     }
 
@@ -673,6 +693,7 @@ impl<P: Program> Module<P> {
         path: &mut AncestorPairs<NodeId>,
         depth: usize,
         steps: &mut Vec<UnifyStep>,
+        any_path: &mut AncestorPairs<AnyNodeId>,
         root: (NodeId, NodeId),
     ) -> bool {
         // One payload compared with itself is one value: nothing to descend and no class
@@ -705,6 +726,18 @@ impl<P: Program> Module<P> {
                 {
                     return true;
                 }
+                // A pair already on the descent is one structure: the frame that is
+                // comparing it owns its interior, so the repeated visit adds nothing and
+                // would only reach the depth bound. `path` is the same rule keyed on class
+                // pairs; this one names the frozen refs that have no class to name them.
+                let guarded =
+                    matches!(na, AnyNodeId::Static(_)) || matches!(nb, AnyNodeId::Static(_));
+                if guarded {
+                    if any_path.contains(na, nb) {
+                        return true;
+                    }
+                    any_path.insert(na, nb);
+                }
                 steps.push(UnifyStep {
                     index,
                     a: node_or_default(na),
@@ -716,8 +749,12 @@ impl<P: Program> Module<P> {
                     path,
                     depth + 1,
                     steps,
+                    any_path,
                     root,
                 );
+                if guarded {
+                    any_path.remove(na, nb);
+                }
                 steps.pop();
                 if !child_ok {
                     *ok = false;
@@ -778,6 +815,7 @@ impl<P: Program> Module<P> {
         path: &mut AncestorPairs<NodeId>,
         depth: usize,
         steps: &mut Vec<UnifyStep>,
+        any_path: &mut AncestorPairs<AnyNodeId>,
         root: (NodeId, NodeId),
     ) -> bool {
         if depth >= MAX_VALUE_DEPTH {
@@ -820,7 +858,7 @@ impl<P: Program> Module<P> {
             };
             return match (x.as_enum(), y.as_enum()) {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                    self.unify_array_items(pa, pb, path, depth, steps, root)
+                    self.unify_array_items(pa, pb, path, depth, steps, any_path, root)
                 }
                 // Two functions are one when their identities resolve to one
                 // logical function — the frozen/static pair included.
@@ -865,7 +903,7 @@ impl<P: Program> Module<P> {
                             return false;
                         }
                         path.insert(ra, rb);
-                        let ok = self.unify_array_items(pa, pb, path, depth, steps, root);
+                        let ok = self.unify_array_items(pa, pb, path, depth, steps, any_path, root);
                         path.remove(ra, rb);
                         if ok {
                             self.add_equality(ra, rb);
@@ -905,6 +943,7 @@ impl<P: Program> Module<P> {
                                 path,
                                 depth + 1,
                                 steps,
+                                any_path,
                                 root,
                             );
                             steps.pop();

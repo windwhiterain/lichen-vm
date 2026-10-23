@@ -604,7 +604,7 @@ impl<P: Program> Module<P> {
         self.nodes[clone].operation = operation;
         // A clone is a singleton class here, so the slot write *is* the class write.
         if let Some(low_shape) = low_shape {
-            self.nodes[clone].low_shape = Some(low_shape);
+            self.nodes[clone].low_shape = Some(Box::new(low_shape));
         }
         // A mark is **not** copied onto the clone: the anchor handoff is
         // `Module::marks_of`, which reads the clone's origin.
@@ -623,23 +623,25 @@ impl<P: Program> Module<P> {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
                 // Each element rides with its shallow flag; a baked static ref is referenced in place.
-
+                // The item buffer is the module's, so a run's clones do not allocate one each.
+                let mut items = self.item_clone_scratch.pop().unwrap_or_default();
+                items.clear();
                 // SAFETY: `array` is `value`'s live payload and this pass releases no block.
-                let items: Vec<ArrayItem> = unsafe { array.items() }
-                    .iter()
-                    .map(|&item| ArrayItem {
+                for &item in unsafe { array.items() } {
+                    items.push(ArrayItem {
                         node: match item.node {
                             AnyNodeId::Static(_) => item.node,
                             Dyn(node) => Dyn(self.node_apply(node, ctx)),
                         },
                         ..item
-                    })
-                    .collect();
+                    });
+                }
                 // The layout travels with the payload (`docs/notes/array-attribute-view.md`).
-                P::Value::from(LowValue::Array(ArrayValue::with_layout(
-                    self.alloc_array(&items, target),
-                    array.layout(),
-                )))
+                let items_addressed =
+                    ArrayValue::with_layout(self.alloc_array(&items, target), array.layout());
+                items.clear();
+                self.item_clone_scratch.push(items);
+                P::Value::from(LowValue::Array(items_addressed))
             }
             Some(LowValue::Table(table)) => {
                 // The entry nodes clone like array items; the stored hash travels verbatim.

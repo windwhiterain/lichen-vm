@@ -334,7 +334,7 @@ impl<P: Program> Module<P> {
             self.fill_class_holes(representative, value);
         }
         if let Some(shape) = low_shape {
-            self.refine_class_low_type(representative, shape);
+            self.refine_class_low_type(representative, *shape);
         }
     }
 

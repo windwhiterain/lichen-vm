@@ -876,7 +876,12 @@ pub struct Node<P: Program> {
     /// an asserted one.
     runned: u32,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
-    low_shape: Option<LowShape>,
+    ///
+    /// # Invariant
+    /// A **box**, so a node costs one pointer and not the shape's 24 bytes: the slot is
+    /// None on nearly every node, and a shape lives in docs/notes/lowlevel-low-types.md's
+    /// class-routed slot rather than per member.
+    low_shape: Option<Box<LowShape>>,
     /// The node's computation (operator plus one operand), or `None` for a value node; private.
     operation: Option<Operation<P>>,
     /// The function whose body owns this node, or `None`; private, read via `node_function`.
@@ -1090,13 +1095,27 @@ pub struct Module<P: Program> {
     /// stack is empty. Capacity is what is kept, never content.
     unify_path: crate::ancestors::AncestorPairs<NodeId>,
     unify_steps: Vec<UnifyStep>,
-    /// The member snapshot one class-first read iterates, kept between reads.
+    /// The unification walk's guard over **any** node id, frozen refs included.
     ///
     /// # Invariant
-    /// [`Module::evaluate_class_first`] takes it and puts it back on every exit, empty
-    /// of content at the take and the put-back; a nested read that takes it while a
-    /// frame holds it gets a fresh one and leaves the holder's own to the holder.
-    class_snapshot: Vec<NodeId>,
+    /// [`Module::unify`] and [`Module::write_node_answer`] take it and put it back, so
+    /// the struct never holds one a walk is using. It carries exactly the pairs a
+    /// `Static` ref names, because a pair of two dynamic ids is already the class-level
+    /// `path` guard's, and a frozen ref has no class to name it.
+    unify_any_path: crate::ancestors::AncestorPairs<AnyNodeId>,
+    /// The member snapshots class-first reads iterate, kept between reads.
+    ///
+    /// # Invariant
+    /// [`Module::evaluate_class_first`] pops one and pushes it back on every exit, empty
+    /// of content at both ends. A stack, because a member's own read re-enters the walk:
+    /// one slot would make every nested read allocate its own buffer.
+    class_snapshots: Vec<Vec<NodeId>>,
+    /// The item buffers an array clone fills, kept for the same reason.
+    ///
+    /// # Invariant
+    /// [`Module::value_apply`] pops one and pushes it back, empty, on every exit; an
+    /// array's clone can reach another inside its own items, so this is a stack too.
+    item_clone_scratch: Vec<Vec<crate::ArrayItem>>,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,

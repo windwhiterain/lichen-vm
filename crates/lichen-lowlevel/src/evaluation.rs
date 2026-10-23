@@ -105,7 +105,7 @@ impl<P: Program> Module<P> {
         // A snapshot, because reading a member may merge the class this walk is over;
         // the buffer is the module's, so a run's reads do not allocate one each. A
         // nested read takes the module's empty slot and puts back its own.
-        let mut members = std::mem::take(&mut self.class_snapshot);
+        let mut members = self.class_snapshots.pop().unwrap_or_default();
         members.clear();
         members.extend(self.class_members(representative));
         for index in 0..members.len() {
@@ -116,7 +116,7 @@ impl<P: Program> Module<P> {
             }
         }
         members.clear();
-        self.class_snapshot = members;
+        self.class_snapshots.push(members);
         self.evaluating_classes.remove(&representative);
     }
 
