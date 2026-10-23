@@ -21,31 +21,35 @@ const COUNT: usize = 8;
 /// `offset` also reads the buffer it was handed at `.d`, so an answer moves with whichever
 /// argument buffers the step names rather than with the chain's shape alone. Each body declares
 /// its buffer with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
-const HEAD: &str = r#"
+fn head() -> String {
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-Pair = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
-Side = struct{.p (compute.Buf Float)}
-In   = struct{.d (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-ParE = struct{.n Int, .in In}
-scale_raw = (k : ParE) => {
+Pair = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Side = struct{{.p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParE = struct{{.n Int, .in In}}
+scale_raw = (k : ParE) => {{
   i = compute.range k.n
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
-}
+}}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-offset_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+offset_raw = (k : Par2) => {{
   i = compute.range k.n
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)) ~ "element"))))))
-}
+}}
 offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-"#;
+"#
+    )
+}
 
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
 const ONE_BUFFER: &str = r#"
@@ -119,12 +123,12 @@ fn filled() -> String {
 Fill = struct{{.n Int}}
 ones_raw = (c : Fill) => {{
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {one})))))
 }}
 tens_raw = (c : Fill) => {{
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {ten})))))
 }}
 ones_filler = compute.parallel ones_raw "cpu" OutE
@@ -137,7 +141,7 @@ tens_filler = compute.parallel tens_raw "cpu" OutE
 
 /// `head` followed by one `GArg` declaration, its step and the recording the root names.
 fn chain(declaration: &str) -> String {
-    let mut source = String::from(HEAD);
+    let mut source = head();
     source.push_str(declaration);
     source
 }
