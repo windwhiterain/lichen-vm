@@ -35,7 +35,7 @@
     and `3` are spare, the new key row is `100 200`, the new value row is `300 400`, and `t = 2`, \
     which is what a decode loop does: the new row lands on the **first unfilled** position. So \
     `K' = 1 2 / 3 4 / 100 200 / 0 0` and `V' = 5 6 / 7 8 / 300 400 / 0 0`. Every element is an \
-    integer below `2^24`, every one of them is copied or replaced rather than computed, and \
+    integer below `2^24`, every one of them is the copy or the replacement and not a rounding of it, and \
     there is no `exp` and no `sqrt` anywhere in the body — **nothing here is modelled**, unlike \
     SiLU, softmax, LayerNorm and attention, whose declared values are the language's own \
     transcendental sequences.\n\n\
@@ -109,12 +109,13 @@
     would not have exercised the write side at all, and the whole reason this example exists is \
     that the write address is computed. The rule underneath is D17's, that a write is the value \
     of a position rather than an effect, which forces one write per lane per output and so \
-    forces the bijection."
+    forces the bijection. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The arithmetic is exact — every element is an integer below `2^24` — so each position holds the copy or the replacement and not a rounding of it."
   output = "([1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0], [5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]): tuple{array{Float, 8}, array{Float, 8}}"
 ---
-KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
-KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
-Par   = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+KVIn  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .nk (compute.Buf ((compute.BufParam _)(.type Float, .length 2))), .nv (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+KVOut = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+Par   = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn}
 Arg   = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
 append_raw = (k : Par) => {
   column = compute.row k
@@ -122,15 +123,52 @@ append_raw = (k : Par) => {
   slot = position * k.dim + column
   old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
   old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
+  row_k = (compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)
+  row_v = (compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)
   fresh = position == k.t
-  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
-  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
-  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+  new_k = old_k + ((row_k - old_k) * (if fresh then 1.0 else 0.0))
+  new_v = old_v + ((row_v - old_v) * (if fresh then 1.0 else 0.0))
+  b_k = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  b_v = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((KVOut)(.k (compute.write ((compute.Write _)(.to b_k, .at slot, .value (new_k ~ "element")))), .v (compute.write ((compute.Write _)(.to b_v, .at slot, .value (new_v ~ "element"))))))
 }
 append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
-kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
-vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
-nk = (compute.buffer ([100.0, 200.0] : array{Float, 2}) : (compute.Buf Float))
-nv = (compute.buffer ([300.0, 400.0] : array{Float, 2}) : (compute.Buf Float))
+Fill = struct{.n Int}
+kbufBuf = struct{.kbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+fill_kbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((kbufBuf)(.kbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_kbuf = compute.parallel fill_kbuf_raw "cpu" kbufBuf
+kbuf = (compute.plrun fill_kbuf ((Fill)(.n 8)) : kbufBuf).kbuf
+vbufBuf = struct{.vbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+fill_vbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 5.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 7.0 else 0.0) + (if i == 3 then 8.0 else 0.0)
+  ((vbufBuf)(.vbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_vbuf = compute.parallel fill_vbuf_raw "cpu" vbufBuf
+vbuf = (compute.plrun fill_vbuf ((Fill)(.n 8)) : vbufBuf).vbuf
+nkBuf = struct{.nk (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+fill_nk_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 2))
+  v = (if i == 0 then 100.0 else 0.0) + (if i == 1 then 200.0 else 0.0)
+  ((nkBuf)(.nk (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_nk = compute.parallel fill_nk_raw "cpu" nkBuf
+nk = (compute.plrun fill_nk ((Fill)(.n 2)) : nkBuf).nk
+nvBuf = struct{.nv (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+fill_nv_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 2))
+  v = (if i == 0 then 300.0 else 0.0) + (if i == 1 then 400.0 else 0.0)
+  ((nvBuf)(.nv (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_nv = compute.parallel fill_nv_raw "cpu" nvBuf
+nv = (compute.plrun fill_nv ((Fill)(.n 2)) : nvBuf).nv
 out = (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, .v vbuf, .nk nk, .nv nv))) : KVOut)
 (compute.collect out.k : array{Float, 8}, compute.collect out.v : array{Float, 8})
