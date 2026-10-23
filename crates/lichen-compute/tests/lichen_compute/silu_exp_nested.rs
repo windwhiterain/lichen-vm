@@ -15,7 +15,8 @@ use lichen_lowlevel::{AnyNodeId, LowValue, Module};
 /// # Invariant
 /// The kernel, its claim and the mark are the operator's own (`examples/silu.lichen`), so every
 /// reading measured here is about **where the expansion sits** — two operators below the marked
-/// value rather than at its root — and about nothing else.
+/// value rather than at its root — and about nothing else. The parameter carries no `.out`
+/// group: the body declares its output and returns the write.
 fn producer() -> String {
     r#"
 ---
@@ -23,11 +24,12 @@ fn producer() -> String {
 ---
 Gate  = struct{.g (compute.Buf Float)}
 SiluA = struct{.a (compute.Buf Float)}
-ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
+ParA  = struct{.n Int, .in Gate}
 silu_raw = (k : ParA) => {
   i = compute.range k.n
   g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
+  a = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((SiluA)(.a (compute.write ((compute.Write _)(.to a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element"))))))
 }
 silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
 silu
