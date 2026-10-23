@@ -50,6 +50,10 @@ fn lifted() -> f32 {
 /// **One incoming edge per node**: `shift` reads `total`'s output at `.p` and `lift` reads
 /// `shift`'s at `.q`, and each kernel's other buffer is the recording's own `d`. So the region is a
 /// chain and nothing else, and `BIAS` appears in `lift`'s element alone.
+///
+/// The parameter carries no `.out` group: each body declares the buffer it writes with
+/// `compute.slice` and returns the write as the codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn program(step: &str) -> String {
     format!(
         r#"
@@ -58,31 +62,37 @@ fn program(step: &str) -> String {
 ---
 In   = struct{{.d (compute.Buf Float)}}
 OutR = struct{{.r (compute.Buf Float)}}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{{.n Int, .in In}}
+Arg  = struct{{.n Int, .I In}}
 total_raw = (k : Par) => {{
   i = compute.range k.n
+  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{{.n Int, .in In2}}
+Arg2 = struct{{.n Int, .I In2}}
 shift_raw = (k : Par2) => {{
   i = compute.range k.n
-  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  p = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - p) ~ "element")) ~ "combine")
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }}
 shift = compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 In3  = struct{{.d (compute.Buf Float), .q (compute.Buf Float)}}
 OutY = struct{{.y (compute.Buf Float)}}
-Par3 = compute.P (compute.KT Float)(.I In3, .O OutY)
+Par3 = struct{{.n Int, .in In3}}
+Arg3 = struct{{.n Int, .I In3}}
 lift_raw = (k : Par3) => {{
   i = compute.range k.n
   q = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float)
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - q + {BIAS:.1}) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }}
 lift = compute.parallel (lift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutY
 GArg = struct{{.n Int, .in In}}
@@ -98,30 +108,43 @@ fn recording() -> String {
         "{}(total, shift, lift, built)\n",
         program(
             r#"step = (s : GArg) => {
-  first = (compute.plrun total ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
-  second = (compute.plrun shift ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r))) : OutZ)
-  compute.plrun lift ((compute.A In3)(.n s.n, .I In3(.d s.in.d, .q second.z))) : OutY
+  first = (compute.plrun total ((Arg)(.n s.n, .I In(.d s.in.d))) : OutR)
+  second = (compute.plrun shift ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.r))) : OutZ)
+  compute.plrun lift ((Arg3)(.n s.n, .I In3(.d s.in.d, .q second.z))) : OutY
 }"#
         )
     )
 }
 
-/// The elements the launch reads: `1.0 … 8.0`.
-fn elements() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
+/// The fill kernel that builds the chain's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
+/// backend, because a host builds its data before a device ever sees it, and its parameter
+/// declares no `.in` group at all.
+fn filled() -> String {
+    r#"
+Data = struct{.d (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Data
+"#
+    .to_string()
 }
 
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, data))\nout\n",
-        recording(),
+        "{head}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
+         out = compute.collect (compute.graphrun built (count, data.d))\nout\n",
+        head = recording(),
+        fill = filled(),
         count = COUNT,
-        elements = elements(),
     )
 }
 
