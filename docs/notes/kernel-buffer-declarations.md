@@ -87,6 +87,12 @@ the perspective is spelled at the declaration.
   output k" is **gone** (`20d0c351`): the codomain's field order and the
   declaration order are the same list, so a write always fills the output it
   names and a crossing is not an error the compiler can see any more.
+- **A declaration's identity survives a clone.** The body is walked from the
+  template, and the write's target is read from the clone the apply made: the
+  clone's `.native` payload records the template's `$buf` node as its origin
+  (measured), so the registry's key is the template's node. The lookup must
+  canonicalize the payload it peeled, or the declaration and the write that
+  names it are two keys and the write is refused.
 - **The allocation is the declared length, uninitialised.** The runtime
   allocates each output with its `count` and element class, in the pack's space,
   and hands back the codomain struct (`build_outputs` by `O`'s fields).
