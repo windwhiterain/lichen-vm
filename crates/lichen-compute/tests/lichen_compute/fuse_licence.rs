@@ -32,6 +32,14 @@ const ABSORBED: u32 = 1;
 /// The pack a runner installs for this region.
 const PACK: &str = "elementwise-pair";
 
+/// The recording's producer, in the stub's own call order.
+///
+/// # Invariant
+/// Call 0 is the fill that built the data, so the producer is call 1 and the consumer is
+/// call 2: a host builds its data with a kernel before the device ever sees it
+/// (`docs/notes/kernel-buffer-declarations.md`).
+const PRODUCER_CALL: usize = 1;
+
 /// The chain `e[i] = d[i] · 2` feeding `z[i] = e[i] + 1`, both claimed as elementwise.
 ///
 /// # Invariant
@@ -39,35 +47,42 @@ const PACK: &str = "elementwise-pair";
 /// lane-dependent value bindable in-lane. The consumer declares `k.in.d` beside the buffer it
 /// absorbs, which the union does not need — `union_ports.rs` merges the same chain without it —
 /// so this one states two bodies naming one buffer at two ports.
-fn program() -> String {
-    r#"
+///
+/// No parameter carries an `.out` group: each body declares its own buffer with
+/// `compute.buf` and returns the write as its codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn program(elements: usize) -> String {
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.d (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
-scale_raw = (k : ParE) => {
+In  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {elements})))}}
+OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParE = struct{{.n Int, .in In}}
+scale_raw = (k : ParE) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
-}
+  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
+}}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
-offset_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {elements}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+offset_raw = (k : Par2) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element")))
-}
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element"))))))
+}}
 offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
   compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
-}
+}}
 built = compute.graph step
 "#
-    .to_string()
+    )
 }
 
 /// The chain whose consumer reads the producer's output one element on.
@@ -79,13 +94,13 @@ built = compute.graph step
 fn shifted() -> String {
     format!(
         "{}(scale, offset, built)\n",
-        program().replace("(.from k.in.p, .at i)", "(.from k.in.p, .at i + 1)")
+        program(COUNT + 1).replace("(.from k.in.p, .at i)", "(.from k.in.p, .at i + 1)")
     )
 }
 
 /// The chain as a recording: the two kernels and the graph they recorded, nothing run.
 fn recording() -> String {
-    format!("{}(scale, offset, built)\n", program())
+    format!("{}(scale, offset, built)\n", program(COUNT))
 }
 
 /// The chain whose consumer reads the producer's output at a **conditional** address.
@@ -97,7 +112,7 @@ fn recording() -> String {
 fn conditional() -> String {
     format!(
         "{}(scale, offset, built)\n",
-        program().replace(
+        program(COUNT).replace(
             "(.from k.in.p, .at i)",
             "(.from k.in.p, .at (if i < 7 then i + 1 else 0))",
         )
@@ -107,25 +122,34 @@ fn conditional() -> String {
 /// The chain as a program that runs its recording and answers it, over `elements` data elements.
 fn running_recording(recording: &str, elements: usize) -> String {
     format!(
-        "{recording}\ncount = ({count})\ndata = (compute.buffer ([{values}] : array{{Float, \
-         {elements}}}) : (compute.Buf Float))\nout = compute.collect (compute.graphrun built \
-         (count, data))\nout\n",
+        "{recording}\n{fill}\ncount = ({count})\ndata = (compute.plrun filler ((Fill)(.n {elements})) : Data)\n\
+         out = compute.collect (compute.graphrun built (count, data.d))\nout\n",
+        fill = filled(elements),
         count = COUNT,
-        values = values(elements),
     )
 }
 
-/// The data the launch reads: `1.0 … elements`.
-fn values(elements: usize) -> String {
-    (1..=elements)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
+/// The fill kernel that builds the launch's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes its own element, so the buffer holds `1.0 … elements`.
+/// The kernel runs on the host's own backend, because a host builds its data before a device ever
+/// sees it, and its parameter declares no `.in` group at all
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn filled(elements: usize) -> String {
+    format!(
+        r#"
+Data = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {elements})))}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length {elements}))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}}
+filler = compute.parallel fill "cpu" Data
+"#
+    )
 }
-
-/// How much of the shifted chain's answer the program defines: its last element reads `e[COUNT]`,
-/// which no lane wrote.
-const SHIFTED_DEFINED: usize = COUNT - 1;
 
 /// The chain `e[i] = d[i] · 2` feeding `z[i] = Σ e[k]`, the elementwise one under a pack.
 ///
@@ -134,19 +158,20 @@ const SHIFTED_DEFINED: usize = COUNT - 1;
 /// entry parameter is — so the shape is the one people write and the one no entry parameter
 /// answers; `k.in.d` is declared beside the buffer it absorbs, which the union does not need.
 fn folding() -> String {
-    let head = program();
+    let head = program(COUNT);
     let head = head
         .split("In2  = struct")
         .next()
         .expect("the elementwise half");
     format!(
-        r#"{head}In3  = struct{{.d (compute.Buf Float), .e (compute.Buf Float)}}
-OutT = struct{{.z (compute.Buf Float)}}
-Par3 = compute.P (compute.KT Float)(.I In3, .O OutT)
+        r#"{head}In3  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutT = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par3 = struct{{.n Int, .in In3}}
 total_raw = (k : Par3) => {{
   i = compute.range k.n
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) : Float) ~ "element") + 1.0)) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutT)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutT
 GArg = struct{{.n Int, .in In}}
@@ -166,6 +191,10 @@ fn answer(bias: f32) -> Vec<f32> {
         .map(|position| 2.0 * position as f32 + bias)
         .collect()
 }
+
+/// How much of the shifted chain's answer the program defines: its last element reads `e[COUNT]`,
+/// which no lane wrote.
+const SHIFTED_DEFINED: usize = COUNT - 1;
 
 /// The answer `z[i] = 2 d[i + 1] + bias` has over `d = 1 … COUNT + 1`: the shifted chain's.
 fn shifted_answer(bias: f32) -> Vec<f32> {
@@ -625,7 +654,7 @@ fn device_triple(
         );
     }
     assert_eq!(
-        composed.count, recorded[0].count,
+        composed.count, recorded[PRODUCER_CALL].count,
         "and it is dispatched over the recording's extent: {name}"
     );
 
@@ -800,36 +829,39 @@ fn the_floor_still_merges_a_reduction_chain_with_no_pack_installed() {
 
 /// The reduction chain of `fused_region.rs`, which the floor proves with no pack at all.
 fn reduction() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
-producer_raw = (k : Par) => {
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par  = struct{{.n Int, .in In}}
+producer_raw = (k : Par) => {{
   i = compute.range k.n
+  r = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
-}
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
+}}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
-consumer_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+consumer_raw = (k : Par2) => {{
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
-}
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
+}}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
-}
+}}
 built = compute.graph step
 (producer, consumer, built)
 "#
-    .to_string()
+    )
 }
