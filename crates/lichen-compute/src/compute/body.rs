@@ -876,6 +876,17 @@ where
 
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
+        // **A clone is its origin's value**: a node that records the template it
+        // instantiates emits no instruction of its own, so a definition reached along two
+        // apply paths emits once.
+        if let Some(origin) = self.module.node_origin(node)
+            && origin != node
+            && self.origins.insert(node)
+        {
+            let value = self.value(origin)?;
+            self.origins.remove(&node);
+            return Ok(value);
+        }
         let class = node_class(self.module, node);
         // A literal is the cheapest thing a node can be, and it is not a computation.
         if let Some(value) = self.literal(node) {
