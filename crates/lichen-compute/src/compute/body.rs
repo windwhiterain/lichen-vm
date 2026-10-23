@@ -876,9 +876,7 @@ where
 
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
-        // **A clone is its origin's value**: a node that records the template it
-        // instantiates emits no instruction of its own, so a definition reached along two
-        // apply paths emits once.
+        // A clone emits its origin's definition, not its own.
         if let Some(origin) = self.module.node_origin(node)
             && origin != node
             && self.origins.insert(node)
