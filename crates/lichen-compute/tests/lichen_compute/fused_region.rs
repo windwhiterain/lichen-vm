@@ -56,6 +56,10 @@ fn answer(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> {
 /// # Invariant
 /// The consumer reads the producer's output at input position [`ABSORBED`], so the recorded edge
 /// and the `element` projection's `Producer` read name the same input.
+///
+/// No parameter carries an `.out` group: each body declares its own buffer with
+/// `compute.slice` and returns the write as its codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn program(step: &str) -> String {
     format!(
         r#"
@@ -64,21 +68,23 @@ fn program(step: &str) -> String {
 ---
 In   = struct{{.d (compute.Buf Float)}}
 OutR = struct{{.r (compute.Buf Float)}}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{{.n Int, .in In}}
 producer_raw = (k : Par) => {{
   i = compute.range k.n
+  d = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{{.n Int, .in In2}}
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
+  d = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{{.n Int, .in In}}
@@ -104,12 +110,31 @@ fn recording() -> String {
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, data))\nout\n",
+        "{}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n {count})) : OutR)\n\
+         out = compute.collect (compute.graphrun built (count, data.r))\nout\n",
         program(two_stage()),
+        fill = filled(),
         count = COUNT,
-        elements = elements(),
     )
+}
+
+/// The fill kernel that builds the launch's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
+/// before a device ever sees it, and its parameter declares no `.in` group at all.
+fn filled() -> String {
+    r#"
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" OutR
+"#
+    .to_string()
 }
 
 /// A program whose producer feeds the same consumer twice, so the region fans out.
@@ -125,14 +150,6 @@ fn fan_out() -> String {
 }"#
         )
     )
-}
-
-/// The elements the launch reads: `1.0 … 8.0`.
-fn elements() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The root tuple's items, read from the value the program answered.
@@ -423,10 +440,11 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
     clear_graph_pass();
     let (base_module, _base_value, _root) = common::run(&running());
     // A stub computes nothing, so each leg proves its **dispatch record**.
+    // Call 0 is the fill kernel, 1 the producer.
     let baseline = stub.calls();
     assert!(
-        !baseline.is_empty(),
-        "the two-node program dispatches its own kernels"
+        baseline.len() > 1,
+        "the two-node program dispatches its own kernels behind the fill that built its data"
     );
 
     install_region_merge(&base_module);
@@ -450,7 +468,7 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         );
     }
     assert_eq!(
-        composed[0].count, baseline[0].count,
+        composed[0].count, baseline[1].count,
         "and it keeps the recording's runtime extent"
     );
 
@@ -651,10 +669,12 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
     clear_graph_pass();
     let (base_module, _base_value, _root) = common::run(&running());
     // A stub computes nothing, so each leg proves its **dispatch record**.
+    // Call 0 is the fill kernel, 1 the producer.
     let baseline = stub.calls();
     assert!(
-        !baseline.is_empty(),
-        "the un-passed two-node program dispatches its own kernels"
+        baseline.len() > 1,
+        "the un-passed two-node program dispatches its own kernels behind the fill that built \
+         its data"
     );
 
     install_floor(&base_module);
@@ -686,7 +706,7 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
         );
     }
     assert_eq!(
-        composed[0].count, baseline[0].count,
+        composed[0].count, baseline[1].count,
         "and it keeps the recording's runtime extent"
     );
 
