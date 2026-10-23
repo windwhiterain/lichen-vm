@@ -115,6 +115,42 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 12: the allocations, finished — and the one that cannot be finished
+
+Three allocation wins landed after round 11, all behaviour-preserving and all without a
+measurable change in wall clock:
+
+- **a clone adopts its class's low shape by refcount** (`Option<Arc<LowShape>>`): the walk
+  boxed a copy of the shape for every shaped clone. `fib 10` 34 671 → 32 871 allocations.
+- **a check's location holds its single step inline** (`LocPath::Empty | One | Many`): every
+  check built its `Loc` with `vec![step]`. `mathlib` 82 572 → 80 085.
+- **the lowering moves a program's statements** instead of deep-cloning them before lowering
+  (the fresh compile path is the program's last reader; the session path, which keeps its
+  program, passes a copy). `mathlib` 80 085 → 78 202, `fib 10` 32 598 → 32 397.
+
+The census behind the last one, for `mathlib`'s 13 KiB source: **lex 1 545 allocations,
+parse 22 986, resolve-and-lower 55 268**. So "the parser" was never one bucket: what is left
+in resolve is the IR's own per-expression arenas and span table, and in parse it is small
+`Vec`s growing from empty plus one `String` per name.
+
+**The name `String` cannot be removed at an acceptable price, measured twice.** The lexer
+allocates one per identifier token and the parser clones it into the AST, so dropping either
+end halves the cost. Both routes were attempted and abandoned:
+
+- **Borrowing the token's payload from the source** (`TokenKind::Name(&'a str)`) makes
+  `Token`'s lifetime flow into `lex_resume`, which reuses the *previous* source's tokens in
+  a list that must borrow the *new* one — the borrow checker refuses, and rebinding each
+  reused token means re-lexing it (slower than the clone it saves) or teaching the token to
+  rebind without the raw kind, which is forty match arms.
+- **Making the token fieldless and reading the text from `range`** (the token already
+  carries `range`) moves the problem to the parser, which then needs the source — and this
+  parser is a chumsky combinator grammar whose every rule is a `fn rule<'a, Er>() -> impl
+  Parser<'a, In<'a>, …>`; threading `&str` through all of them is a parser-wide rewrite for
+  two thousand allocations on a 13 KiB file.
+
+So the allocation thread ends here, on the measured floor: what is left per program is one
+`String` per name, the small `Vec`s the grammar collects, and the IR's own arenas.
+
 ## Round 11: where a bigger refactor could pay, measured
 
 This round asked a different question — not "what is left to tune" but "what is left to
