@@ -18,6 +18,9 @@ use lichen_lowlevel::{AnyNodeId, LowValue, Module};
 /// The mark rides a **top-level routed operator**, which `compile.rs` lowers to a call of
 /// the prelude's `mul`, and the consumer's rides a **marked application**. Neither spelling
 /// is the one `elementwise_chain` uses, so neither is covered by it.
+///
+/// The body declares its output and returns the write
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn elementwise_natural() -> String {
     format!(
         r#"
@@ -28,16 +31,18 @@ In   = struct{{.d (compute.Buf Float)}}
 OutE = struct{{.e (compute.Buf Float)}}
 In2  = struct{{.p (compute.Buf Float)}}
 OutF = struct{{.f (compute.Buf Float)}}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutF)
+ParE = struct{{.n Int, .in In}}
+Par2 = struct{{.n Int, .in In2}}
 scale_raw = (k : ParE) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))))
 }}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 rescale_raw = (k : Par2) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.f, .at i, .value ((exp ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float))) ~ "element")))
+  f = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutF)(.f (compute.write ((compute.Write _)(.to f, .at i, .value ((exp ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float))) ~ "element")))))
 }}
 rescale = compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" OutF
 GArg = struct{{.n Int, .in In}}
@@ -56,6 +61,9 @@ built = compute.graph step
 /// # Invariant
 /// The producer is the natural spelling, so one recording pins both a top-level marked
 /// operator and an in-loop mark against a single region.
+///
+/// The consumer declares its output and returns the write
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn reduction_in_loop() -> String {
     format!(
         r#"
@@ -65,12 +73,13 @@ fn reduction_in_loop() -> String {
 {SCALE}
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{{.n Int, .in In2}}
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - r) ~ "element")) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{{.n Int, .in In}}
@@ -88,10 +97,11 @@ built = compute.graph step
 const SCALE: &str = r#"
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
+ParE = struct{.n Int, .in In}
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 "#;
