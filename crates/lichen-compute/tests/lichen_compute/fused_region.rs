@@ -66,22 +66,22 @@ fn program(step: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{{.d (compute.Buf Float)}}
-OutR = struct{{.r (compute.Buf Float)}}
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par  = struct{{.n Int, .in In}}
 producer_raw = (k : Par) => {{
   i = compute.range k.n
-  d = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
-OutZ = struct{{.z (compute.Buf Float)}}
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par2 = struct{{.n Int, .in In2}}
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
-  d = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
   ((OutZ)(.z (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
@@ -125,16 +125,17 @@ fn running() -> String {
 /// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
 /// before a device ever sees it, and its parameter declares no `.in` group at all.
 fn filled() -> String {
-    r#"
-Fill = struct{.n Int}
-fill = (c : Fill) => {
+    format!(
+        r#"
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
   i = compute.range c.n
-  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
-}
+}}
 filler = compute.parallel fill "cpu" OutR
 "#
-    .to_string()
+    )
 }
 
 /// A program whose producer feeds the same consumer twice, so the region fans out.
