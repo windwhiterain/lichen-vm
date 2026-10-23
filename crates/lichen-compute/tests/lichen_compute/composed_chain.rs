@@ -196,23 +196,24 @@ const SOURCE: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutR = struct{.r (compute.Buf Float)}
+L = 8
+In   = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
+OutR = struct{.r (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
 Par  = struct{.n Int, .in In}
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
-  r = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
+  r = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) + s(1)) ~ "combine")
   ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at at, .value acc (lane.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
+In2  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
+OutZ = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
 Par2 = struct{.n Int, .in In2}
 consumer_raw = (lane : Par2) => {
   running = (compute.read ((compute.Read _)(.from lane.in.p, .at 0)) : Float)
   at = compute.range lane.n
-  z = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) - running) ~ "element")) ~ "combine")
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity"))))))
 }
