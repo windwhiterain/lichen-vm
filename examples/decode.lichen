@@ -181,12 +181,13 @@
     **third** leaf, and it is attention's spelling. The rule underneath both is D17's, that a \
     `compute.write` is **the value of an output position and not an effect** (`code-audit.md` \
     P1-42, `wontfix:D17`), which is why every stage here is one lane per output with exactly \
-    one write, and which is also why the append rewrites the whole cache rather than one row."
+    one write, and which is also why the append rewrites the whole cache rather than one row. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
   output = "[8.888384, 10.773098]: array{Float, 2}"
 ---
-KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
-KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
-ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+KVIn  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .nk (compute.Buf ((compute.BufParam _)(.type Float, .length 2))), .nv (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+KVOut = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn}
 ArgK  = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
 append_raw = (k : ParK) => {
   column = compute.row k
@@ -194,59 +195,108 @@ append_raw = (k : ParK) => {
   slot = position * k.dim + column
   old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
   old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
+  row_k = (compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)
+  row_v = (compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)
   fresh = position == k.t
-  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
-  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
-  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+  new_k = old_k + ((row_k - old_k) * (if fresh then 1.0 else 0.0))
+  new_v = old_v + ((row_v - old_v) * (if fresh then 1.0 else 0.0))
+  b_k = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  b_v = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((KVOut)(.k (compute.write ((compute.Write _)(.to b_k, .at slot, .value (new_k ~ "element")))), .v (compute.write ((compute.Write _)(.to b_v, .at slot, .value (new_v ~ "element"))))))
 }
 append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
-Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
-Gout = struct{.y (compute.Buf Float)}
-ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+Gin  = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .x (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+Gout = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParS = struct{.n Int, .kdim Int, .in Gin}
 ArgS = struct{.n Int, .kdim Int, .I Gin}
 score_raw = (k : ParS) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Gout)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity")))))))
 }
 score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
-Row  = struct{.x (compute.Buf Float)}
-Maxs = struct{.m (compute.Buf Float)}
-ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
+Row  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Maxs = struct{.m (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParM = struct{.n Int, .in Row}
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
+  b_m = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Maxs)(.m (compute.write ((compute.Write _)(.to b_m, .at i, .value fold (k.n + 0, ((0.0 - 1.0) / 0.0) ~ "identity"))))))
 }
 rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu" Maxs
-Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
-OutY = struct{.y (compute.Buf Float)}
-ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
+Soft = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .m (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+OutY = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParY = struct{.n Int, .in Soft}
 softmax_raw = (k : ParY) => {
   i = compute.range k.n
   m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
-  total = fold (k.n, 0.0 ~ "identity")
+  total = fold (k.n + 0, 0.0 ~ "identity")
   here = exp ((compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float) - m)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (here / total))))))
 }
 softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutY
-AV   = struct{.a (compute.Buf Float), .v (compute.Buf Float)}
-OutW = struct{.o (compute.Buf Float)}
-ParW = struct{.n Int, .dim Int, .keys Int, .in AV, .out OutW}
+AV   = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+OutW = struct{.o (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+ParW = struct{.n Int, .dim Int, .keys Int, .in AV}
 ArgW = struct{.n Int, .dim Int, .keys Int, .I AV}
 weigh_raw = (k : ParW) => {
   i = compute.range k.n
   column = compute.col k
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element")))
+  b_o = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutW)(.o (compute.write ((compute.Write _)(.to b_o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element"))))))
 }
 weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutW
-kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
-vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
-nk = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
-nv = (compute.buffer ([30.0, 40.0] : array{Float, 2}) : (compute.Buf Float))
-q = (compute.buffer ([1.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
+Fill = struct{.n Int}
+kbufBuf = struct{.kbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+fill_kbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((kbufBuf)(.kbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_kbuf = compute.parallel fill_kbuf_raw "cpu" kbufBuf
+kbuf = (compute.plrun fill_kbuf ((Fill)(.n 8)) : kbufBuf).kbuf
+vbufBuf = struct{.vbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+fill_vbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 5.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 7.0 else 0.0) + (if i == 3 then 8.0 else 0.0)
+  ((vbufBuf)(.vbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_vbuf = compute.parallel fill_vbuf_raw "cpu" vbufBuf
+vbuf = (compute.plrun fill_vbuf ((Fill)(.n 8)) : vbufBuf).vbuf
+nkBuf = struct{.nk (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+fill_nk_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 2))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0)
+  ((nkBuf)(.nk (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_nk = compute.parallel fill_nk_raw "cpu" nkBuf
+nk = (compute.plrun fill_nk ((Fill)(.n 2)) : nkBuf).nk
+nvBuf = struct{.nv (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+fill_nv_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 2))
+  v = (if i == 0 then 30.0 else 0.0) + (if i == 1 then 40.0 else 0.0)
+  ((nvBuf)(.nv (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_nv = compute.parallel fill_nv_raw "cpu" nvBuf
+nv = (compute.plrun fill_nv ((Fill)(.n 2)) : nvBuf).nv
+qBuf = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+fill_q_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 2))
+  v = (if i == 0 then 1.0 else 0.0)
+  ((qBuf)(.q (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_q = compute.parallel fill_q_raw "cpu" qBuf
+q = (compute.plrun fill_q ((Fill)(.n 2)) : qBuf).q
 cached = (compute.plrun append ((ArgK)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, .v vbuf, .nk nk, .nv nv))) : KVOut)
 scored = (compute.plrun score ((ArgS)(.n 4, .kdim 2, .I Gin(.w cached.k, .x q))) : Gout)
 topped = (compute.plrun rowmax ((compute.A Row)(.n 4, .I Row(.x scored.y))) : Maxs)
