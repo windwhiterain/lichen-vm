@@ -6,8 +6,8 @@ K = _x => struct{.native _, .I _, .O _}
 A = I => struct{.n Int, .I I}
 P = T: KT _ => struct{.n Int, .in T.I}
 S = T: KT _ => A T.I -> T.O
-Buf = T => struct{.native _, .element T}
-Slice = T => struct{.count Int, .element T}
+BufParam = _x => struct{.type _, .length _}
+Buf = x : (BufParam _) => struct{.native $buf_type(x.type, x.length), .type x.type, .length x.length}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I # _ => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I # _ => {r = $call(k.native, a); r: k.O; r}
@@ -16,15 +16,15 @@ plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => (($range(x): Int) # 1)
 row = cfg => (($row(cfg): Int) # 1)
 col = cfg => (($col(cfg): Int) # 1)
-Read = T => struct{.from (Buf T) # warp, .at Int}
-Write = T => struct{.to (Buf T) # warp, .at Int, .value T}
-WriteAtomic = T => struct{.to (Buf T) # warp, .at Int, .value T}
+Read = p : (BufParam _) => struct{.from (Buf p) # warp, .at Int}
+Write = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
+WriteAtomic = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
 read = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
 write = (x : (Write _)) => ($write(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
 write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
 collect = (b : (Buf _)) => $collect(b)
-slice = (x : (Slice _)) => ($slice(x.count, x.element) : (Buf _))
-Mma = T => struct{.s string, .a (Buf T) # warp, .b (Buf T) # warp, .c (Buf T) # warp}
-mma = (x : (Mma Int)) => ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # warp)
+buf = (x : (BufParam _)) => (Buf x)(.native $buf(x.type, x.length), .type @any, .length @any)
+Mma = _x => struct{.s string, .a (Buf ((BufParam _)(.type Int, .length 16))) # warp, .b (Buf ((BufParam _)(.type Int, .length 32))) # warp, .c (Buf ((BufParam _)(.type Int, .length 16))) # warp}
+mma = (x : (Mma _)) => ($mma(x.s, x.a, x.b, x.c) : (Buf ((BufParam _)(.type Int, .length 16))) # warp)
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)

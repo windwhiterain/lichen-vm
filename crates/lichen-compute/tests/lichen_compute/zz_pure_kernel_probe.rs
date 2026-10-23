@@ -19,7 +19,7 @@ Fill = struct{.n Int}
 FillArg = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 1.0)))))
 }
 fk = compute.parallel fill "cpu" Out
@@ -29,7 +29,7 @@ Arg = struct{.n Int, .I In}
 raw = (c : Par) => {
   i = compute.range c.n
   x = (compute.read ((compute.Read _)(.from c.in.unused, .at i)) : Float)
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value x)))))
 }
 k = compute.parallel raw "cpu" Out
@@ -65,7 +65,7 @@ OutThree = struct{.y (compute.Buf Float)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length 3))
   ((OutThree)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
 }
 fk = compute.parallel fill "cpu" OutThree
@@ -101,7 +101,7 @@ Out = struct{.y (compute.Buf Float)}
 LPar = struct{.n Int, .taps Int}
 fill = (c : LPar) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _)(.to s(1), .at i, .value (int2float s(0))))))
   ((Out)(.y (fold (c.taps, y))))
 }
@@ -138,7 +138,7 @@ Out = struct{.y (compute.Buf Float)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length 3))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (if i == 0 then 1.0 else 2.0))))))
 }
 k = compute.parallel fill "cpu" Out
@@ -173,7 +173,7 @@ Out = struct{.y (compute.Buf Float)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length 3))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (if i == 0 then 1.0 else (if i == 1 then 2.0 else 3.0)))))))
 }
 k = compute.parallel fill "cpu" Out
@@ -208,8 +208,8 @@ Out = struct{.c (compute.Buf Int), .s (compute.Buf Int)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  a = compute.slice ((compute.Slice _)(.count c.n, .element Int))
-  b = compute.slice ((compute.Slice _)(.count c.n, .element Int))
+  a = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  b = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
   ((Out)(.c (compute.write ((compute.Write _)(.to a, .at i, .value i))), .s (compute.write ((compute.Write _)(.to b, .at i, .value i)))))
 }
 k = compute.parallel fill "cpu" Out

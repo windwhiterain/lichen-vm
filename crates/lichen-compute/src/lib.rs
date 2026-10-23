@@ -13,14 +13,14 @@ pub mod region_merge;
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 pub use compute::{
-    BufferCollectOp, BufferPayload, CallOp, ColOp, ComputeOperator, ComputePlugin, ComputeValue,
-    FusedKernel, FusedRefusal, GraphId, GraphOp, GraphPass, GraphRunOp, GraphValueId, JitOp,
-    KernelEntry, KernelId, LANDING_DIAGNOSTIC, LandingRefusal, LaunchExtent, LaunchOp, MmaOp,
-    ParLaunchOp, ParallelOp, RangeOp, ReadOp, RoleUnread, RowOp, SliceOp, WRAPPER_SOURCE,
-    WriteAtomicOp, WriteOp, clear_graph_pass, compile_fragment, compile_parallel_fragment,
-    consult_graph_pass, kernel_claim, kernel_fragment, land_fused_kernel, module_cache_disk_hits,
-    module_cache_disk_writes, module_cache_misses, read_fused_kernel, set_graph_pass,
-    set_graph_policy, take_graph_pass_lines, write_fused_kernel,
+    BufOp, BufTypeOp, BufferCollectOp, BufferPayload, CallOp, ColOp, ComputeOperator,
+    ComputePlugin, ComputeValue, FusedKernel, FusedRefusal, GraphId, GraphOp, GraphPass,
+    GraphRunOp, GraphValueId, JitOp, KernelEntry, KernelId, LANDING_DIAGNOSTIC, LandingRefusal,
+    LaunchExtent, LaunchOp, MmaOp, ParLaunchOp, ParallelOp, RangeOp, ReadOp, RoleUnread, RowOp,
+    WRAPPER_SOURCE, WriteAtomicOp, WriteOp, clear_graph_pass, compile_fragment,
+    compile_parallel_fragment, consult_graph_pass, kernel_claim, kernel_fragment,
+    land_fused_kernel, module_cache_disk_hits, module_cache_disk_writes, module_cache_misses,
+    read_fused_kernel, set_graph_pass, set_graph_policy, take_graph_pass_lines, write_fused_kernel,
 };
 
 /// Contribute this plugin's vocabulary leaves into a host's composition.

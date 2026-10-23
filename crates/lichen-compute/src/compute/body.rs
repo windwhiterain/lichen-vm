@@ -940,7 +940,7 @@ where
             ComputeOperator::Write => self.buffer_write(operand),
             ComputeOperator::WriteAtomic => self.buffer_write_atomic(operand),
             // A declared slice: a length, an element type, and no placement.
-            ComputeOperator::Slice => self.slice_declare(node, operand),
+            ComputeOperator::Buf => self.buf_declare(node, operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
             )),
@@ -953,7 +953,7 @@ where
     /// The body **names** the buffer instead of receiving it, so [`Self::declared`] is the
     /// only authority over an ordinal: a write whose target is one of these fills the
     /// position the declaration was lowered at, not a parameter path.
-    fn slice_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
+    fn buf_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         let Some(count) = items.first() else {
             return Err(

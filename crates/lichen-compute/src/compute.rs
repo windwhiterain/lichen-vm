@@ -900,7 +900,9 @@ pub enum ComputeOperator {
     /// operation never evaluates to a `Buffer` payload — the graph keeps the node and the
     /// kernel's own walk decides which output it is (`docs/notes/kernel-buffer-declarations.md`).
     /// A decided value here would be a physical buffer the checker could not trace.
-    Slice,
+    Buf,
+    /// `[type, length]` — the native buffer **type** `(T, L)`: a decided type term.
+    BufType,
     /// `[function]` — record the dispatches that function performs, and hand back
     /// a `Graph`.
     ///
@@ -1117,7 +1119,8 @@ impl OperatorCodec for ComputeOperator {
             ComputeOperator::WriteAtomic => 10,
             ComputeOperator::Graph => 11,
             ComputeOperator::GraphRun => 12,
-            ComputeOperator::Slice => 13,
+            ComputeOperator::BufType => 13,
+            ComputeOperator::Buf => 16,
             ComputeOperator::BufferCollect => 14,
             ComputeOperator::Mma => 15,
         };
@@ -1140,7 +1143,8 @@ impl OperatorCodec for ComputeOperator {
             10 => Ok(ComputeOperator::WriteAtomic),
             11 => Ok(ComputeOperator::Graph),
             12 => Ok(ComputeOperator::GraphRun),
-            13 => Ok(ComputeOperator::Slice),
+            13 => Ok(ComputeOperator::BufType),
+            16 => Ok(ComputeOperator::Buf),
             14 => Ok(ComputeOperator::BufferCollect),
             15 => Ok(ComputeOperator::Mma),
             other => Err(format!("unknown compute-operator tag {other}")),
@@ -1766,7 +1770,8 @@ where
                 | ComputeOperator::Col
                 | ComputeOperator::Write
                 | ComputeOperator::WriteAtomic
-                | ComputeOperator::Slice => {
+                | ComputeOperator::Buf
+                | ComputeOperator::BufType => {
                     // Kernel-only operators stay lazy; a slice has no host value.
                     None
                 }
@@ -1995,7 +2000,8 @@ where
             | ComputeOperator::WriteAtomic
             // A buffer's element class comes from the array it was made of, which the
             // operator answers rather than this table.
-            | ComputeOperator::Slice
+            | ComputeOperator::Buf
+            | ComputeOperator::BufType
             // `Graph` is host-owned and `GraphRun`'s length is the graph's own
             // return: both decline like `Jit`/`BufferCollect`.
             | ComputeOperator::Graph
@@ -2832,7 +2838,7 @@ where
             && module.node_operation(definition).is_some_and(|operation| {
                 matches!(
                     AsEnum::<ComputeOperator>::as_enum(&operation.operator),
-                    Some(ComputeOperator::Slice)
+                    Some(ComputeOperator::Buf)
                 )
             })
         {
@@ -7300,7 +7306,8 @@ macro_rules! compute_native_ops {
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static WRITE_ATOMIC: $crate::WriteAtomicOp = $crate::WriteAtomicOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
-        static SLICE: $crate::SliceOp = $crate::SliceOp;
+        static BUF_TYPE: $crate::BufTypeOp = $crate::BufTypeOp;
+        static BUF: $crate::BufOp = $crate::BufOp;
         static MMA: $crate::MmaOp = $crate::MmaOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
         static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
@@ -7320,7 +7327,8 @@ macro_rules! compute_native_ops {
                 &WRITE_ATOMIC as &dyn $crate::NativeOp<$program>,
             ),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
-            ("slice", &SLICE as &dyn $crate::NativeOp<$program>),
+            ("buf_type", &BUF_TYPE as &dyn $crate::NativeOp<$program>),
+            ("buf", &BUF as &dyn $crate::NativeOp<$program>),
             ("mma", &MMA as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
             ("graphrun", &GRAPHRUN as &dyn $crate::NativeOp<$program>),
@@ -7483,7 +7491,10 @@ pub struct BufferCollectOp;
 /// type, so a buffer made here is the one buffer whose class is not a fresh cell. The
 /// wrapper's `.native` slot is the `Buffer` node, exactly as `compute.plrun`'s is: the
 /// read/write role walk and `buf_payload` know one carrier, not two.
-pub struct SliceOp;
+pub struct BufTypeOp;
+
+/// `(type, length)` — the native buffer **value**, kernel-only.
+pub struct BufOp;
 
 /// `$mma(s, a, b, c)` — the cooperative matrix product over three buffers.
 ///
@@ -7788,19 +7799,18 @@ where
     }
 }
 
-impl<P> NativeOp<P> for SliceOp
+impl<P> NativeOp<P> for BufTypeOp
 where
     P: HighProgram,
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$buffer(count, element)` — declare a buffer of `count` elements of `element`.
+    /// `$buf_type(type, length)` — the native buffer **type** `$buf(T, L)`.
     ///
     /// # Invariant
-    /// **A declaration, not an allocation**: it states the length and the element type and
-    /// initialises nothing, and where the buffer lives is the pack's choice
-    /// (`docs/notes/kernel-buffer-declarations.md`). The two operands are the only facts a
-    /// declaration carries, so a body that names the wrong ones names them here.
+    /// A decided type term built where it is written: the shape is `[type, length]` and the
+    /// kind carries the buffer marker, so a type position reads it without a run
+    /// (`docs/notes/kernel-buffer-declarations.md`). It allocates nothing.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -7808,10 +7818,36 @@ where
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
-        let count = &args[0];
-        let element = &args[1];
-        let operands = ctx.array_node(&[count.value, element.value]);
-        let op = ctx.op_node(P::Operator::from(ComputeOperator::Slice), Some(operands));
+        let shape = ctx.array_node(&[args[0].value, args[1].value]);
+        let kind = ctx.kind_expr(ctx.buffer_marker_node());
+        let term = ctx.pair(shape, kind);
+        NativeApply {
+            value: term,
+            decided: true,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for BufOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$buf(type, length)` — the native buffer **value**: the payload a declaration holds.
+    ///
+    /// # Invariant
+    /// Kernel-only: the payload is what the runtime allocates, so the op is never evaluated
+    /// on the host, and a body that declares a buffer lowers it to an output.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        let operands = ctx.array_node(&[args[0].value, args[1].value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Buf), Some(operands));
         NativeApply {
             value: op,
             decided: false,
