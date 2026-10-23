@@ -13,23 +13,32 @@ and its operators itself.
 
 ## A first kernel
 
-The program reads three floats from a buffer, doubles each one, and reads
+The program fills a buffer with three floats, doubles each one, and reads
 the result back:
 
 ```lichen
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.x (compute.Buf Float)}
-Out = struct{.y (compute.Buf Float)}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+In  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Par = struct{.n Int, .in In}
 double_raw = (k : Par) => {
   i = compute.range k.n
   x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (x * 2.0 ~ "element")))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (x * 2.0 ~ "element"))))))
 }
 double = compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu" Out
-b = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+Fill = struct{.n Int}
+fill_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  v = 1.0 + int2float i
+  ((In)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill = compute.parallel fill_raw "cpu" In
+b = (compute.plrun fill ((Fill)(.n 3)) : In).x
 out = (compute.plrun double ((compute.A In)(.n 3, .I In(.x b))) : Out)
 compute.collect out.y : array{Float, 3}
 ```
@@ -40,11 +49,14 @@ compute.collect out.y : array{Float, 3}
 
 There is a lot in that program, so let us take it apart.
 
-**The data is buffers, and the shape is a struct.** `compute.Buf Float` is
-a buffer of floats. The kernel's input and output are struct types —
-`In`, `Out` — and a kernel's parameter type is
-`compute.P (compute.KT Float)(.I In, .O Out)`: a parallel kernel over
-`Float` cells, taking one `In` and producing one `Out`.
+**The data is buffers, and the shape is a struct.** A buffer's type states
+its element type and its length —
+`compute.Buf ((compute.BufParam _)(.type Float, .length 3))` is a buffer
+of three floats. The kernel's input and output are struct types — `In`,
+`Out` — and a kernel's parameter type is `struct{.n Int, .in In}`: the
+launch's extent and the input struct. There is no output group in the
+parameter: a kernel's **result** is its codomain, `Out`, and the body
+hands that result back (below).
 
 **The body runs once per lane.** `k : Par` is the kernel's parameter. The
 first line, `i = compute.range k.n`, is the lane's own index — the kernel
@@ -63,6 +75,24 @@ the read to take). `compute.write` takes a `Write` built with
 `(.to buf, .at i, .value v)`. The `_` placeholders are the constructors'
 own type parameters (Chapter 5's `_`), which the checker decides.
 
+**A kernel declares the buffers it writes.** The body names the buffer it
+writes — `y = compute.buf ((compute.BufParam _)(.type Float, .length
+k.n))` — and a write's **result** is that buffer's new version. So the
+body ends by building the result struct, `((Out)(.y (compute.write …)))`:
+the value that flows out *is* the write's result, and there is no effect
+outside the value.
+
+**The host builds its input with a kernel.** There is no way to turn an
+array into a buffer, so the program runs a second, tiny kernel — the
+`fill` kernel — whose body writes the table `1, 2, 3` at its lane's
+index, and whose own result is the buffer the first kernel reads. The
+fill kernel is an ordinary kernel: it declares a buffer, writes at its
+lane's index, and returns it. A table that is not a plain sequence is
+spelled as a sum of one-level `if`s, one term per element — `(if i == 0
+then 2.0 else 0.0) + (if i == 1 then 4.0 else 0.0) + …` — which is what
+[the buffer-declaration note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/kernel-buffer-declarations.md)
+records.
+
 **Marks label the computation.** The body is marked
 `~ "claim:Elementwise(element)"` before `compute.parallel` builds the
 kernel from it, and the written value is marked `~ "element"`. Marks are
@@ -73,8 +103,9 @@ the body is refused by the fusion pass, not by the language.
 **The launch is typed.** `compute.plrun kernel argument : Out` runs the
 kernel once; the argument is built with `compute.A In` and carries the
 extent (`.n 3`) and the input struct (`.I In(.x b)`). `compute.collect
-out.y : array{Float, 3}` reads a buffer back as an ordinary array, and the
-annotation is what decides the resulting array type.
+out.y : array{Float, 3}` reads a buffer back as an ordinary array — the
+only way a value leaves the compute layer — and the annotation is what
+decides the resulting array type.
 
 **The backend is a string.** `compute.parallel … "cpu" Out` binds the
 kernel to the CPU path and names its output struct type. The output type
@@ -163,8 +194,9 @@ A few that shape what a kernel can look like:
 
 - **No two-dimensional arrays.** A matrix is a flat array with index
   arithmetic in the body; the examples spell `A[r * k + c]` by hand.
-- **No runtime-length arrays.** A buffer's length is a launch parameter; an
-  array's length is in its type (Chapter 7).
+- **No runtime-length arrays.** An array's length is in its type (Chapter
+  7); a buffer's length is the launch's extent, and the host writes it
+  with a kernel.
 - **One lane per element.** A kernel writes one position per lane; a
   reduction folds inside its own lane and writes its result there.
 - **No per-row reduction across lanes yet.** Cross-lane exchange needs a
@@ -185,12 +217,15 @@ was measured and what is next.
   no file.
 - A kernel is a body of one lane, launched over an extent, reading and
   writing buffers at its lane's index.
-- `compute.P`/`compute.KT` describe a parallel kernel's parameter;
-  `compute.Buf` is a buffer; `compute.range` is the lane index;
+- A kernel's parameter is a plain struct — `struct{.n Int, .in In}` — and
+  `compute.Buf` is a buffer whose type states its element type and its
+  length; `compute.range` is the lane index;
   `compute.read`/`compute.write` are the buffer reads and writes, and a
   read names its element type at the call site;
-  `compute.parallel` builds a kernel and `compute.plrun` runs it;
-  `compute.collect` reads a buffer back as an array.
+  `compute.buf` declares a buffer, `compute.parallel` builds a kernel and
+  `compute.plrun` runs it;
+  `compute.collect` reads a buffer back as an array, and it is the only
+  way out.
 - The backend is a string, `"cpu"` or `"gpu"`, and both run the same kernel.
 - `compute.jit`/`compute.launch` is the scalar path.
 - The graph path records a chain and lets the fusion pass merge regions from
@@ -201,12 +236,13 @@ was measured and what is next.
 ## Exercises
 
 1. Change the first kernel to triple its input and check the answer.
-2. Fix the lane count to 2 and explain why `compute.collect` still needs the
+2. Change the table the fill kernel writes, and check the answer.
+3. Fix the lane count to 2 and explain why `compute.collect` still needs the
    `array{Float, 3}` annotation to answer a 3-element array.
-3. Write a scalar `compute.jit` kernel that squares its input and launch it.
-4. Change the backend string to `"gpu"` and describe what would have to be
+4. Write a scalar `compute.jit` kernel that squares its input and launch it.
+5. Change the backend string to `"gpu"` and describe what would have to be
    true of the machine for the program to run.
-5. Read one of the operator examples (`examples/matmul.lichen` or
+6. Read one of the operator examples (`examples/matmul.lichen` or
    `examples/softmax.lichen`) and identify its claim and its element marks.
-6. Pick one of the walls above and read the note it points at; state what
+7. Pick one of the walls above and read the note it points at; state what
    was measured.
