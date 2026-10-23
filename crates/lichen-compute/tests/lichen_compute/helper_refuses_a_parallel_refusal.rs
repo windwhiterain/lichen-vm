@@ -10,22 +10,22 @@ use lichen_compute::language::{LangProgram, new_store};
 /// adds is the second reader: the helper `common::run` calls, and not a gate of its own.
 const MISPLACED_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-Data = struct{.d (compute.Buf Float)}
-Out = struct{.e (compute.Buf Float)}
+Data = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Out = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
   ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
 }
 filler = compute.parallel fill "cpu" Data
 data = (compute.plrun filler ((Fill)(.n 3)) : Data)
-In  = struct{.k (compute.Buf Float)}
+In  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 Par = struct{.n Int, .in In}
 Arg = struct{.n Int, .I In}
 f = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.in.k, .at i, .value (99.0 : Float)))
+  ((Out)(.e (compute.write ((compute.Write _)(.to k.in.k, .at i, .value (99.0 : Float))))))
 }
 k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((Arg)(.n 3, .I In(.k data.d))) : Out)
