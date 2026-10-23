@@ -22,12 +22,12 @@ fn squares() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.b (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
+In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
 Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float))) ~ "combine" ~ "accumulator"))
   ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }
@@ -39,7 +39,7 @@ built = compute.graph step
 Fill = struct{.n Int}
 fill_raw = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length COUNT))
   ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value ((int2float i + 1.0) ~ "element"))))))
 }
 filler = compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" Out
