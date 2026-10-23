@@ -815,6 +815,19 @@ where
         node
     }
 
+    /// The first slot's value node when `node` is an array (a struct instance).
+    fn first_slot_value(&self, node: NodeId) -> Option<NodeId> {
+        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        let Some(LowValue::Array(items)) = AsEnum::<LowValue>::as_enum(&value) else {
+            return None;
+        };
+        // SAFETY: `items` is the payload of a live value of `module` on this borrow.
+        let items = unsafe { items.items() };
+        self.module
+            .element_value_node(items.first()?.node)
+            .and_then(|slot| slot.dynamic())
+    }
+
     /// The `.native` slot's value node when `node` is a `Buf`-shaped instance.
     ///
     /// # Invariant
@@ -894,6 +907,19 @@ where
             // A declaration instance is its `.native` slot; a pair reaches its value half.
             if let Some(inner) = lichen_highlevel::shape::pair_value(self.module, node) {
                 return self.value(inner);
+            }
+            // **A parameter's buffer is its entry leaf**: the wrapper's `.native` slot holds
+            // the value the host passed, and the path walk names it.
+            if let Some(slot) = self.parameter_path_of(node)? {
+                return self.parameter(slot);
+            }
+            // **A parameter's buffer is an instance whose payload is the entry leaf**: the
+            // first slot names it, and the leaf is the value the host passed.
+            if let Some(inner) = self.first_slot_value(node) {
+                return match self.parameter_path_of(inner)? {
+                    Some(slot) => self.parameter(slot),
+                    None => self.lower_definition(inner),
+                };
             }
             if let Some(payload) = self.instance_payload(node) {
                 // The identity is the node the body bound, not a peel of it.
@@ -2382,8 +2408,17 @@ where
         {
             self.value(previous)?;
         }
-        // A declaration registers its ordinal when walked, so lower the target first.
-        self.value(target)?;
+        // A declaration registers its ordinal when walked, so lower the target first. A
+        // parameter's buffer is its entry leaf, and the refusal below names it.
+        match self.parameter_path_of(target)? {
+            Some(slot) => {
+                let value = self.parameter(slot)?;
+                self.values.insert(target, value);
+            }
+            None => {
+                self.value(target)?;
+            }
+        }
         // A declared target names its ordinal by declaration order.
         let ordinal = match self.declared_ordinal(target) {
             Some(ordinal) => ordinal,
