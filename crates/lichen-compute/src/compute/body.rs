@@ -945,24 +945,24 @@ where
             ComputeOperator::WriteAtomic => self.buffer_write_atomic(operand),
             // **A buffer the body declares**: a length and an element type, and nothing
             // about where it lives (`docs/notes/kernel-buffer-declarations.md`).
-            ComputeOperator::Buffer => self.buffer_declare(node, operand),
+            ComputeOperator::Slice => self.slice_declare(node, operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
             )),
         }
     }
 
-    /// A declared buffer: its declaration order is its output ordinal.
+    /// A declared slice: its declaration order is its output ordinal.
     ///
     /// # Invariant
     /// The body **names** the buffer instead of receiving it, so [`Self::declared`] is the
     /// only authority over an ordinal: a write whose target is one of these fills the
     /// position the declaration was lowered at, not a parameter path.
-    fn buffer_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
+    fn slice_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         let Some(count) = items.first() else {
             return Err(
-                "a `compute.buffer` declaration states no length: its operand array is empty and \
+                "a `compute.slice` declaration states no length: its operand array is empty and \
                  a declaration states a length and an element type"
                     .into(),
             );

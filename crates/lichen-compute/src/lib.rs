@@ -13,10 +13,10 @@ pub mod region_merge;
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 pub use compute::{
-    BufferCollectOp, BufferOp, BufferPayload, CallOp, ColOp, ComputeOperator, ComputePlugin,
-    ComputeValue, FusedKernel, FusedRefusal, GraphId, GraphOp, GraphPass, GraphRunOp, GraphValueId,
-    JitOp, KernelEntry, KernelId, LANDING_DIAGNOSTIC, LandingRefusal, LaunchExtent, LaunchOp,
-    MmaOp, ParLaunchOp, ParallelOp, RangeOp, ReadOp, RoleUnread, RowOp, WRAPPER_SOURCE,
+    BufferCollectOp, BufferPayload, CallOp, ColOp, ComputeOperator, ComputePlugin, ComputeValue,
+    FusedKernel, FusedRefusal, GraphId, GraphOp, GraphPass, GraphRunOp, GraphValueId, JitOp,
+    KernelEntry, KernelId, LANDING_DIAGNOSTIC, LandingRefusal, LaunchExtent, LaunchOp, MmaOp,
+    ParLaunchOp, ParallelOp, RangeOp, ReadOp, RoleUnread, RowOp, SliceOp, WRAPPER_SOURCE,
     WriteAtomicOp, WriteOp, clear_graph_pass, compile_fragment, compile_parallel_fragment,
     consult_graph_pass, kernel_claim, kernel_fragment, land_fused_kernel, module_cache_disk_hits,
     module_cache_disk_writes, module_cache_misses, read_fused_kernel, set_graph_pass,

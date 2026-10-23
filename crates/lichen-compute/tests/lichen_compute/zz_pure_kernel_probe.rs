@@ -3,7 +3,7 @@
 //! # Invariant
 //!
 //! Print-only. No `.out` group exists: the body declares the output buffer with
-//! `compute.buffer`, writes it, and returns the codomain. The input of the second kernel
+//! `compute.slice`, writes it, and returns the codomain. The input of the second kernel
 //! is the *first kernel's output* — a host builds data by running a kernel
 //! (`docs/notes/kernel-buffer-declarations.md`). The reading is the refusal, or the value
 //! a run gives: the fill kernel writes 1.0, the compute kernel writes 2.0.
@@ -21,7 +21,7 @@ Fill = struct{.n Int}
 FillArg = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.buffer ((compute.Buffer _)(.count c.n, .element Float))
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
   ((Out)(.y y))
 }
 fk = compute.parallel fill "cpu" Out
@@ -30,7 +30,7 @@ Par = struct{.n Int, .in In}
 Arg = struct{.n Int, .I In}
 raw = (c : Par) => {
   i = compute.range c.n
-  y = compute.buffer ((compute.Buffer _)(.count c.n, .element Float))
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 2.0)))))
 }
 k = compute.parallel raw "cpu" Out
@@ -66,7 +66,7 @@ OutThree = struct{.y (compute.Buf Float)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.buffer ((compute.Buffer _)(.count 3, .element Float))
+  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
   ((OutThree)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
 }
 fk = compute.parallel fill "cpu" OutThree

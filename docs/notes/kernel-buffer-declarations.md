@@ -20,10 +20,14 @@
   says how many lanes share it (`0` crosses workgroups, `1` is one lane, the warp
   width is one subgroup), and a placement the perspective does not admit is
   refused by name.
-- **`compute.buffer` is the declaration, and it is the only one.** It takes the
+- **`compute.slice` is the declaration, and it is the only one.** It takes the
   **length and the element type**, takes **no array**, and **initialises
   nothing** — the allocation holds whatever the allocator held, and filling it is
-  the program's job.
+  the program's job. **Its value is undecided**: the operation never evaluates to a
+  `Buffer` payload, so the node stays the identity the walk traces. A declaration
+  that really produced a physical buffer would be *decided*, and a decided value
+  cannot be traced back to the output it names — that is why the operator is a
+  slice and not a buffer.
 - **A host builds an input buffer explicitly, with a kernel.** There is no
   array-to-buffer conversion: a kernel declares an uninitialised buffer, writes
   it, and returns it; the returned `Buf` is the input of the next launch.
@@ -42,7 +46,7 @@ A body:
 ```lichen
 raw = (c : Par) => {
   i  = compute.range c.n
-  y  = compute.buffer ((compute.Buffer _)(.count c.n, .element Float)) # warp
+  y  = compute.slice ((compute.Slice _)(.count c.n, .element Float))
   compute.write ((compute.Write _)(.to y, .at i, .value (int2float s(0))))
   ((Out)(.y y))
 }
@@ -69,7 +73,7 @@ the perspective is spelled at the declaration.
   must agree.
 - **A `write`'s target is a declared buffer**, so its output ordinal is the
   declaration's index. `Lower::write_call` resolves a target that is a
-  `compute.buffer` node to that ordinal instead of through a parameter path;
+  `compute.slice` node to that ordinal instead of through a parameter path;
   `Lower::version_identity` no longer needs a parameter slot for a declared
   version.
 - **The allocation is the declared length, uninitialised.** The runtime
@@ -98,7 +102,7 @@ slice; the ruling above is what the earlier slices build toward.
 
 ## Slices
 
-1. **The declaration and the pure signature** (this branch): `compute.buffer`
+1. **The declaration and the pure signature** (this branch): `compute.slice`
    takes `(count, element)`; `P` loses `.out`; the body declares, writes and
    returns; the fragment's outputs are the declarations; the runtime allocates by
    the declared count in `global` space; the perspective check refuses a
@@ -107,7 +111,7 @@ slice; the ruling above is what the earlier slices build toward.
    cpu and compiles for the gpu; **every other program is red on the branch
    until slice 2**.
 2. **The migration**: every `compute.P …(.I In, .O Out)` and every
-   `compute.buffer (array)` in the tests and examples — 46 files — moves to the
+   `compute.buffer (array)` / `compute.buffer (count, element)` in the tests and examples — 46 files — moves to the
    declared form and to a kernel-built input where it needs data.
 3. **The pack**: the file format, its reader, the space/slot mapping, and the
    perspective constraint enforced against it.

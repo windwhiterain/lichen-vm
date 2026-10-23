@@ -893,13 +893,14 @@ pub enum ComputeOperator {
     WriteAtomic,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
-    /// `[array]` operand — a copy of the array's elements as a `Buf` payload.
+    /// `[length, element]` — declare a **slice**: an undecided value of buffer type.
     ///
     /// # Invariant
-    /// The array's own element type is the buffer's element class, so this is the one
-    /// buffer-producing operation whose class is not a fresh cell. See
-    /// docs/notes/gpu-algorithm-roadmap.md §4.3.
-    Buffer,
+    /// **Undecided on purpose**: a slice is a name and a length, not an allocation, so the
+    /// operation never evaluates to a `Buffer` payload — the graph keeps the node and the
+    /// kernel's own walk decides which output it is (`docs/notes/kernel-buffer-declarations.md`).
+    /// A decided value here would be a physical buffer the checker could not trace.
+    Slice,
     /// `[function]` — record the dispatches that function performs, and hand back
     /// a `Graph`.
     ///
@@ -1116,7 +1117,7 @@ impl OperatorCodec for ComputeOperator {
             ComputeOperator::WriteAtomic => 10,
             ComputeOperator::Graph => 11,
             ComputeOperator::GraphRun => 12,
-            ComputeOperator::Buffer => 13,
+            ComputeOperator::Slice => 13,
             ComputeOperator::BufferCollect => 14,
             ComputeOperator::Mma => 15,
         };
@@ -1139,7 +1140,7 @@ impl OperatorCodec for ComputeOperator {
             10 => Ok(ComputeOperator::WriteAtomic),
             11 => Ok(ComputeOperator::Graph),
             12 => Ok(ComputeOperator::GraphRun),
-            13 => Ok(ComputeOperator::Buffer),
+            13 => Ok(ComputeOperator::Slice),
             14 => Ok(ComputeOperator::BufferCollect),
             15 => Ok(ComputeOperator::Mma),
             other => Err(format!("unknown compute-operator tag {other}")),
@@ -1765,7 +1766,7 @@ where
                 | ComputeOperator::Col
                 | ComputeOperator::Write
                 | ComputeOperator::WriteAtomic
-                | ComputeOperator::Buffer => {
+                | ComputeOperator::Slice => {
                     // Kernel-only operators: none of them reaches the VM as a
                     // standalone apply — stay lazy. A declared buffer is lowered in the
                     // body it is declared in and has no host value.
@@ -1996,7 +1997,7 @@ where
             | ComputeOperator::WriteAtomic
             // A buffer's element class comes from the array it was made of, which the
             // operator answers rather than this table.
-            | ComputeOperator::Buffer
+            | ComputeOperator::Slice
             // `Graph` is host-owned and `GraphRun`'s length is the graph's own
             // return: both decline like `Jit`/`BufferCollect`.
             | ComputeOperator::Graph
@@ -2844,7 +2845,7 @@ where
             && module.node_operation(definition).is_some_and(|operation| {
                 matches!(
                     AsEnum::<ComputeOperator>::as_enum(&operation.operator),
-                    Some(ComputeOperator::Buffer)
+                    Some(ComputeOperator::Slice)
                 )
             })
         {
@@ -7315,7 +7316,7 @@ macro_rules! compute_native_ops {
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static WRITE_ATOMIC: $crate::WriteAtomicOp = $crate::WriteAtomicOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
-        static BUFFER: $crate::BufferOp = $crate::BufferOp;
+        static SLICE: $crate::SliceOp = $crate::SliceOp;
         static MMA: $crate::MmaOp = $crate::MmaOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
         static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
@@ -7335,7 +7336,7 @@ macro_rules! compute_native_ops {
                 &WRITE_ATOMIC as &dyn $crate::NativeOp<$program>,
             ),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
-            ("buffer", &BUFFER as &dyn $crate::NativeOp<$program>),
+            ("slice", &SLICE as &dyn $crate::NativeOp<$program>),
             ("mma", &MMA as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
             ("graphrun", &GRAPHRUN as &dyn $crate::NativeOp<$program>),
@@ -7498,7 +7499,7 @@ pub struct BufferCollectOp;
 /// type, so a buffer made here is the one buffer whose class is not a fresh cell. The
 /// wrapper's `.native` slot is the `Buffer` node, exactly as `compute.plrun`'s is: the
 /// read/write role walk and `buf_payload` know one carrier, not two.
-pub struct BufferOp;
+pub struct SliceOp;
 
 /// `$mma(s, a, b, c)` — the cooperative matrix product over three buffers.
 ///
@@ -7803,7 +7804,7 @@ where
     }
 }
 
-impl<P> NativeOp<P> for BufferOp
+impl<P> NativeOp<P> for SliceOp
 where
     P: HighProgram,
     P::Value: ValueType + From<ComputeValue>,
@@ -7826,7 +7827,7 @@ where
         let count = &args[0];
         let element = &args[1];
         let operands = ctx.array_node(&[count.value, element.value]);
-        let op = ctx.op_node(P::Operator::from(ComputeOperator::Buffer), Some(operands));
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Slice), Some(operands));
         NativeApply {
             value: op,
             decided: false,
