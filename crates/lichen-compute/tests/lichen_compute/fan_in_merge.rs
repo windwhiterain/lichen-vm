@@ -34,52 +34,53 @@ const SUM: usize = 2;
 /// Each body declares its output with `compute.slice`
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutM = struct{.m (compute.Buf Float)}
-ParM = struct{.n Int, .in In}
-rowmax_raw = (k : ParM) => {
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutM = struct{{.m (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParM = struct{{.n Int, .in In}}
+rowmax_raw = (k : ParM) => {{
   i = compute.range k.n
-  m = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  m = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutM)(.m (compute.write ((compute.Write _)(.to m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity"))))))
-}
+}}
 rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu" OutM
-Soft = struct{.d (compute.Buf Float), .m (compute.Buf Float)}
-OutS = struct{.s (compute.Buf Float)}
-ParS = struct{.n Int, .in Soft}
-shifted_raw = (k : ParS) => {
+Soft = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .m (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutS = struct{{.s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParS = struct{{.n Int, .in Soft}}
+shifted_raw = (k : ParS) => {{
   i = compute.range k.n
   m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
   ((OutS)(.s (compute.write ((compute.Write _)(.to y, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
-}
+}}
 shifted = compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutS
-Norm = struct{.d (compute.Buf Float), .m (compute.Buf Float), .s (compute.Buf Float)}
-OutY = struct{.y (compute.Buf Float)}
-ParY = struct{.n Int, .in Norm}
-norm_raw = (k : ParY) => {
+Norm = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .m (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutY = struct{{.y (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParY = struct{{.n Int, .in Norm}}
+norm_raw = (k : ParY) => {{
   i = compute.range k.n
   m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
   s = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m)) / s) ~ "element"))))))
-}
+}}
 norm = compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu" OutY
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   mx = (compute.plrun rowmax ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutM)
   tot = (compute.plrun shifted ((compute.A Soft)(.n s.n, .I Soft(.d s.in.d, .m mx.m))) : OutS)
   compute.plrun norm ((compute.A Norm)(.n s.n, .I Norm(.d s.in.d, .m mx.m, .s tot.s))) : OutY
-}
+}}
 built = compute.graph step
 (rowmax, shifted, norm, built)
 "#
-    .to_string()
+    )
 }
 
 /// The same diamond with the normalise's `element` marked **inside** the division.
