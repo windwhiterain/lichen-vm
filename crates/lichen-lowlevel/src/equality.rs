@@ -87,20 +87,25 @@ impl<P: Program> Module<P> {
     /// the conflicting arms instead. A merge of two decided-different classes is not a
     /// merge, and this is the one thing the write rules rely on.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        let left = self.class_low_type(a).cloned();
-        let right = self.class_low_type(b).cloned();
+        // The two roots once, compressed: the shape reads and the union below would
+        // otherwise walk the parents again, and this runs on every merge.
+        let root_a = disjoint::find(&mut self.nodes, a);
+        let root_b = disjoint::find(&mut self.nodes, b);
+        let left = self.nodes[root_a].low_shape.as_deref().cloned();
+        let right = self.nodes[root_b].low_shape.as_deref().cloned();
         let left_value = self.nodes[a].value;
         let right_value = self.nodes[b].value;
-        let representative = disjoint::union(&mut self.nodes, a, b);
+        // **A class that holds a value has no holes**, so only the valueless side fills,
+        // and it fills before the union: the walk then never visits the valued side's
+        // members, which are the many. The class it writes is uniform either way.
+        match (left_value, right_value) {
+            (None, Some(value)) => self.fill_class_holes(root_a, value),
+            (Some(value), None) => self.fill_class_holes(root_b, value),
+            _ => {}
+        }
+        let representative = disjoint::union(&mut self.nodes, root_a, root_b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
-        }
-        if let Some(value) = left_value.or(right_value) {
-            // A class that holds a value has no holes, so only a merge with a valueless
-            // class fills.
-            if left_value.is_none() || right_value.is_none() {
-                self.fill_class_holes(representative, value);
-            }
         }
         representative
     }

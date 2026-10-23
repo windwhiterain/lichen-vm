@@ -115,6 +115,38 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 6: the merge fills the valueless side only
+
+Round 3 stopped filling when both sides held a value. Timing the walk again showed the
+half that was left is the bigger half: a merge of a *large* decided class with a *small*
+empty one walked the large class to write nothing, because the fill ran on the merged class
+after the union. **A class that holds a value has no holes** — the same invariant round 3
+used — so only the valueless side has any, and it is now filled *before* the union, while
+it is still the small side. The merged class ends uniform either way; nothing reads the two
+classes in between.
+
+Round 3's other half also lands here: `add_equality` reads the two roots once with
+`disjoint::find` and passes them to the union, instead of reading each shape through
+`class_root`'s uncompressed walk and letting the union find both again. That one is not
+measurable on its own; it is a walk removed, not a walk made cheaper.
+
+| reading | round 5 | round 6 | vs. the original |
+|---|---|---|---|
+| `recursion.lichen` min / median | 31.75 / 32.53 ms | **25.14 / 25.47 ms** | 174 → 25.1 ms (6.9×) |
+| its allocations | 34 671 | **34 671** | 754 827 → 34 671 (21.8×) |
+| `mathlib.lichen` min / median | 21.14 / 21.69 ms | **21.09 / 21.54 ms** | 25.1 → 21.1 ms |
+| corpus (46 programs, median) | 591 ms | **580 ms** | 1 108 → 580 ms |
+
+Ten interleaved runs per binary, minimum and median, because this machine's load moves the
+median by ±20 % between minutes. `mathlib` is flat because its merges are small classes on
+both sides; the corpus is flat-ish because it is compute-dominated.
+
+**Round 5's "the class walk is the last compressible item" was wrong, and this corrects
+it.** Skipping `evaluate_class_first`'s walk outright — an experiment, not a change —
+moved `fib 10` by nothing measurable (31.8–33.4 ms with and without), so its ~400 000
+member reads are ~3 ns each, not 15–25 ns: a class's members sit in the slot table's own
+storage and are read out of cache. No owed counter is worth an invariant there.
+
 ## Round 5: the clone walk reads a node once, and the class walk makes one pass
 
 Timing `node_apply`'s segments rather than guessing found the opposite of what the
@@ -145,7 +177,8 @@ ones, which is where the lookups were.
 
 Where `fib 10`'s remaining 33 ms goes, measured: `unify` 18 841 calls of which only 2 338
 (12 %) are same-class; `add_node` 66 548 calls at ~85 ns; the class-first walk's ~400 000
-member reads at 15–25 ns; the walk's own per-visit arithmetic under 6 ms in total.
+member reads, which round 6 measured at ~3 ns each; the walk's own per-visit arithmetic
+under 6 ms in total.
 
 ## Round 4: the apply tail stops building two buffers per call
 
@@ -300,12 +333,10 @@ materialization and the checker's own graph, not the array-pair walk this round 
   frozen ref, which materializes a fresh leaf each time. Sharing a *decided* static read
   would cut most of that and the peak with it, but a leaf is a cell a unification writes,
   so it is a semantic change and is not taken.
-- **The class walk is the last compressible item, and it needs a counter.** `fib 10`
-  reads ~400 000 class members across 2 092 class-first walks — 15–25 ns each, because
-  every member is a slot-table read of facts that mostly say "this member owes nothing".
-  Skipping a walk whose class cannot owe needs a per-class flag maintained on creation and
-  merge (the shape round 3 used for holes), and it only pays if most classes that are read
-  hold no operation-bearing member; that has not been measured.
+- **The class walk is not a target.** `fib 10` reads ~400 000 class members across 2 360
+  class-first walks, and skipping the walk outright does not move its check (round 6): the
+  members are the slot table's own storage, read out of cache at ~3 ns. Round 5 guessed
+  15–25 ns and was wrong.
 - **The clone walk itself** is no longer a mystery: its per-visit bookkeeping is under
   6 ms of `fib 10`'s 33 (round 5), so what is left of it is `add_node` (66 548 calls at
   ~85 ns) and the volume of nodes the representation creates. That volume is the same
