@@ -196,3 +196,39 @@ fn probe_a_nested_chain_in_the_body() {
         ),
     }
 }
+
+/// Two outputs: the codomain's second field must reach the host too.
+///
+/// # Invariant
+/// Print-only. A kernel that fills two buffers and returns both; the reading is
+/// whether `collect` reaches the second field (`docs/notes/kernel-buffer-declarations.md`).
+const TWO: &str = r#"
+--- compute = import "compute.lichen" ---
+Out = struct{.c (compute.Buf Int), .s (compute.Buf Int)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  a = compute.slice ((compute.Slice _)(.count c.n, .element Int))
+  b = compute.slice ((compute.Slice _)(.count c.n, .element Int))
+  ((Out)(.c (compute.write ((compute.Write _)(.to a, .at i, .value i))), .s (compute.write ((compute.Write _)(.to b, .at i, .value i)))))
+}
+k = compute.parallel fill "cpu" Out
+out = (compute.plrun k ((Fill)(.n 2)) : Out)
+compute.collect out.c : array{Int, 2}
+"#;
+
+#[test]
+fn probe_two_outputs() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(TWO, None, &mut store) {
+        Ok(text) => println!("[two] answered {text}"),
+        Err(diagnostics) => println!(
+            "[two] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}

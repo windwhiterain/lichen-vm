@@ -75,7 +75,10 @@ the perspective is spelled at the declaration.
   declaration's index. `Lower::write_call` resolves a target that is a
   `compute.slice` node to that ordinal instead of through a parameter path;
   `Lower::version_identity` no longer needs a parameter slot for a declared
-  version.
+  version. The per-position check that used to demand "output k is a write to
+  output k" is **gone** (`20d0c351`): the codomain's field order and the
+  declaration order are the same list, so a write always fills the output it
+  names and a crossing is not an error the compiler can see any more.
 - **The allocation is the declared length, uninitialised.** The runtime
   allocates each output with its `count` and element class, in the pack's space,
   and hands back the codomain struct (`build_outputs` by `O`'s fields).
