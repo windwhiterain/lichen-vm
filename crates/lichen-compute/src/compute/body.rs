@@ -148,8 +148,7 @@ struct ActiveLoop {
 /// A `write` in a conditional's arm is refused (see §6 of the loop-conversion note).
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
 
-/// A comparison over a comparison's own result: the doubling a `@loop`'s carried state
-/// produces, refused where its value would be used.
+/// A comparison over a comparison's own result, refused where its value would be used.
 const DOUBLED_COMPARISON: &str = "a comparison over a comparison: an order comparison over a `@loop`'s carried state is emitted twice inside a lowered body, so its value ranges over the first comparison's `0`/`1` and cannot answer. Compare the state inside an arm instead (an `==` test is clean), or use the comparison's `0`/`1` as a number (`1 * (a > b)`); `docs/notes/operator-gaps.md` rows the defect";
 
 /// Refusal: a cross-kernel callee returns exactly one value, in the caller's class.
@@ -323,8 +322,8 @@ where
             && let Some(value) = self.loop_value(index, node)?
         {
             self.publish_mark(node, value);
-            // **The node's value is this block parameter**, so a reader that asks what
-            // class the node was declared in gets the parameter's (`emitted_class`).
+            // **The node's value is this block parameter**: its class is the
+            // parameter's (`emitted_class`).
             self.values.insert(node, value);
             return Ok(value);
         }
@@ -1006,11 +1005,8 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
-        // **A doubled comparison is refused where its value is used**: an order comparison
-        // over the `@loop`'s carried state is emitted twice (the second ranges over the
-        // first's `0`/`1`), so a use computes a constant. Refused rather than answered
-        // (`docs/notes/operator-gaps.md`, the `if`-in-fold row). A loop test's own
-        // comparison is not caught here: its doubled value feeds only a dead selection.
+        // **A doubled comparison is refused where its value is used**: it is compared
+        // twice (`docs/notes/operator-gaps.md`).
         for operand in [left_operand, right_operand] {
             if let Some(produced) = operand
                 .dynamic()
@@ -1034,8 +1030,7 @@ where
         )
     }
 
-    /// Whether a value is an order comparison **over another comparison's result** — the
-    /// doubled emission a `@loop`'s carried state produces.
+    /// Whether a value is an order comparison **over another comparison's result**.
     fn value_is_doubled_comparison(&self, value: ValueId) -> bool {
         let Some(ValueDef::Instr {
             op: KernelInstr::Bin(_, bin),
@@ -1283,9 +1278,8 @@ where
         for _ in 0..slots.len() {
             self.body.add_param(header);
         }
-        // **A block parameter's class is its incoming argument's**: the state arrives as
-        // the entering call's values, and an operator over a state read must see the
-        // class it was entered with, not the one a node happened to carry.
+        // **A block parameter's class is its incoming argument's**: a state read is
+        // classed by the value it was entered with.
         for (&slot, &param) in slots
             .iter()
             .zip(self.body.blocks[header].params.clone().iter())
@@ -1354,8 +1348,8 @@ where
         self.lower_loop_steps(index)?;
         let result = self.lower_loop_exit(index)?;
         self.loops.pop();
-        // The nest's other blocks take their parameters' classes from the branches that
-        // reach them, so a state read outside the header is classed too.
+        // The nest's other blocks take their parameters' classes from the branches
+        // reaching them.
         self.propagate_param_classes();
         // The caller's remaining instructions go in the merge block, which is
         // where the nest leaves its result.
@@ -1452,10 +1446,8 @@ where
                     .element_value_node(element.into())
                     .and_then(|node| node.dynamic())
                     .unwrap_or(element);
-                // **A buffer slot is carried as a version token**: a buffer is named, never
-                // emitted, so the state holds the *version* the write fills — the same token
-                // the write's own value is. Which buffer the slot names is the state read's
-                // identity ([`Lower::version_identity`]), not the value carried.
+                // **A buffer slot is carried as a version token**: a buffer is named, not
+                // emitted (`docs/notes/loop-conversion.md` §6).
                 if super::write_chain_output_pos(self.module, self.params, value)?.is_some() {
                     return Ok(self.version_token());
                 }
@@ -1784,12 +1776,8 @@ where
             return Err(CONDITIONAL_WRITE.into());
         }
         let selector = self.value_item(*selector)?;
-        // **A selector that compares a comparison is refused**: an order comparison over the
-        // `@loop`'s carried state is emitted twice inside a lowered body (the second ranges over
-        // the first's `0`/`1`), so the selector would take one arm every time — a wrong answer
-        // rather than a refusal (`docs/notes/operator-gaps.md`, the `if`-in-fold row). **A loop
-        // test is exempt**: the conversion decides it with a branch over the first comparison, so
-        // the second is a dead value there.
+        // **A selector that compares a comparison is refused**: a loop test is exempt
+        // (`docs/notes/operator-gaps.md`).
         let is_loop_test = self.loops.iter().any(|active| {
             active
                 .conversion
@@ -1803,8 +1791,8 @@ where
         // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
         // re-derive.
         let narrow = self.emit(KernelInstr::I32WrapI64, vec![selector], ScalarClass::Int);
-        // **A selection's class is its arms'**, read off what they emitted: both arms are
-        // computed here, so the node's own class is the fallback and not the answer.
+        // **A selection's class is its arms'**, read off what they emitted: the node's
+        // own class is only the fallback.
         let class = self
             .value_classes
             .get(&then)
@@ -2120,8 +2108,8 @@ where
     /// output: the version's identity is the entering value's, and a write into it is a
     /// write into that output.
     fn version_identity(&self, node: NodeId) -> Option<AnyNodeId> {
-        // A write's target arrives as the `Write` struct's **slot**: the value the
-        // slot holds is the state read, and a slot is not a read of anything.
+        // A write's target arrives as the `Write` struct's **slot**: a slot is not
+        // a read of anything.
         let node = self
             .module
             .element_value_node(AnyNodeId::Dynamic(node))
@@ -2129,9 +2117,8 @@ where
             .unwrap_or(node);
         let index = self.loop_owner(node)?;
         let active = &self.loops[index];
-        // **The slot the read names**: the marked function's own parameter path
-        // (`s(1)` in the template), or the entering call's element list. The
-        // conversion's state is the list of paths, so the slot is where the path is.
+        // **The slot the read names**: the marked function's parameter path (`s(1)`),
+        // or the entering call's element list.
         let path = self
             .module
             .parameter_value_path(active.function, node)
@@ -2157,8 +2144,8 @@ where
                 .pair_value_half(active.state)
                 .map(AnyNodeId::Dynamic);
         }
-        // The entering state is the argument's **value**: a tuple of the slots, so the
-        // element at the slot is the node the call bound there.
+        // The entering state is the argument's **value**: the element at the slot is
+        // the node the call bound there.
         let value = self.module.pair_value_half(active.state)?;
         // SAFETY: `value` is a live node of the module being lowered.
         let elements = unsafe { self.module.array_items(value) }?;
@@ -2179,8 +2166,8 @@ where
             ));
         }
         let mut target = dynamic(items[0].node)?;
-        // **A carried version names the buffer it was entered with**: follow the state
-        // read to the entering value before resolving the output ordinal.
+        // **A carried version names the buffer it was entered with**: follow the
+        // state read to the entering value.
         for _ in 0..8 {
             let Some(entering) = self.version_identity(target) else {
                 break;
@@ -2196,7 +2183,7 @@ where
         let index = dynamic(items[1].node)?;
         let value_node = dynamic(items[2].node)?;
         // **A record stores the call's pair**: the value written is the pair's value
-        // half — the call — and the pair itself is not a value this body can emit.
+        // half — the call.
         let value_node = if self.module.node_operation(value_node).is_none() {
             self.module
                 .pair_value_half(value_node)
@@ -2246,22 +2233,19 @@ where
             KernelInstr::BufferWriteCall(element)
         };
         self.emit(instruction, vec![position, index, value], element);
-        // **A write's value is a token of the element's class.** A write fills an output
-        // position, so what a reader of its value needs is *which buffer* — and that is the
-        // node's identity (`write_target_node`), not an SSA value. The token exists because
-        // the value may be carried: a `@loop`'s state slot, or a selection's arm
-        // (`docs/notes/loop-conversion.md` §6, the version spine).
+        // **A write's value is a token of the element's class**, not an SSA value
+        // (`docs/notes/loop-conversion.md` §6).
         Ok(self.version_token())
     }
 
     /// The token a version is carried as: one `Int` const, because nothing reads it.
     ///
     /// # Invariant
-    /// Which buffer a version names is the node's identity (`write_target_node`), never the
-    /// carried value, so a version has no element class to agree with: a token whose class
-    /// followed the element would make a loop's entry and its backedge disagree whenever
-    /// the parameter states no element class (`docs/notes/loop-conversion.md` §6). The
-    /// **store** keeps the element's class (`declared_output_class`); the token does not.
+    /// Which buffer a version names is the node's identity (`write_target_node`), never
+    /// the carried value, so a version has no element class: a token classed after the
+    /// element would make a loop's entry and backedge disagree when the parameter
+    /// states no class (`docs/notes/loop-conversion.md` §6). The **store** keeps
+    /// the element's class (`declared_output_class`); the token does not.
     fn version_token(&mut self) -> ValueId {
         self.emit_const(ScalarClass::Int, 0)
     }

@@ -487,6 +487,11 @@ what it wrote needs `read` to accept an output binding, which the ABI does not h
 yet ([shared-memory-and-barriers](shared-memory-and-barriers.md) §3's retraction is
 about exactly that).
 
+**The probe's own template.** `@B@` is the backend and `@BODY@` the kernel body, so a
+control and the loop are one template. The second probe varies what the state's
+**second slot** holds, because that is where the walk used to stop; the third reads
+the graph the refusal was about.
+
 ## 7. Why a marker, and not a `loop` builtin
 
 [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md) argues — correctly — that

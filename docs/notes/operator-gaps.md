@@ -38,6 +38,28 @@ its only test — so "the same six readings" is no longer true and the list is k
 | **a boundary the caller chooses at run time** | not expressible: the condition would have to be data | a boundary that is an argument rather than a leaf or a buffer | the language (control flow on a datum) |
 | **the fusion floor refuses every single operator** | `zz_operator_floor_probe.rs`: `NotClaimed` without a claim; with one, `RegionIsNotAPair` **and** `BeyondANode`, whose sentence says the `element` role reads another node's output while it reads a parameter | fusing any operator this line writes, however it is spelled | fusion / the floor's model (`llm-operators.md`, `physics-operators.md`) |
 
+### The `if`-in-fold probe's own measured reading
+
+The probe's file-level note carried two paragraphs that a comment budget could not
+hold. They are kept here, with the first row of the table above as their summary.
+
+**Where the doubling is, measured.** The graph is not where it lives: the refusing
+spellings and the clean control hold the same 13 comparison nodes in the same classes.
+The body is: with the selector wrapped in an addition (`(s(0) > 1) + 0`) the walk
+lowers, and the surface operator emits `Gt` over **the routed call's own result** —
+`Bin(Gt)[block parameter, 1]` then `Bin(Gt)[that, 1]`. The four order comparisons
+are routed through the prelude's bindings, so one source `>` is two nodes (an
+operator and an `Apply` of a frozen callee) and both emit; only the state case takes
+the second one over the first.
+
+**Why the second emission ranges over the first, measured.** The surface operator's
+operand is the state read, and `parameter_value_path` cannot walk it: the walk reaches
+that `Index` node and `operands_of` fails on it (`walk … -> no operands`), so the
+reading is `None`. `Lower::loop_value` therefore cannot place the read as a block
+parameter, `Lower::value_inner` falls through to `define_in`, and `define_in` answers
+the class member that already computed — the routed comparison. A clone's operand
+array being unreadable is the defect; the `None` is its symptom.
+
 ## Traps: they parse or compile, and then surprise you
 
 | trap | the reading | what to do instead |

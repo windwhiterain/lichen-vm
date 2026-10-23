@@ -2,10 +2,10 @@
 //!
 //! # Invariant
 //!
-//! Print-only, for the type system's owner: the three cases are the same three-step ring, the same
-//! seed and the same body, and only the annotation on the recursive function differs. Since
-//! `53463b11` all three are refused at the **check** (`this field read cannot be checked`), so this
-//! reads the checker and never a run; `docs/notes/operator-gaps.md` row three carries it, and
+//! Print-only, for the type system's owner: the three cases are the same ring, seed
+//! and body, and only the recursive function's annotation differs. Since
+//! `53463b11` all three are refused at the **check**, so this reads the checker and
+//! never a run; `docs/notes/operator-gaps.md` row three carries it, and
 //! `examples/decode_loop.lichen` is the spelling that does run.
 
 use super::common;

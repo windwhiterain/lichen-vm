@@ -1,17 +1,13 @@
 //! Probe: a `@loop` whose step writes, and what the codomain makes of it.
+//! `@B@` is the backend, `@BODY@` the body.
 //!
 //! # Invariant
 //!
 //! Print-only. The state carries the output buffer, so a step's write returns the
-//! buffer it filled; the codomain's position is therefore the loop's result, not a
-//! write node. The reading is what the check refuses with, or the answer a run gives
-//! (the last iteration's store wins: `taps = 3` writes 3.0, 2.0, 1.0), and the
-//! lowered body with the store's own block named.
-//!
-//! `@B@` is the backend and `@BODY@` the kernel body, so a control and the loop are
-//! one template. The second reading varies what the state's **second slot** holds,
-//! because that is where the walk used to stop; the third reads the graph the
-//! refusal was about.
+//! buffer it filled; the codomain's position is the loop's result, not a write node.
+//! The reading is the check's refusal, or a run's answer (the last iteration's store
+//! wins), and the lowered body with the store's own block named. The measured
+//! reading is in `docs/notes/loop-conversion.md` §6.
 
 use lichen_compute::ComputeOperator;
 use lichen_compute::language::{LangProgram, new_store};
@@ -71,8 +67,8 @@ fn probe_a_loop_that_writes() {
     println!("[body]\n    {}", dump_body(LOOP));
 }
 
-/// The lowered body, block by block: the write's own block is the reading, because a
-/// store inside the step is the whole point.
+/// The lowered body, block by block: the write's own block is the reading, since a
+/// store in the step is the point.
 fn dump_body(body: &str) -> String {
     use lichen_kernel_ir::{KernelInstr, ValueDef};
 
@@ -128,8 +124,8 @@ fn dump_body(body: &str) -> String {
     lines.join("\n    ")
 }
 
-/// The same fold with the state's second slot holding something else, so the place the
-/// walk stops at is the slot's own contents.
+/// The same fold with the state's second slot holding something else: the place the
+/// walk stops at is the slot's contents.
 #[test]
 fn probe_the_state_slot_the_walk_stops_at() {
     let _slot = common::slot();
@@ -159,8 +155,8 @@ fn probe_the_state_slot_the_walk_stops_at() {
     }
 }
 
-/// The graph the refusal is about: the kernel body's own return node, what that node
-/// holds, and the chain a walk would follow from it.
+/// The graph the refusal is about: the kernel body's return node, what it holds, and
+/// the chain a walk follows from it.
 #[test]
 fn probe_the_graph_a_loop_body_leaves() {
     let _slot = common::slot();

@@ -2,27 +2,11 @@
 //!
 //! # Invariant
 //!
-//! Print-only. Each variant differs from the others in one spelling of the `if`, and the
-//! reading is five things: the refusal the check recorded, the comparison nodes the graph
-//! holds, each one's operand classes, the step at which `Module::parameter_value_path`'s
-//! walk stops, and the count of comparison instructions the lowered body carries.
-//!
-//! **Where the doubling is, measured.** The graph is not where it lives: the refusing
-//! spellings and the clean control hold the same 13 comparison nodes in the same classes.
-//! The body is: with the selector wrapped in an addition (`(s(0) > 1) + 0`) the walk
-//! lowers, and the surface operator emits `Gt` over **the routed call's own result** —
-//! `Bin(Gt)[block parameter, 1]` then `Bin(Gt)[that, 1]`. The four order comparisons
-//! are routed through the prelude's bindings, so one source `>` is two nodes (an
-//! operator and an `Apply` of a frozen callee) and both emit; only the state case takes
-//! the second one over the first.
-//!
-//! **Why the second emission ranges over the first, measured.** The surface operator's
-//! operand is the state read, and `parameter_value_path` cannot walk it: the walk reaches
-//! that `Index` node and `operands_of` fails on it (`walk … -> no operands`), so the
-//! reading is [`None`]. `Lower::loop_value` therefore cannot place the read as a block
-//! parameter, `Lower::value_inner` falls through to `define_in`, and `define_in` answers
-//! the class member that already computed — the routed comparison. A clone's operand
-//! array being unreadable is the defect; the `None` is its symptom.
+//! Print-only. Each variant differs in one spelling of the `if`; the reading is five
+//! things: the refusal the check recorded, the comparison nodes the graph holds, each
+//! one's operand classes, the step at which `Module::parameter_value_path`'s walk stops,
+//! and the comparison count the lowered body carries. The measured doubling is in
+//! `docs/notes/operator-gaps.md`.
 
 use super::common;
 use lichen_compute::language::LangProgram;
@@ -70,8 +54,8 @@ fn is_order_comparison(name: &str) -> bool {
     matches!(name, "Gt" | "Lt" | "Geq" | "Leq")
 }
 
-/// The operator's own name, structural operators included — `Index` and `Apply`
-/// are where the clone's own kind differs from what the refusal hinges on.
+/// The operator's own name, structural operators included — `Index` and `Apply` are where
+/// the clone's kind differs.
 fn operation_name(operation: &Operation<LangProgram>) -> String {
     if let Some(operator) = AsEnum::<TypeOperator>::as_enum(&operation.operator) {
         return operator_name(&operator);
@@ -91,8 +75,8 @@ fn node_name(module: &Module<LangProgram>, node: NodeId) -> String {
     }
 }
 
-/// Whether an operand array the walk could not read is still a node of the module,
-/// and whether it still holds an array value.
+/// Whether an unreadable operand is still a node of the module, and whether it still
+/// holds an array value.
 ///
 /// # Invariant
 ///
@@ -135,8 +119,8 @@ fn operand_fate(module: &Module<LangProgram>, node: NodeId) -> String {
     }
 }
 
-/// The `Index` chain `Module::parameter_value_path` walks, step by step, so the step a
-/// clone's read stops at is named rather than inferred.
+/// The `Index` chain `Module::parameter_value_path` walks, step by step: the step a
+/// clone's read stops at is named.
 ///
 /// # Invariant
 ///
@@ -226,8 +210,7 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
     format!("{} -> depth cut", steps.join(" -> "))
 }
 
-/// How many `Gt` nodes the graph holds, and how many comparison instructions the lowered
-/// body carries — through a refusal as much as through a clean check.
+/// How many `Gt` nodes the graph holds, and how many comparisons the lowered body carries.
 ///
 /// # Invariant
 ///
@@ -266,8 +249,8 @@ fn counts(source: &str) -> String {
             graph_gts += 1;
         }
     }
-    // The body is only lowered when the check reached it; a refusal from the body walk
-    // leaves no fragment to count, so the count is the clean check's alone.
+    // The body is only lowered when the check reached it; a refusal leaves no fragment
+    // to count.
     if !clean {
         return format!(
             "{refusal}; graph: {graph_gts} order-comparison node(s); body: not lowered"
@@ -303,16 +286,16 @@ fn counts(source: &str) -> String {
     )
 }
 
-/// The node every route of a comparison shares: its own operands, the routed call that
-/// also carries them, and the conditional that selects on it.
+/// The node every route of a comparison shares: its operands, the routed call, and the
+/// conditional that selects on it.
 ///
 /// # Invariant
 ///
 /// The four order comparisons are **routed through the prelude's bindings**, so one source
 /// `>` is two nodes in the graph — a `TypeOperator` operator and an `Apply` of a frozen
-/// callee — and both emit a comparison when the body walk meets them. A doubled comparison
-/// is therefore a question about which operands each of the two routes reads, so all three
-/// are printed together, each against its class root.
+/// callee — and both emit a comparison. A doubled comparison is a question about which
+/// operands each of the two routes reads, so all three are printed together, each
+/// against its class root.
 fn dump_comparisons(source: &str) -> String {
     let report = common::check(source);
     let Some(build) = report.build else {
@@ -359,9 +342,8 @@ fn dump_comparisons(source: &str) -> String {
                 .unwrap_or_else(|| "<no operand array>".to_string());
             lines.push(format!("operator  {name} {}", read(id)));
             lines.push(format!("            operands [{items}]"));
-            // The surface operator's own operands are where the clone's state read
-            // has to be recognised; a template that answers and a clone that does not
-            // is the whole difference between the two lowerings.
+            // The surface operator's operands are where the clone's read must be
+            // recognised: a template answers, a clone does not.
             if is_order_comparison(&name) {
                 for item in operation
                     .operand
@@ -440,10 +422,8 @@ fn dump_comparisons(source: &str) -> String {
             lines.push(format!("routed    Apply {}", read(id)));
             lines.push(format!("            operands [{operands}]"));
             lines.push(format!("            leaves   {argument_leaves}"));
-            // The comparison's own operands are the reading: a leaf that names a
-            // state slot must lower to a block parameter, and one that does not is
-            // what the doubling ranges over. A two-leaf routed call is the
-            // comparison's own route; the one-leaf ones are the index reads.
+            // The comparison's own operands are the reading: a leaf naming a state slot
+            // must lower to a block parameter.
             let state = module.nodes.iter().find_map(|(candidate, _)| {
                 (module.callee_function(candidate) == looping_function(module))
                     .then(|| module.operands_of(candidate).ok())
@@ -559,8 +539,7 @@ fn dump_comparisons(source: &str) -> String {
                     members.join(", ")
                 ));
                 // A routed selector emits over its argument's leaves, so each leaf is
-                // read with the operator it carries of its own. A routed apply may be
-                // reached through its type side, so the value side is followed too.
+                // read with the operator it carries of its own.
                 if own == "an Apply" {
                     let mut frontier = vec![selector];
                     if let Some(value_side) = module.apply_pairs.get(&selector).copied() {
@@ -656,8 +635,8 @@ fn run_answer(source: &str) -> String {
     format!("answered {:?}", common::float_array(&module, &value))
 }
 
-/// The lowered body, instruction by instruction, so the two comparisons the order
-/// comparison emits are read with the operands each of them was given.
+/// The lowered body, instruction by instruction, so the two comparisons are read with
+/// the operands each was given.
 ///
 /// # Invariant
 ///
@@ -703,10 +682,8 @@ fn probe_the_body_an_if_in_a_fold_lowers_to() {
         ("one_lt_state", "1 < s(0)", "1.0", "0.0"),
         ("state_gt_1_equal_arms", "s(0) > 1", "1.0", "1.0"),
         ("state_eq_2", "s(0) == 2", "1.0", "0.0"),
-        // **The selector is an addition, not the comparison**: `value_is_comparison`
-        // is false for `Add`, so the body walk lowers and the body's own instructions
-        // are readable. What the comparison itself emitted is one of those
-        // instructions' arguments.
+        // **The selector is an addition, not the comparison**: `value_is_comparison` is
+        // false for `Add`, so the body lowers.
         ("state_gt_1_plus_zero", "(s(0) > 1) + 0", "1.0", "0.0"),
         ("leaf_gt_1_plus_zero", "(c.taps > 1) + 0", "1.0", "0.0"),
         ("state_eq_2_plus_zero", "(s(0) == 2) + 0", "1.0", "0.0"),
