@@ -34,15 +34,16 @@ compute.launch k 5
     let parallel = r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.a Int}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 69)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value float2int (int2float i + 0.5)))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value float2int (int2float i + 0.5))))))
 }
 k = compute.parallel f "BACKEND" Out
 out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
-((compute.read ((compute.Read _)(.from out.z, .at 0)) : Float), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Float), (compute.read ((compute.Read _)(.from out.z, .at 68)) : Float), compute.collect out.z)
+((compute.read ((compute.Read _)(.from out.z, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 68)) : Int), compute.collect out.z)
 "#;
     mark("first program start");
     let (first_module, first_value, _first_ty) = common::run(source);
