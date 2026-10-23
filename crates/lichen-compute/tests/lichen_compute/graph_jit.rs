@@ -146,21 +146,21 @@ fn fail(source: &str) -> Vec<String> {
 /// and the write is the codomain field's value (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
 In1  = struct{.a Int}
-Out1 = struct{.z (compute.Buf Int)}
+Out1 = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
 Par1 = struct{.n Int, .in In1}
 f1 = (k : Par1) => {
   i = compute.range k.n
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i + 10)))))
 }
 k1 = compute.parallel f1 "gpu" Out1
-In2  = struct{.b (compute.Buf Int)}
-Out2 = struct{.w (compute.Buf Int)}
+In2  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
+Out2 = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
 Par2 = struct{.n Int, .in In2}
 f2 = (k : Par2) => {
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a + a)))))
 }
 k2 = compute.parallel f2 "gpu" Out2
@@ -176,7 +176,7 @@ const FILL: &str = r#"
 Fill = struct{.n Int}
 fill_raw = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length 3))
   ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value 1)))))
 }
 filler = compute.parallel fill_raw "cpu" Out1
@@ -449,21 +449,21 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
   compute = import "compute.lichen"
 ---
 In1  = struct{.a Int}
-Out1 = struct{.z (compute.Buf Int)}
+Out1 = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
 Par1 = struct{.n Int, .in In1}
 f1 = (k : Par1) => {
   i = compute.range k.n
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i)))))
 }
 k1 = compute.parallel f1 "gpu" Out1
-In2  = struct{.b (compute.Buf Int)}
-Out2 = struct{.w (compute.Buf Int)}
+In2  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
+Out2 = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
 Par2 = struct{.n Int, .in In2}
 f2 = (k : Par2) => {
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a)))))
 }
 k2 = compute.parallel f2 "cpu" Out2
@@ -549,21 +549,21 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
   compute = import "compute.lichen"
 ---
 In1  = struct{{.a Int}}
-Out1 = struct{{.z (compute.Buf Int)}}
+Out1 = struct{{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}}
 Par1 = struct{{.n Int, .in In1}}
 f1 = (k : Par1) => {{
   i = compute.range k.n
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i + 10)))))
 }}
 k1 = compute.parallel f1 "{backend}" Out1
-In2  = struct{{.b (compute.Buf Int)}}
-Out2 = struct{{.w (compute.Buf Int)}}
+In2  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}}
+Out2 = struct{{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}}
 Par2 = struct{{.n Int, .in In2}}
 f2 = (k : Par2) => {{
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
   ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a + a)))))
 }}
 k2 = compute.parallel f2 "{backend}" Out2
