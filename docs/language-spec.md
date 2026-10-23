@@ -141,6 +141,13 @@ farg     := '.' name expr                         -- named instantiation argumen
   leave a hole the context unifies.  `_` is **never a name**: it cannot be
   bound (`_ = 5`) or used as a lambda parameter (`_ => e`) — both are parse
   errors.  The discard idiom is gone; use a real name.
+- **Literals are expressions.**  `0`, `1.5`, `"x"` are Exprs like any other: each
+  has its own value, its own type and its own attributes, decided by the literal
+  rather than filled in from an annotation.  A constant literal stands for one
+  value, so its perspective is `0` — the same on every lane (the reference's
+  `grid[1]`) — while its doc and refinement positions constrain nothing (`@any`).
+  The **`_` literal** is the one whose every attribute is undecided: a hole the
+  context may bind.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
 - **Strings:** `"…"` with no escape characters, and it may span newlines; the
@@ -424,6 +431,35 @@ maps every span back to the original file.
 
 ## 3. Semantics
 
+- **Everything is an expression, and an expression is its attributes.**  An
+  expression is the record of its parts: its **value**, its **type**, and one
+  expression per **attribute** position (`#`, `?`, `!`).  Each of those parts is
+  itself an expression of the same record shape — **the type position holds an
+  expression too**: a type value is a `[shape, kind]` expression (`Int : Type`),
+  not a separate kind of object, so `type_of x.to` is a field read of the type
+  expression exactly as `x.to` is of the value.  The model is uniform at every
+  level: `1 # (4 # 2)`'s perspective is the expression `4 # 2`, and a compound's
+  element is the same record again (`tuple{Int # 2}`).  An annotation is
+  **syntax** — `e : T # p ? d ! q` — not a change to the expression's shape: each
+  position it spells is **replaced** by the expression written there and
+  **unified** with the one the value already has, and that position's own order
+  (`is_subtype`) decides whether a broader value is accepted (`4 | 8`).
+- **Every attribute is handled like the type.**  The type position is the model
+  for all of them: an attribute position holds an expression, it is unified the way
+  the type is (only the attribute's own order decides relaxation), it rides the
+  function's parameter and return pair so an applied clone re-materializes it per
+  call, and an absent position is an undecided cell — never a special wildcard
+  fill.  An expression's type is itself an expression, and a value/type unification
+  pairs their attribute positions **one-to-one in canonical order** — the type's
+  `#` with the value's `#`, its `?` with the value's `?`, its `!` with the value's
+  `!` — so the type expression carries the same attribute structure the value has.
+  The pairing is **recursive into the compound's element positions**: a struct's,
+  a tuple's or an array's element slot pairs with the value's element slot, so a
+  field's attribute is carried by the field's type expression — `x.to`'s type and
+  `x.to`'s attribute are the same read of the same slot.
+  There is no attribute-specific record, table or reference: a return's `#` is the
+  return expression's `#`, and a call's `#` is the applied clone's, exactly as its
+  type is.
 - **Programs are pure expressions.**  The checker compiles the IR, runs the
   definition pass (so apply-time type checks fire), and the program's value is
   the evaluation of its root: an `Int`, a `string`, a tuple, an array, a table,
@@ -857,13 +893,9 @@ maps every span back to the original file.
   apply's **clone** mints a fresh undecided cell in its place — carrying that
   one node would put it in a class the caller also holds, and would make every
   unify it met return before comparing anything.
-- **`_` is undecided in every attribute.**  The wildcard above is what a
-  *concrete* value's un-spelled position holds; `_` is not the statement that it
-  has no claim — it is a hole over the whole expression, and **every attribute
-  position of a `_` is an undecided cell**, not the wildcard and not the absent
-  top.  `(_ ! in_num)` therefore declares the refinement alone: its perspective
-  and doc positions stay open, and an attribute read of `_` answers a hole the
-  context may bind.
+- **A literal's attributes.**  A literal is an Expr and its attributes are its
+  own (§1, "Literals are expressions"); the `_` literal is the one whose
+  attributes are all undecided cells.
 - **The `_` placeholder.**  A `_` in any position compiles to an undecided
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow

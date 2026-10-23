@@ -46,7 +46,9 @@ impl<P: Program> Module<P> {
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
-        // The attribute tail is the checker's reconciliation, not the engine's.
+        // Every position is compared, the attribute positions included: the checker
+        // only decides the order (`declared | value`) after the compare
+        // (spec §3, "Every attribute is handled like the type").
         let lengths = (
             unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
             unsafe { self.array_items(argument) }.map(|items| items.len()),

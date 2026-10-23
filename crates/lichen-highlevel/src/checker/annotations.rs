@@ -189,35 +189,6 @@ where
             .flatten()
     }
 
-    /// The field of the enclosing parameter an attribute value follows, or [`None`]
-    /// for a value that names no part of it.
-    ///
-    /// # Invariant
-
-    /// The field of the enclosing parameter an attribute value follows, or [`None`]
-    /// for a value that names no part of it.
-    ///
-    /// # Invariant
-    /// Recognised by **shape** — a call whose argument is the parameter or one of its
-    /// fields — never by the callee's name, so any `xxx_of` vocabulary function that
-    /// takes the parameter qualifies. `None` inside the returned option is the whole
-    /// parameter; `Some(name)` is that field.
-    fn attribute_reference(&self, pe: ExprId) -> Option<Option<&'static str>> {
-        let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
-            return None;
-        };
-        let Some(parameter) = self.current_parameters.last().copied() else {
-            return None;
-        };
-        if argument == parameter {
-            return Some(None);
-        }
-        match self.ir[argument].kind {
-            ExprKind::NamedField { container, name } if container == parameter => Some(Some(name)),
-            _ => None,
-        }
-    }
-
     /// The node that holds the `[value, type]` pair an attribute value answers with.
     ///
     /// # Invariant
@@ -238,6 +209,18 @@ where
         term
     }
 
+    /// The call's applied return slot for `marker`: the same pair whose type slot is
+    /// the call's type, so a reference's attribute is read where the type is
+    /// (spec §3, "Every attribute is handled like the type").
+    fn applied_attribute_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
+        let apply = self.type_applies.get(&pe)?;
+        let pair = self.module.applied_pairs.get(apply).copied()?;
+        self.stated_attributes(pair)
+            .into_iter()
+            .find(|(attribute, _)| attribute.order_index() == marker.order_index())
+            .map(|(_, slot)| slot)
+    }
+
     /// An expression's attribute slot for `marker` — its own slot, else the
     /// attribute's *missing* slot.
     ///
@@ -246,6 +229,15 @@ where
     /// them directly. Only meaningful once the expression is compiled.
     pub(super) fn attr_or_missing(&mut self, e: ExprId, marker: &P::Attr) -> NodeId {
         if let Some(slot) = self.state[e].attr {
+            return slot;
+        }
+        // `_` is undecided in every attribute: its pair carries a hole per position,
+        // not the missing value (spec §1, "Literals and their attributes").
+        if let ExprKind::Placeholder = self.ir[e].kind
+            && let Some(pair) = self.state[e].term
+            && let Some(slot) = self.slot_attribute(pair, marker.order_index() as u32)
+            && let Some(slot) = slot.dynamic()
+        {
             return slot;
         }
         self.missing_slot_of(marker, self.loc(e, 2))
@@ -632,18 +624,13 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
-                // A value computed from a part of the parameter is a **reference**.
-                if let Some(field) = self.attribute_reference(pe) {
-                    self.attr_refs.insert(e, (*marker, field));
-                    // The reference's slot is a hole: the call site resolves it.
-                    let cell = self.fresh_cell();
-                    constraint_slot = Some(cell);
-                    slots.push(cell);
-                    continue;
-                }
-                // The slot is the annotation value's `[value, type]` term pair, the
-                // one shape every attribute shares.
-                let slot = self.annotation_value_slot(pe);
+                // The slot is the call's applied return slot when the value is a call —
+                // the same pair whose type slot is its type; otherwise the expression's
+                // own `[value, type]` pair (spec §3, "Every attribute is handled like
+                // the type").
+                let slot = self
+                    .applied_attribute_slot(pe, marker)
+                    .unwrap_or_else(|| self.annotation_value_slot(pe));
                 if ext.is_label() {
                     // A label is metadata: it carries no apply-time slot, and its
                     // slot is the annotation value's pair like any other's.
@@ -703,9 +690,20 @@ where
             }
         }
         // The pair is **full width**: settled slots canonically, wildcards elsewhere
-        // (`docs/notes/array-attribute-view.md`).
+        // (`docs/notes/array-attribute-view.md`); a `_` value's positions are its own
+        // holes (spec §1, "Literals and their attributes").
         let any = self.any();
-        let mut width: Vec<NodeId> = vec![any; P::Attr::ORDER.len()];
+        let placeholder = matches!(self.ir[value].kind, ExprKind::Placeholder);
+        let mut width: Vec<NodeId> = (0..P::Attr::ORDER.len())
+            .map(|index| {
+                if !placeholder {
+                    return any;
+                }
+                self.slot_attribute(value_term, index as u32)
+                    .and_then(|node| node.dynamic())
+                    .unwrap_or(any)
+            })
+            .collect();
         for (slot, marker) in slots.iter().zip(tail.iter()) {
             width[marker.order_index()] = *slot;
         }

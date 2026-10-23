@@ -42,7 +42,6 @@ where
         let function = self.module.begin_function(return_block, parent);
         self.function_of.insert(e, function);
         self.function_stack.push((function, Some(e)));
-        self.current_parameters.push(parameter);
         // The `@loop` mark crosses into the graph here, where the shell exists and
         // the body does not (loop-conversion.md §8.6).
         if looping {
@@ -166,26 +165,6 @@ where
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
-        // The return's attribute marker and the parameter field it follows are
-        // definition-time shape data, like the return type.
-        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
-            let tail = self.schema_tail(r#return).to_vec();
-            self.module.functions[function].return_marker = tail
-                .iter()
-                .rev()
-                .find(|marker| {
-                    self.attribute_extension(*marker)
-                        .is_some_and(|ext| !ext.is_label())
-                })
-                .map(|marker| marker.order_index() as u32);
-            if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
-                && let Some(parameter_type) = self.state[parameter].ty
-            {
-                let position = self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
-                self.module.functions[function].return_field =
-                    position.map(|position| position as u32);
-            }
-        }
         self.scopes.pop();
         self.current_block = saved;
         // The value node pre-exists — the self-reference applied it during the
@@ -211,7 +190,6 @@ where
         // to it now reads the function type.
         self.module.unify(ty_cell, pair);
         self.function_stack.pop();
-        self.current_parameters.pop();
         self.state[e].term = Some(pair);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(pair);
@@ -301,6 +279,12 @@ where
 
     /// The argument's field a computed certificate names: an `Index` of the bound
     /// parameter clone carries the field position.
+    ///
+    /// # Invariant
+    /// The certificate may be a vocabulary call over the reference
+    /// (`perspective_of x.to`); the reference is that call's argument, so the walk
+    /// looks through an `Apply` first (spec §3, "Every attribute is handled like
+    /// the type").
     fn certificate_field(
         &mut self,
         certificate: NodeId,
@@ -308,10 +292,50 @@ where
         argument: ExprId,
     ) -> Option<ExprId> {
         let operation = self.module.node_operation(certificate)?;
-        if !matches!(
-            AsEnum::<LowOperator>::as_enum(&operation.operator),
-            Some(LowOperator::Index)
-        ) {
+        let operator = AsEnum::<LowOperator>::as_enum(&operation.operator);
+        if matches!(operator, Some(LowOperator::Apply)) {
+            let operand = operation.operand;
+            let called = match operand {
+                // SAFETY: `operand` is a live node of this module.
+                Some(operand) => unsafe { self.module.array_items(operand) }
+                    .and_then(|items| items.get(1).map(|item| item.node))
+                    .and_then(|node| node.dynamic()),
+                None => None,
+            };
+            // The reference's own field read is the call's argument; its position
+            // names the argument's field.
+            let called = match called {
+                Some(node) => node,
+                None => return None,
+            };
+            let field_operation = self.module.node_operation(called);
+            let Some(field_operation) = field_operation else {
+                return None;
+            };
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&field_operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                return None;
+            }
+            let operand = field_operation.operand;
+            let position = operand.and_then(|operand| {
+                // SAFETY: `operand` is a live node of this module.
+                unsafe { self.module.array_items(operand) }
+                    .and_then(|items| items.get(1).map(|item| item.node))
+                    .and_then(|node| node.dynamic())
+            });
+            let Some(position) = position else {
+                return None;
+            };
+            self.module.evaluate_node_deep(position, None);
+            let value = self.module.node_value(AnyNodeId::Dynamic(position))?;
+            let LowValue::USize(position) = AsEnum::<LowValue>::as_enum(&value)? else {
+                return None;
+            };
+            return self.argument_field(argument, position);
+        }
+        if !matches!(operator, Some(LowOperator::Index)) {
             return None;
         }
         let operand = operation.operand?;
@@ -335,6 +359,7 @@ where
             return None;
         }
         let position = items.get(1)?.node.dynamic()?;
+        self.module.evaluate_node_deep(position, None);
         let value = self.module.node_value(AnyNodeId::Dynamic(position))?;
         let LowValue::USize(position) = AsEnum::<LowValue>::as_enum(&value)? else {
             return None;
@@ -475,15 +500,11 @@ where
             ),
             _ => self.slot_pair(self.current_block, argument_value, argument_type),
         };
-        // The type side's argument: the same slots with an undecided value, so
-        // its check never evaluates the argument's value.
-        let type_value = self.fresh_cell();
-        let type_argument_pair = match (pair_marker, argument_attr) {
-            (Some(marker), Some(attr)) => {
-                self.attribute_pair(self.current_block, type_value, argument_type, &marker, attr)
-            }
-            _ => self.slot_pair(self.current_block, type_value, argument_type),
-        };
+        // The type side's argument is the value side's pair: the type check reads the
+        // same slots, the value's included, so a return attribute that names a field
+        // of the parameter resolves through that pair (spec §3, "Every attribute is
+        // handled like the type").
+        let type_argument_pair = value_argument_pair;
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return pair.
         let c = self.fresh_cell();
@@ -596,7 +617,8 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
-        // The applied clone's return pair states the call's attribute.
+        // A body that returns its parameter hands the call the argument itself: the
+        // parameter's attribute slot is the caller's own.
         let returns_parameter = match callee {
             Some(AnyFunctionId::Dynamic(fid)) => {
                 self.module.functions[fid].parameter == self.module.functions[fid].r#return
@@ -606,35 +628,11 @@ where
             }
             None => false,
         };
-        // A body that states a reference hands the call site the field it follows.
-        let mut field_certificate = false;
-        let (return_marker, return_field) = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => (
-                self.module.functions[fid].return_marker,
-                self.module.functions[fid].return_field,
-            ),
-            Some(AnyFunctionId::Static(sref)) => (
-                self.module.static_function_return_marker(sref),
-                self.module.static_function_return_field(sref),
-            ),
-            None => (None, None),
-        };
-        if let (Some(position), Some(index)) = (return_field, return_marker)
-            && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
-            && let Some(ext) = self.attribute_extension(&marker)
-            && let Some(field) = self.argument_field(argument, position as usize)
-        {
-            let provided = self.provided_slot(field, &marker, ext);
-            self.state[e].attr = Some(provided);
-            self.merged_tails.insert(e, vec![marker]);
-            field_certificate = true;
-        }
+        // The applied clone's return pair states the call's attribute — the same pair
+        // whose type slot states its type (spec §3, "Every attribute is handled like
+        // the type").
         let certificate = match returns_parameter {
             true => None,
-            false if field_certificate => None,
-            // A callee that states no attribute hands the call nothing
-            // (`docs/notes/attributes.md`).
-            false if return_marker.is_none() => None,
             false => self
                 .module
                 .applied_pairs
@@ -656,12 +654,21 @@ where
                 // A hole: the result follows a field the clone's reference names, or
                 // the argument's whole provided slot.
                 None => {
-                    let field = self
+                    let mut field = self
                         .module
                         .applied_parameters
                         .get(&type_apply)
                         .copied()
                         .and_then(|parameter| self.certificate_field(value, parameter, argument));
+                    // The clone that bound the argument's value is the value side's,
+                    // and the certificate's class may name that one.
+                    if field.is_none()
+                        && let Some(value_apply) = self.module.apply_pairs.get(&type_apply).copied()
+                        && let Some(parameter) =
+                            self.module.applied_parameters.get(&value_apply).copied()
+                    {
+                        field = self.certificate_field(value, parameter, argument);
+                    }
                     let provided = match field {
                         Some(field) => self.provided_slot(field, &marker, ext),
                         None => self.provided_slot(argument, &marker, ext),

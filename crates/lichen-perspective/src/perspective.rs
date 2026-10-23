@@ -145,6 +145,12 @@ where
         Some(LowValue::USize(0))
     }
 
+    /// A constant literal is the same on every lane, so its perspective is `0`,
+    /// the top (spec §1, "Literals are expressions").
+    fn literal_value(&self) -> Option<LowValue> {
+        Some(LowValue::USize(0))
+    }
+
     /// The absent form is the concrete constant `0`, so reconciliation reads
     /// it and one node serves every absent occurrence.
     fn share_missing_slot(&self) -> bool {

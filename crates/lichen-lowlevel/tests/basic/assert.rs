@@ -354,8 +354,6 @@ fn gc_moves_an_assert_condition_with_its_function() {
         r#return: ret,
         parameter: param,
         return_type: NodeId::default(),
-        return_marker: None,
-        return_field: None,
         static_origin: None,
         template: None,
         asserts: vec![condition],

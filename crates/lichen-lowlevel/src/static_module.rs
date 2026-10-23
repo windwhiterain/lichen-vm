@@ -83,26 +83,6 @@ impl<P: Program> Module<P> {
             .is_some_and(|function| function.parameter == function.r#return)
     }
 
-    /// The static mirror of [`Function::return_field`].
-    ///
-    /// # Invariant
-    /// Shape data recorded at definition time, so a frozen callee states the field its
-    /// return's attribute follows (`docs/notes/array-attribute-view.md`).
-    pub fn static_function_return_field(&self, function: StaticFunctionRef) -> Option<u32> {
-        self.static_module(function.module)
-            .functions
-            .get(function.index.0)
-            .and_then(|function| function.return_field)
-    }
-
-    /// The static mirror of [`Function::return_marker`].
-    pub fn static_function_return_marker(&self, function: StaticFunctionRef) -> Option<u32> {
-        self.static_module(function.module)
-            .functions
-            .get(function.index.0)
-            .and_then(|function| function.return_marker)
-    }
-
     /// Read a static node's solved value verbatim, or [`None`] for a residual
     /// with no cached answer.
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {

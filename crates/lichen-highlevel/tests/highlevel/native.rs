@@ -60,7 +60,7 @@ fn build(operator: &'static dyn NativeOp<ProbeProgram>) -> Build<ProbeProgram> {
     Checker::<ProbeProgram>::build_in_attr_native(
         probe_call().ir,
         registry,
-        Box::new(|_: &NoAttr| -> &'static dyn AttrExt<ProbeProgram> { unreachable!() }),
+        Box::new(|_: &NoAttr| -> &'static dyn AttrExt<ProbeProgram> { &NoAttr }),
         ops(operator),
     )
 }

@@ -226,6 +226,13 @@ pub trait Ctx<P: Program> {
 pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
     /// Build this literal's value and type nodes (and their pair).
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild;
+
+    /// Whether the pair is a value expression of this occurrence (a value
+    /// literal), so the literal decides its attribute positions itself; a type
+    /// constant is a shared type value and answers `false`.
+    fn decides_attributes(&self) -> bool {
+        true
+    }
 }
 
 /// The built-in int literal: stores just the value, and references the shared
@@ -314,6 +321,11 @@ where
             ty,
         }
     }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
 }
 
 /// The built-in `Float` type constant — `Float : Type`. A unit literal whose
@@ -334,6 +346,11 @@ where
             value: value_node,
             ty,
         }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
     }
 }
 
@@ -356,6 +373,11 @@ where
             ty,
         }
     }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
 }
 
 /// The built-in `Type` type constant — `Type : Type`. A unit literal whose pair
@@ -373,6 +395,11 @@ where
             value: ctx.type_marker_node(),
             ty: ctx.universe(),
         }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
     }
 }
 
@@ -395,6 +422,11 @@ where
         let ty = ctx.fresh();
         let pair = ctx.pair(value, ty);
         LiteralBuild { pair, value, ty }
+    }
+
+    /// The wildcard constrains nothing, so its own attributes are the wildcard.
+    fn decides_attributes(&self) -> bool {
+        false
     }
 }
 
@@ -429,6 +461,15 @@ where
             HighProgramLiteral::TypeType(lit) => lit.build(ctx),
             HighProgramLiteral::Any(lit) => lit.build(ctx),
         }
+    }
+
+    /// A value literal decides its own attributes; a type constant is a shared
+    /// type value, and the wildcard constrains nothing, so neither does.
+    fn decides_attributes(&self) -> bool {
+        matches!(
+            self,
+            HighProgramLiteral::Int(_) | HighProgramLiteral::Float(_) | HighProgramLiteral::Str(_)
+        )
     }
 }
 

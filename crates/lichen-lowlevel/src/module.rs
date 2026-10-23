@@ -678,8 +678,6 @@ impl<P: Program> Module<P> {
             parameter: NodeId::default(),
 
             return_type: NodeId::default(),
-            return_marker: None,
-            return_field: None,
             static_origin: None,
             template: None,
             parent,

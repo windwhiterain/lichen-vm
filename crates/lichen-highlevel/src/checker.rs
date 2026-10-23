@@ -148,11 +148,6 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
-    /// The enclosing lambdas' parameters, innermost last: an attribute naming
-    /// one of their fields is a **reference**.
-    current_parameters: Vec<ExprId>,
-    /// The attribute references an expression states: the marker and the field.
-    attr_refs: HashMap<ExprId, (P::Attr, Option<&'static str>)>,
     /// The `@gc` expressions this build compiled.
     ///
     /// # Invariant
@@ -569,8 +564,6 @@ where
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
-            current_parameters: Vec::new(),
-            attr_refs: HashMap::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
@@ -1540,10 +1533,34 @@ where
                 //
                 // Invariant: a type-constant literal builds the universe.
                 let built = lit.build(self);
-                self.state[e].term = Some(built.pair);
+                // A value literal decides its own attribute positions: each is the
+                // `[value, type]` pair its attribute's extension supplies, or the
+                // wildcard when the literal states nothing (spec §1, "Literals are
+                // expressions").
+                let pair = if lit.decides_attributes() {
+                    let mut items = vec![built.value, built.ty];
+                    for marker in P::Attr::ORDER {
+                        let slot = match self
+                            .attribute_extension(&marker)
+                            .and_then(|ext| ext.literal_value())
+                        {
+                            Some(value) => {
+                                let value = self.value_node(P::Value::from(value));
+                                self.pair(value, self.int_type)
+                            }
+                            None => self.any(),
+                        };
+                        items.push(slot);
+                    }
+                    let layout = self.full_width_layout();
+                    self.array_node_with_layout(self.current_block, &items, layout)
+                } else {
+                    built.pair
+                };
+                self.state[e].term = Some(pair);
                 self.state[e].val = Some(built.value);
                 self.state[e].ty = Some(built.ty);
-                built.pair
+                pair
             }
             ExprKind::Parameter => {
                 // The function compiled its parameter pair before the body.
@@ -1631,7 +1648,17 @@ where
                 // Invariant: the kind slot is a cell, not the universe.
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
-                let pair = self.pair_of(val, ty_cell);
+                // `_` is undecided in every attribute: each attribute slot is a hole of
+                // its own, not the wildcard (spec §1, "Literals and their attributes").
+                let block = self.current_block;
+                let mut items = vec![val, ty_cell];
+                for _ in 0..P::Attr::ORDER.len() {
+                    let slot_value = self.fresh_cell();
+                    let slot_type = self.fresh_cell();
+                    items.push(self.slot_pair(block, slot_value, slot_type));
+                }
+                let layout = self.full_width_layout();
+                let pair = self.array_node_with_layout(block, &items, layout);
                 self.state[e].term = Some(pair);
                 self.state[e].val = Some(val);
                 self.state[e].ty = Some(ty_cell);

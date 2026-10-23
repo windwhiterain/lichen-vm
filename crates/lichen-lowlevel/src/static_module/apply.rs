@@ -193,7 +193,17 @@ impl<P: Program> Module<P> {
             }
             let node = match item.node {
                 AnyNodeId::Static(sref) if sref.module == ctx.module.key => {
-                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
+                    // The return copy rides the signature's remap, so a reference to the
+                    // parameter names the clone the apply bound the argument to
+                    // (spec §3, "Every attribute is handled like the type").
+                    let module = ctx.module.clone();
+                    let target = ctx.target;
+                    AnyNodeId::Dynamic(self.clone_static_signature_node(
+                        &module,
+                        sref.index,
+                        target,
+                        &mut ctx.remap,
+                    ))
                 }
                 other => other,
             };
@@ -217,6 +227,7 @@ impl<P: Program> Module<P> {
     pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
+        argument: NodeId,
         block: BlockId,
         node: NodeId,
     ) {
@@ -245,6 +256,20 @@ impl<P: Program> Module<P> {
         self.static_node_apply(parameter, &mut ctx);
         if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
             self.applied_parameters.insert(node, cloned_parameter);
+            // The parameter is bound to this call's argument, so a return attribute
+            // that names one of its fields resolves on this clone — the same binding
+            // the type slot gets (spec §3, "Every attribute is handled like the
+            // type"). The reporting side owns the failure.
+            let recorded = self.unify_errors.len();
+            let _ = self.apply_parameter_check(
+                cloned_parameter,
+                argument,
+                block,
+                node,
+                AnyFunctionId::Static(function),
+                cloned_parameter,
+            );
+            self.unify_errors.truncate(recorded);
         }
         self.applied_pairs.insert(node, applied);
     }
@@ -368,14 +393,10 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            // A node with no value is an operation: it keeps its frozen
-                            // reference, which the reader resolves in that module.
-                            if module.read(sref.index).is_some() {
-                                Dyn(self
-                                    .clone_static_signature_node(module, sref.index, block, remap))
-                            } else {
-                                item.node
-                            }
+                            // Every item rides the signature's remap, so a reference to
+                            // the parameter names the clone the apply binds
+                            // (spec §3, "Every attribute is handled like the type").
+                            Dyn(self.clone_static_signature_node(module, sref.index, block, remap))
                         }
                         node => node,
                     };
@@ -594,8 +615,6 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             return_type: NodeId::default(),
-            return_marker: None,
-            return_field: None,
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.
             static_origin: Some(sref),

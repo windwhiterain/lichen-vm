@@ -42,8 +42,9 @@ pub fn order_is_canonical<A: AttrSet>() -> bool {
         .all(|(position, attr)| attr.order_index() == position)
 }
 
-/// The highlevel's default attribute: its `AttrExt` is never reached, so the
-/// checker's machinery is inert.
+/// The highlevel's default attribute: its `AttrExt` is inert — only the literal
+/// hook is read (it answers `None`), so no schema carries the attribute and the
+/// checker's machinery stays inert.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NoAttr;
 impl AttrSpec for NoAttr {}
@@ -55,6 +56,27 @@ impl AttrSet for NoAttr {
     /// The first (and only) attribute of the inert set.
     fn order_index(&self) -> usize {
         0
+    }
+}
+
+/// The inert extension answers only the literal hook (with `None`, so a literal
+/// keeps the wildcard); every other entry point is unreachable because no schema
+/// carries the inert attribute.
+impl<P> AttrExt<P> for NoAttr
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    fn missing_value(&self) -> Option<LowValue> {
+        None
+    }
+
+    fn combine(&self, _ctx: &mut dyn Ctx<P>, _children: &[NodeId]) -> NodeId {
+        unreachable!("the inert attribute set carries no schema")
+    }
+
+    fn unify_slots(&self, _ctx: &mut dyn Ctx<P>, _a: NodeId, _b: NodeId, _loc: Loc) {
+        unreachable!("the inert attribute set carries no schema")
     }
 }
 
@@ -93,6 +115,17 @@ where
     /// Combine the sub-expressions' slots into one node; `children` are compiled,
     /// pre-padded with [`Self::missing_value`].
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId;
+
+    /// The value a **literal** carries in this attribute's position, or `None`
+    /// when a literal states nothing there (`@any`).
+    ///
+    /// # Invariant
+    /// A literal is an expression, so it decides its own attributes: this hook is
+    /// what it decides with, and it never depends on an annotation around it
+    /// (spec §1, "Literals are expressions").
+    fn literal_value(&self) -> Option<LowValue> {
+        None
+    }
 
     /// Unify two attribute slots: `a` is the found side, `b` the expected one,
     /// at the source-blind `loc`.
