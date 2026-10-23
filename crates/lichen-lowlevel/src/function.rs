@@ -327,8 +327,8 @@ impl<P: Program> Module<P> {
             minted: &mut minted,
         };
         // Walked before the return pair, so a nested closure captures this call's cells.
-        self.node_apply(parameter, &mut ctx);
         let applied = self.node_apply(r#return, &mut ctx);
+        self.node_apply(parameter, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
@@ -886,3 +886,4 @@ impl<P: Program> Module<P> {
         false
     }
 }
+
