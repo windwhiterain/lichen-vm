@@ -326,10 +326,7 @@ impl<P: Program> Module<P> {
             remap: &mut remap,
             minted: &mut minted,
         };
-        // The parameter is a walk entry point, so the unify fires even when the body never
-        // references it.  Idempotent.  It is walked **before** the return pair, so a nested
-        // closure the body mints captures this call's parameter clone and not the parameter
-        // node the call is about to clone away from.
+        // Walked before the return pair, so a nested closure captures this call's cells.
         self.node_apply(parameter, &mut ctx);
         let applied = self.node_apply(r#return, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
@@ -484,11 +481,7 @@ impl<P: Program> Module<P> {
         ) {
             return self.add_node(ctx.target, None, None);
         }
-        // Membership is the anchor chain test or a closure-scope hit; else in place.
-        // A closure is instantiated from its **template**, so a node owned by a function
-        // nested in that template is reached through the template as well: the clone's own
-        // id is not in any lexical chain, and a body node left outside the walk would keep
-        // reading the template's cells instead of this call's.
+        // A closure is instantiated from its template, whose body a clone never names.
         let anchor_template = self.functions[ctx.anchor].template;
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
             || anchor_template.is_some_and(|template| {
@@ -695,9 +688,7 @@ impl<P: Program> Module<P> {
                     // A clone of a materialized static closure is still that
                     // logical function, so the static origin travels with it.
                     static_origin,
-                    // The template is the **original** one: a closure cloned from a closure
-                    // still answers to the template it was built from, or the membership test
-                    // would read a per-call id no lexical chain names.
+                    // The original template: a clone of a clone still answers to it.
                     template: Some(self.functions[function].template.unwrap_or(function)),
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),

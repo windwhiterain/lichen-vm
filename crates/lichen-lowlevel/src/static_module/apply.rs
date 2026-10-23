@@ -562,12 +562,12 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// The body is walked through the *shared* remap, so its captured cells are cloned
+    /// The body walks the *shared* remap, so its captured cells are cloned
     /// alongside the applied parameter and re-join its class in the regroup. Its own scope
     /// nodes are re-tagged with the fresh owner and re-instantiated per call; captures,
     /// outside the scope, keep the enclosing owner and are read in place.
     ///
-    /// A frozen closure is re-homed **once** per pass ([`StaticApplyCtx::minted`]).
+    /// A closure is re-homed **once** per pass ([`StaticApplyCtx::minted`]).
     fn static_clone_function(
         &mut self,
         sref: StaticFunctionRef,
@@ -606,8 +606,7 @@ impl<P: Program> Module<P> {
             // An instance, not a template; the `@loop` mark does not travel here.
             looping: None,
         });
-        // The fresh id is recorded before the walk, so the closure's own value node
-        // resolves to this closure and not to a second one.
+        // Recorded before the walk: the closure's own value node names it again.
         ctx.minted.insert(sref, fresh);
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
@@ -626,12 +625,7 @@ impl<P: Program> Module<P> {
             }
             assert_clones.push(instantiated);
         }
-        // Re-stamp the closure's clones after the entry walks, so a capture is
-        // not re-owned by the closure.  The return pair and the parameter belong
-        // to the closure itself, so they are stamped beside the scope: a pair left
-        // under the enclosing owner's tag reads as a template fact and its apply
-        // references it in place, and the body then keeps reading the parameter
-        // node the call clones away from.
+        // Re-stamped after the walk: the pair and parameter belong to this closure.
         let mut own = Vec::with_capacity(scope.len());
         for &node in &scope {
             let clone = self.static_node_apply(node, ctx);

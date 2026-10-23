@@ -1,6 +1,4 @@
-//! Probe: at what arity does a linked family's entry run? Prints; asserts nothing.
-//!
-//! Reads native-link-library.md §19; the measured readings are beside it.
+//! Probe: at what arity a linked family's entry runs. Prints, asserts nothing.
 
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
@@ -280,8 +278,7 @@ fn build_frozen(
     Ok((report.build.unwrap(), store))
 }
 
-/// The **spliced** path: the wrapper's source is joined in front of the program
-/// and the spliced text compiles — the shape a `link` directive takes.
+/// The **spliced** path: the wrapper's source joined in front of the program.
 fn show_spliced(families: &str, body: &str) -> String {
     let source = format!("{families}\n({body})\n");
     let line_starts = lichen_language::lex::line_starts(&source);
@@ -365,8 +362,7 @@ fn wrapper_content() {
     }
 }
 
-/// The same case repeated inside one process: a per-process flip answers once,
-/// a per-module flip answers differently across the repeats.
+/// The same case repeated in one process: a per-module flip varies across repeats.
 #[test]
 fn same_process_repeats() {
     lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
