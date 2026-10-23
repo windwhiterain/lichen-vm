@@ -323,6 +323,9 @@ fn a_float_scale_beside_two_extents_records_and_answers_on_the_device() {
 /// difference is the whole of it.
 #[test]
 fn a_float_leaf_and_an_integer_value_are_refused_in_both_directions() {
+    // The run reaches the class check only once a backend is installed: with none, the
+    // refusal is the missing device and not the leaf's class.
+    let (_stub, _guard) = common::stub();
     assert_eq!(
         graph_of(&mismatched("Float", "Float")).nodes().len(),
         1,
