@@ -2269,7 +2269,7 @@ where
                     roles.output_classes.push(element);
                     Ok(())
                 }
-                LeafRole::Scalar => Err(role_refusal(path, "a buffer outside `.in`/`.out`")),
+                LeafRole::Scalar => Err(role_refusal(path, "a buffer outside `.in`")),
             };
         }
         // SAFETY: `shape` resolved from the field's own type term just above.

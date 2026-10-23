@@ -127,3 +127,74 @@ fn probe_the_codomain_may_hold_a_loops_result() {
         ),
     }
 }
+
+/// A per-lane constant selected by the index: the shape arbitrary literal data needs.
+///
+/// # Invariant
+/// The write's value is an `if` chain, which is how a fill kernel would write a literal
+/// that is not a formula of the lane index. Print-only: the reading is whether the body
+/// compiles (`docs/notes/kernel-buffer-declarations.md`).
+const SELECTED: &str = r#"
+--- compute = import "compute.lichen" ---
+Out = struct{.y (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (if i == 0 then 1.0 else 2.0))))))
+}
+k = compute.parallel fill "cpu" Out
+data = (compute.plrun k ((Fill)(.n 3)) : Out)
+compute.collect data.y : array{Float, 3}
+"#;
+
+#[test]
+fn probe_a_literal_selected_by_the_index() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(SELECTED, None, &mut store) {
+        Ok(text) => println!("[selected] answered {text}"),
+        Err(diagnostics) => println!(
+            "[selected] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+/// A **nested** `if` chain in the body: the shape a literal with three values needs.
+///
+/// # Invariant
+/// The two-arm chain above answers; a third arm refuses with the template's own message,
+/// so a fill kernel can build data of at most two distinct values until that is fixed
+/// (`docs/notes/kernel-buffer-declarations.md`).
+const NESTED: &str = r#"
+--- compute = import "compute.lichen" ---
+Out = struct{.y (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count 3, .element Float))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (if i == 0 then 1.0 else (if i == 1 then 2.0 else 3.0)))))))
+}
+k = compute.parallel fill "cpu" Out
+data = (compute.plrun k ((Fill)(.n 3)) : Out)
+compute.collect data.y : array{Float, 3}
+"#;
+
+#[test]
+fn probe_a_nested_chain_in_the_body() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(NESTED, None, &mut store) {
+        Ok(text) => println!("[nested] answered {text}"),
+        Err(diagnostics) => println!(
+            "[nested] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
