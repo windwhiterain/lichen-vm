@@ -53,3 +53,36 @@ fn probe_a_kernel_that_declares_its_output() {
         ),
     }
 }
+
+/// The declared length is the allocation: one lane fills a three-element buffer.
+const LENGTH: &str = r#"
+--- compute = import "compute.lichen" ---
+Three = struct{.y (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  y = compute.buffer ((compute.Buffer _)(.count 3, .element Float))
+  compute.write ((compute.Write _)(.to y, .at 0, .value 8.0))
+  compute.write ((compute.Write _)(.to y, .at 1, .value 9.0))
+  compute.write ((compute.Write _)(.to y, .at 2, .value 10.0))
+  ((Three)(.y y))
+}
+fk = compute.parallel fill "cpu" Three
+data = (compute.plrun fk ((Fill)(.n 1)) : Three)
+compute.collect data.y : array{Float, 3}
+"#;
+
+#[test]
+fn probe_a_declared_length_is_the_allocation() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(LENGTH, None, &mut store) {
+        Ok(text) => println!("[length] answered {text}"),
+        Err(diagnostics) => println!(
+            "[length] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}

@@ -1003,6 +1003,14 @@ pub struct KernelRoles {
     pub input_classes: Vec<Option<ScalarClass>>,
     /// The class each output buffer's parameter states, per [`Self::outputs`], or none.
     pub output_classes: Vec<Option<ScalarClass>>,
+    /// The length each output buffer's declaration states, per [`Self::outputs`], or none.
+    ///
+    /// # Invariant
+    /// A declaration states a length (`compute.buffer`'s count, `docs/notes/kernel-buffer-
+    /// declarations.md`); it is the allocation the run owes that output, and `None` means the
+    /// declaration's count is a runtime scalar the compile cannot decide, so the launch's own
+    /// element count is the extent — the same number the count usually is.
+    pub output_extents: Vec<Option<u32>>,
 }
 
 impl KernelRoles {

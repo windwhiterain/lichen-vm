@@ -367,6 +367,9 @@ impl From<schema::Roles> for ir::KernelRoles {
                 .into_iter()
                 .map(|class| class.map(Into::into))
                 .collect(),
+            // A fused schema states no declared length: the launch's element count is the
+            // extent (`KernelRoles::output_extents`).
+            output_extents: Vec::new(),
         }
     }
 }

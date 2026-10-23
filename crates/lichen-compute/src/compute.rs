@@ -2733,6 +2733,9 @@ where
         type_classes_ref,
     )?;
     body_instr.expand_transcendentals()?;
+    // **The declaration's length is the output's allocation**: the run reads it per
+    // ordinal (`docs/notes/kernel-buffer-declarations.md`).
+    roles.output_extents = tally.output_extents.clone();
     if outputs.len() != roles.outputs.len() {
         return Err(format!(
             "this index function's codomain names {} output(s) but its parameter declares {} \
@@ -3293,6 +3296,13 @@ struct Positions {
     element_class: Option<ScalarClass>,
     /// The marks the body's labelled expressions published, in lowering order.
     marks: Vec<KernelMark>,
+    /// The length each `compute.buffer` declaration states, in declaration order.
+    ///
+    /// # Invariant
+    /// The run allocates each output at its declared length
+    /// (`docs/notes/kernel-buffer-declarations.md`): a declaration whose count is a runtime
+    /// scalar answers `None`, and the launch's element count is the extent.
+    output_extents: Vec<Option<u32>>,
 }
 
 impl Positions {
@@ -6663,7 +6673,7 @@ fn run_parallel_kernel(
     }
     // The output count and class are the fragment's, read here rather than carried
     // in: an id is content-addressed.
-    let (outputs, class, input_classes, leaf_classes, output_classes) = {
+    let (outputs, class, input_classes, leaf_classes, output_classes, output_extents) = {
         let fragments = kernels().lock().unwrap();
         let fragment = &fragments
             .get(&id)
@@ -6677,6 +6687,7 @@ fn run_parallel_kernel(
             // handed in.
             param_classes(fragment)[..fragment.scalar_leaves()].to_vec(),
             fragment.output_classes.clone(),
+            fragment.roles.output_extents.clone(),
         )
     };
     if leaf_classes.len() != leaves.len() {
@@ -6714,8 +6725,19 @@ fn run_parallel_kernel(
     }
     let inputs = host_inputs;
     // Shared atomic words: a write stores its slot, an atomic add read-modify-writes it.
+    // **Each output is allocated at its declared length** where the declaration states one
+    // (`docs/notes/kernel-buffer-declarations.md`); the launch's element count is the
+    // extent otherwise.
     let outputs: Vec<Vec<AtomicI64>> = (0..outputs)
-        .map(|_| (0..count).map(|_| AtomicI64::new(0)).collect())
+        .map(|ordinal| {
+            let length = output_extents
+                .get(ordinal)
+                .copied()
+                .flatten()
+                .map(|extent| extent as usize)
+                .unwrap_or(count);
+            (0..length).map(|_| AtomicI64::new(0)).collect()
+        })
         .collect();
     {
         let inputs = &inputs;

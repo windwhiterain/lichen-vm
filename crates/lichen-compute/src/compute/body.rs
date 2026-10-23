@@ -967,9 +967,17 @@ where
                     .into(),
             );
         };
-        let count = self.value(dynamic(count.node)?)?;
+        let count_node = dynamic(count.node)?;
+        // A literal length is the allocation the run owes the declaration; a runtime one
+        // leaves the launch's element count the extent (`Positions::output_extents`).
+        let extent = self
+            .module
+            .usize_value(count_node)
+            .map(|value| value as u32);
+        let count = self.value(count_node)?;
         let ordinal = self.declarations.len();
         self.declarations.push(count);
+        self.tally.output_extents.push(extent);
         self.declared.insert(node, ordinal);
         // The declaration's value is the version token: which buffer it names is the node's
         // identity, and no reader reads the value.
