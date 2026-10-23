@@ -14,7 +14,7 @@ use lichen_lowlevel::{AnyNodeId, BudgetExhausted, EvalError, LowValue, NodeId, P
 
 use crate::{
     checker::Build,
-    ir::Loc,
+    ir::{Loc, LocPath},
     program::{HighProgram, ValueType},
 };
 
@@ -663,7 +663,7 @@ where
             if let Some(edge) = self.apply_edges.get(&origin) {
                 return Some(Loc {
                     expr: edge.argument_expr,
-                    path: Vec::new(),
+                    path: LocPath::Empty,
                 });
             }
             // A dynamic template: the slot it lowered from.
@@ -692,7 +692,7 @@ where
                 crate::shape::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
             let loc = self.apply_edges.get(&apply.apply_node).map(|edge| Loc {
                 expr: edge.argument_expr,
-                path,
+                path: path.into(),
             });
             return Diag {
                 budget: None,

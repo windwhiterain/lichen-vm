@@ -6,7 +6,7 @@ use std::ops::Range;
 use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{ExprId, Loc, LocStep};
+use crate::ir::{ExprId, Loc, LocPath, LocStep};
 use crate::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
@@ -167,7 +167,7 @@ where
         errors: Range<usize>,
     ) {
         let first = self.module.unify_errors[errors.start].clone();
-        let path = shape::tag_descent(&self.module, loc.path.clone(), b, &first.steps);
+        let path = shape::tag_descent(&self.module, loc.path.into_vec(), b, &first.steps);
         self.diary.push(DiaryEntry {
             errors: Some(errors),
             seq: self.check_seq,
@@ -175,7 +175,7 @@ where
             b,
             loc: Loc {
                 expr: loc.expr,
-                path,
+                path: path.into(),
             },
             kind,
             field: field.map(|f| f.to_string()),
@@ -197,7 +197,7 @@ where
         };
         Loc {
             expr: e,
-            path: vec![step],
+            path: LocPath::One(step),
         }
     }
 }

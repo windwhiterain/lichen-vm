@@ -18,7 +18,7 @@ use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{AssertSpelling, DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, PrefixOp};
+use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocPath, PrefixOp};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 
 /// What a build does after checking: run the program, or decide only types.
@@ -698,7 +698,7 @@ where
                 checker.nonterminating.push(NonTerminating {
                     loc: Loc {
                         expr: s,
-                        path: Vec::new(),
+                        path: LocPath::Empty,
                     },
                     budget: Some(budget),
                 });
@@ -711,7 +711,7 @@ where
                     checker.nonterminating.push(NonTerminating {
                         loc: Loc {
                             expr: root,
-                            path: Vec::new(),
+                            path: LocPath::Empty,
                         },
                         budget: Some(budget),
                     });
@@ -739,7 +739,7 @@ where
                 checker.nonterminating.push(NonTerminating {
                     loc: Loc {
                         expr: root,
-                        path: Vec::new(),
+                        path: LocPath::Empty,
                     },
                     budget: Some(budget),
                 });
