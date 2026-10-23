@@ -102,20 +102,39 @@
     so there is no approximation anywhere in this file: there is no `exp` and no `sqrt` in the \
     body, and **nothing here is modelled** — unlike SiLU, softmax, LayerNorm and attention, whose \
     declared values are the language's own transcendental sequences. The declared output is that \
-    arithmetic worked out by hand, not a transcription of what the program printed."
+    arithmetic worked out by hand, not a transcription of what the program printed. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "[14.0, 32.0, 50.0, 68.0]: array{Float, 4}"
 ---
-Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
-Gout = struct{.y (compute.Buf Float)}
-Par  = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+Gin  = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 12))), .x (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Gout = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Par  = struct{.n Int, .kdim Int, .in Gin}
 Arg  = struct{.n Int, .kdim Int, .I Gin}
 gemv_raw = (k : Par) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Gout)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity")))))))
 }
 gemv = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
-w = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 12}) : (compute.Buf Float))
-x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+Fill = struct{.n Int}
+wBuf = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 12)))}
+fill_w_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 12))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0) + (if i == 8 then 9.0 else 0.0) + (if i == 9 then 10.0 else 0.0) + (if i == 10 then 11.0 else 0.0) + (if i == 11 then 12.0 else 0.0)
+  ((wBuf)(.w (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_w = compute.parallel fill_w_raw "cpu" wBuf
+w = (compute.plrun fill_w ((Fill)(.n 12)) : wBuf).w
+xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+fill_x_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0)
+  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_x = compute.parallel fill_x_raw "cpu" xBuf
+x = (compute.plrun fill_x ((Fill)(.n 3)) : xBuf).x
 out = (compute.plrun gemv ((Arg)(.n 4, .kdim 3, .I Gin(.w w, .x x))) : Gout)
 compute.collect out.y : array{Float, 4}
