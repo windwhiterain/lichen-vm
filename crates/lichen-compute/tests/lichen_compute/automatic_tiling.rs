@@ -70,14 +70,14 @@ fn declared() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf Float)}}
-Out = struct{{.z (compute.Buf Float)}}
+In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
+Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
 Par = struct{{.n Int, .in In}}
 Arg = struct{{.n Int, .I In}}
 GA  = struct{{.n Int, .in In}}
 reduction = (k : Par) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
   ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }}
@@ -101,19 +101,22 @@ out
 /// # Invariant
 /// One lane per element, each writing the datum at its own lane, so the buffer holds
 /// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
-/// before a device ever sees it, and its parameter declares no `.in` group.
+/// before a device ever sees it, and its parameter declares no `.in` group. Its declaration
+/// states the count the fill runs at, so the buffer it fills is the input's length.
 fn filled() -> String {
-    r#"
-Data = struct{.b (compute.Buf Float)}
-Fill = struct{.n Int}
-fill = (c : Fill) => {
+    format!(
+        r#"
+Data = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
   i = compute.range c.n
-  b = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  b = compute.buf ((compute.BufParam _)(.type Float, .length {count}))
   ((Data)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (int2float i + 1.0))))))
-}
+}}
 filler = compute.parallel fill "cpu" Data
-"#
-    .to_string()
+"#,
+        count = COUNT,
+    )
 }
 
 /// A program whose fold bound is a **literal**, so its algebra is not readable.
