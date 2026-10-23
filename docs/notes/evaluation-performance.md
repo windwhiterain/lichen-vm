@@ -115,6 +115,58 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 4: the apply tail stops building two buffers per call
+
+`apply_parameter_check` compared a wide pair by **collecting both sides into a fresh
+`Vec<NodeId>`** on every apply, and its pattern walk started from a fresh
+`HashSet` each time. A language pair is three wide (value, type, attributes), so every
+apply took that path: two `Vec`s and one hash set per call, each growing by doubling as
+the walk filled it.
+
+Both buffers were unnecessary. `Module::array_items` hands back the payload's own
+`&'static [ArrayItem]`, which the tail now indexes directly — no collection, and the
+`unsafe` slice does not borrow the module, so the per-slot `as_dynamic`/`unify` calls keep
+their `&mut self`. The visited set became a per-module stack, popped and pushed back empty,
+like the class snapshots and clone buffers before it.
+
+Measured on the same probe (release): `recursion.lichen` **40 394 → 34 681** allocations
+and ~42 → **33.5 ms**; `mathlib.lichen` 85 411 → 83 541 and ~25 → **22 ms**. The suite
+readings and all 45 example outcomes are unchanged.
+
+| reading | round 3 | round 4 | vs. the original |
+|---|---|---|---|
+| `recursion.lichen` | 41.9 ms | **33.5 ms** | 174 → 33.5 ms (5.2×) |
+| its allocations | 40 394 | **34 681** | 754 827 → 34 681 (21.8×) |
+| its bytes allocated | 34 337 KiB | **31 176 KiB** | 126 372 → 31 176 KiB |
+| `mathlib.lichen` | 25.1 ms | **22.0 ms** | |
+| its allocations | 85 411 | **83 541** | |
+
+## Round 4's rejected idea: a persisted prelude artifact
+
+The prelude is compiled from source in every store that has no shared registry: 1.5 ms of
+check plus 0.3 terms, 0.8 freeze. It was implemented as a cache — the frozen module written
+beside a sidecar carrying its `direct` names and its source record, filed outside the
+device's index because a published prelude artifact would change **every** dependent
+package's identity (the artifact fold gives an unpublished dependency the all-zero
+sentinel, and `language::persist` asserts that contract).
+
+It works and it is faster **in a warm process**: the load is 0.47–0.75 ms against a
+compile of 2.4 ms of measured stages. It does not move the shipped CLI, measured three
+ways on `examples/array.lichen` (a 91-byte program, so the fixed cost dominates):
+
+- prelude compiled vs loaded in one binary, interleaved, 8 runs: **20.15 → 15.81 ms**;
+- the same binary against the pre-change binary, 15 runs: **16.76 vs 16.66 ms** median,
+  14.80 vs 14.45 ms minimum — no difference;
+- the compile's own timer reads 8.5–10 ms in a fresh CLI process, against 2.4 ms of
+  stages measured in a warm one.
+
+The difference between the first two readings is the finding: a fresh process pays the
+prelude's page faults somewhere, and the checker it faults in is code the program's own
+compile needs anyway. The win exists only for a store created in an already-warm process,
+and no shipped path creates a second cache-backed store. The change was reverted rather
+than landed, and the artifact's ~130 KB write, the identity ripple and the source-record
+sidecar are the reasons a second attempt needs a buyer, not the code.
+
 ## Round 3: a merge of two decided classes has nothing to fill
 
 Timing the entries rather than counting calls found the merge's own walk: `add_equality`
@@ -199,16 +251,17 @@ materialization and the checker's own graph, not the array-pair walk this round 
 
 ## What is left
 
-- **The per-run fixed cost is now the largest single line in the corpus reading.** Phase
-  timing separates `preprocess` (the store's own compiles) from the program's check: a
-  store compiles the **core prelude** from source every time (1.9–3.6 ms, ~2 MiB), and a
-  program that imports `compute.lichen` compiles that wrapper once per store too
+- **The per-run fixed cost is now the largest single line in the corpus reading, and it is
+  not worth caching.** Phase timing separates `preprocess` (the store's own compiles) from
+  the program's check: a store compiles the **core prelude** from source every time
+  (1.5 ms of check plus 0.3 terms and 0.8 freeze for `core.lichen`), and a program that
+  imports `compute.lichen` compiles that wrapper once per store too
   ([lazy-plugin-registration](lazy-plugin-registration.md) made it deferred, not cheap).
-  Across 46 probe stores that is ~230 ms of the ~700 ms corpus total. It is paid once per
-  process on the shipping CLI path, so the user-visible gain is a small program's 2.4 ms —
-  a *shared registry* (directory runs, the example test, the server) or a persisted
-  prelude artifact would remove it, and the prelude artifact needs a companion record for
-  its `direct` names and source spans before it can be loaded without a compile.
+  Across 46 probe stores that is ~230 ms of the ~700 ms corpus total, but a persisted
+  prelude artifact was measured and rejected: in a fresh process the compile's page faults
+  are paid by the run anyway, so the CLI does not move (see round 4 above). The remaining
+  lever here is a **shared registry** for the in-process multi-store cases (the example
+  runner, a directory run, the server), which needs no persisted format.
 - **The node count, not the node slot, is where the peak now is.** `fib 10` ends with
   65 391 live nodes for a six-line program: 16 130 are the clone walk's, 17 020 are fresh
   undecided cells minted for a shared wildcard node, and ~12 000 came from reading a
@@ -219,8 +272,12 @@ materialization and the checker's own graph, not the array-pair walk this round 
   `fib 10` across 185 applies, and its inclusive time dwarfs every leaf measured here. A
   per-visit membership walk (`Function::parent` chain) and the `origin` chain are the
   candidates; neither has been measured in isolation yet.
-- **The upstream `gc.lichen` panic is not this note's.** `examples/gc.lichen` panics with
-  `invalid SlotMap key used` at `evaluate_pattern_argument_inner`, from a dynamic pattern
-  id that was never in the slot table; it appears at `fad1448e` (bisected: `93b4eb9c` is
-  clean) and is masked by the examples guard stopping at `decode.lichen` first. It is
-  unrelated to the changes above and its owner's to fix.
+- **The upstream `gc.lichen` panic is not this note's, and it no longer reproduces.**
+  `examples/gc.lichen` panicked with `invalid SlotMap key used` at
+  `evaluate_pattern_argument_inner`, from a dynamic pattern id that was never in the slot
+  table; it appeared at `fad1448e` (bisected: `93b4eb9c` is clean) and was masked by the
+  examples guard stopping at `decode.lichen` first. At this commit the program runs to its
+  declared answer, eight runs out of eight, both alone and in the corpus — but nothing here
+  claims to have fixed it: the only changes since the reproduction are this note's walks,
+  and a released-node read that a different allocation order can hide is still a released
+  read. Its owner should confirm which it was before the guard stops masking it.

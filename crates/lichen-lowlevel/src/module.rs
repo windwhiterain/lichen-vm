@@ -90,6 +90,7 @@ impl<P: Program> Module<P> {
             unify_any_path: crate::ancestors::AncestorPairs::new(),
             class_snapshots: Vec::new(),
             item_clone_scratch: Vec::new(),
+            pattern_seen: Vec::new(),
             stamp_depth: 0,
             deep_depth: 0,
             budget_exhausted: None,

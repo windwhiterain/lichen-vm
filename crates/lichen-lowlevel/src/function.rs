@@ -394,12 +394,13 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
     ) {
-        self.evaluate_pattern_argument_inner(
-            Dyn(pattern),
-            Dyn(argument),
-            block,
-            &mut HashSet::new(),
-        );
+        // The visited set is the module's, so a run's argument checks do not allocate one
+        // each; a nested check pops its own, because the walk re-enters itself.
+        let mut seen = self.pattern_seen.pop().unwrap_or_default();
+        seen.clear();
+        self.evaluate_pattern_argument_inner(Dyn(pattern), Dyn(argument), block, &mut seen);
+        seen.clear();
+        self.pattern_seen.push(seen);
     }
 
     #[stacksafe]

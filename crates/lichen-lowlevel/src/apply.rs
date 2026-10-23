@@ -55,22 +55,23 @@ impl<P: Program> Module<P> {
             (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
                 // SAFETY: both nodes are live members of this module; the unify
                 // below only reads them.
-                let parameters: Vec<_> = unsafe { self.array_items(cloned_param) }
-                    .map(|items| items.iter().map(|item| item.node).collect())
-                    .unwrap_or_default();
-                let supplieds: Vec<_> = unsafe { self.array_items(argument) }
-                    .map(|items| items.iter().map(|item| item.node).collect())
-                    .unwrap_or_default();
+                let parameters = unsafe { self.array_items(cloned_param) };
+                let supplieds = unsafe { self.array_items(argument) };
+                let width = parameters
+                    .map_or(0, |items| items.len())
+                    .max(supplieds.map_or(0, |items| items.len()));
                 // **Every position is compared**: the highlevel pardons an attribute's
                 // failure (`docs/notes/array-attribute-view.md`).
-                let width = parameters.len().max(supplieds.len());
                 for slot in 0..width {
-                    let (Some(&left), Some(&right)) = (parameters.get(slot), supplieds.get(slot))
+                    let (Some(parameters), Some(supplieds)) = (parameters, supplieds) else {
+                        break;
+                    };
+                    let (Some(left), Some(right)) = (parameters.get(slot), supplieds.get(slot))
                     else {
                         continue;
                     };
-                    let left = self.as_dynamic(left, block);
-                    let right = self.as_dynamic(right, block);
+                    let left = self.as_dynamic(left.node, block);
+                    let right = self.as_dynamic(right.node, block);
                     self.unify(left, right);
                 }
             }

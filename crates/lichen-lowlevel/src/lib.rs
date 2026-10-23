@@ -1116,6 +1116,12 @@ pub struct Module<P: Program> {
     /// [`Module::value_apply`] pops one and pushes it back, empty, on every exit; an
     /// array's clone can reach another inside its own items, so this is a stack too.
     item_clone_scratch: Vec<Vec<crate::ArrayItem>>,
+    /// The visited sets a parameter check walks, kept for the same reason.
+    ///
+    /// # Invariant
+    /// [`Module::evaluate_pattern_argument`] pops one and pushes it back, empty, on every
+    /// exit; a pattern's item can hold a nested check, so this is a stack too.
+    pattern_seen: Vec<std::collections::HashSet<(AnyNodeId, AnyNodeId)>>,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
