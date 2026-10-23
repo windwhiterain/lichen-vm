@@ -43,14 +43,12 @@ const PRODUCER_CALL: usize = 1;
 /// The chain `e[i] = d[i] · 2` feeding `z[i] = e[i] + 1`, both claimed as elementwise.
 ///
 /// # Invariant
-/// Each kernel reads at its own invocation index, which is the pairing that makes the producer's
+/// Each kernel reads at its own invocation index, the pairing that makes the producer's
 /// lane-dependent value bindable in-lane. The consumer declares `k.in.d` beside the buffer it
-/// absorbs, which the union does not need — `union_ports.rs` merges the same chain without it —
-/// so this one states two bodies naming one buffer at two ports.
+/// absorbs, which the union does not need.
 ///
-/// No parameter carries an `.out` group: each body declares its own buffer with
-/// `compute.buf` and returns the write as its codomain field's value
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// No parameter carries an `.out` group: each body declares its buffer with `compute.buf` and
+/// returns the write as the codomain field's value.
 fn program(elements: usize) -> String {
     format!(
         r#"
