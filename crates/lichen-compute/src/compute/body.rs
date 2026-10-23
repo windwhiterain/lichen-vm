@@ -885,6 +885,11 @@ where
             // **A declaration instance is its `.native` slot**: the wrapper states the payload
             // first, so the `$buf` op inside it is the definition the walk wants
             // (`docs/notes/kernel-buffer-declarations.md`).
+            // **A pair reaches its value half**: the walk may land on a [value, type] term
+            // rather than on the value it holds.
+            if let Some(inner) = lichen_highlevel::shape::pair_value(self.module, node) {
+                return self.value(inner);
+            }
             if let Some(payload) = self.instance_payload(node) {
                 // **The identity is the node the body bound**: the instance is registered
                 // beside the payload the walk declares, so a write naming its own `y` finds
@@ -1098,6 +1103,9 @@ where
         // **A target that is a `Buf` instance names the `$buf` op inside it**, so the
         // declaration's ordinal is read through `.native` rather than from the node itself.
         if let Some(payload) = self.instance_payload(value) {
+            // **The clone records the template it instantiates**, so the registry is read
+            // through the attributed node (docs/notes/kernel-buffer-declarations.md).
+            let payload = self.canonical(payload);
             if let Some(ordinal) = self.declared.get(&payload).copied() {
                 return Some(ordinal);
             }

@@ -2730,6 +2730,11 @@ where
     body_instr.expand_transcendentals()?;
     // The declaration's length is the output's allocation.
     roles.output_extents = tally.output_extents.clone();
+    // **The parameter carries no .out group**, so the codomain's fields are the outputs and
+    // their positions are the paths (docs/notes/kernel-buffer-declarations.md).
+    if roles.outputs.is_empty() {
+        roles.outputs = (0..outputs.len()).map(|at| vec![at]).collect();
+    }
     if outputs.len() != roles.outputs.len() {
         return Err(format!(
             "this index function's codomain names {} output(s) but its parameter declares {} \
