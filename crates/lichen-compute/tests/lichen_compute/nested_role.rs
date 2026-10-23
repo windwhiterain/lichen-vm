@@ -1,4 +1,4 @@
-//! A `.in`/`.out` **group that is a struct**, and the scalar leaf in it.
+//! A `.in` **group that is a struct**, and the scalar leaf in it.
 //! See `docs/notes/compute-kernel-struct.md`.
 //!
 //! # Invariant
@@ -32,28 +32,34 @@ fn source_at(lane: usize) -> f32 {
 ///
 /// # Invariant
 /// The source holds [`source_at`] per lane, so every answer below is a map of it.
+///
+/// No parameter carries an `.out` group: each body declares its own buffer with
+/// `compute.buf` and returns the write as its codomain field's value, and the host's
+/// source is a fill kernel's own output (`docs/notes/kernel-buffer-declarations.md`).
 fn kernel(declarations: &str, written: &str, argument: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
 Src = struct{{.a Int}}
-SrcOut = struct{{.z (compute.Buf Float)}}
-SrcPar = compute.P (compute.KT _)(.I Src, .O SrcOut)
+SrcOut = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}}
+SrcPar = struct{{.n Int, .in Src}}
 fill = (k : SrcPar) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value int2float (i + 10)))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((SrcOut)(.z (compute.write ((compute.Write _)(.to z, .at i, .value int2float (i + 10))))))
 }}
 source_kernel = compute.parallel fill "cpu" SrcOut
 inbuf = (compute.plrun source_kernel ((compute.A Src)(.n 3, .I Src(.a 0))) : SrcOut)
 {declarations}
 f = (k : Par) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value {written}))
+  w = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.w (compute.write ((compute.Write _)(.to w, .at i, .value {written})))))
 }}
 k = compute.parallel f "cpu" Out
 out = (compute.plrun k ({argument}) : Out)
 compute.collect out.w
-"#,
+"#
     )
 }
 
