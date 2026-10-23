@@ -156,7 +156,7 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
         }
         let Some(operation) = module.node_operation(current) else {
             // **The walk bottomed out**: the origin is the node the clone
-            // instantiates, so the walk continues where the template's read is.
+            // instantiates, so the walk resumes at the template's read.
             let Some(origin) = module.node_origin(current) else {
                 return format!("{} -> no operation, no origin", steps.join(" -> "));
             };
@@ -176,7 +176,7 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
             return format!("{} -> not an Index", steps.join(" -> "));
         }
         // **The walk as it now stands**: the target through the operand array, the
-        // position through `read_position`, so a frozen position answers too.
+        // position through `read_position`.
         let Some(operand) = operation.operand else {
             return format!("{} -> no operand array", steps.join(" -> "));
         };

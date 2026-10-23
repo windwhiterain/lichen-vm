@@ -575,6 +575,35 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   tuple state both convert; a non-tail call and a mutual pair name their rules)
   and by hand-built shapes in `tests/basic/loop_conversion.rs`. The probe
   `examples/recursion.rs` prints one verdict per shape.
+- **The state read's path is read from the value side, and a frozen position
+  answers** — `Module::parameter_value_path` walks the chain from the value side,
+  alternating element positions with the slot's value position (`0`), so the pair
+  peel and every slot peel are dropped and a pair's type or attribute position
+  ends the match rather than naming a state element
+  ([compound-element-slots](compound-element-slots.md)).
+  **The position is read through `Module::read_position`, so a frozen one
+  answers.** The four order comparisons are routed through the prelude's
+  bindings, and the residual that routing leaves behind holds the read's
+  subscript as a reference into the **frozen** module — a decided node cannot
+  carry the caller's (`static_module/apply.rs`, `static_remap_value`). A
+  position is a position whichever module names it, and `read_position` already
+  reads both; only the walk's **target** has to be this module's, so `operands_of`
+  is kept for that alone. Reading the position through `operands_of` instead
+  refused every routed comparison's state read, and a read that cannot be walked
+  is a read the loop cannot place.
+  **A clone of the read answers as the template's read does.** The walk above
+  terminates on `class_root(current) == value_class`, and a clone's chain bottoms
+  out at *this instantiation's* parameter — a fresh node in a singleton class —
+  so the class test never matches there. The origin is therefore followed once
+  when the walk meets a node with no operation, and the walk resumes from the
+  template the clone instantiates. A clone of a state read reads that slot, so it
+  must answer the same path; a clone that bottoms out somewhere else, or an
+  origin that is not a read, still answers `None`.
+  **The two are one reading.** A routed comparison's read is frozen *and* a
+  clone: reading the position alone leaves the walk at the clone's parameter,
+  and following the origin alone leaves it at the frozen position. Either half
+  alone answers `None` for every routed comparison, which is how the doubling
+  survived the first of them.
 - **The marker reaches the graph through real source** — `compile.rs`'s
   block-wide binding arm re-stamps `ExprKind::Function::looping` when the
   binding is `@loop`. Without it the mark was dropped at the transplant, and the
