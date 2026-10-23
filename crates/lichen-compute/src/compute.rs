@@ -2259,9 +2259,8 @@ where
             let mut element = None;
             if let Some(fields) = &fields {
                 if let Some(native) = fields.first()
-                    && let Some(ty) = shape::slot_type(module, *native)
                     && let Some((element_type, _length)) =
-                        shape::buffer_shape(module, shape::TypeRef::Term(ty))
+                        shape::buffer_shape(module, shape::TypeRef::Term(*native))
                 {
                     element =
                         low_type_of_slot(module, element_type).map(|shape| scalar_class_of(&shape));
