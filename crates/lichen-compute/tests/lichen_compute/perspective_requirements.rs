@@ -9,15 +9,35 @@
 use lichen_compute::language::{LangProgram, new_store};
 use lichen_language::Report;
 
-/// The program: one buffer read at an index.
-const PROGRAM: &str = "---
-  order = \"30\"
-  compute = import \"compute.lichen\"
+/// The program's head: the buffer the programs below read, built by a kernel.
+///
+/// # Invariant
+/// A host builds a buffer with a kernel, so the three elements the read needs are a fill
+/// kernel's own output (`docs/notes/kernel-buffer-declarations.md`).
+fn head() -> String {
+    r#"
 ---
-b = (compute.buffer ([1, 2, 3] : array{Int, 3}))
-r = compute.read ((compute.Read _)(.from BUFFER, .at 1))
-r
-";
+  order = "30"
+  compute = import "compute.lichen"
+---
+Out = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((Out)(.b (compute.write ((compute.Write _)(.to d, .at i, .value (i + 1))))))
+}
+filler = compute.parallel fill "cpu" Out
+b = (compute.plrun filler ((Fill)(.n 3)) : Out)
+"#
+    .to_string()
+}
+
+/// The program: one buffer read at an index.
+fn program() -> String {
+    let head = head();
+    format!("{head}\nr = compute.read ((compute.Read _)(.from BUFFER, .at 1))\nr\n")
+}
 
 /// `source` compiled and checked, never run.
 fn compile(source: &str) -> Report<LangProgram> {
@@ -36,13 +56,13 @@ fn compile(source: &str) -> Report<LangProgram> {
 
 #[test]
 fn a_uniform_buffer_is_read() {
-    let report = compile(&PROGRAM.replace("BUFFER", "b"));
+    let report = compile(&program().replace("BUFFER", "b.b"));
     assert!(report.ok(), "{:?}", report.diagnostics);
 }
 
 #[test]
 fn a_lane_varying_buffer_is_refused() {
-    let report = compile(&PROGRAM.replace("BUFFER", "(b # 1)"));
+    let report = compile(&program().replace("BUFFER", "(b.b # 1)"));
     assert!(!report.ok(), "a lane-varying buffer must not be read");
     let messages: Vec<String> = report
         .diagnostics
@@ -57,25 +77,21 @@ fn a_lane_varying_buffer_is_refused() {
     );
 }
 
-/// The program: one read, its buffer and index spelled by the source.
-const READ: &str = "---
-  order = \"30\"
-  compute = import \"compute.lichen\"
----
-b = ((compute.buffer ([1, 2, 3] : array{Int, 3})) # BUFFER)
-r = compute.read ((compute.Read _)(.from b, .at INDEX))
-(r # DEMAND)
-";
+/// The program: one read, its buffer's perspective and index spelled by the source.
+fn read() -> String {
+    let head = head();
+    format!(
+        "{head}\nr = compute.read ((compute.Read _)(.from (b.b # BUFFER), .at INDEX))\n(r # DEMAND)\n"
+    )
+}
 
-/// The program: one write, its buffer, index and value spelled by the source.
-const WRITE: &str = "---
-  order = \"30\"
-  compute = import \"compute.lichen\"
----
-b = ((compute.buffer ([1, 2, 3] : array{Int, 3})) # BUFFER)
-w = compute.write ((compute.Write _)(.to b, .at INDEX, .value (0 # 1)))
-(w # DEMAND)
-";
+/// The program: one write, its buffer's perspective, index and value spelled by the source.
+fn write() -> String {
+    let head = head();
+    format!(
+        "{head}\nw = compute.write ((compute.Write _)(.to (b.b # BUFFER), .at INDEX, .value (0 # 1)))\n(w # DEMAND)\n"
+    )
+}
 
 /// `program` with its three spellings replaced.
 fn spelled(program: &str, buffer: &str, index: &str, demand: &str) -> String {
@@ -89,8 +105,8 @@ fn spelled(program: &str, buffer: &str, index: &str, demand: &str) -> String {
 fn a_read_takes_its_perspective_from_the_buffer_and_the_index() {
     // `divisor(from, at)`: a uniform index keeps the buffer's perspective, a
     // lane-varying one does not.
-    assert!(compile(&spelled(READ, "compute.warp", "0", "compute.warp")).ok());
-    let report = compile(&spelled(READ, "compute.warp", "(0 # 1)", "compute.warp"));
+    assert!(compile(&spelled(&read(), "compute.warp", "0", "compute.warp")).ok());
+    let report = compile(&spelled(&read(), "compute.warp", "(0 # 1)", "compute.warp"));
     assert!(
         !report.ok(),
         "a lane-varying index must not stay warp-uniform"
@@ -112,8 +128,8 @@ fn a_read_takes_its_perspective_from_the_buffer_and_the_index() {
 fn a_write_returns_the_input_buffer_perspective() {
     // The output buffer is the input's segment, so its perspective is the
     // input's whatever the written index and value are.
-    assert!(compile(&spelled(WRITE, "0", "(0 # 1)", "0")).ok());
-    let report = compile(&spelled(WRITE, "compute.warp", "(0 # 1)", "0"));
+    assert!(compile(&spelled(&write(), "0", "(0 # 1)", "0")).ok());
+    let report = compile(&spelled(&write(), "compute.warp", "(0 # 1)", "0"));
     assert!(!report.ok(), "a warp segment is not zero-uniform");
     let messages: Vec<String> = report
         .diagnostics
@@ -136,15 +152,11 @@ fn a_write_returns_the_input_buffer_perspective() {
 /// (`docs/notes/array-attribute-view.md`).
 #[test]
 fn a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it() {
-    let source = "---
-  order = \"30\"
-  compute = import \"compute.lichen\"
----
-use = (b : (compute.Buf Int)) => compute.read ((compute.Read _)(.from b, .at 1))
-b = (compute.buffer ([1, 2, 3] : array{Int, 3}))
-use (b # 1)
-";
-    let report = compile(source);
+    let head = head();
+    let source = format!(
+        "{head}\nuse = (x : (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))) => compute.read ((compute.Read _)(.from x, .at 1))\nuse (b.b # 1)\n"
+    );
+    let report = compile(&source);
     assert!(
         !report.ok(),
         "the body's warp requirement sees the caller's `1`"
