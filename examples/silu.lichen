@@ -8,31 +8,50 @@
   looks first. `g = 0, 1, -1, 2` and `u = 3, 1, 0.5, 4`, so lane 0 is `0 / (1 + exp(0)) = 0`
   exactly and lane 1 is `exp(-1)`; `0 - 1` is written `0.0 - 1.0` because the language has no
   unary minus. The other three lanes are the language's own `exp` — a degree-10 Taylor sum over
-  seven halvings, not `e` — so the declared output is that sum evaluated in `f32`, which is at
-  most 3 parts in `10⁶` away from `x / (1 + e⁻ˣ)` and is not claimed to be equal to it."
+  seven halvings, not `e` — so the declared output is that sum evaluated in `f32`, which is at The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+  conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "[0.0, 0.73105794, -0.13447031, 7.0463777]: array{Float, 4}"
 ---
-Gate  = struct{.g (compute.Buf Float)}
-SiluA = struct{.a (compute.Buf Float)}
-ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
+Gate  = struct{.g (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+SiluA = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParA  = struct{.n Int, .in Gate}
 silu_raw = (k : ParA) => {
   i = compute.range k.n
   g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
+  b_a = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((SiluA)(.a (compute.write ((compute.Write _)(.to b_a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element"))))))
 }
 silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
-UpIn  = struct{.a (compute.Buf Float), .u (compute.Buf Float)}
-OutY  = struct{.y (compute.Buf Float)}
-ParB  = compute.P (compute.KT Float)(.I UpIn, .O OutY)
+UpIn  = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .u (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+OutY  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParB  = struct{.n Int, .in UpIn}
 up_raw = (k : ParB) => {
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Float)
   u = (compute.read ((compute.Read _)(.from k.in.u, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((a * u) ~ "element")))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((a * u) ~ "element"))))))
 }
 up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu" OutY
-g = (compute.buffer ([0.0, 1.0, (0.0 - 1.0), 2.0] : array{Float, 4}) : (compute.Buf Float))
-u = (compute.buffer ([3.0, 1.0, 0.5, 4.0] : array{Float, 4}) : (compute.Buf Float))
+Fill = struct{.n Int}
+gBuf = struct{.g (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+fill_g_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
+  v = (if i == 1 then 1.0 else 0.0) + (if i == 2 then (0.0 - 1.0) else 0.0) + (if i == 3 then 2.0 else 0.0)
+  ((gBuf)(.g (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_g = compute.parallel fill_g_raw "cpu" gBuf
+g = (compute.plrun fill_g ((Fill)(.n 4)) : gBuf).g
+uBuf = struct{.u (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+fill_u_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
+  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 2 then 0.5 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((uBuf)(.u (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_u = compute.parallel fill_u_raw "cpu" uBuf
+u = (compute.plrun fill_u ((Fill)(.n 4)) : uBuf).u
 act = (compute.plrun silu ((compute.A Gate)(.n 4, .I Gate(.g g))) : SiluA)
 out = (compute.plrun up ((compute.A UpIn)(.n 4, .I UpIn(.a act.a, .u u))) : OutY)
 compute.collect out.y : array{Float, 4}
