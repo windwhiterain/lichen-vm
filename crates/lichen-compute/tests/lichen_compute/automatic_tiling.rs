@@ -60,6 +60,10 @@ fn closed_form() -> f32 {
 /// The **seed** is the marked literal, because both halves of the algebra have to survive
 /// lowering (`docs/notes/graph-fusion.md` §3).
 ///
+/// The parameter carries no `.out` group: the body declares the buffer it writes with
+/// `compute.slice` and returns the write as the codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
+///
 /// The buffer reaches the kernel through the graph's own parameter, which is the one way a
 /// recording may name one.
 fn declared() -> String {
@@ -70,33 +74,49 @@ fn declared() -> String {
 ---
 In  = struct{{.b (compute.Buf Float)}}
 Out = struct{{.z (compute.Buf Float)}}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{{.n Int, .in In}}
+Arg = struct{{.n Int, .I In}}
+GA  = struct{{.n Int, .in In}}
 reduction = (k : Par) => {{
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, 0.0 ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }}
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step = (s : Par) => {{
-  compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
+step = (s : GA) => {{
+  compute.plrun kernel ((Arg)(.n s.n, .I In(.b s.in.b))) : Out
 }}
 built = compute.graph step
-data = (compute.buffer ([{elements}] : array{{Float, LENGTH}}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built ({count}, data))
+{fill}
+data = (compute.plrun filler ((Fill)(.n {count})) : Data)
+out = compute.collect (compute.graphrun built ({count}, data.b))
 out
 "#,
-        elements = data(),
+        fill = filled(),
         count = COUNT,
     )
-    .replace("array{Float, LENGTH}", &format!("array{{Float, {COUNT}}}"))
 }
 
-/// The elements a launch folds: `1 ..= count`, which is what makes the closed form the answer.
-fn data() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
+/// The fill kernel that builds the launch's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
+/// backend, because a host builds its data before a device ever sees it, and its parameter
+/// declares no `.in` group at all.
+fn filled() -> String {
+    r#"
+Data = struct{.b (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  b = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Data)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Data
+"#
+    .to_string()
 }
 
 /// A program whose fold bound is a **literal**, so its algebra is not readable.
