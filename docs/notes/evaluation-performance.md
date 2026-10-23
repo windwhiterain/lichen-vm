@@ -174,6 +174,28 @@ one closure per call, the two carry gates) are the whole subject of
 [`apply-clone-ownership.md`](apply-clone-ownership.md). Its invalidation would have to track
 the very thing the probe shows moving: a template node's `value`/`evaluated_deep`. Not built.
 
+**The forcing is load-bearing, not a check to skip.** An experiment that made the pattern walk
+force nothing answered `fib 10` with `none: Int` where the program means `55: Int`: the
+argument's value reaches the apply's unify *through* that walk, and the body cannot compute
+without it. So its 16.8 % is the argument's own evaluation, not overhead beside it.
+
+**The per-visit arithmetic does not convert into wall clock.** Two bookkeeping removals were
+made and measured (`ApplyCtx::last_member`, and one force per walk frame instead of two): the
+walk read the anchor's template out of the slot table on every visit and walked the parent
+chain twice per node that had a function tag. Interleaved A/B, eight alternating runs each
+(the sequential form of this measurement read ~2 % on the loop shape and is not the reading —
+run-to-run drift is the trap this note's medians already name):
+
+| reading | before | after |
+|---|---|---|
+| `recursion.lichen` median (min) | 25.11 (24.78) ms | **24.94 (24.47)** |
+| the `@loop` shape median (min) | 43.63 (42.61) | **43.25 (42.39)** |
+| `mathlib.lichen` median (min) | 21.57 (21.35) | **21.53 (20.88)** |
+
+≈25 ns of chain walk per visit is worth ~0.5 % of the wall. The plan cache's remaining ~50 ns
+per visit is therefore worth about one percent, which is why it is not built: the walk's cost
+is the node table's memory traffic and the cells it creates, not the arithmetic over them.
+
 ## Round 12: the allocations, finished — and the one that cannot be finished
 
 Three allocation wins landed after round 11, all behaviour-preserving and all without a
