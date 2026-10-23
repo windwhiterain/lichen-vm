@@ -22,7 +22,8 @@ const COUNT: usize = 8;
 /// # Invariant
 /// The consumer's parameter struct names **only** the buffer it absorbs, so the merged node has
 /// one port and it is the producer's. This is the program the old numbering refused, and the one
-/// `fuse_licence.rs` worked around by declaring an input its consumer never reads.
+/// `fuse_licence.rs` worked around by declaring an input its consumer never reads. Each body
+/// declares its output with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
 fn natural() -> String {
     r#"
 ---
@@ -30,20 +31,22 @@ fn natural() -> String {
 ---
 In   = struct{.d (compute.Buf Float)}
 OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{.n Int, .in In}
 producer_raw = (k : Par) => {
   i = compute.range k.n
+  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.e (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) : Float) ~ "element")) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((fold (k.n, 0.0 ~ "identity")) + 1.0)))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((fold (k.n, 0.0 ~ "identity")) + 1.0))))))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
