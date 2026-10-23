@@ -38,10 +38,14 @@ const ELEMENTS: usize = 64;
 /// The nested config: scalar leaves and buffer leaves at different depths.
 ///
 /// # Invariant
-/// `.meta` is a group outside `.in`/`.out`, so both its leaves are scalars and the extent
-/// is the **first** of them, whatever depth the walk reached it at; `.in` and `.out` hold
-/// the buffers, one level down. `kind` is the class of every leaf past the extent, `ga`
-/// the step's own parameter, `cols` what it passes for `.meta.cols`.
+/// `.meta` is a group outside `.in`, so both its leaves are scalars and the extent is the
+/// **first** of them, whatever depth the walk reached it at; `.in` holds the buffers, one
+/// level down. `kind` is the class of every leaf past the extent, `ga` the step's own
+/// parameter, `cols` what it passes for `.meta.cols`.
+///
+/// No parameter carries an `.out` group: the body declares its own buffer with
+/// `compute.buf` and returns the write as its codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn nested(kind: &str, ga: &str, cols: &str) -> String {
     format!(
         r#"
@@ -49,16 +53,17 @@ fn nested(kind: &str, ga: &str, cols: &str) -> String {
   compute = import "compute.lichen"
 ---
 Meta  = struct{{.rows Int, .cols {kind}}}
-In2   = struct{{.a (compute.Buf {kind}), .b (compute.Buf {kind})}}
-Out   = struct{{.z (compute.Buf {kind})}}
-Par   = struct{{.meta Meta, .in In2, .out Out}}
+In2   = struct{{.a (compute.Buf ((compute.BufParam _)(.type {kind}, .length {ELEMENTS}))), .b (compute.Buf ((compute.BufParam _)(.type {kind}, .length {ELEMENTS})))}}
+Out   = struct{{.z (compute.Buf ((compute.BufParam _)(.type {kind}, .length {ROWS})))}}
+Par   = struct{{.meta Meta, .in In2}}
 Arg   = struct{{.meta Meta, .I In2}}
 GA    = {ga}
 nested_raw = (k : Par) => {{
   i = compute.range k.meta.rows
   v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : {kind})
   w = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : {kind})
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((v * k.meta.cols + w) ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type {kind}, .length k.meta.rows))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((v * k.meta.cols + w) ~ "element"))))))
 }}
 nested = compute.parallel (nested_raw ~ "claim:Elementwise(element)") "gpu" Out
 step = (s : GA) => {{
@@ -76,53 +81,80 @@ built
 /// `.n` is the extent by position and the other two are launch values, so the fragment
 /// declares two runtime scalars and the recording has to carry both.
 fn flat() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In1   = struct{.a (compute.Buf Int)}
-Out1  = struct{.z (compute.Buf Int)}
-Par3  = struct{.n Int, .K Int, .cols Int, .in In1, .out Out1}
-Arg3  = struct{.n Int, .K Int, .cols Int, .I In1}
-GA3   = struct{.n Int, .K Int, .cols Int, .in In1}
-shape_raw = (k : Par3) => {
+In1   = struct{{.a (compute.Buf ((compute.BufParam _)(.type Int, .length {ELEMENTS})))}}
+Out1  = struct{{.z (compute.Buf ((compute.BufParam _)(.type Int, .length {ROWS})))}}
+Par3  = struct{{.n Int, .K Int, .cols Int, .in In1}}
+Arg3  = struct{{.n Int, .K Int, .cols Int, .I In1}}
+GA3   = struct{{.n Int, .K Int, .cols Int, .in In1}}
+shape_raw = (k : Par3) => {{
   i = compute.range k.n
   r = i / k.cols
   c = i % k.cols
   v = (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.K + c))) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v ~ "element")))
-}
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (v ~ "element"))))))
+}}
 shape = compute.parallel (shape_raw ~ "claim:Elementwise(element)") "gpu" Out1
-step3 = (s : GA3) => {
+step3 = (s : GA3) => {{
   compute.plrun shape ((Arg3)(.n s.n, .K s.K, .cols s.cols, .I In1(.a s.in.a))) : Out1
-}
+}}
 built3 = compute.graph step3
 built3
 "#
-    .to_string()
+    )
 }
 
-/// An input buffer of `n` elements, `offset + i` in each, in the class `kind` names.
-fn buffer(name: &str, kind: &str, offset: usize) -> String {
-    let elements = (0..ELEMENTS)
-        .map(|at| offset + at)
-        .map(|at| format!("{at}"))
-        .collect::<Vec<String>>()
-        .join(", ");
+/// The fill kernel that builds the launch's input buffers, and the run that hands them back.
+///
+/// # Invariant
+/// One lane per element and each writes its own element, so the buffer at `offset` holds
+/// `offset + i` in every element. The kernel runs on the host's own backend, because a
+/// host builds its data before a device ever sees it, and its parameter declares no
+/// `.in` group at all (`docs/notes/kernel-buffer-declarations.md`).
+fn filled(shape: &str, kind: &str, offsets: &[usize]) -> String {
+    let names = ["a", "b"];
+    let mut declarations = String::new();
+    let mut writes = Vec::new();
+    for (at, offset) in offsets.iter().enumerate() {
+        let name = names[at];
+        let value = if kind == INT {
+            format!("i + {offset}")
+        } else {
+            format!("int2float (i + {offset})")
+        };
+        declarations.push_str(&format!(
+            "  {name} = compute.buf ((compute.BufParam _)(.type {kind}, .length {ELEMENTS}))\n"
+        ));
+        writes.push(format!(
+            ".{name} (compute.write ((compute.Write _)(.to {name}, .at i, .value {value})))"
+        ));
+    }
     format!(
-        "{name} = (compute.buffer ([{elements}] : array{{{kind}, {n}}}) : (compute.Buf {kind}))",
-        n = ELEMENTS
+        r#"
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
+  i = compute.range c.n
+{declarations}  (({shape})({writes}))
+}}
+filler = compute.parallel fill "cpu" {shape}
+data = (compute.plrun filler ((Fill)(.n {ELEMENTS})) : {shape})
+"#,
+        writes = writes.join(", "),
     )
 }
 
 /// The nested kernel launched directly, over the two buffers and the two scalars.
 fn nested_direct() -> String {
     format!(
-        "{head}{a}\n{b}\nout = (compute.plrun nested ((Arg)(.meta Meta(.rows {rows}, .cols {cols}), \
-         .I In2(.a a, .b b))) : Out)\ncompute.collect out.z\n",
+        "{head}{fill}\nout = (compute.plrun nested ((Arg)(.meta Meta(.rows {rows}, .cols {cols}), \
+         .I In2(.a data.a, .b data.b))) : Out)\ncompute.collect out.z\n",
         head = nested(INT, CARRYING, "s.cols"),
-        a = buffer("a", INT, 1),
-        b = buffer("b", INT, 101),
+        fill = filled("In2", INT, &[1, 101]),
         rows = ROWS,
         cols = COLS,
     )
@@ -131,10 +163,9 @@ fn nested_direct() -> String {
 /// The nested kernel recorded, and run over the two buffers and the two scalars.
 fn nested_graph() -> String {
     format!(
-        "{head}{a}\n{b}\ncompute.collect (compute.graphrun built ({rows}, {cols}, a, b))\n",
+        "{head}{fill}\ncompute.collect (compute.graphrun built ({rows}, {cols}, data.a, data.b))\n",
         head = nested(INT, CARRYING, "s.cols"),
-        a = buffer("a", INT, 1),
-        b = buffer("b", INT, 101),
+        fill = filled("In2", INT, &[1, 101]),
         rows = ROWS,
         cols = COLS,
     )
@@ -153,10 +184,10 @@ fn nested_answer() -> Vec<usize> {
 /// The flat kernel launched directly, over the one buffer and the three scalars.
 fn flat_direct() -> String {
     format!(
-        "{head}{a}\nout = (compute.plrun shape ((Arg3)(.n {rows}, .K {k}, .cols {cols}, .I In1(.a a))) : \
-         Out1)\ncompute.collect out.z\n",
+        "{head}{fill}\nout = (compute.plrun shape ((Arg3)(.n {rows}, .K {k}, .cols {cols}, .I In1(.a \
+         data.a))) : Out1)\ncompute.collect out.z\n",
         head = flat(),
-        a = buffer("a", INT, 10),
+        fill = filled("In1", INT, &[10]),
         rows = ROWS,
         k = K,
         cols = SHAPE_COLS,
@@ -166,9 +197,9 @@ fn flat_direct() -> String {
 /// The flat kernel recorded, and run over the buffer and the three scalars.
 fn flat_graph() -> String {
     format!(
-        "{head}{a}\ncompute.collect (compute.graphrun built3 ({rows}, {k}, {cols}, a))\n",
+        "{head}{fill}\ncompute.collect (compute.graphrun built3 ({rows}, {k}, {cols}, data.a))\n",
         head = flat(),
-        a = buffer("a", INT, 10),
+        fill = filled("In1", INT, &[10]),
         rows = ROWS,
         k = K,
         cols = SHAPE_COLS,
@@ -394,14 +425,15 @@ fn a_leaf_the_graph_cannot_carry_is_refused_at_its_own_path() {
 ---
   compute = import "compute.lichen"
 ---
-In2  = struct{.a (compute.Buf Int)}
-Out  = struct{.z (compute.Buf Int)}
-Par  = struct{.n Int, .in In2, .out Out, .spare (compute.Buf Int)}
-Arg  = struct{.n Int, .in In2, .spare (compute.Buf Int)}
+In2  = struct{.a (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Out  = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par  = struct{.n Int, .in In2, .spare (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Arg  = struct{.n Int, .in In2, .spare (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
 stray_raw = (k : Par) => {
   i = compute.range k.n
-  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : {kind})
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v ~ "element")))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (v ~ "element"))))))
 }
 stray = compute.parallel (stray_raw ~ "claim:Elementwise(element)") "gpu" Out
 built = compute.graph ((s : Arg) => {
@@ -412,7 +444,7 @@ built
     );
     let refusal = lines
         .iter()
-        .find(|line| line.contains("a buffer outside `.in`/`.out` at position 2"))
+        .find(|line| line.contains("a buffer outside `.in` at position 2"))
         .unwrap_or_else(|| {
             panic!(
                 "the refusal names the stray buffer's own field position; the report was:\n  {}",
