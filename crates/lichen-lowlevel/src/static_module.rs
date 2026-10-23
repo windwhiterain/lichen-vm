@@ -228,9 +228,9 @@ impl<P: Program> Module<P> {
     /// operator still owes its own reconciliation with it (`write_node_answer`). A run
     /// stamp of zero is the never-ran half of the second term.
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
-        self.nodes.get(node).is_some_and(|node| {
-            node.operation.is_some() && (node.value.is_none() || node.runned == 0)
-        })
+        self.nodes
+            .get(node)
+            .is_some_and(|node| node.operation.is_some() && (node.value.is_none() || !node.runned))
     }
 
     /// The dynamic node behind `id`: a static ref becomes a fresh leaf in

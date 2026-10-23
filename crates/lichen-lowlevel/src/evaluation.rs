@@ -116,7 +116,7 @@ impl<P: Program> Module<P> {
             current = entry.meta().next();
             if member != node
                 && entry.operation.is_some()
-                && (entry.value.is_none() || entry.runned == 0)
+                && (entry.value.is_none() || !entry.runned)
             {
                 members.push(member);
             }

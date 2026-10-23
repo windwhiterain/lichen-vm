@@ -872,9 +872,9 @@ pub struct Node<P: Program> {
     /// ([`Module::has_no_result_yet`]). An operation-bearing member holds that value
     /// while the stamp stays zero, so it still reads as owed an answer.
     value: Option<P::Value>,
-    /// The node's run stamp: zero means its operator never ran — a produced answer versus
-    /// an asserted one.
-    runned: u32,
+    /// The node's run stamp: `false` means its operator never ran — a produced answer
+    /// versus an asserted one.
+    runned: bool,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     ///
     /// # Invariant
@@ -900,7 +900,11 @@ pub struct Node<P: Program> {
     /// The stamp comes from the apply node the instantiation is for, not from the walk or
     /// the evaluation order, so a converted loop's iterations are all stamped alike. Read
     /// through [`Module::node_depth`]; a frame counter could not state it.
-    depth: u32,
+    ///
+    /// # Invariant
+    /// A `u16` because [`Module::apply_depth_limit`] bounds the stamp an order of magnitude
+    /// below it, so the narrowing in [`Module::add_node`] never clamps.
+    depth: u16,
     /// The GC unit whose lifetime bounds this node; moved only by GC.
     block: BlockId,
     /// Whether an evaluation attempt is computing this node right now — the cycle mark.

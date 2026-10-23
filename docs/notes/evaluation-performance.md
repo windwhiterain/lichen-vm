@@ -115,6 +115,31 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 10: the node slot is 128 bytes, not 136
+
+The peak is the node slot: `fib 10` ends with 65 391 nodes, and at 136 bytes each that is
+8.4 MB of a 14.9 MB peak. Two fields were holding more bytes than their values need —
+`runned: u32` is only ever 0 or 1 (six sites, all writes), and `depth: u32` is bounded by
+`MAX_APPLY_DEPTH` (10 000, an order of magnitude under `u16::MAX`). Narrowed to `bool` and
+`u16`, they free 5 bytes of field text, which is enough to cross the struct's 8-byte
+alignment: **136 → 128 bytes (−5.9 %)**.
+
+| reading | round 9 | round 10 |
+|---|---|---|
+| `Node<LangProgram>` | 136 B | **128 B** |
+| `fib 10` peak / allocated | 14 868 / 31 144 KiB | **14 355 / 30 088 KiB** |
+| `mathlib` peak / allocated | 9 002 / 27 052 KiB | **8 745 / 26 380 KiB** |
+| corpus peak / allocated | 17 105 / 607 353 KiB | **16 593 / 603 356 KiB** |
+
+Time and allocation counts are unchanged within noise, all suite readings are unchanged,
+and the 46 example outcomes are the same eight red ones.
+
+What is left in the 128 bytes, and why each is structural: `value: Option<P::Value>` is 40,
+whose `Array` payload is a 32-byte `AnyHandle` (a static handle carries a module key, an
+offset and a length beside the dynamic pointer); `equality: Meta<NodeId>` is 28 — parent,
+next, tail and size, where `tail` is what makes a class merge splice two member lists in
+O(1), and dropping it would make `union` walk the shorter list on every merge.
+
 ## Round 9: the example runner shares a registry too, and the server already did
 
 `readme::program_output` — the tool behind `sync-readme` and the examples guard — built a

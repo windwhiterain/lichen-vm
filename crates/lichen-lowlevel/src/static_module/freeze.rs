@@ -144,7 +144,7 @@ impl<P: Program> StaticModule<P> {
                 ),
                 // The two axes of [`Node::value`] travel uncollapsed; the run axis
                 // is the stamp's zero test.
-                runned: node.runned != 0,
+                runned: node.runned,
                 evaluated_deep: node.evaluated_deep,
             });
         }
