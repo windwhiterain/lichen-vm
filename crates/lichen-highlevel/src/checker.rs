@@ -148,6 +148,10 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
+    /// The enclosing lambdas' parameters, innermost last: an attribute that names
+    /// one of their fields is a **reference** (spec §3, "Every attribute is handled
+    /// like the type").
+    current_parameters: Vec<ExprId>,
     /// The `@gc` expressions this build compiled.
     ///
     /// # Invariant
@@ -564,6 +568,7 @@ where
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
+            current_parameters: Vec::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),

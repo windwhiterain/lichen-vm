@@ -117,6 +117,7 @@ where
                 ty: type_cell,
             },
         )]));
+        self.current_parameters.push(parameter);
         // The parameter's annotated type is unified into its type slot
         // before the body, so an in-body reader sees it.
         if let Some(parameter_type) = parameter_type {
@@ -165,6 +166,7 @@ where
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
+        self.current_parameters.pop();
         self.scopes.pop();
         self.current_block = saved;
         // The value node pre-exists — the self-reference applied it during the
