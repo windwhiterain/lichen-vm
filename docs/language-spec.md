@@ -857,6 +857,13 @@ maps every span back to the original file.
   apply's **clone** mints a fresh undecided cell in its place — carrying that
   one node would put it in a class the caller also holds, and would make every
   unify it met return before comparing anything.
+- **`_` is undecided in every attribute.**  The wildcard above is what a
+  *concrete* value's un-spelled position holds; `_` is not the statement that it
+  has no claim — it is a hole over the whole expression, and **every attribute
+  position of a `_` is an undecided cell**, not the wildcard and not the absent
+  top.  `(_ ! in_num)` therefore declares the refinement alone: its perspective
+  and doc positions stay open, and an attribute read of `_` answers a hole the
+  context may bind.
 - **The `_` placeholder.**  A `_` in any position compiles to an undecided
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow
