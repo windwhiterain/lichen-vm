@@ -88,82 +88,124 @@
     `hi 12.0` lifts `5` to `6` and brings `13` down to `12`. Every value is exact for the reason \
     above — quarters and halves, no division — and the two chains are the root as a **tuple**, so \
     both are performed: an unread chain would not be, which is the plain-run gate \
-    `docs/notes/graph-recording-rounds.md` records."
+    `docs/notes/graph-recording-rounds.md` records. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`). The buffer types here carry an \
+    **undecided length**: one struct type serves buffers of several lengths — `scale` runs over \
+    four, eight and two elements — so the length is the launch's count rather than a stated number."
   output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0], [4.0, 7.0], [22.0, 4.0]): tuple{array{Float, 4}, array{Float, 2}, array{Float, 2}, array{Float, 2}}"
 ---
-SIn  = struct{.x (compute.Buf Float)}
-SOut = struct{.y (compute.Buf Float)}
-SPar = struct{.n Int, .k Float, .in SIn, .out SOut}
+SIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+SOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+SPar = struct{.n Int, .k Float, .in SIn}
 SArg = struct{.n Int, .k Float, .I SIn}
 scale_raw = (c : SPar) => {
   i = compute.range c.n
   x = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (x * c.k)))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((SOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (x * c.k))))))
 }
 scale = compute.parallel scale_raw "cpu" SOut
-LIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
-LOut = struct{.y (compute.Buf Float)}
-LPar = struct{.n Int, .t Float, .in LIn, .out LOut}
+LIn  = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+LOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+LPar = struct{.n Int, .t Float, .in LIn}
 LArg = struct{.n Int, .t Float, .I LIn}
 lerp_raw = (c : LPar) => {
   i = compute.range c.n
   a = (compute.read ((compute.Read _)(.from c.in.a, .at i)) : Float)
   b = (compute.read ((compute.Read _)(.from c.in.b, .at i)) : Float)
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (a + c.t * (b - a))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((LOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (a + c.t * (b - a)))))))
 }
 lerp = compute.parallel lerp_raw "cpu" LOut
-CIn  = struct{.x (compute.Buf Float)}
-COut = struct{.y (compute.Buf Float)}
-CPar = struct{.n Int, .lo Float, .hi Float, .in CIn, .out COut}
+CIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+COut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+CPar = struct{.n Int, .lo Float, .hi Float, .in CIn}
 CArg = struct{.n Int, .lo Float, .hi Float, .I CIn}
 clamp_raw = (c : CPar) => {
   i = compute.range c.n
   x = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (max c.lo (min c.hi x))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((COut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (max c.lo (min c.hi x)))))))
 }
 clamp = compute.parallel clamp_raw "cpu" COut
-RIn  = struct{.x (compute.Buf Float)}
-ROut = struct{.y (compute.Buf Float)}
-RPar = struct{.n Int, .kdim Int, .in RIn, .out ROut}
+RIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+ROut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+RPar = struct{.n Int, .kdim Int, .in RIn}
 RArg = struct{.n Int, .kdim Int, .I RIn}
 rowsum_raw = (c : RPar) => {
   r = compute.range c.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1)))) : Float)) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((ROut)(.y (compute.write ((compute.Write _)(.to b_y, .at r, .value (fold (c.kdim, 0.0 ~ "identity")))))))
 }
 rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu" ROut
-MIn  = struct{.x (compute.Buf Float)}
-MOut = struct{.y (compute.Buf Float)}
-MPar = struct{.n Int, .kdim Int, .least Float, .in MIn, .out MOut}
+MIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+MOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+MPar = struct{.n Int, .kdim Int, .least Float, .in MIn}
 MArg = struct{.n Int, .kdim Int, .least Float, .I MIn}
 rowmax_raw = (c : MPar) => {
   r = compute.range c.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1)))) : Float)) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, c.least ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((MOut)(.y (compute.write ((compute.Write _)(.to b_y, .at r, .value (fold (c.kdim, c.least ~ "identity")))))))
 }
 rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" MOut
-DIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
-DOut = struct{.y (compute.Buf Float)}
-DPar = struct{.n Int, .kdim Int, .in DIn, .out DOut}
+DIn  = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+DOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+DPar = struct{.n Int, .kdim Int, .in DIn}
 DArg = struct{.n Int, .kdim Int, .I DIn}
 dot_raw = (c : DPar) => {
   r = compute.range c.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.a, .at (r * c.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from c.in.b, .at (r * c.kdim + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((DOut)(.y (compute.write ((compute.Write _)(.to b_y, .at r, .value (fold (c.kdim, 0.0 ~ "identity")))))))
 }
 dot = compute.parallel (dot_raw ~ "claim:Reduction(combine,identity,element)") "cpu" DOut
-x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+Fill = struct{.n Int}
+xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+fill_x_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length _))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_x = compute.parallel fill_x_raw "cpu" xBuf
+x = (compute.plrun fill_x ((Fill)(.n 4)) : xBuf).x
 up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
 down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
 mixed = (compute.plrun lerp ((LArg)(.n 4, .t 0.25, .I LIn(.a up.y, .b down.y))) : LOut)
 bounded = (compute.plrun clamp ((CArg)(.n 4, .lo 2.0, .hi 5.0, .I CIn(.x mixed.y))) : COut)
-grid = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
+gridBuf = struct{.grid (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+fill_grid_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length _))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
+  ((gridBuf)(.grid (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_grid = compute.parallel fill_grid_raw "cpu" gridBuf
+grid = (compute.plrun fill_grid ((Fill)(.n 8)) : gridBuf).grid
 doubled = (compute.plrun scale ((SArg)(.n 8, .k 2.0, .I SIn(.x grid))) : SOut)
 rows = (compute.plrun rowsum ((RArg)(.n 2, .kdim 4, .I RIn(.x doubled.y))) : ROut)
 means = (compute.plrun scale ((SArg)(.n 2, .k 0.25, .I SIn(.x rows.y))) : SOut)
 bounded_rows = (compute.plrun clamp ((CArg)(.n 2, .lo 6.0, .hi 12.0, .I CIn(.x means.y))) : COut)
-bumps = (compute.buffer ([1.0, (0.0 - 2.0), 3.0, 4.0, (0.0 - 5.0), 6.0, 7.0, (0.0 - 8.0)] : array{Float, 8}) : (compute.Buf Float))
-weights = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
+bumpsBuf = struct{.bumps (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+fill_bumps_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length _))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then (0.0 - 2.0) else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then (0.0 - 5.0) else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then (0.0 - 8.0) else 0.0)
+  ((bumpsBuf)(.bumps (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_bumps = compute.parallel fill_bumps_raw "cpu" bumpsBuf
+bumps = (compute.plrun fill_bumps ((Fill)(.n 8)) : bumpsBuf).bumps
+weightsBuf = struct{.weights (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+fill_weights_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length _))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 4.0 else 0.0) + (if i == 5 then 3.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
+  ((weightsBuf)(.weights (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_weights = compute.parallel fill_weights_raw "cpu" weightsBuf
+weights = (compute.plrun fill_weights ((Fill)(.n 8)) : weightsBuf).weights
 peaks = (compute.plrun rowmax ((MArg)(.n 2, .kdim 4, .least (0.0 - 100.0), .I MIn(.x bumps))) : MOut)
 products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights))) : DOut)
 (compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2}, compute.collect peaks.y : array{Float, 2}, compute.collect products.y : array{Float, 2})
