@@ -1,4 +1,5 @@
-//! What a fold can be performed over: the operators, and the datum it applies.
+//! The operators a fold is performed over, and the datum it applies.
+//! See docs/notes/kernel-buffer-declarations.md.
 
 use super::common;
 
@@ -17,9 +18,12 @@ const COUNT: usize = 3 * LANES as usize;
 /// One `Reduction` program whose combine is `combine`, over the buffer read as `READ`.
 ///
 /// # Invariant
-/// The fold bound is `i + 1`, the lane's own index plus one, so the program's own body is the
-/// per-lane schedule the tiling pass replaces, and `combine` is the only thing that varies
-/// between the cases here — so every difference in what answers is the datum's.
+/// The fold bound is `i + 1`, the lane's own index plus one, so the program's own body is
+/// the per-lane schedule the tiling pass replaces, and `combine` alone varies between the
+/// cases, so every difference in the answer is the datum's.
+///
+/// No parameter carries an `.out` group: the write is the codomain's value, and the data is
+/// a fill kernel's output: a host builds data by running one.
 fn fold_over(combine: &str, identity: &str) -> String {
     let mut source = String::from(
         r#"
@@ -28,30 +32,33 @@ fn fold_over(combine: &str, identity: &str) -> String {
 ---
 In  = struct{.b (compute.Buf Float)}
 Out = struct{.z (compute.Buf Float)}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, IDENTITY ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity"))))))
 }
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step = (s : Par) => {
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }
 built = compute.graph step
-data = (compute.buffer ([ELEMENTS] : array{Float, COUNT}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built (COUNT, data))
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Out
+data = (compute.plrun filler ((Fill)(.n COUNT)) : Out)
+out = compute.collect (compute.graphrun built (COUNT, data.z))
 out
 "#,
     );
     let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
-    let elements = (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ");
     source = source.replace("COMBINE", combine.replace("READ", read).as_str());
     source = source.replace("IDENTITY", identity);
-    source = source.replace("ELEMENTS", &elements);
     source.replace("COUNT", &COUNT.to_string())
 }
 
