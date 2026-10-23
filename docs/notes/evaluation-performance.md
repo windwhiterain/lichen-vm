@@ -115,6 +115,32 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 7: the check is the run, and it is three costs
+
+Splitting the pipeline for the first time: for `fib 10` the frontend is **0.09 ms** and the
+check is **22.8 ms of the 25.1 ms total**; for `mathlib.lichen` (13 KiB) the frontend is
+1.66 ms and the check 13.5 ms of 21.7 ms. There is no separate "run" to optimise — the
+checker is what evaluates, and the deep pass at the end finds everything decided.
+
+Inside the check, timed at the entries (timers in place, so inflated by ~50 ns per call):
+
+| entry | `fib 10` | `mathlib` |
+|---|---|---|
+| `add_node` | 6.0 ms / 79 162 calls (76 ns) | 3.7 ms / 44 181 (83 ns) |
+| `unify` | 6.8 ms / 18 841 (359 ns, inclusive) | 2.4 ms / 4 667 (517 ns) |
+| `unify_inner` | 10.1 ms / 49 245 (206 ns) | 5.3 ms / 16 117 (330 ns) |
+| the clone walk's own arithmetic | ~7 ms | ~4 ms |
+| the class walk | ~1 ms (round 6) | ~1 ms |
+| its allocations | 34 671 | 83 532 |
+
+Round 3's "`unify` is 14.8 ms" is **superseded**: the fill skip (round 3) and the narrowed
+fill (round 6) took it to 6.8 ms. What is left of the check is proportional to two
+semantic facts — the **number of nodes the representation creates** (79 162 for a six-line
+program) and the **three-wide pair** every expression and value is stored as. Every exact
+optimisation this note has measured is now a few percent at most; the levers that are left
+are the two the maintainer declined in round 2 (sharing a materialized static read) and
+round 5 (sharing a wildcard's cell), both cell-identity changes.
+
 ## Round 6: the merge fills the valueless side only
 
 Round 3 stopped filling when both sides held a value. Timing the walk again showed the
