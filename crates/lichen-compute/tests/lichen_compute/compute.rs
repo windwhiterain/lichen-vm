@@ -727,7 +727,7 @@ out = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
         "parallel range/write map produced 4"
     );
     // The read's result is annotated `Int` at the use site, so the root reads back
-    // decided; the buffer's own `.type` states what the *fragment* records.
+    // decided.
     assert!(
         !common::type_is_undecided(&module, root_ty),
         "the annotated read reads back a decided type"
@@ -1248,8 +1248,8 @@ outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 
 #[test]
 fn an_output_position_that_is_not_a_buffer_is_refused() {
-    // The output count comes from the codomain's arity, and every position holds a
-    // buffer: a position that holds a decided value is refused.
+    // Every codomain position holds a buffer: a position that holds a decided value
+    // is refused.
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
@@ -1626,11 +1626,10 @@ compute.launch k 3.0
 ///
 /// # Invariant
 /// The per-position check that used to demand "output k is a write to output k" is
-/// gone (`docs/notes/kernel-buffer-declarations.md`): the codomain's field order and the
-/// declaration order are the same list, so a write always fills the output it names and a
-/// crossing is not an error the compiler can see any more. **The crossing is the author's
-/// mistake**, and this pins what it costs: each field holds the values written to the
-/// buffer it names, so the two outputs hold each other's values.
+/// gone (`docs/notes/kernel-buffer-declarations.md`): a crossing is not an error the
+/// compiler can see any more. **The crossing is the author's mistake**, and this pins
+/// what it costs: each field holds the values written to the buffer it names, so the
+/// two outputs hold each other's values.
 #[test]
 fn a_write_to_another_output_than_its_position_exchanges_the_outputs() {
     let (module, value, _root_ty) = run(r#"
@@ -1703,7 +1702,8 @@ compute.collect out.z : array{Int, 4}
     );
     let message = &messages[0];
     assert!(
-        message.contains("compute.parallel") && message.contains("neither a value nor an operation"),
+        message.contains("compute.parallel")
+            && message.contains("neither a value nor an operation"),
         "the refusal must name its own cause: {message:?}"
     );
 }
@@ -1752,13 +1752,11 @@ compute.collect outs.z : array{Int, 4}
 ///
 /// # Invariant
 /// `write` is a pure function whose result is a buffer, so the write that reaches the
-/// codomain is the one that fills the output. A write whose value is discarded is an
-/// effect outside the value and is not the model: the freeze drops it, because a
-/// statement-form write is not reachable from the return
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// codomain fills the output. A write whose value is discarded is an effect outside
+/// the value: the freeze drops it (`docs/notes/kernel-buffer-declarations.md`).
 ///
-/// The two programs differ in the codomain's value alone, so the pair says which of the
-/// two writes filled the buffer.
+/// The two programs differ in the codomain's value alone, so the pair says which
+/// write filled the buffer.
 #[test]
 fn a_statement_write_is_dropped_and_the_codowns_write_fills_the_output() {
     let (module, value, _root_ty) = run(r#"
@@ -1783,8 +1781,8 @@ compute.collect outs.z : array{Int, 4}
          nowhere in it"
     );
 
-    // The same body, with the codomain holding the declared buffer: the statement's
-    // write is the only one, and it is dropped, so the buffer holds nothing.
+    // The same body, with the codomain holding the declared buffer: the write is a
+    // statement, so it is dropped.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.a Int}

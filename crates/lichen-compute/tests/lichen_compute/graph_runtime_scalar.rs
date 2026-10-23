@@ -16,9 +16,7 @@ use lichen_utils::extend::AsEnum;
 /// # Invariant
 /// `COLS` divides `N`, so every lane's `(row, col)` is inside the rectangle and the
 /// answer below is the whole strip rather than a prefix of it. The buffer is one
-/// element longer than the largest index the body reads, which is the tail-lane
-/// obligation the device states: a lane of the last workgroup reads past `count`
-/// whether or not the body looks.
+/// element longer than the largest index the body reads.
 ///
 /// The programs declare the same count as their own `L`, so the buffer's declared
 /// length and the launch's extent are one number.

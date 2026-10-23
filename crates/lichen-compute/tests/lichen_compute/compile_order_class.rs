@@ -22,14 +22,12 @@ use lichen_utils::extend::AsEnum;
 /// # Invariant
 ///
 /// Both declare `Float` buffers on every side, so **every** class in both fragments
-/// is `Float`: the pair differs only in what it computes. That is what makes the
-/// control and the test comparable at all — a difference between the two fragments
-/// is a difference between the two compilations, never a difference the program
-/// asked for.
+/// is `Float`: the pair differs only in what it computes. A difference between the
+/// fragments is a difference between the compilations, never one the program asked
+/// for.
 ///
-/// No parameter carries an `.out` group: each body declares its buffer with
-/// `compute.buf` and the write is the codomain field's value
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// No parameter carries an `.out` group: the body declares its buffer with
+/// `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
 QK = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
 Scored = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
