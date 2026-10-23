@@ -93,3 +93,13 @@ fn a_closure_stored_in_an_outside_array_is_still_callable() {
     let out = run::evaluate("y = [@gc (x => x + 1)]\n(y[0]) 3").expect("the program runs");
     assert_eq!(out, "4: Int");
 }
+
+#[test]
+fn a_gc_block_calls_a_curried_binding_per_element() {
+    // The example's program: a @gc block calling a curried pair, twice in one array.
+    let out = run::evaluate(
+        "add = x => y => x + y\ndouble = n => @gc { a = n + 1\nb = add a a\nb }\n@gc [double 3, double 7]",
+    )
+    .expect("the program runs");
+    assert_eq!(out, "[8, 16]: array{Int, 2}");
+}
