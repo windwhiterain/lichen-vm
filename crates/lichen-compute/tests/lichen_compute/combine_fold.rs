@@ -10,16 +10,6 @@ use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
 const COUNT: usize = 3 * LANES as usize;
-
-/// The per-lane answer at `out[0]`: the body folds the lane's own one element there, and that
-/// element is `1.0²`.
-///
-/// # Invariant
-/// The same schedule `automatic_tiling.rs`'s `Σ x` case pins: the fold's bound is the lane's own
-/// index plus one, so lane zero folds `b[0]` — squared here, which is still `1.0` — and the tiled
-/// body would have put `1² + 2² + … + 192²` there instead.
-const PER_LANE: f32 = 1.0;
-
 /// A `Σ x²` program: the one of `automatic_tiling.rs` with the datum squared inside the combine.
 ///
 /// # Invariant
@@ -61,16 +51,6 @@ out
 "#,
     );
     source.replace("COUNT", &COUNT.to_string())
-}
-
-/// The sum of squares over `1 … COUNT`, the one number both schedules must agree on.
-///
-/// # Invariant
-/// Every partial sum of `j²` for `j ≤ COUNT` is an integer below `2^24`, so the closed form is one
-/// exact `f32` however it is spelled and no rounding enters the comparison.
-fn sum_of_squares() -> f32 {
-    let count = COUNT as f64;
-    (count * (count + 1.0) * (2.0 * count + 1.0) / 6.0) as f32
 }
 
 /// The lines the installed pass reported for a module, through the run report's own channel.
