@@ -2,23 +2,35 @@
 
 use lichen_compute::language::new_store;
 
-/// A parallel kernel whose two writes name each other's output, and is refused by name.
+/// A parallel kernel whose write names a buffer it did not declare, and is refused by name.
 ///
 /// # Invariant
 ///
 /// The body is fixed and only the program's **tail** varies, so the two tests below differ in
-/// the shape of the answer alone and not in the refusal they are about.
+/// the shape of the answer alone and not in the refusal they are about. The parameter carries
+/// no `.out` group: the body declares its output, and the write that names the parameter's
+/// input buffer is the one the compiler refuses (`docs/notes/kernel-buffer-declarations.md`).
 const MISPLACED_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.a Int}
-Out = struct{.c (compute.Buf _), .s (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Data = struct{.d (compute.Buf Float)}
+Out = struct{.e (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+}
+filler = compute.parallel fill "cpu" Data
+data = (compute.plrun filler ((Fill)(.n 3)) : Data)
+In  = struct{.k (compute.Buf Float)}
+Par = struct{.n Int, .in In}
+Arg = struct{.n Int, .I In}
 f = (k : Par) => {
   i = compute.range k.n
-  (compute.write ((compute.Write _)(.to k.out.s, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.c, .at i, .value i)))
+  compute.write ((compute.Write _)(.to k.in.k, .at i, .value (99.0 : Float)))
 }
 k = compute.parallel f "cpu" Out
-outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
+out = (compute.plrun k ((Arg)(.n 3, .I In(.k data.d))) : Out)
 "#;
 
 /// Run `tail` after [`MISPLACED_WRITE`]: the output line, or the rendered diagnostics.
@@ -31,7 +43,7 @@ fn attempt(tail: &str) -> Result<String, Vec<String>> {
 /// The answer is a tuple of empty slots, which the root-only gate read as a value.
 #[test]
 fn a_refusal_reaches_an_answer_that_is_a_tuple() {
-    let messages = attempt("(compute.collect outs.c, compute.collect outs.s)")
+    let messages = attempt("(data.d, data.d)")
         .expect_err("a refusal must not be lost because the answer is a tuple");
     assert_eq!(
         messages.len(),
@@ -39,8 +51,9 @@ fn a_refusal_reaches_an_answer_that_is_a_tuple() {
         "one misplaced write is one diagnostic: {messages:?}"
     );
     assert!(
-        messages[0].contains("compute.parallel") && messages[0].contains("to output 1"),
-        "the refusal must name the output the write points at: {messages:?}"
+        messages[0].contains("compute.parallel")
+            && messages[0].contains("a kernel body's index cannot be placed"),
+        "the refusal must name the write it could not place: {messages:?}"
     );
 }
 
@@ -61,7 +74,8 @@ fn a_refusal_is_reported_even_when_the_answer_arrived() {
         "one misplaced write is one diagnostic: {messages:?}"
     );
     assert!(
-        messages[0].contains("compute.parallel") && messages[0].contains("to output 1"),
-        "the refusal must name the output the write points at: {messages:?}"
+        messages[0].contains("compute.parallel")
+            && messages[0].contains("a kernel body's index cannot be placed"),
+        "the refusal must name the write it could not place: {messages:?}"
     );
 }
