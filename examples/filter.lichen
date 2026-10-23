@@ -33,22 +33,49 @@
     measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
     `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 12 of 12 element(s)` on \
     the RTX 3060 for both chains, so the window read, the tap-count leaf and the guard are all right \
-    on the device."
+    on the device. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "([1.0, 4.0, 8.0, 12.0, 16.0, 20.0], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]): tuple{array{Float, 6}, array{Float, 6}}"
 ---
-FIn  = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
-FOut = struct{.y (compute.Buf Float)}
-FPar = struct{.n Int, .taps Int, .in FIn, .out FOut}
+FIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 6))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+FOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+FPar = struct{.n Int, .taps Int, .in FIn}
 FArg = struct{.n Int, .taps Int, .I FIn}
 filter_raw = (c : FPar) => {
   i = compute.range c.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((FOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (c.taps, 0.0 ~ "identity")))))))
 }
 filter = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu" FOut
-x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
-smooth = (compute.buffer ([1.0, 2.0, 1.0] : array{Float, 3}) : (compute.Buf Float))
-difference = (compute.buffer ([1.0, (0.0 - 1.0), 0.0] : array{Float, 3}) : (compute.Buf Float))
+Fill = struct{.n Int}
+xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+fill_x_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0)
+  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_x = compute.parallel fill_x_raw "cpu" xBuf
+x = (compute.plrun fill_x ((Fill)(.n 6)) : xBuf).x
+smoothBuf = struct{.smooth (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+fill_smooth_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0)
+  ((smoothBuf)(.smooth (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_smooth = compute.parallel fill_smooth_raw "cpu" smoothBuf
+smooth = (compute.plrun fill_smooth ((Fill)(.n 3)) : smoothBuf).smooth
+differenceBuf = struct{.difference (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+fill_difference_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then (0.0 - 1.0) else 0.0)
+  ((differenceBuf)(.difference (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_difference = compute.parallel fill_difference_raw "cpu" differenceBuf
+difference = (compute.plrun fill_difference ((Fill)(.n 3)) : differenceBuf).difference
 smoothed = (compute.plrun filter ((FArg)(.n 6, .taps 3, .I FIn(.x x, .w smooth))) : FOut)
 differenced = (compute.plrun filter ((FArg)(.n 6, .taps 3, .I FIn(.x x, .w difference))) : FOut)
 (compute.collect smoothed.y : array{Float, 6}, compute.collect differenced.y : array{Float, 6})
