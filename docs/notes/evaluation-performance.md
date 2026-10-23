@@ -115,6 +115,25 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 9: the example runner shares a registry too, and the server already did
+
+`readme::program_output` — the tool behind `sync-readme` and the examples guard — built a
+store per program, so each of `examples/`' 46 programs compiled the prelude again. It now
+keeps one registry **per thread** and gives each call a store over it; the prelude and the
+plugin wrapper compile once for the run. A thread-local rather than a `static`, because
+`Registry<P>` is neither `Send` nor `Sync` by design (round 8): the cache is exactly as
+wide as the thread that owns it.
+
+Measured: `sync-readme` 110–118 ms → **80–84 ms**, and the README and example metadata come
+out unchanged (the tool is idempotent; `git status` stays clean after a run).
+
+**The server needed nothing: round 8's report was wrong about it.** `WorkerState` holds one
+`registry: Arc<RwLock<Registry<P>>>` and every run's store adopts it
+(`store.registry = Arc::clone(&self.registry)` before the analysis), so the prelude and the
+plugin wrappers already compile once per worker; the *store* is per run, the registry is
+not. A store is rebuilt each time because a document's imports must not be read through
+another's — the same split this note uses for the CLI.
+
 ## Round 8: a directory run shares one registry
 
 Each file of a directory run got a store of its own, and each store compiled the prelude

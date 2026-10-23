@@ -11,6 +11,7 @@ pub use container::{
     deserialize_artifact, deserialize_artifact_with, serialize_artifact, serialize_artifact_with,
 };
 
+pub use lichen_lowlevel::Registry;
 pub use lichen_lowlevel::codec::{Reader, Writer, arena_align, arena_base};
 
 // The hash helpers live in `lichen-utils`; re-exported for the old paths.
