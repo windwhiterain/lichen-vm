@@ -2,11 +2,9 @@
 //!
 //! # Invariant
 //!
-//! Print-only. No `.out` group exists: the body declares the output buffer with
-//! `compute.slice`, writes it, and returns the codomain. The input of the second kernel
-//! is the *first kernel's output* — a host builds data by running a kernel
-//! (`docs/notes/kernel-buffer-declarations.md`). The reading is the refusal, or the value
-//! a run gives: the fill kernel writes 1.0, the compute kernel writes 2.0.
+//! Print-only. A body declares its output with `compute.slice` and returns the codomain;
+//! a host builds data by running a kernel (`docs/notes/kernel-buffer-declarations.md`).
+//! Each reading is a run's answer or its refusal.
 
 use lichen_compute::language::new_store;
 

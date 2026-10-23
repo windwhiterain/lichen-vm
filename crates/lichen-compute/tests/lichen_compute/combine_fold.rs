@@ -15,9 +15,7 @@ const COUNT: usize = 3 * LANES as usize;
 /// # Invariant
 /// One expression differs and the algebra with it: the marked combine canonicalizes to
 /// `(+ t (* d d))`, so its **top-level operator** is still `+` while its datum is not the datum.
-/// The fold's parameter carries no `.out` group and the data is a fill kernel's own output,
-/// because a kernel declares its buffers and a host builds its data by running a kernel
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// The parameter carries no `.out` group and the data is a fill kernel's output.
 fn squares() -> String {
     let mut source = String::from(
         r#"

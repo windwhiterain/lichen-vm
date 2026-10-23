@@ -1767,9 +1767,7 @@ where
                 | ComputeOperator::Write
                 | ComputeOperator::WriteAtomic
                 | ComputeOperator::Slice => {
-                    // Kernel-only operators: none of them reaches the VM as a
-                    // standalone apply — stay lazy. A declared buffer is lowered in the
-                    // body it is declared in and has no host value.
+                    // Kernel-only operators stay lazy; a slice has no host value.
                     None
                 }
                 ComputeOperator::BufferCollect => {
@@ -2644,9 +2642,7 @@ where
     let type_classes_ref = &type_classes;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
-    // **The codomain states the outputs**: the parameter no longer carries `.out`
-    // (`docs/notes/kernel-buffer-declarations.md`), so a parameter that names none takes
-    // them from the return type, in field order.
+    // The codomain states the outputs; the parameter carries no `.out` group.
     if roles.outputs.is_empty()
         && let Ok(codomain) = codomain_roles(module, body)
     {
@@ -2714,15 +2710,7 @@ where
     let mut tally = Positions::for_params(&params);
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // **A conditional is left to the walk**, which knows *why* it did not reduce the
-    // write.
-    // **Any buffer an output position names is accepted** (`docs/notes/kernel-buffer-declarations.md`):
-    // a declaration, a write, a loop result or a selection arm. The walk lowers it, and the
-    // declaration order is the position; the checks that rejected a non-write position are
-    // gone, so a store is validated where it is emitted instead.
-    //
-    // **The body statements are lowered too** (`Lower::lower_statements`): a write the
-    // codomain does not demand is still a store the program wrote.
+    // The walk lowers an output position whatever buffer it names.
     let mut body_instr = Lower::lower_index_function(
         module,
         &params,
@@ -2734,8 +2722,7 @@ where
         type_classes_ref,
     )?;
     body_instr.expand_transcendentals()?;
-    // **The declaration's length is the output's allocation**: the run reads it per
-    // ordinal (`docs/notes/kernel-buffer-declarations.md`).
+    // The declaration's length is the output's allocation.
     roles.output_extents = tally.output_extents.clone();
     if outputs.len() != roles.outputs.len() {
         return Err(format!(
@@ -3759,8 +3746,7 @@ where
     let mut placed: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(outputs.len());
     for (position, &(payload, class)) in outputs.iter().enumerate() {
         let path = roles.outputs.get(position)?;
-        // The paths are the codomain's own: `P` no longer carries an `.out` group to drop
-        // (`docs/notes/kernel-buffer-declarations.md`).
+        // The paths are the codomain's own: there is no `.out` step to drop.
         let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
         placed.push((path.clone(), value));
     }
@@ -5525,8 +5511,7 @@ where
     }
     let mut fields: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(placed.len());
     for (position, placed) in placed.iter().enumerate() {
-        // The paths are the codomain's own: `P` no longer carries an `.out` group to drop
-        // (`docs/notes/kernel-buffer-declarations.md`).
+        // The paths are the codomain's own: there is no `.out` step to drop.
         let Some(path) = roles.outputs.get(position) else {
             refuse(
                 module,
@@ -6727,10 +6712,7 @@ fn run_parallel_kernel(
         }
     }
     let inputs = host_inputs;
-    // Shared atomic words: a write stores its slot, an atomic add read-modify-writes it.
-    // **Each output is allocated at its declared length** where the declaration states one
-    // (`docs/notes/kernel-buffer-declarations.md`); the launch's element count is the
-    // extent otherwise.
+    // Each output is allocated at its declared length, else the launch count.
     let outputs: Vec<Vec<AtomicI64>> = (0..outputs)
         .map(|ordinal| {
             let length = output_extents

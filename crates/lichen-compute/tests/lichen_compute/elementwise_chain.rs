@@ -21,12 +21,10 @@ const COUNT: usize = 8;
 /// The chain's first kernel: `e[i] = 2·d[i]`, marked as the function it computes.
 ///
 /// # Invariant
-/// The mark rides the **whole** expression — a top-level routed operator anchors to the
-/// product and not to its first operand (`docs/notes/graph-fusion.md` §3) — so the region's
-/// node 0 records the element function this kernel computes and nothing else. The extent is
-/// `k.n`, a run-time value, so the recorded node's count is the graph's own. `ParE` carries
-/// no `.out` group: the body declares `e` with `compute.slice` and the write is the codomain
-/// field's value (`docs/notes/kernel-buffer-declarations.md`).
+/// The mark rides the **whole** expression — a routed operator anchors to the product, not
+/// its first operand (`docs/notes/graph-fusion.md` §3) — so node 0 records the element
+/// function and nothing else. The extent is `k.n`, a runtime value. `ParE` carries no
+/// `.out` group (`docs/notes/kernel-buffer-declarations.md`).
 const SCALE: &str = r#"
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}

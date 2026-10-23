@@ -939,8 +939,7 @@ where
             ComputeOperator::Read => self.buffer_read(operand),
             ComputeOperator::Write => self.buffer_write(operand),
             ComputeOperator::WriteAtomic => self.buffer_write_atomic(operand),
-            // **A buffer the body declares**: a length and an element type, and nothing
-            // about where it lives (`docs/notes/kernel-buffer-declarations.md`).
+            // A declared slice: a length, an element type, and no placement.
             ComputeOperator::Slice => self.slice_declare(node, operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
@@ -964,8 +963,7 @@ where
             );
         };
         let count_node = dynamic(count.node)?;
-        // A literal length is the allocation the run owes the declaration; a runtime one
-        // leaves the launch's element count the extent (`Positions::output_extents`).
+        // A literal length is the allocation; a runtime one leaves the launch count.
         let extent = self
             .module
             .usize_value(count_node)
@@ -975,8 +973,7 @@ where
         self.declarations.push(count);
         self.tally.output_extents.push(extent);
         self.declared.insert(node, ordinal);
-        // The declaration's value is the version token: which buffer it names is the node's
-        // identity, and no reader reads the value.
+        // The declaration's value is the version token; its node is the identity.
         Ok(self.version_token())
     }
 
@@ -2265,13 +2262,9 @@ where
         {
             self.value(previous)?;
         }
-        // **The target is lowered before its ordinal is read**: a declaration registers its
-        // ordinal when it is walked, so the write's position is known only after that walk
-        // (`docs/notes/kernel-buffer-declarations.md`).
+        // A declaration registers its ordinal when walked, so lower the target first.
         self.value(target)?;
-        // **A declared buffer names its position by declaration order**: the body creates
-        // the buffer instead of receiving it, and a buffer the parameter still names falls
-        // back to its path.
+        // A declared target names its ordinal by declaration order.
         let ordinal = match self.declared_ordinal(target) {
             Some(ordinal) => ordinal,
             None => write_chain_output_pos(self.module, self.params, target)?.ok_or_else(|| {

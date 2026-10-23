@@ -95,12 +95,10 @@ fn combine_operator(expr: &Expr) -> Option<BinaryOp> {
 /// The program whose marks declare the algebra, over a **runtime** extent.
 ///
 /// # Invariant
-/// The fold's bound is `k.n`, a runtime value, so the definition pass leaves the nest undecided
-/// and the emitter lowers it: only then is the marked seed visited and `identity` published
-/// (`docs/notes/graph-fusion.md` §3). A literal bound loses both halves of the algebra. The
-/// parameter carries no `.out` group: the body declares the output with `compute.slice` and the
-/// write is the codomain field's value, so the write is reachable from the return and survives
-/// the freeze (`docs/notes/kernel-buffer-declarations.md`).
+/// The fold's bound is `k.n`, a runtime value, so the definition pass leaves the nest
+/// undecided and the emitter lowers it: only then is the marked seed visited and `identity`
+/// published (`docs/notes/graph-fusion.md` §3). The parameter carries no `.out` group
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn source() -> &'static str {
     r#"
 ---

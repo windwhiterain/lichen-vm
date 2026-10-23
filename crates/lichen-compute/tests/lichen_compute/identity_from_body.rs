@@ -41,12 +41,10 @@ const A_ROW_OF_POSITIVES: &str = "int2float i";
 /// A `Reduction` program folding `combine` over the row `data_at_i` writes, from `seed`.
 ///
 /// # Invariant
-/// The fold's bound is `i + 1`, the lane's own index plus one, so the program's own body is the
-/// per-lane schedule the tiling pass replaces and the two answers are read at `out[COUNT - 1]`
-/// and `out[0]` — which is what makes the comparison a statement about **tile ≡ body** rather
-/// than about a number chosen here. `Par` declares no `.out` group: the body declares `z` with
-/// `compute.slice` and the write is the codomain field's value, and the input data is a fill
-/// kernel's own output, because a host builds its data by running a kernel
+/// The fold's bound is `i + 1`, the lane's own index plus one, so the program's body is the
+/// per-lane schedule the pass replaces and the answers are read at `out[COUNT - 1]` and
+/// `out[0]`, which makes the comparison about **tile ≡ body**. `Par` declares no `.out`
+/// group and the data is a fill kernel's output
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn fold_over(combine: &str, seed: &str, data_at_i: &str) -> String {
     let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
@@ -88,12 +86,9 @@ out
 /// The one-node graph the recording's own fragment makes.
 ///
 /// # Invariant
-/// The fragment is the kernel whose claim names [`REDUCTION`], chosen by the claim and not by
-/// the order the module compiled in: the program compiles the fill kernel as well as the fold, and
-/// the pass is handed the fold's body and not the fill's. The node is built from the registry's
-/// own fragment and not from a run's, so the pass is handed exactly the body the program
-/// compiled: a refusal is then the derivation's answer to that body, and the consultation
-/// dispatches nothing.
+/// The fragment is the kernel whose claim names [`REDUCTION`], chosen by the claim because
+/// the program compiles the fill kernel too. It is built from the registry's own fragment,
+/// so a refusal is the derivation's answer to that body and nothing is dispatched.
 fn recorded_graph(module: &Module<LangProgram>) -> Graph {
     let kernel = module
         .nodes

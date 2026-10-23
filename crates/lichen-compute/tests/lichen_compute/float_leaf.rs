@@ -46,9 +46,7 @@ const ELEMENTS: usize = 32;
 /// `.n` is the **first** scalar leaf, so it is the extent whatever follows it; `.scale` sits
 /// beside it rather than under `.in`, which is what makes it a launch value and not a
 /// buffer. `kind` is the class of `.scale`, so the same shape declares the mismatch case.
-/// The parameter carries no `.out` group: the body declares the output with
-/// `compute.slice` and the write is the codomain field's value
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// The parameter carries no `.out` group; the body declares the output and returns the write.
 fn scaled(kind: &str) -> String {
     format!(
         r#"
@@ -323,8 +321,7 @@ fn a_float_scale_beside_two_extents_records_and_answers_on_the_device() {
 /// difference is the whole of it.
 #[test]
 fn a_float_leaf_and_an_integer_value_are_refused_in_both_directions() {
-    // The run reaches the class check only once a backend is installed: with none, the
-    // refusal is the missing device and not the leaf's class.
+    // The class check needs a backend: with none, the refusal names the device.
     let (_stub, _guard) = common::stub();
     assert_eq!(
         graph_of(&mismatched("Float", "Float")).nodes().len(),
