@@ -30,12 +30,12 @@ fn fold_over(combine: &str, identity: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.b (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
+In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
 Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
   ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity"))))))
 }
@@ -47,7 +47,7 @@ built = compute.graph step
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length COUNT))
   ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
 }
 filler = compute.parallel fill "cpu" Out
