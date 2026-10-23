@@ -90,3 +90,40 @@ fn probe_a_declared_length_is_the_allocation() {
         ),
     }
 }
+
+/// The codomain may hold a loop's result: the version a step's write returned.
+///
+/// # Invariant
+/// The field is the fold's result, not a `compute.write` node — the state carries the
+/// version the step wrote, so the pure value is the loop's, and the store is inside its
+/// step (`docs/notes/kernel-buffer-declarations.md`).
+const LOOPED: &str = r#"
+--- compute = import "compute.lichen" ---
+Out = struct{.y (compute.Buf Float)}
+LPar = struct{.n Int, .taps Int}
+fill = (c : LPar) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _)(.to s(1), .at i, .value (int2float s(0))))))
+  ((Out)(.y (fold (c.taps, y))))
+}
+k = compute.parallel fill "cpu" Out
+data = (compute.plrun k ((LPar)(.n 2, .taps 3)) : Out)
+compute.collect data.y : array{Float, 2}
+"#;
+
+#[test]
+fn probe_the_codomain_may_hold_a_loops_result() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(LOOPED, None, &mut store) {
+        Ok(text) => println!("[looped] answered {text}"),
+        Err(diagnostics) => println!(
+            "[looped] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
