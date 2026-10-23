@@ -341,6 +341,7 @@ impl From<ir::KernelRoles> for schema::Roles {
 
 impl From<schema::Roles> for ir::KernelRoles {
     fn from(roles: schema::Roles) -> Self {
+        let output_count = roles.outputs.len();
         ir::KernelRoles {
             scalars: roles
                 .scalars
@@ -367,9 +368,9 @@ impl From<schema::Roles> for ir::KernelRoles {
                 .into_iter()
                 .map(|class| class.map(Into::into))
                 .collect(),
-            // A fused schema states no declared length: the launch's element count is the
-            // extent (`KernelRoles::output_extents`).
-            output_extents: Vec::new(),
+            // A fused schema states no declared length: each output answers `None`, and the
+            // launch's element count is its extent (`KernelRoles::output_extents`).
+            output_extents: (0..output_count).map(|_| None).collect(),
         }
     }
 }

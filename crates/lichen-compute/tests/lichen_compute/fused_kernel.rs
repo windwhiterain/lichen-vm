@@ -191,7 +191,7 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
             outputs: vec![vec![1]],
             input_classes: vec![Some(ScalarClass::Float)],
             output_classes: vec![Some(ScalarClass::Int)],
-            output_extents: Vec::new(),
+            output_extents: vec![None],
         },
         body: staged_body().0,
         inputs: 1,
