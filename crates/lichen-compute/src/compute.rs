@@ -2651,6 +2651,12 @@ where
     // The role table is decoded from the parameter's type, whose shape the low
     // vocabulary reads as a tuple of its fields.
     let mut roles = parallel_roles(module, cfg_pair)?;
+    // **The parameter's own output paths are the parameter's**: a write's target and a
+    // `@loop`'s carried state are read against the *parameter's* paths, and the
+    // codomain's field indices are not paths in the parameter
+    // (`docs/notes/kernel-buffer-declarations.md`). The slot keeps this copy; the
+    // fragment carries the codomain's.
+    let mut parameter_roles = roles.clone();
     let type_classes = domain_type_classes(
         module,
         &[
@@ -2666,7 +2672,10 @@ where
         && let Ok(codomain) = codomain_roles(module, body)
     {
         roles.outputs = codomain.outputs;
-        roles.output_classes = codomain.output_classes;
+        roles.output_classes = codomain.output_classes.clone();
+        // The element class an output position carries is the codomain's, and the
+        // slot's write reads it there (`Lower::declared_output_class`).
+        parameter_roles.output_classes = codomain.output_classes;
     }
 
     // The slot is seeded with the ABI's signature: the parameter's leaves then
@@ -2692,7 +2701,7 @@ where
         value: cfg_value,
         shape: cfg_shape,
         base: 0,
-        roles: Some(roles.clone()),
+        roles: Some(parameter_roles),
     }];
     // The class a buffer read is declared in: the first write's own class.
 
