@@ -55,22 +55,41 @@
    `f32` represents every integer up to `2^24` exactly — so unlike SiLU and softmax, whose declared
    values are *modelled* because this language's `exp` is a Taylor sum and its `sqrt` a Newton
    iteration, a matmul over small integers has no approximation in it at all and this is an
-   **exact** correctness check."
+   **exact** correctness check. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+   conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "[58.0, 64.0, 139.0, 154.0]: array{Float, 4}"
 ---
-Ain  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
-OutC = struct{.c (compute.Buf Float)}
-Par  = struct{.n Int, .cols Int, .k Int, .in Ain, .out OutC}
+Ain  = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 6))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+OutC = struct{.c (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Par  = struct{.n Int, .cols Int, .k Int, .in Ain}
 Arg  = struct{.n Int, .cols Int, .k Int, .I Ain}
 matmul_raw = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (k.k, 0.0 ~ "identity"))))
+  b_c = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutC)(.c (compute.write ((compute.Write _)(.to b_c, .at i, .value (fold (k.k, 0.0 ~ "identity")))))))
 }
 matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutC
-a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
-b = (compute.buffer ([7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 6}) : (compute.Buf Float))
+Fill = struct{.n Int}
+aBuf = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+fill_a_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0)
+  ((aBuf)(.a (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_a = compute.parallel fill_a_raw "cpu" aBuf
+a = (compute.plrun fill_a ((Fill)(.n 6)) : aBuf).a
+bBuf = struct{.b (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+fill_b_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  v = (if i == 0 then 7.0 else 0.0) + (if i == 1 then 8.0 else 0.0) + (if i == 2 then 9.0 else 0.0) + (if i == 3 then 10.0 else 0.0) + (if i == 4 then 11.0 else 0.0) + (if i == 5 then 12.0 else 0.0)
+  ((bBuf)(.b (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_b = compute.parallel fill_b_raw "cpu" bBuf
+b = (compute.plrun fill_b ((Fill)(.n 6)) : bBuf).b
 out = (compute.plrun matmul ((Arg)(.n 4, .cols 2, .k 3, .I Ain(.a a, .b b))) : OutC)
 compute.collect out.c : array{Float, 4}
