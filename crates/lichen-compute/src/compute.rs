@@ -2651,11 +2651,7 @@ where
     // The role table is decoded from the parameter's type, whose shape the low
     // vocabulary reads as a tuple of its fields.
     let mut roles = parallel_roles(module, cfg_pair)?;
-    // **The parameter's own output paths are the parameter's**: a write's target and a
-    // `@loop`'s carried state are read against the *parameter's* paths, and the
-    // codomain's field indices are not paths in the parameter
-    // (`docs/notes/kernel-buffer-declarations.md`). The slot keeps this copy; the
-    // fragment carries the codomain's.
+    // The parameter's output paths are its own (`docs/notes/kernel-buffer-declarations.md`).
     let mut parameter_roles = roles.clone();
     let type_classes = domain_type_classes(
         module,
@@ -2673,8 +2669,7 @@ where
     {
         roles.outputs = codomain.outputs;
         roles.output_classes = codomain.output_classes.clone();
-        // The element class an output position carries is the codomain's, and the
-        // slot's write reads it there (`Lower::declared_output_class`).
+        // The element class an output position carries is the codomain's.
         parameter_roles.output_classes = codomain.output_classes;
     }
 
@@ -4887,10 +4882,9 @@ where
 /// cannot drift into two slightly different constructions: a collected array is
 /// homogeneous, and the class is only known at run time.
 ///
-/// The node is the element's **slot** — `[value, type, attributes…]` — and not the
-/// bare value: an array's element read takes the element's value out of its slot
-/// (`docs/notes/compound-element-slots.md`), so a collected array read by position
-/// answers its element and not *its value is not a container*.
+/// The node is the element's **slot** and not the bare value: an array's element
+/// read takes the element's value out of its slot
+/// (`docs/notes/compound-element-slots.md`).
 fn scalar_item<P>(
     module: &mut Module<P>,
     block: BlockId,
