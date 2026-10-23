@@ -16,7 +16,7 @@ use lichen_kernel_ir::{
 };
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
-    Module, NodeId, Program,
+    Module, NodeId, Program, ValueExt,
 };
 use lichen_runtime::wasm::param_classes;
 use lichen_utils::extend::AsEnum;
@@ -1028,12 +1028,22 @@ where
             let Ok(items) = self.module.operand_items(operand) else {
                 continue;
             };
-            if items.len() == wanted.len()
-                && items
-                    .iter()
-                    .zip(wanted.iter())
-                    .all(|(left, right)| left.node == right.node)
-            {
+            // **A declaration's identity is its parameters**, not the op node: a wrapper call
+            // the body makes twice is two `$buf` ops whose operands may be copies, so the
+            // operands are compared by value — the wrapper's own equality is the authority
+            // (`docs/notes/kernel-buffer-declarations.md`).
+            let same = items.len() == wanted.len()
+                && items.iter().zip(wanted.iter()).all(|(left, right)| {
+                    left.node == right.node
+                        || match (
+                            self.module.node_value(left.node),
+                            self.module.node_value(right.node),
+                        ) {
+                            (Some(left), Some(right)) => left.value_eq(&right),
+                            _ => false,
+                        }
+                });
+            if same {
                 return Some(*ordinal);
             }
         }
