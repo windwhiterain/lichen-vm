@@ -22,7 +22,7 @@ FillArg = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
   y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
-  ((Out)(.y y))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 1.0)))))
 }
 fk = compute.parallel fill "cpu" Out
 filled = (compute.plrun fk ((FillArg)(.n 2)) : Out)
@@ -30,8 +30,9 @@ Par = struct{.n Int, .in In}
 Arg = struct{.n Int, .I In}
 raw = (c : Par) => {
   i = compute.range c.n
+  x = (compute.read ((compute.Read _)(.from c.in.unused, .at i)) : Float)
   y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
-  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 2.0)))))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value x)))))
 }
 k = compute.parallel raw "cpu" Out
 out = (compute.plrun k ((Arg)(.n 2, .I In(.unused filled.y))) : Out)

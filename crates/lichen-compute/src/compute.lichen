@@ -20,8 +20,8 @@ Read = T => struct{.from (Buf T) # warp, .at Int}
 Write = T => struct{.to (Buf T) # warp, .at Int, .value T}
 WriteAtomic = T => struct{.to (Buf T) # warp, .at Int, .value T}
 read = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
-write = (x : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
-write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # (perspective_of x.to))
+write = (x : (Write _)) => ($write(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
+write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
 collect = (b : (Buf _)) => $collect(b)
 slice = (x : (Slice _)) => ($slice(x.count, x.element) : (Buf _))
 Mma = T => struct{.s string, .a (Buf T) # warp, .b (Buf T) # warp, .c (Buf T) # warp}

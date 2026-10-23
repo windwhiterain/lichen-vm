@@ -52,14 +52,14 @@ raw = (c : Par) => {
 }
 ```
 
-**The codomain accepts any buffer**, not a write specifically: `((Out)(.y y))`
-(the declared buffer, with the write a statement) and
-`((Out)(.y (compute.write …)))` (the write as the position's value) are both
-accepted, because the rule is that **whatever flows out is a buffer**
-(`docs/notes/kernel-buffer-declarations.md`). The body's statements are lowered
-by the fragment (`Lower::lower_statements`), so a write the codomain does not
-demand is still a store the program wrote; `value` is idempotent, so a write an
-output already demanded is not emitted twice.
+**`write` is itself a pure function, and its result is a buffer.** The wrapper
+ascribes the result `(Buf _)`: a write returns the buffer's **new version**, so
+the value that flows out *is* the write's result — `((Out)(.y (compute.write …)))`
+— and no effect exists outside the value. Any buffer the value reaches is
+accepted: a slice declaration, a write's version, a loop's result, a selection's
+arm. A write whose value is discarded is an effect outside the value and is **not**
+the model; the freeze drops it (a statement-form write is not reachable from the
+return, measured — `docs/notes/kernel-buffer-declarations.md`).
 
 The signature is `A I -> O`, the codomain `O` holds the declared buffers, and
 the perspective is spelled at the declaration.
