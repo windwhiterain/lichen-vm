@@ -882,18 +882,12 @@ where
             return Ok(value);
         }
         let Some(operation) = self.module.node_operation(node) else {
-            // **A declaration instance is its `.native` slot**: the wrapper states the payload
-            // first, so the `$buf` op inside it is the definition the walk wants
-            // (`docs/notes/kernel-buffer-declarations.md`).
-            // **A pair reaches its value half**: the walk may land on a [value, type] term
-            // rather than on the value it holds.
+            // A declaration instance is its `.native` slot; a pair reaches its value half.
             if let Some(inner) = lichen_highlevel::shape::pair_value(self.module, node) {
                 return self.value(inner);
             }
             if let Some(payload) = self.instance_payload(node) {
-                // **The identity is the node the body bound**: the instance is registered
-                // beside the payload the walk declares, so a write naming its own `y` finds
-                // this declaration through the registry and not through a peel.
+                // The identity is the node the body bound, not a peel of it.
                 let before = self.declarations.len();
                 let value = self.lower_definition(payload)?;
                 if self.declarations.len() > before {
@@ -1032,8 +1026,7 @@ where
             .module
             .usize_value(count_node)
             .map(|value| value as u32);
-        // **The length is read, not lowered**: a declaration's count may be the launch's runtime
-        // scalar, which has no value in the frozen template.
+        // The length is read, not lowered: the template has no value for a runtime count.
         let ordinal = self.tally.output_extents.len();
         self.tally.output_extents.push(extent);
         let identity = self.canonical(node);
@@ -1061,10 +1054,7 @@ where
             let Ok(items) = self.module.operand_items(operand) else {
                 continue;
             };
-            // **A declaration's identity is its parameters**, not the op node: a wrapper call
-            // the body makes twice is two `$buf` ops whose operands may be copies, so the
-            // operands are compared by value — the wrapper's own equality is the authority
-            // (`docs/notes/kernel-buffer-declarations.md`).
+            // A declaration's identity is its parameters, not the op node.
             let same = items.len() == wanted.len()
                 && items.iter().zip(wanted.iter()).all(|(left, right)| {
                     left.node == right.node
@@ -1091,8 +1081,7 @@ where
     /// produced. A buffer the *parameter* named answers `None` here and falls back to the
     /// parameter path.
     fn declared_ordinal(&self, target: NodeId) -> Option<usize> {
-        // **The target may be the declaration itself**: a body lowers a declaration at the
-        // node it names, so the registry answers before any peel.
+        // The registry answers before any peel: a body lowers a declaration at its node.
         let identity = self.canonical(target);
         if let Some(ordinal) = self.declared.get(&identity) {
             return Some(*ordinal);
@@ -1100,17 +1089,14 @@ where
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
         let node = peeled.dynamic()?;
         let value = self.module.pair_value_half(node).unwrap_or(node);
-        // **A target that is a `Buf` instance names the `$buf` op inside it**, so the
-        // declaration's ordinal is read through `.native` rather than from the node itself.
+        // A target that is a `Buf` instance names the `$buf` op inside it.
         if let Some(payload) = self.instance_payload(value) {
-            // **The clone records the template it instantiates**, so the registry is read
-            // through the attributed node (docs/notes/kernel-buffer-declarations.md).
+            // The clone records the template it instantiates.
             let payload = self.canonical(payload);
             if let Some(ordinal) = self.declared.get(&payload).copied() {
                 return Some(ordinal);
             }
-            // **A declaration evaluated twice yields two `$buf` ops**, so a copy is matched by
-            // the `(type, length)` operands it shares with the declaration the body lowered.
+            // A copy is matched by the `(type, length)` operands it shares.
             return self.declared_matching(payload);
         }
         let definition = match self.module.define_in(self.function, value) {

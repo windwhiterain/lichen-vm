@@ -2223,8 +2223,7 @@ const BUF_NATIVE_FIELD: &str = "native";
 
 /// Whether a struct's field names are the `Buf` wrapper's.
 fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
-    // **The payload is the first field**: the older wrapper named the element field `element`,
-    // the value-indexed one names it `type` and adds `length` after it.
+    // The payload is the first field in both wrappers.
     let fields: Vec<&'static str> = names.iter().filter_map(|name| *name).collect();
     fields.as_slice() == [BUF_NATIVE_FIELD, "element"]
         || fields.as_slice() == [BUF_NATIVE_FIELD, "type", "length"]
@@ -2254,10 +2253,7 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
-            // **The parameter's `Buf` states the element class**, not a body node; an
-            // open cell states nothing. The value-indexed wrapper keeps it in `.native`'s
-            // `$buf(type, length)` term, whose first shape position is the element type; the
-            // older wrapper keeps it in `.element`'s field type.
+            // The class is the buffer type's first shape position.
             let fields = struct_fields_of_slot(module, field)
                 .and_then(|(_, shape)| field_types_of(module, shape));
             let mut element = None;
@@ -2748,8 +2744,7 @@ where
     body_instr.expand_transcendentals()?;
     // The declaration's length is the output's allocation.
     roles.output_extents = tally.output_extents.clone();
-    // **The parameter carries no .out group**, so the codomain's fields are the outputs and
-    // their positions are the paths (docs/notes/kernel-buffer-declarations.md).
+    // The codomain's fields are the outputs; the parameter names no `.out` group.
     if roles.outputs.is_empty() {
         roles.outputs = (0..outputs.len()).map(|at| vec![at]).collect();
     }

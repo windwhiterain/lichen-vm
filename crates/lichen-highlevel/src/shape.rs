@@ -66,9 +66,7 @@ macro_rules! for_each_kind_marker {
             /// `set(a)` and `set(a, b)` share one type.
             TypeSet { 10, "SetType", set_type_marker, set_type_marker_node }
             /// The kind marker of a **native buffer** type: the shape is
-            /// `[element type, length]`, the shape an array type carries, and the
-            /// payload is the native value of that kind
-            /// (`docs/notes/kernel-buffer-declarations.md`).
+            /// `[element type, length]`.
             TypeBuffer { 11, "$buf", buffer_marker, buffer_marker_node }
         }
     };
