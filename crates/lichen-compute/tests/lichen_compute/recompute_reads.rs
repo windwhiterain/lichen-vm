@@ -42,20 +42,22 @@ fn program() -> String {
 ---
 In  = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
+ParE = struct{.n Int, .in In}
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 pair_raw = (k : Par2) => {
   i = compute.range k.n
   left = (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)
   right = (compute.read ((compute.Read _)(.from k.in.p, .at i + 1)) : Float)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((left + right) ~ "element")))
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((left + right) ~ "element"))))))
 }
 pair = compute.parallel (pair_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
@@ -69,6 +71,10 @@ built = compute.graph step
 }
 
 /// The chain as a recording: the two kernels and the graph they recorded, nothing run.
+///
+/// # Invariant
+/// Each body declares its buffer with `compute.slice` and returns the write as the codomain
+/// field's value (`docs/notes/kernel-buffer-declarations.md`).
 fn recording() -> String {
     format!("{}(scale, pair, built)\n", program())
 }
@@ -76,21 +82,50 @@ fn recording() -> String {
 /// The recording as a program that runs it and answers, over `elements` data elements.
 fn running_recording(elements: usize) -> String {
     format!(
-        "{recording}\ncount = ({count})\ndata = (compute.buffer ([{values}] : array{{Float, \
-         {elements}}}) : (compute.Buf Float))\nout = compute.collect (compute.graphrun built \
-         (count, data))\nout\n",
+        "{recording}\ncount = ({count})\n{fill}data = (compute.plrun filler ((Fill)(.n {elements})) : In)\nout = \
+         compute.collect (compute.graphrun built (count, data.d))\nout\n",
         recording = recording(),
+        fill = fill(elements),
         count = COUNT,
-        values = values(elements),
+        elements = elements,
     )
 }
 
-/// The data the launch reads: `1.0 … elements`.
-fn values(elements: usize) -> String {
-    (1..=elements)
-        .map(|position| format!("{position}.0"))
+/// The fill kernel that builds the launch's data, and the table it writes.
+///
+/// # Invariant
+/// One lane per element and each lane writes the element at its own index, so the buffer holds
+/// the list the old `compute.buffer` call held: a host builds its data with a kernel, because
+/// there is no array-to-buffer conversion any more (`docs/notes/kernel-buffer-declarations.md`).
+fn fill(elements: usize) -> String {
+    format!(
+        r#"
+Fill = struct{{.n Int}}
+fill_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((In)(.d (compute.write ((compute.Write _)(.to y, .at i, .value {table})))))
+}}
+filler = compute.parallel fill_raw "cpu" In
+"#,
+        table = table(elements),
+    )
+}
+
+/// The data the launch reads: `1.0 … elements`, as the fill kernel's table.
+///
+/// # Invariant
+/// One arm per element and each arm names its own lane, so the sum is the list the old array
+/// literal held and not a formula of it: a nested `if` chain is refused
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn table(elements: usize) -> String {
+    (0..elements)
+        .map(|position| {
+            let value = position as f32 + 1.0;
+            format!("(if i == {position} then {value:.1} else 0.0)")
+        })
         .collect::<Vec<String>>()
-        .join(", ")
+        .join(" + ")
 }
 
 /// How many leading elements of the two-read answer the program defines.
