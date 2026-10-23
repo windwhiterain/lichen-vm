@@ -173,6 +173,18 @@ answers `?a # 32`, at a lane-varying index it is refused (`expected 32, found 1`
 from a `# 0` buffer answers `?a # 0` and from a `# warp` buffer it is refused
 (`expected 0, found 32`). The artifact format stays 16 — no persisted shape changed.
 
+**Later: the whole-argument spelling was retired.** `read`'s line was
+`# (perspective_of x)` because the annotation gate combined its value's direct children
+with `attr_or_missing`, so the reference was what made `divisor(from, at)` visible. The
+gate now reads the provider through `provided_slot` — the apply's reading, made recursive
+through a call's argument — so `read` states nothing and a caller's `combine` derives the
+meet from the argument expression it wrote. The **field** case is not a meet: `write`'s
+`# (perspective_of x.to)` states that the result *is* the input segment, and stays
+(`docs/notes/attributes.md` §"The whole-argument default"). Measured: removing `read`'s
+line alone refuses nothing new and leaves `a_read_takes_its_perspective_from_the_buffer_and_the_index`
+red (the provider reads `0`); with the provider change it is green, and language 275,
+highlevel 136 and compute 237/0/1 are green.
+
 ## Stage 5: the annotated pair is generated full width
 
 An annotation's pair carries **every** canonical attribute slot — the settled ones at

@@ -38,9 +38,11 @@ record (`return_marker`/`return_field`: the marker and the parameter field a bod
 reference follows), which carries the *field* reference (`write`'s `perspective_of
 x.to`); `02770d31` materializes the frozen return pair through the **signature's** remap,
 so its attribute graph references the parameter clone the type-side check binds and the
-*whole-parameter* reference (`read`'s `perspective_of x`) decides per call site. Measured:
-`perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
-lowlevel 164 (1 ignored), graph JIT 1/10.
+*whole-parameter* reference (then `read`'s `perspective_of x`, since retired: the
+consumer's recursive `combine` derives the same meet —
+[attributes](attributes.md) §"The whole-argument default") decides per call site.
+Measured: `perspective_requirements` **4/4**, compute **99 passed**, language 275,
+highlevel 136, lowlevel 164 (1 ignored), graph JIT 1/10.
 
 **The write's value reaches the marked body through a pair peel.** The backtrace from the
 loop lowering: `buffer_write → write_call → value → … → conditional → value_item → value →

@@ -88,19 +88,42 @@ certificate** is the applied clone's own return pair: the call's attribute is th
 clone's stated attribute, exactly as the call's type is the clone's codomain. So a
 frozen call reads the requirement from the signature pair exactly as a source call does.
 
-**A return attribute computed from the argument follows it.** The vocabulary writes
-`perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and a return
-spells `# (perspective_of x)` or `# (perspective_of x.to)`. The checker recognizes the
-**shape**, never the callee's name: a call whose argument is the enclosing parameter (or
-one of its fields) is a **reference** (`Checker::attribute_reference`). The applied
-clone's return pair states the call's attribute: a reference to the whole parameter is
-decided against the argument's provided slot, and a reference the clone can decide (a
-field of a **dynamic** callee's bound parameter) is decided per call site. A frozen
-callee's reference is only materialized by the runtime apply, so a *static* field
-reference falls back to the argument's whole provided slot. The reference slot is a
-fresh cell, and the annotation's computed value is not validated against the body's
-provider — the body cannot know the caller's value, so the check belongs to the call
-site (`docs/notes/array-attribute-view.md`).
+**The whole-argument default is the combine; a result that is an argument's part is a
+reference.** An expression's **provider** is `provided_slot` — the **combine** of what its
+sub-expressions provide, read recursively — and that one reading serves both gates: the
+apply's requirement check and the annotation's provider. So a function whose result's
+uniformity is its operand's meet states **nothing**: `add`, `sub`, `mul`, `div` and
+`compute.read`'s `divisor(from, at)` are all derived by the caller's own argument
+expression, whatever package defines the function. `compute.read` needs no annotation;
+it is the default working, not a fact the vocabulary wrote.
+
+**A callee that states nothing hands the call no certificate.** `check_app` copies a
+return certificate only when the callee's return states an attribute
+(`return_marker`/`return_field`); otherwise the call carries none and the consumer's
+combine is the whole reading. That gate is load-bearing for the **routed operators**: a
+surface `+` lowers to an `Apply` of the prelude's `add`, whose applied pair carries an
+*undecided* attribute cell. Read without the gate, that cell is a stated **wildcard**,
+and a wildcard unifies with everything — so `((1 # 4) + (2 # 6)) # 5` checked with the
+store loaded and was refused only in a bare build
+([operator-polymorphism](operator-polymorphism.md) §7.2 has the readings).
+
+`perspective_of` remains for the other shape: a result that is a **part** of the argument.
+`compute.write` returns the input's segment, so its uniformity is the `.to` field's and
+**not** the meet of `(to, at, value)` — under the meet, a write at a lane-varying index
+would certify `# 1`, and the later read's `Read.from # warp` requirement would refuse the
+buffer, so no kernel could write then read. The vocabulary therefore writes
+`perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and the return
+spells `# (perspective_of x.to)`. The checker recognizes the **shape**, never the callee's
+name: a call whose argument is the enclosing parameter (or one of its fields) is a
+**reference** (`Checker::attribute_reference`). The applied clone's return pair states the
+call's attribute: a reference to the whole parameter is decided against the argument's
+provided slot, and a reference the clone can decide (a field of a **dynamic** callee's
+bound parameter) is decided per call site. A frozen callee's reference is only
+materialized by the runtime apply, so a *static* field reference falls back to the
+argument's whole provided slot. The reference slot is a fresh cell, and the annotation's
+computed value is not validated against the body's provider — the body cannot know the
+caller's value, so the check belongs to the call site
+(`docs/notes/array-attribute-view.md`).
 
 ## The extension point (`AttrExt`)
 
@@ -391,12 +414,14 @@ different**: a requirement is the callee's *declared* `# 4`, which is checked an
 copied; a markerless parameter's slot is the *caller's own*, which a body returning it
 does restate, because that is the caller's value and not the callee's promise.
 
-**What it does not do.** The certificate reaches the call site, not through a
-compound the caller builds: `h = y => (g y) + 1` states nothing, because its returned
-expression is an unannotated `+` and the combine is only ever validated at an
-annotation site (above). Deriving a provider for an arbitrary expression is the
-inference this note does **not** have, and the certificate's first consumer is still
-unbuilt ([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2).
+**What it does not do.** A **certificate** — the attribute an expression *carries* — still
+needs a statement; only the **provider** is derived. So the certificate reaches the call
+site, not through a compound the caller builds: `h = y => (g y) + 1` states nothing,
+because its returned expression is an unannotated `+`, and a consumer of `h` reads `h`'s
+own call (whose provider is `h`'s argument) rather than descending into the body. Deriving
+a certificate for an arbitrary expression is the inference this note does **not** have,
+and the certificate's first consumer is still unbuilt
+([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2).
 
 ### The gate must compute its operands
 
@@ -566,6 +591,25 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   gains one `(marker, expression)` push. That push needs no slot number and no
   order knowledge — it is sorted into the canonical order — so the **order**
   itself stays a one-list edit (the manifest).
+- **The provider is one reading, and it is recursive.** `Checker::check_ann` used to
+  combine its value's direct children with `attr_or_missing`, so a call whose callee
+  stated no return attribute provided the absent top: `compute.read`'s
+  `# (perspective_of x)` was the certificate that made
+  `divisor(from, at)` visible. The apply's requirement gate already read
+  `provided_slot` — the same reading, made recursive — so the annotation gate now uses
+  it too. That is how "a package writes nothing and the combine derives it" is true for
+  every package, not only for the one that spelled the wrapper. **The exception is a
+  result that is part of the argument** (`write`'s `.to`): a meet there would make a
+  write at a lane-varying index certify `# 1` and the later read's `# warp` requirement
+  would refuse the buffer, so that shape states a reference and is not a divisor.
+  The second half is the **certificate gate**: `check_app` copies a return certificate
+  only when the callee's return states one (`return_marker`). The applied pair of a
+  callee that states nothing carries an *undecided* attribute cell, and
+  `stated_attributes` reads that as stated — so a routed `a + b` carried the wildcard
+  and accepted every annotation. The gate is what makes the routed operators' combine
+  observable; the table is
+  [operator-polymorphism](operator-polymorphism.md) §7.2. Measured: language 275,
+  highlevel 136, compute 237/0/1.
 
 ## Recovered measurements
 

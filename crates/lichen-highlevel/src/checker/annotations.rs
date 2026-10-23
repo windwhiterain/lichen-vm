@@ -652,8 +652,8 @@ where
                     // A *constraint* replaces the slot and validates it against the
                     // value's existing attribute, the *provider*.
 
-                    // The provider is the value's own slot, or for a compound the
-                    // combine of its children; with none, nothing to validate.
+                    // The provider is the value's own slot, else the combine of its
+                    // sub-expressions' slots; none when neither provides one.
                     let provider = if self.state[value].attr.is_some() {
                         Some(self.attr_or_missing(value, marker))
                     } else {
@@ -663,7 +663,7 @@ where
                         } else {
                             let child_attrs: Vec<NodeId> = children
                                 .iter()
-                                .map(|&c| self.attr_or_missing(c, marker))
+                                .map(|&c| self.provided_slot(c, marker, ext))
                                 .collect();
                             Some(ext.combine(self, &child_attrs))
                         }

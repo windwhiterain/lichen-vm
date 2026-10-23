@@ -19,7 +19,7 @@ col = cfg => (($col(cfg): Int) # 1)
 Read = p : (BufParam _) => struct{.from (Buf p) # warp, .at Int}
 Write = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
 WriteAtomic = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
-read = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
+read = (x : (Read _)) => $read(x.from, x.at)
 write = (x : (Write _)) => ($write(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
 write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
 collect = (b : (Buf _)) => $collect(b)

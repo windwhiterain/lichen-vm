@@ -17,8 +17,9 @@ The acceptance table is [attributes](attributes.md) §"Behaviour"; the enforceme
 - a parameter's declared `# p` is checked at each apply (`declared | provider`), and an
   absent parameter annotation states nothing (the isomorphic reading);
 - a function's return certificate rides to the call site, including through a frozen
-  (package) callee — the compute wrapper's `# 1` seeds on `range`/`row`/`col`/`read`
-  make a false `# 64` claim a check-time refusal;
+  (package) callee — the compute wrapper's `# 1` seeds on `range`/`row`/`col` make a
+  false `# 64` claim a check-time refusal, and a read's is its operands' meet
+  (`docs/notes/attributes.md` §"The whole-argument default");
 - a lane-group requirement is spellable in the shipping vocabulary:
   `f = (x : Int # compute.warp) => x` answers `expected 32, found 1` for a lane value,
   and accepts a uniform value or a `# 64` claim (`compute.warp = 32`, the backend's
@@ -189,12 +190,16 @@ scope reading stays parked with the kernel-type merge, and no operator needs it.
   the body cannot see which caller's values it will run on.
 - **A read's perspective is its operands', a write's is its input's.** `compute.read`'s
   result is `divisor(from, at)` — a warp-uniform buffer read at a uniform index stays
-  warp-uniform, a lane-varying index makes the result lane-varying — evaluated per call
-  site (`# @any` on the return, the argument's provided slot). `compute.write` returns a
-  new buffer whose perspective is the **input buffer's** (the segment is the same
-  storage; the written index and value are content, not segment shape) — the return
-  names the `.to` field, whose provided slot the call site takes. Both are
-  whole-program level statements; nothing is specialised to the compute layer.
+  warp-uniform, a lane-varying index makes the result lane-varying — and the vocabulary
+  **states nothing** for it: the caller's combine derives it from the argument expression
+  (`provided_slot`, the attribute's own protocol). `compute.write` returns a new buffer
+  whose perspective is the **input buffer's** (the segment is the same storage; the
+  written index and value are content, not segment shape) — that is a *part* of the
+  argument, not a meet, so its return names the `.to` field
+  (`# (perspective_of x.to)`) and the call site takes that field's provided slot. Both
+  are whole-program level statements; the first needs no line from the package at all.
+  Measured: removing `read`'s line alone leaves the lane-varying-index refusal red; with
+  the combine reading it is green (`crates/lichen-compute/tests/lichen_compute/perspective_requirements.rs`).
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is

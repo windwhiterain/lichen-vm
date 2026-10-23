@@ -558,6 +558,33 @@ So the chain's three steps: **static-signature instantiation** (landed), **the
 routing** (landed, the call form), **kernel specialize** (the kernel
 workstream's, for cost 1).
 
+### 7.2 Measured: a routed operator's attribute
+
+**A routed operator's perspective is its operand group's meet, and it was masked until
+the certificate gate landed.** `+` lowers to `Apply(add, [left, right])`, and `add`
+states no return attribute; the applied pair the checker reads for the call nevertheless
+carries an *undecided* attribute cell, and `Checker::stated_attributes` treats an
+undecided position as stated. So the call carried the **wildcard**, which unifies with
+everything — the annotation gate never reached the combine.
+
+| program, prelude loaded | before the gate | after |
+|---|---|---|
+| `((1 # 4) + (2 # 6)) # 5` | **checks** | refused — `expected 5, found 2` |
+| `((1 # 4) + (2 # 6)) # 2` | checks | checks |
+| `((1 # 4) + 2) # 4` | checks | checks |
+| `((1 # 4) + 2) # 32` | **checks** | refused — `expected 32, found 4` |
+| `((1 # 4) - (2 # 6)) # 5` | **checks** | refused — `expected 5, found 2` |
+| `((1 # 4) * (2 # 6)) # 3` | **checks** | refused — `expected 3, found 2` |
+| `((1 # 4) / (2 # 6)) # 2` | checks | checks |
+
+The bare-language suite never saw it: without a prelude there is no binding to route onto,
+so `+` stays a `BinOp` and the annotation gate already combined its operands. The gate —
+`check_app` copies a certificate only when the callee's return states an attribute
+(`return_marker`) — leaves `add`'s call carrying none, and the consumer's recursive
+combine is then the whole reading
+([attributes](attributes.md) §"The whole-argument default"). Measured after it:
+language 275, highlevel 136, compute 237/0/1.
+
 ## 8. Open questions
 
 1. *(Closed — landed.)* **The printer's spelling** of a refined cell. The surface

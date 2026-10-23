@@ -632,6 +632,9 @@ where
         let certificate = match returns_parameter {
             true => None,
             false if field_certificate => None,
+            // A callee that states no attribute hands the call nothing
+            // (`docs/notes/attributes.md`).
+            false if return_marker.is_none() => None,
             false => self
                 .module
                 .applied_pairs
