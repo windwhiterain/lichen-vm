@@ -210,16 +210,18 @@ where
     }
 
     /// A reference's slot: a call over one of the enclosing parameter's fields names
-    /// the field's own attribute slot, the slot the field read compiled to
+    /// the field's own attribute position in the field read's record
     /// (spec §3, "Every attribute is handled like the type").
-    fn reference_slot(&mut self, pe: ExprId) -> Option<NodeId> {
+    fn reference_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
             return None;
         };
         let parameter = self.current_parameters.last().copied()?;
         match self.ir[argument].kind {
             ExprKind::NamedField { container, .. } if container == parameter => {
-                self.state[argument].attr
+                let record = self.state[argument].term?;
+                self.slot_attribute(record, marker.order_index() as u32)?
+                    .dynamic()
             }
             _ => None,
         }
@@ -644,7 +646,7 @@ where
                 // call's applied return slot, else the expression's own record
                 // (spec §3, "Every attribute is handled like the type").
                 let slot = self
-                    .reference_slot(pe)
+                    .reference_slot(pe, marker)
                     .or_else(|| self.applied_attribute_slot(pe, marker))
                     .unwrap_or_else(|| self.annotation_value_slot(pe));
                 if ext.is_label() {
