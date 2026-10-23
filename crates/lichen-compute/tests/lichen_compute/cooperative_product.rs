@@ -45,7 +45,7 @@ fn product(a: &[i64], b: &[i64], c: &[i64]) -> Vec<i64> {
 /// The operands are a host's own buffers, so a fill kernel builds each one and writes the
 /// table the oracle spells (`index % 4`, `index % 3`, `index % 5`). The `Mma` type states the
 /// matrix's fixed lengths, so a buffer's **type** carries the shape's edge and its
-/// **allocation** is the launch's own element count, which is the flattened matrix
+/// **allocation** is the launch's own element count, the flattened matrix
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
     format!(
