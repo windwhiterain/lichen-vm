@@ -988,16 +988,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// `rep`'s class members, representative first; the union-find walk lives here once.
-    pub(crate) fn class_members(&self, rep: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        let mut member = Some(rep);
-        std::iter::from_fn(move || {
-            let current = member?;
-            member = self.nodes[current].meta().next();
-            Some(current)
-        })
-    }
-
     /// Join `reader` into `target`'s class and evaluate the target.
     ///
     /// # Invariant

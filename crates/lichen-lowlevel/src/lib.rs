@@ -1297,4 +1297,6 @@ pub struct Registry<P: Program> {
     entries: HashMap<ModuleKey, Package<P>>,
     /// The counter behind [`Self::allocate_cell_key`]; the registry's, not a caller's.
     next_cell_key: u64,
+    /// The counter behind [`Self::allocate_module_key`], for a store with no device.
+    next_module_key: u64,
 }

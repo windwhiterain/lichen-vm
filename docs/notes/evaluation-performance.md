@@ -115,6 +115,42 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 8: a directory run shares one registry
+
+Each file of a directory run got a store of its own, and each store compiled the prelude
+(1.5 ms of check plus 0.3 terms and 0.8 freeze) and — for the 22 examples that import it —
+the compute wrapper (5.4 ms). On a 46-file run that is ~230 ms of a ~975 ms command, and it
+is the same two modules every time.
+
+The run now hands every store **one registry**, the compiled modules, while each store keeps
+its own `packages`, `vendored`, `native` and device handle. Keys come from the device when
+there is one; without one they come from `Registry::allocate_module_key`, a counter the
+registry owns, because two stores sharing a registry must never be handed one key — that
+move is what makes the sharing sound rather than lucky.
+
+The change surfaced a real bug in the reuse path: `register_embedded` returned an
+already-registered wrapper without filing it in the store's own `native` map, which is what
+`import "compute.lichen"` resolves against. The first store of a run always compiled the
+wrapper and filed it; every later store took the reuse path and then failed to find it,
+falling through to a file read of `examples/compute.lichen`. The reused handle is now filed
+the same way, which is where the "outputs identical" reading came from — the first version
+of this change failed on every compute-importing example after the first.
+
+| reading | before | after |
+|---|---|---|
+| `lichen-compiler examples` (46 files, quiet machine) | 975 ms | **405 ms** |
+| the same, under load (median of five interleaved) | 1 190 ms | **749 ms** |
+| its output | — | identical, 126 lines |
+| single-file mode | — | identical |
+
+It also removes `class_members`, dead since round 5 inlined its only caller.
+
+**A process-global registry for the tools' example runner was tried and does not compile**:
+`Registry<P>` holds raw arena pointers and is deliberately neither `Send` nor `Sync`, so it
+cannot live in a `static`. The runner (`readme::program_output`, once per program) would
+have to thread a registry through `render_examples`/`render_dir`, which is a signature change
+through the render chain rather than a cache behind a `OnceLock`.
+
 ## Round 7: the check is the run, and it is three costs
 
 Splitting the pipeline for the first time: for `fib 10` the frontend is **0.09 ms** and the
