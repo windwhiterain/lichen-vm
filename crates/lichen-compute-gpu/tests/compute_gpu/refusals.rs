@@ -401,13 +401,14 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
     }
 }
 
-/// A loop body that writes: the write a zero trip count can skip.
+/// A loop body that writes: the write is emitted where the body writes it.
 ///
 /// # Invariant
-/// `dispatch` allocates output buffers uninitialised, so this is the refusal the no-zero-fill claim
-/// rests on.
+/// The ruling withdrew the refusal (`docs/notes/loop-conversion.md` §6): a lane whose trip
+/// count is zero leaves its output element as the allocation held, and the module must still
+/// be well formed — so the store is validated, not skipped.
 #[test]
-fn a_write_inside_a_loop_is_refused_by_name() {
+fn a_write_inside_a_loop_is_emitted() {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let _config = body.add_param(entry);
@@ -495,17 +496,11 @@ fn a_write_inside_a_loop_is_refused_by_name() {
     fragment
         .body
         .validate()
-        .expect("the body is well formed; it is the *write* that is refused");
-    let refusal =
-        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
-    // `at` is the write's position in the loop body block.
-    assert_eq!(refusal, SpirvRefusal::WriteInsideLoop { at: 2 });
-    let message = refusal.to_string();
-    assert!(message.contains('2'), "names the write: {message}");
-    assert!(
-        message.contains("without initialising"),
-        "says why the buffer matters: {message}"
-    );
+        .expect("the body is well formed: the write is now emitted, not refused");
+    let words = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT)
+        .expect("a write inside a loop body is emitted");
+    assert!(!words.is_empty(), "the module is not empty");
+    super::spirv_validation::validate("a write inside a loop body", &words);
 }
 
 /// A workgroup width this target cannot schedule is refused by name, not rounded to one it can.

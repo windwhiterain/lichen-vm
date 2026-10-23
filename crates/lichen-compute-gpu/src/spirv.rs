@@ -1,11 +1,12 @@
 //! The SPIR-V emitter: a [`KernelFragment`] to a SPIR-V compute module.
 //!
 //! # Invariant
-//! A `BufferWriteCall` is reached by every invocation, and a body that would break
-//! that — a write inside a loop — is refused by name. Why this is hand-written,
-//! the two passes a module's section order forces, the one place this target
-//! disagrees with the wasm backend, and the per-buffer element class:
-//! `docs/notes/lichen-compute-gpu.md`.
+//! A body's output elements are written where the body's own code writes them, a loop
+//! body included: the author's ruling withdrew the refusal that a write inside a loop
+//! relied on, so a lane that never runs the loop leaves its element as the allocation
+//! held (`docs/notes/loop-conversion.md` §6). Why this is hand-written, the two passes a
+//! module's section order forces, the one place this target disagrees with the wasm
+//! backend, and the per-buffer element class: `docs/notes/lichen-compute-gpu.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -392,8 +393,6 @@ pub enum SpirvRefusal {
     UnexpandedTranscendental { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
-    /// A buffer write inside a loop body: the trip count is per lane and may be zero.
-    WriteInsideLoop { at: usize },
     /// A `write_atomic` whose class no hardware atomic add exists for.
     ///
     /// # Invariant
@@ -545,13 +544,6 @@ impl fmt::Display for SpirvRefusal {
                 "the fragment declares {results} result(s) and its body returns {left} value(s). \
                  A compute shader communicates through its storage buffers, so this backend \
                  requires a fragment whose body returns exactly one value."
-            ),
-            SpirvRefusal::WriteInsideLoop { at } => write!(
-                f,
-                "instruction {at} writes a buffer inside a loop body. A loop's trip count comes from \
-                 a register and can be zero, so a lane that never runs the body would leave its \
-                 output element as whatever a fresh allocation held — `dispatch` allocates output \
-                 buffers without initialising them. Move the write out of the loop."
             ),
             SpirvRefusal::AtomicAddNotAHardwarePrimitive { class, at } => write!(
                 f,
@@ -2083,11 +2075,6 @@ fn emit_function(
                             slots.insert(definition, scalar(id, read_as));
                         }
                         KernelInstr::BufferAtomicAddCall(class) => {
-                            // **The plain write's refusal, for its reason**: a zero trip count
-                            // leaves the output element uninitialised.
-                            if plan.inside[node] {
-                                return Err(SpirvRefusal::WriteInsideLoop { at });
-                            }
                             if class == ScalarClass::BFloat16 {
                                 return Err(SpirvRefusal::AtomicAddNotAHardwarePrimitive {
                                     class,
@@ -2162,11 +2149,6 @@ fn emit_function(
                             extensions.note(KernelInstr::BufferAtomicAddCall(class));
                         }
                         KernelInstr::BufferWriteCall(_) => {
-                            // **The one place a loop changes what `dispatch` may assume**: a
-                            // zero trip count never runs the body.
-                            if plan.inside[node] {
-                                return Err(SpirvRefusal::WriteInsideLoop { at });
-                            }
                             let value = operand(2)?;
                             let element = operand(1)?;
                             let position = operand(0)?;
@@ -2865,8 +2847,6 @@ struct Plan {
     loop_bodies: Vec<Option<usize>>,
     /// The order the blocks are written in, entry first.
     order: Vec<usize>,
-    /// Whether a loop's zero trip count can skip a node's instructions.
-    inside: Vec<bool>,
     entry: usize,
     /// How many label ids the plan took.
     fresh_labels: u32,
@@ -3109,17 +3089,8 @@ fn plan_body(
         depth_first(nodes.len(), &targets, entry).ok_or_else(|| SpirvRefusal::ControlFlow {
             detail: "a block of the emitted graph is unreachable, so it has no arrival".to_string(),
         })?;
-    // A write inside a loop body is the one thing a zero trip count can skip.
-    let emitted = dominators(nodes.len(), &targets, entry);
-    let mut inside = vec![false; nodes.len()];
-    for &(header, merge) in &loops {
-        for node in 0..nodes.len() {
-            if emitted[node][header] && node != header && !emitted[node][merge] {
-                inside[node] = true;
-            }
-        }
-    }
-
+    // A write inside a loop body is emitted where the body writes it: the ruling that
+    // withdrew the refusal is `docs/notes/loop-conversion.md` §6.
     let mut labels = vec![0u32; nodes.len()];
     labels[entry] = entry_label;
     let mut fresh_labels = 0u32;
@@ -3138,7 +3109,6 @@ fn plan_body(
         merges,
         loop_bodies,
         order,
-        inside,
         entry,
         fresh_labels,
     })

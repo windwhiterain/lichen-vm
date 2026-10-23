@@ -1452,16 +1452,12 @@ where
                     .element_value_node(element.into())
                     .and_then(|node| node.dynamic())
                     .unwrap_or(element);
-                // **A buffer slot is carried as a token of its element's class**: a
-                // buffer is named, never emitted, so the state holds the *version* the
-                // write fills — the same token the write's own value is. Which buffer
-                // the slot names is the state read's identity
-                // ([`Lower::version_identity`]), not the value carried.
-                if let Some(ordinal) =
-                    super::write_chain_output_pos(self.module, self.params, value)?
-                {
-                    let class = self.declared_output_class(ordinal, value);
-                    return Ok(self.emit_const(class, 0));
+                // **A buffer slot is carried as a version token**: a buffer is named, never
+                // emitted, so the state holds the *version* the write fills — the same token
+                // the write's own value is. Which buffer the slot names is the state read's
+                // identity ([`Lower::version_identity`]), not the value carried.
+                if super::write_chain_output_pos(self.module, self.params, value)?.is_some() {
+                    return Ok(self.version_token());
                 }
                 self.value(value)
             })
@@ -2255,7 +2251,19 @@ where
         // node's identity (`write_target_node`), not an SSA value. The token exists because
         // the value may be carried: a `@loop`'s state slot, or a selection's arm
         // (`docs/notes/loop-conversion.md` §6, the version spine).
-        Ok(self.emit_const(element, 0))
+        Ok(self.version_token())
+    }
+
+    /// The token a version is carried as: one `Int` const, because nothing reads it.
+    ///
+    /// # Invariant
+    /// Which buffer a version names is the node's identity (`write_target_node`), never the
+    /// carried value, so a version has no element class to agree with: a token whose class
+    /// followed the element would make a loop's entry and its backedge disagree whenever
+    /// the parameter states no element class (`docs/notes/loop-conversion.md` §6). The
+    /// **store** keeps the element's class (`declared_output_class`); the token does not.
+    fn version_token(&mut self) -> ValueId {
+        self.emit_const(ScalarClass::Int, 0)
     }
 
     /// The element class the parameter declares for write ordinal `ordinal`.
