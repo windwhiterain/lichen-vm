@@ -52,7 +52,7 @@
     from one iteration to the next as `s(1)`. Two things make that work and neither is obvious. A \
     **recursive function's type follows from its annotation** (`language-spec.md` §3's `f : f` rule; \
     `examples/gcd.lichen` states it), so `march` carries \
-    `tuple{Int, compute.Buf Float} -> compute.Buf Float` — an **array** state without that annotation \
+    `tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 6))} -> compute.Buf ((compute.BufParam _)(.type Float, .length 6))` — an **array** state without that annotation \
     prints `raw[raw …]: ?a`, a value with no type, which is why a solver that threads an array needs \
     one. And the **dispatch \
     happens inside the fold**: a plain run is one pass, so an operator asked before its operand is \
@@ -72,33 +72,49 @@
     device check of the tail-lane guard, not only a physics demonstration, and the sweep \
     `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
     on the RTX 3060 for all three chains: the padding is the same boundary on both backends, and the \
-    surplus lanes leave the answer untouched."
+    surplus lanes leave the answer untouched. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`). The ring's boundary is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so both addresses are read and the test picks between them with a factor. The arithmetic is exact — every element is a quarter or a half — so each neighbour is the copy or the padding and not a rounding of it."
   output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 6}, array{Float, 6}}"
 ---
-XIn  = struct{.x (compute.Buf Float)}
-XOut = struct{.y (compute.Buf Float)}
-XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
+XIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+XOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+XPar = struct{.n Int, .alpha Float, .in XIn}
 XArg = struct{.n Int, .alpha Float, .I XIn}
 stencil_raw = (c : XPar) => {
   i = compute.range c.n
   centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
   left = (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float)
   right = (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float)
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((XOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre)))))))
 }
 stencil = compute.parallel stencil_raw "cpu" XOut
 ring_raw = (c : XPar) => {
   i = compute.range c.n
   centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
-  left = if i == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
-  right = if i == (c.n - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+  left_base = (compute.read ((compute.Read _)(.from c.in.x, .at ((max i 1) - 1))) : Float)
+  left_wrap = (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)
+  left = left_base + ((left_wrap - left_base) * (if i == 0 then 1.0 else 0.0))
+  right_base = (compute.read ((compute.Read _)(.from c.in.x, .at ((min i (c.n - 2)) + 1))) : Float)
+  right_wrap = (compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)
+  right = right_base + ((right_wrap - right_base) * (if i == (c.n - 1) then 1.0 else 0.0))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((XOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre)))))))
 }
 ring = compute.parallel ring_raw "cpu" XOut
-x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
+Fill = struct{.n Int}
+xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+fill_x_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  v = (if i == 0 then 4.0 else 0.0) + (if i == 5 then 4.0 else 0.0)
+  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_x = compute.parallel fill_x_raw "cpu" xBuf
+x = (compute.plrun fill_x ((Fill)(.n 6)) : xBuf).x
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 seed = looped.y
-@loop march = (((s : tuple{Int, compute.Buf Float}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
+@loop march = (((s : tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 6))}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 6))} -> compute.Buf ((compute.BufParam _)(.type Float, .length 6)))
 solved = march (2, seed)
 (compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, compute.collect solved : array{Float, 6})
