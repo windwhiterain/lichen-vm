@@ -403,7 +403,12 @@ where
                                 self.origins.remove(&node);
                                 value
                             }
-                            None => self.opaque(node)?,
+                            // A value node has no operation to follow, so the definition's
+                            // own peels (a pair, an instance, a parameter path) answer it.
+                            None => match self.module.node_operation(node) {
+                                Some(_) => self.opaque(node)?,
+                                None => self.definition(node)?,
+                            },
                         }
                     }
                 },

@@ -265,3 +265,94 @@ fn probe_the_settled_spelling() {
         ),
     }
 }
+
+/// A `let` alias of a read, used as an operand: does the walk see a node?
+///
+/// # Invariant
+/// Print-only. The alias is the bound expression's own node, so the trace should read its
+/// value unchanged; the reading is whether the lowering agrees.
+const ALIAS: &str = r#"
+--- compute = import "compute.lichen" ---
+In  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  ((In)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+}
+filler = compute.parallel fill "cpu" In
+data = (compute.plrun filler ((Fill)(.n 3)) : In)
+Par = struct{.n Int, .in In}
+Arg = struct{.n Int, .I In}
+alias_raw = (k : Par) => {
+  i = compute.range k.n
+  low = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (low * 2.0))))))
+}
+alias = compute.parallel alias_raw "cpu" Out
+out = (compute.plrun alias ((Arg)(.n 3, .I In(.d data.d))) : Out)
+compute.collect out.y : array{Float, 3}
+"#;
+
+#[test]
+fn probe_a_let_alias_of_a_read() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(ALIAS, None, &mut store) {
+        Ok(text) => println!("[alias] answered {text}"),
+        Err(diagnostics) => println!(
+            "[alias] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+/// A conditional whose **then** arm reads a buffer, and whose **else** arm does.
+///
+/// # Invariant
+/// Print-only. The two arms are emitted in a fixed order, so the reading is which of them
+/// the walk meets first and whether the other is reachable.
+const COND_READ: &str = r#"
+--- compute = import "compute.lichen" ---
+In  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
+  ((In)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+}
+filler = compute.parallel fill "cpu" In
+data = (compute.plrun filler ((Fill)(.n 3)) : In)
+Par = struct{.n Int, .in In}
+Arg = struct{.n Int, .I In}
+then_raw = (k : Par) => {
+  i = compute.range k.n
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  v = if i == 0 then (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) else 0.0
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value v)))))
+}
+then_k = compute.parallel then_raw "cpu" Out
+out = (compute.plrun then_k ((Arg)(.n 3, .I In(.d data.d))) : Out)
+compute.collect out.y : array{Float, 3}
+"#;
+
+#[test]
+fn probe_a_conditional_whose_then_arm_reads() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(COND_READ, None, &mut store) {
+        Ok(text) => println!("[cond-read] answered {text}"),
+        Err(diagnostics) => println!(
+            "[cond-read] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
