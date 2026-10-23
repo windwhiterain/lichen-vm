@@ -76,7 +76,7 @@ pub fn compile_with_imports_with_cells(
 /// A clean cell is lowered to a static read of its frozen pair, so its body is
 /// never lowered, checked or evaluated. See `docs/notes/incremental-update.md`.
 pub(crate) fn compile_resolved_with_cells(
-    program: &Program,
+    program: &mut Program,
     import_binders: &[crate::resolve::ImportBinder],
     prelude: &[(String, BinderId)],
     cells: Option<&CellStore>,
@@ -92,32 +92,36 @@ pub(crate) fn compile_resolved_with_cells(
             }
         }
     }
-    let (statements, final_id) = match &program.expr {
+    // The program's statements move into the lowering: it is the last reader, and a clone
+    // here would copy every expression, box and name in the source.
+    let final_expr = program.expr.take();
+    let statements_in = std::mem::take(&mut program.statements);
+    let (statements, final_id) = match final_expr {
         Some(final_expr) => {
-            let stmts: Vec<Stmt> = program
-                .statements
-                .iter()
-                .map(|bs| bs.stmt.clone())
-                .collect();
+            let stmts: Vec<Stmt> = statements_in.into_iter().map(|bs| bs.stmt).collect();
             let statements = compiler.compile_scope_statements(&stmts);
-            let final_id = compiler.compile_expr(final_expr);
+            let final_id = compiler.compile_expr(&final_expr);
             (statements, final_id)
         }
         None => {
-            let fields: Vec<RecordField> = program
-                .statements
-                .iter()
+            let span = statements_in
+                .first()
+                .map(|bs| bs.stmt.span())
+                .unwrap_or((1, 1));
+            let fields: Vec<RecordField> = statements_in
+                .into_iter()
                 .map(|bs| {
-                    let (name, value, binder, field, cached, looping) = match &bs.stmt {
+                    let field_span = bs.stmt.span();
+                    let (name, value, binder, field, cached, looping) = match bs.stmt {
                         Stmt::Binding(b) => (
-                            Some(b.name.clone()),
-                            b.value.clone(),
+                            Some(b.name),
+                            b.value,
                             b.binder,
                             !b.restrictive,
                             b.cached,
                             b.looping,
                         ),
-                        Stmt::Expr(e) => (None, e.clone(), None, true, false, false),
+                        Stmt::Expr(e) => (None, e, None, true, false, false),
                     };
                     RecordField {
                         name,
@@ -127,15 +131,10 @@ pub(crate) fn compile_resolved_with_cells(
                         field,
                         cached,
                         looping,
-                        span: bs.stmt.span(),
+                        span: field_span,
                     }
                 })
                 .collect();
-            let span = program
-                .statements
-                .first()
-                .map(|bs| bs.stmt.span())
-                .unwrap_or((1, 1));
             let (statements, root) = compiler.compile_record_fields(&fields, &span);
             (statements, root)
         }
