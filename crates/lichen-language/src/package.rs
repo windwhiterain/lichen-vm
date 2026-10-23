@@ -334,12 +334,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
     ///
     /// # Invariant
     ///
-    /// The registry is the **only** shared part: `packages`, `vendored`, `native` and the
-    /// device handle stay this store's, so a store's imports and its key allocation
-    /// (which comes from the device, or from the registry's own counter without one)
-    /// cannot be read through another store. A caller shares one registry to compile the
-    /// prelude and the plugins once for a process, and must still give each program a
-    /// store of its own.
+    /// The registry is the only shared part; a store's own maps and its key stay its own.
     pub fn with_registry(cache_dir: Option<PathBuf>, registry: Arc<RwLock<Registry<P>>>) -> Self {
         let mut store = PackageStore::new();
         store.registry = registry;
@@ -481,8 +476,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         match &mut self.device {
             Some(device) => device.alloc(file_id),
             None => {
-                // The registry's counter, not this store's: a store may share the registry
-                // with another, and two stores must never be handed one key.
+                // The registry's counter: two stores sharing it never share a key.
                 let key = self
                     .registry
                     .write()
@@ -1285,8 +1279,7 @@ where
         native_ops: NativeOps<P>,
         bindings: &[String],
     ) -> Result<PackageHandle, String> {
-        // Reuse an already-registered module, so one registry holds it once. Filed under
-        // its file name either way, because that is what `import "name"` resolves to.
+        // Reuse an already-registered module; file it under its name either way.
         if let Some(handle) = self.registered_builtin(virtual_path) {
             let name = Path::new(virtual_path)
                 .file_name()

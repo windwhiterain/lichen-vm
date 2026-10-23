@@ -87,17 +87,14 @@ impl<P: Program> Module<P> {
     /// the conflicting arms instead. A merge of two decided-different classes is not a
     /// merge, and this is the one thing the write rules rely on.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        // The two roots once, compressed: the shape reads and the union below would
-        // otherwise walk the parents again, and this runs on every merge.
+        // The two roots once, compressed: the shape reads and the union would read them again.
         let root_a = disjoint::find(&mut self.nodes, a);
         let root_b = disjoint::find(&mut self.nodes, b);
         let left = self.nodes[root_a].low_shape.as_deref().cloned();
         let right = self.nodes[root_b].low_shape.as_deref().cloned();
         let left_value = self.nodes[a].value;
         let right_value = self.nodes[b].value;
-        // **A class that holds a value has no holes**, so only the valueless side fills,
-        // and it fills before the union: the walk then never visits the valued side's
-        // members, which are the many. The class it writes is uniform either way.
+        // A class that holds a value has no holes: the valueless side fills before the union.
         match (left_value, right_value) {
             (None, Some(value)) => self.fill_class_holes(root_a, value),
             (Some(value), None) => self.fill_class_holes(root_b, value),

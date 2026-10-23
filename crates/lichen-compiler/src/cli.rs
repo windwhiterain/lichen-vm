@@ -196,8 +196,7 @@ where
     } else {
         None
     };
-    // A directory run hands every program the same registry, so the prelude and the
-    // plugins compile once for the process rather than once per file.
+    // A directory run shares one registry, so the prelude compiles once.
     let mut store: PackageStore<P> = match shared {
         Some(registry) => PackageStore::with_registry(persistent, registry.clone()),
         None => match persistent {
@@ -274,9 +273,7 @@ where
         }
     };
     files.sort();
-    // One registry for the whole run: the prelude and the plugin wrappers are the
-    // language's own modules, identical for every file, so a directory run costs one
-    // prelude rather than one per file.
+    // One registry for the whole run: the prelude compiles once, not per file.
     let shared = std::sync::Arc::new(std::sync::RwLock::new(lichen_lowlevel::Registry::<P>::new()));
     let mut failed = 0;
     for file in files {

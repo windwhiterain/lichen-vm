@@ -92,8 +92,7 @@ pub(crate) fn compile_resolved_with_cells(
             }
         }
     }
-    // The program's statements move into the lowering: it is the last reader, and a clone
-    // here would copy every expression, box and name in the source.
+    // The statements move into the lowering: a clone here would copy the source.
     let final_expr = program.expr.take();
     let statements_in = std::mem::take(&mut program.statements);
     let (statements, final_id) = match final_expr {

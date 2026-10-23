@@ -889,9 +889,7 @@ where
 
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
-        // A clone emits its origin's definition, not its own.
-        // A write or a declaration emits its origin's definition, so a clone of one emits
-        // nothing; other clones (a kernel value's, a jit wrapper's) keep their own.
+        // A write or a declaration emits its origin's definition; other clones keep theirs.
         if let Some(origin) = self.module.node_origin(node)
             && origin != node
             && !self.origins.contains(&origin)

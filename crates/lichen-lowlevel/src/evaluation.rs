@@ -106,10 +106,7 @@ impl<P: Program> Module<P> {
         // the buffer is the module's.
         let mut members = self.class_snapshots.pop().unwrap_or_default();
         members.clear();
-        // One pass over the member list: a member that does not owe an answer here never
-        // owes one later (`value` is never cleared and `runned` only grows), so the
-        // snapshot needs the owing members alone. `visiting` is the exception — a nested
-        // read can set it — so it is re-read at the member's own turn.
+        // One pass over the members that owe an answer; `visiting` is re-read at each turn.
         let mut current = Some(representative);
         while let Some(member) = current {
             let entry = &self.nodes[member];

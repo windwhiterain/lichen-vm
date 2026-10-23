@@ -54,8 +54,7 @@ struct ApplyCtx<'a> {
     /// The membership anchor: the applied function.  A node belongs to it iff its
     /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
-    /// [`Self::anchor`]'s own template, which the membership test also accepts; read once
-    /// per pass, because a slot lookup per visit is the walk's largest bookkeeping cost.
+    /// [`Self::anchor`]'s own template, which the membership test also accepts.
     anchor_template: Option<FunctionId>,
     /// The chain half of the membership verdict for the last `Node::function` tested.
     ///
@@ -406,8 +405,7 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
     ) {
-        // The visited set is the module's, so a run's argument checks do not allocate one
-        // each; a nested check pops its own, because the walk re-enters itself.
+        // The visited set is the module's, so a nested check pops its own.
         let mut seen = self.pattern_seen.pop().unwrap_or_default();
         seen.clear();
         self.evaluate_pattern_argument_inner(Dyn(pattern), Dyn(argument), block, &mut seen);
@@ -426,8 +424,7 @@ impl<P: Program> Module<P> {
         if !seen.insert((pattern, argument)) {
             return;
         }
-        // One force answers both reads: it fills the pattern's slot when the two are one
-        // class, and nothing between the reads writes the argument.
+        // One force answers both reads.
         let forced = self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
@@ -812,8 +809,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `function`'s chain reaches the pass's anchor or the anchor's template — the
-    /// chain half of the membership test, answered from [`ApplyCtx::last_member`].
+    /// Whether `function`'s chain reaches the pass's anchor or its template.
     fn template_member(&self, function: Option<FunctionId>, ctx: &mut ApplyCtx<'_>) -> bool {
         if let Some((tested, verdict)) = ctx.last_member
             && tested == function
