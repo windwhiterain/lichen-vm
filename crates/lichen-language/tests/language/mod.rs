@@ -1,5 +1,6 @@
 mod artifact_transitivity;
 mod block_boundary;
+mod callee_inference;
 mod common;
 mod cyclic_type_cut;
 mod defer_pending;

@@ -412,6 +412,9 @@ where
 
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
+        // The call's expected type may decide a placeholder callee, so the
+        // callee is pinned before the argument is checked.
+        self.pin_placeholder_callee(function, argument);
         self.check_expr(argument);
         // The function slot is its *value*, not the pair; the argument slot
         // is the pair, so the apply compares type to type.

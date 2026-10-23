@@ -1,7 +1,7 @@
 //! Structs, fields, instantiation: the nominal id, the field reads, and
 //! the instantiation checked against a field list.
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
@@ -487,6 +487,70 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(struct_ty);
         pair
+    }
+
+    /// A placeholder callee takes the struct type the **context requires**.
+    ///
+    /// # Invariant
+    /// Only a **placeholder** callee is resolved here: an undetermined callee (a
+    /// parameter) is not determined at the normalize and stays refused
+    /// (`docs/notes/function-normalization.md` §3.7). The expected type must be
+    /// decided; an undecided one decides nothing, so the instantiation refuses
+    /// itself by name. The pin is the same one an undetermined callee carries —
+    /// the callee's own pair takes the struct type the context requires.
+    pub(super) fn pin_placeholder_callee(&mut self, function: ExprId, argument: ExprId) {
+        let ExprKind::Instantiate { type_expr, .. } = self.ir[argument].kind else {
+            return;
+        };
+        if !matches!(self.ir[type_expr].kind, ExprKind::Placeholder) {
+            return;
+        }
+        let Some(expected) = self.expected_argument_type(function) else {
+            return;
+        };
+        // The expected type must be decided: an undecided one decides nothing.
+        self.module.evaluate_node_deep(expected, None);
+        let Some(value) = self.node_value(expected) else {
+            return;
+        };
+        // A type is a pair; anything else states no type to pin.
+        if !matches!(
+            lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value),
+            Some(LowValue::Array(_))
+        ) {
+            return;
+        }
+        // The placeholder's own pair is the callee: pinning it to the expected
+        // type makes the instantiation that type.
+        self.check_expr(type_expr);
+        let pair = self.state[type_expr].term.expect("the placeholder is compiled");
+        // The expected side leads, so the expected type's own value is the one
+        // the pair keeps.
+        let (_, errors) = self.module.try_unify(expected, pair);
+        // The callee is a hole: it takes the requirement and disagrees with
+        // nothing, so the unify has no failure to report.
+        self.module.unify_errors.truncate(errors.start);
+    }
+
+    /// The type a call's parameter requires: the call's **expected type**.
+    ///
+    /// # Invariant
+    /// The parameter pair's **type slot** is the requirement; its value slot is
+    /// the argument the call supplies, which states no type.
+    fn expected_argument_type(&mut self, function: ExprId) -> Option<NodeId> {
+        let function_ty = self.state[function].ty?;
+        let callee = self.module.function_type_function(function_ty)?;
+        let parameter = match callee {
+            AnyFunctionId::Dynamic(fid) => self.module.functions[fid].parameter,
+            AnyFunctionId::Static(sref) => {
+                self.module
+                    .materialize_static_signature_pair(sref, false, self.current_block)?
+            }
+        };
+        // SAFETY: `parameter` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        let items = unsafe { self.module.array_items(parameter) }?;
+        items.get(shape::PAIR_TYPE_SLOT)?.node.dynamic()
     }
 
     /// A struct instantiation `C(f1, …, fn)`, recognised syntactically and
