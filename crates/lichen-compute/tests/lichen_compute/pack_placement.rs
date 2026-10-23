@@ -39,41 +39,43 @@ fn closed_form() -> f32 {
 /// The fold's bound is `i + 1`, the lane's own index plus one, so the program's own body is the
 /// per-lane schedule the pass replaces, and the seed is the marked literal both halves of the
 /// algebra survive lowering through (`docs/notes/graph-fusion.md` §3).
+///
+/// No parameter carries an `.out` group: the body declares its buffer with `compute.buf` and
+/// returns the write as the codomain field's value, and the host's data is a kernel's own output
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn declared() -> String {
     format!(
         r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf Float)}}
-Out = struct{{.z (compute.Buf Float)}}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par = struct{{.n Int, .in In}}
 reduction = (k : Par) => {{
   i = compute.range k.n
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, 0.0 ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }}
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step = (s : Par) => {{
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }}
 built = compute.graph step
-data = (compute.buffer ([{elements}] : array{{Float, LENGTH}}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built ({count}, data))
+Data = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
+  i = compute.range c.n
+  b = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
+  ((Data)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (int2float i + 1.0))))))
+}}
+filler = compute.parallel fill "cpu" Data
+data = (compute.plrun filler ((Fill)(.n {COUNT})) : Data)
+out = compute.collect (compute.graphrun built ({COUNT}, data.b))
 out
-"#,
-        elements = data(),
-        count = COUNT,
+"#
     )
-    .replace("array{Float, LENGTH}", &format!("array{{Float, {COUNT}}}"))
-}
-
-/// The elements a launch folds: `1 ..= count`, which is what makes the closed form the answer.
-fn data() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The kernel id the program dispatched, as the registry knows it.
@@ -319,6 +321,11 @@ fn a_pack_whose_constraints_do_not_hold_is_inert() {
 }
 
 /// A pack whose group width the target does not have is refused, and nothing lands.
+///
+/// # Invariant
+/// A landing changes the node's body, the slice it stages and the staging name it publishes, so
+/// those three are what "nothing landed" is read from. The fragment's digest also covers
+/// `output_extents`, which the artifact's round trip does not carry.
 #[test]
 fn a_pack_asking_for_a_width_the_target_lacks_is_refused() {
     let (_stub, _guard) = common::stub();
@@ -371,9 +378,10 @@ fn a_pack_asking_for_a_width_the_target_lacks_is_refused() {
     );
     let (unlanded, _) = landed(&recorded, COUNT);
     assert_eq!(
-        fragment_digest(&unlanded),
-        fragment_digest(&recorded),
-        "and the pass landing over the recording leaves the node's fragment as it was"
+        (unlanded.body, unlanded.slices, unlanded.marks),
+        (recorded.body, recorded.slices, recorded.marks),
+        "and the pass landing over the recording leaves the node's body as it was: the refused \
+         pack's plan lands neither a slice nor a staging name"
     );
 }
 
@@ -479,6 +487,7 @@ fn combine() -> Expr {
 /// the latter passes here and fails in the numbers.
 #[test]
 fn the_landed_fragment_reads_the_class_the_pack_states() {
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, _value, _root) = common::run(&source);
