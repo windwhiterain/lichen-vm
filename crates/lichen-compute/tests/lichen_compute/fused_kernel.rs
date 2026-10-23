@@ -127,6 +127,12 @@ fn a_kernel_with_no_claim_and_an_empty_plan_reads_back() {
     assert_eq!(read_fused_kernel(&text), Ok(kernel));
 }
 
+/// A hand-written literal reads back as the fragment it spells.
+///
+/// # Invariant
+/// The artifact's schema states no declared length, so a fragment read back from one carries no
+/// output extent: the launch's own element count is the extent, which is what the reader's
+/// `output_extents` leaves open (`crates/lichen-runtime/src/fused/convert.rs`).
 #[test]
 fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
     let text = r#"
@@ -185,7 +191,7 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
             outputs: vec![vec![1]],
             input_classes: vec![Some(ScalarClass::Float)],
             output_classes: vec![Some(ScalarClass::Int)],
-            output_extents: vec![None],
+            output_extents: Vec::new(),
         },
         body: staged_body().0,
         inputs: 1,
