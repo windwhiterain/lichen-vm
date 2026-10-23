@@ -1247,18 +1247,20 @@ outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 }
 
 #[test]
-fn an_output_position_that_is_not_a_write_is_refused() {
-    // The output count comes from the codomain's arity, so a non-write position is
-    // refused by its position.
+fn an_output_position_that_is_not_a_buffer_is_refused() {
+    // The output count comes from the codomain's arity, and every position holds a
+    // buffer: a position that holds a decided value is refused.
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.a Int}
-Out = struct{.x (compute.Buf _), .y (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Out = struct{.x (compute.Buf ((compute.BufParam _)(.type Int, .length 3))), .y (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
-  (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)), i)
+  x = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.x (compute.write ((compute.Write _)(.to x, .at i, .value i))), .y i))
 }
 k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
@@ -1272,8 +1274,8 @@ outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
     );
     let message = &messages[0];
     assert!(
-        message.contains("output 1") && message.contains("compute.write"),
-        "the refusal must name the position that is not a write: {message:?}"
+        message.contains("expected struct{") && message.contains("found Int"),
+        "the refusal must name the buffer the position must hold and what it holds: {message:?}"
     );
 }
 
@@ -1284,23 +1286,26 @@ outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 /// Parked: one disagreement reaches two record sites — the check-time unify and the
 /// runtime apply's join — so the refusal is reported twice. The refusal itself is right
 /// and names the right position; only its count is wrong.
+///
+/// The buffer's **type** is decided now, so the position is refused by the checker
+/// and the run-time join never sees it.
 #[ignore = "one disagreement, two reports: the apply's join is not yet suppressed"]
 fn a_program_value_where_a_buffer_belongs_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.a (compute.Buf _)}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+In  = struct{.a (compute.Buf ((compute.BufParam _)(.type Int, .length 8)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 8)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
-  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + 1))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 1)))))
 }
 data = [3, 1, 4, 1, 5, 9, 2, 6]
 k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 8, .I In(.a data))) : Out)
-compute.collect out.z
+compute.collect out.z : array{Int, 8}
 "#,
     );
     assert_eq!(
@@ -1310,15 +1315,8 @@ compute.collect out.z
     );
     let message = &messages[0];
     assert!(
-        message.contains("input buffer")
-            && message.contains("position 0")
-            && message.contains("holds a number"),
-        "the refusal must name the position and what it holds: {message:?}"
-    );
-    assert!(
-        message.contains("compute.buffer"),
-        "and it must name the operation that makes one, since the fix is not obvious from \
-         the fact: {message:?}"
+        message.contains("expected struct{") && message.contains("found array{Int, 8}"),
+        "the refusal must name the buffer the position must hold and what it holds: {message:?}"
     );
 }
 
@@ -1333,19 +1331,33 @@ compute.collect out.z
 fn a_kernel_reads_the_input_buffer_it_names() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.b (compute.Buf _), .c (compute.Buf _)}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4))), .c (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
   v = (compute.read ((compute.Read _)(.from k.in.c, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value v)))))
 }
-ones = compute.buffer [1, 1, 1, 1]
-twos = compute.buffer [2, 2, 2, 2]
+OutB = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+OutC = struct{.c (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Fill = struct{.n Int}
+fb = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((OutB)(.b (compute.write ((compute.Write _)(.to y, .at i, .value 1)))))
+}
+fc = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((OutC)(.c (compute.write ((compute.Write _)(.to y, .at i, .value 2)))))
+}
+ones = (compute.plrun (compute.parallel fb "cpu" OutB) ((Fill)(.n 4)) : OutB)
+twos = (compute.plrun (compute.parallel fc "cpu" OutC) ((Fill)(.n 4)) : OutC)
 k = compute.parallel f "cpu" Out
-out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b ones, .c twos))) : Out)
-compute.collect out.z
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b ones.b, .c twos.c))) : Out)
+compute.collect out.z : array{Int, 4}
 "#);
     assert_eq!(
         common::usize_array(&module, &value),
@@ -1365,19 +1377,26 @@ fn a_read_of_a_writes_result_is_refused_by_name() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.b (compute.Buf _)}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value 0)))))
+}
+data = (compute.plrun (compute.parallel fill "cpu" Out) ((Fill)(.n 4)) : Out)
 f = (k : Par) => {
   i = compute.range k.n
-  w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  w = compute.write ((compute.Write _)(.to z, .at i, .value i + 7))
   r = (compute.read ((compute.Read _)(.from w, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value r + 1))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value r + 1)))))
 }
-data = compute.buffer [0, 0, 0, 0]
 k = compute.parallel f "cpu" Out
-out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
-compute.collect out.z
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data.z))) : Out)
+compute.collect out.z : array{Int, 4}
 "#,
     );
     assert_eq!(
@@ -1602,39 +1621,43 @@ compute.launch k 3.0
     }
 }
 
-/// A write that names another output than the codomain position it sits at is refused.
+/// A write that names another output than the codomain position it sits at exchanges
+/// the two outputs.
 ///
 /// # Invariant
-/// The ordinal a write fills comes from its `.to` operand, so a body that names its
-/// targets in another order than the codomain lists them is a mistake to report, not
-/// a spelling to reinterpret. Position order used to win and the two outputs were
-/// silently exchanged.
+/// The per-position check that used to demand "output k is a write to output k" is
+/// gone (`docs/notes/kernel-buffer-declarations.md`): the codomain's field order and the
+/// declaration order are the same list, so a write always fills the output it names and a
+/// crossing is not an error the compiler can see any more. **The crossing is the author's
+/// mistake**, and this pins what it costs: each field holds the values written to the
+/// buffer it names, so the two outputs hold each other's values.
 #[test]
-fn a_write_to_another_output_than_its_position_is_refused() {
-    let messages = fail(
-        r#"
+fn a_write_to_another_output_than_its_position_exchanges_the_outputs() {
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.a Int}
-Out = struct{.x (compute.Buf _), .y (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Out = struct{.x (compute.Buf ((compute.BufParam _)(.type Int, .length 3))), .y (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
-  (compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)))
+  x = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  y = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.x (compute.write ((compute.Write _)(.to y, .at i, .value i + i))), .y (compute.write ((compute.Write _)(.to x, .at i, .value i)))))
 }
 k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from outs.x, .at 2)) : Int)
-"#,
+(compute.collect outs.x : array{Int, 3}, compute.collect outs.y : array{Int, 3})
+"#);
+    let pair = common::array_values(&module, &value);
+    assert_eq!(
+        common::usize_array(&module, &pair[0]),
+        vec![0, 2, 4],
+        "the field that holds the write to `y` holds `y`'s own values"
     );
     assert_eq!(
-        messages.len(),
-        1,
-        "one misplaced write is one diagnostic: {messages:?}"
-    );
-    let message = &messages[0];
-    assert!(
-        message.contains("compute.parallel") && message.contains("to output 1"),
-        "the refusal must name the output the write points at: {message:?}"
+        common::usize_array(&module, &pair[1]),
+        vec![0, 1, 2],
+        "and the field that holds the write to `x` holds `x`'s own values"
     );
 }
 
@@ -1645,22 +1668,32 @@ outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 /// The write's counterpart to [`a_read_of_a_writes_result_is_refused_by_name`]: both
 /// sides resolve the buffer the author named against the role paths the parameter
 /// declares, and neither falls back to a position.
+///
+/// A write's target is a **declared** buffer, so an input buffer is no target at all:
+/// the body reaches a node that holds no value, and the body's own refusal names that.
 #[test]
 fn a_write_naming_an_input_buffer_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.b (compute.Buf _)}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value 0)))))
+}
+data = (compute.plrun (compute.parallel fill "cpu" Out) ((Fill)(.n 4)) : Out)
 f = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.in.b, .at i, .value i))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to k.in.b, .at i, .value i)))))
 }
-data = compute.buffer [0, 0, 0, 0]
 k = compute.parallel f "cpu" Out
-out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
-compute.collect out.z
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data.z))) : Out)
+compute.collect out.z : array{Int, 4}
 "#,
     );
     assert_eq!(
@@ -1670,38 +1703,106 @@ compute.collect out.z
     );
     let message = &messages[0];
     assert!(
-        message.contains("compute.parallel") && message.contains("names no output buffer"),
+        message.contains("compute.parallel") && message.contains("neither a value nor an operation"),
         "the refusal must name its own cause: {message:?}"
     );
 }
 
-/// A chain of writes fills the one output it names, and every link is written.
+/// A write whose `.to` names another write's result is refused: only a **declared**
+/// buffer is a target.
 ///
 /// # Invariant
-/// A `compute.write` is the value of an output position, so a `.to` that is itself a
-/// write names that same output and both links are emitted. The assertion reads only
-/// the slots the **inner** write owns: the outer writes `i / 2`, which two lanes
-/// share, so its slots are contended and say nothing about a schedule.
+/// A write's target is a declared buffer, so its output ordinal is the declaration's
+/// index; a write's own result is a version, and the ABI has no output for a version
+/// that names no declaration. The refusal says what the target was and what the
+/// parameter declares.
 #[test]
-fn a_chain_of_writes_fills_the_one_output_it_names() {
-    let (module, value, _root_ty) = run(r#"
+fn a_write_naming_a_writes_result_is_refused() {
+    let messages = fail(
+        r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.a Int}
-Out = struct{.z (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
 f = (k : Par) => {
   i = compute.range k.n
-  w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
-  compute.write ((compute.Write _)(.to w, .at i / 2, .value i + 100))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  w = compute.write ((compute.Write _)(.to z, .at i, .value i + 7))
+  ((Out)(.z (compute.write ((compute.Write _)(.to w, .at i / 2, .value i + 100)))))
 }
 k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
-compute.collect outs.z
-"#);
-    let elements = common::usize_array(&module, &value);
+compute.collect outs.z : array{Int, 4}
+"#,
+    );
     assert_eq!(
-        &elements[2..],
-        &[9, 10],
-        "slots 2 and 3 are the inner write's alone, so it was emitted"
+        messages.len(),
+        1,
+        "one unreadable target is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("compute.parallel") && message.contains("neither a declared buffer"),
+        "the refusal must name its own cause: {message:?}"
+    );
+}
+
+/// The write the codomain names fills the output; a write that is only a statement is
+/// dropped.
+///
+/// # Invariant
+/// `write` is a pure function whose result is a buffer, so the write that reaches the
+/// codomain is the one that fills the output. A write whose value is discarded is an
+/// effect outside the value and is not the model: the freeze drops it, because a
+/// statement-form write is not reachable from the return
+/// (`docs/notes/kernel-buffer-declarations.md`).
+///
+/// The two programs differ in the codomain's value alone, so the pair says which of the
+/// two writes filled the buffer.
+#[test]
+fn a_statement_write_is_dropped_and_the_codowns_write_fills_the_output() {
+    let (module, value, _root_ty) = run(r#"
+--- compute = import "compute.lichen" ---
+In  = struct{.a Int}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
+f = (k : Par) => {
+  i = compute.range k.n
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  compute.write ((compute.Write _)(.to z, .at i, .value i + 7))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 100)))))
+}
+k = compute.parallel f "cpu" Out
+outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
+compute.collect outs.z : array{Int, 4}
+"#);
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![100, 101, 102, 103],
+        "the write the codomain names filled every slot, and the statement's values are \
+         nowhere in it"
+    );
+
+    // The same body, with the codomain holding the declared buffer: the statement's
+    // write is the only one, and it is dropped, so the buffer holds nothing.
+    let (module, value, _root_ty) = run(r#"
+--- compute = import "compute.lichen" ---
+In  = struct{.a Int}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
+Par = struct{.n Int, .in In}
+f = (k : Par) => {
+  i = compute.range k.n
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  compute.write ((compute.Write _)(.to z, .at i, .value i + 7))
+  ((Out)(.z z))
+}
+k = compute.parallel f "cpu" Out
+outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
+compute.collect outs.z : array{Int, 4}
+"#);
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![0, 0, 0, 0],
+        "a write that is only a statement is dropped, so the buffer it named stays empty"
     );
 }
