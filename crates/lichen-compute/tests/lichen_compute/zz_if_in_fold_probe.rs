@@ -171,21 +171,56 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
             return format!("{} -> reaches the state's value", steps.join(" -> "));
         }
         let Some(operation) = module.node_operation(current) else {
-            return format!("{} -> no operation, origin hop", steps.join(" -> "));
+            // **The walk bottomed out**: the origin is the node the clone
+            // instantiates, so the walk continues where the template's read is.
+            let Some(origin) = module.node_origin(current) else {
+                return format!("{} -> no operation, no origin", steps.join(" -> "));
+            };
+            if origin == current {
+                return format!(
+                    "{} -> no operation, the origin is itself",
+                    steps.join(" -> ")
+                );
+            }
+            steps.push(format!(
+                "{current:?}(a value node, origin {origin:?}, value class {value_class:?})"
+            ));
+            current = origin;
+            continue;
         };
         if operation_name(&operation) != "Index" {
             return format!("{} -> not an Index", steps.join(" -> "));
         }
-        let Some(operands) = module.operands_of(current).ok() else {
-            return format!(
-                "{} -> no operands; {}",
-                steps.join(" -> "),
-                operand_fate(module, current)
-            );
+        // **The walk as it now stands**: the target through the operand array, the
+        // position through `read_position`, so a frozen position answers too.
+        let Some(operand) = operation.operand else {
+            return format!("{} -> no operand array", steps.join(" -> "));
         };
-        let Some(target) = operands.first().copied() else {
-            return format!("{} -> no target", steps.join(" -> "));
+        let Some(items) = module.operand_items(operand).ok() else {
+            return format!("{} -> operand array unreadable", steps.join(" -> "));
         };
+        let Some(target) = items
+            .first()
+            .map(|item| item.node)
+            .and_then(|n| n.dynamic())
+        else {
+            return format!("{} -> target is not this module's", steps.join(" -> "));
+        };
+        let position_item = items.get(1).map(|item| item.node);
+        let Some(position) = position_item.and_then(|item| module.read_position(item)) else {
+            let frozen = match position_item {
+                Some(AnyNodeId::Static(reference)) => format!(
+                    "the frozen node holds {}",
+                    module
+                        .static_read(reference)
+                        .map(|value| format!("{value:?}"))
+                        .unwrap_or_else(|| "<nothing readable>".to_string())
+                ),
+                _ => "no position".to_string(),
+            };
+            return format!("{} -> position unreadable ({frozen})", steps.join(" -> "));
+        };
+        steps.push(format!("{current:?}(position {position})"));
         current = target;
     }
     format!("{} -> depth cut", steps.join(" -> "))

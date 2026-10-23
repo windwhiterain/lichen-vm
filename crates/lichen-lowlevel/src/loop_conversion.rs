@@ -159,6 +159,32 @@ impl<P: Program> Module<P> {
     /// slot's value position (`0`), so the pair peel and every slot peel are dropped
     /// and a pair's type or attribute position ends the match rather than naming a
     /// state element (`docs/notes/compound-element-slots.md`).
+    ///
+    /// **The position is read through [`Module::read_position`], so a frozen one
+    /// answers.** The four order comparisons are routed through the prelude's
+    /// bindings, and the residual that routing leaves behind holds the read's
+    /// subscript as a reference into the **frozen** module — a decided node cannot
+    /// carry the caller's (`static_module/apply.rs`, `static_remap_value`). A
+    /// position is a position whichever module names it, and `read_position` already
+    /// reads both; only the walk's **target** has to be this module's, so `operands_of`
+    /// is kept for that alone. Reading the position through `operands_of` instead
+    /// refused every routed comparison's state read, and a read that cannot be walked
+    /// is a read the loop cannot place.
+    ///
+    /// **A clone of the read answers as the template's read does.** The walk above
+    /// terminates on `class_root(current) == value_class`, and a clone's chain bottoms
+    /// out at *this instantiation's* parameter — a fresh node in a singleton class —
+    /// so the class test never matches there. The origin is therefore followed once
+    /// when the walk meets a node with no operation, and the walk resumes from the
+    /// template the clone instantiates. A clone of a state read reads that slot, so it
+    /// must answer the same path; a clone that bottoms out somewhere else, or an
+    /// origin that is not a read, still answers [`None`].
+    ///
+    /// **The two are one reading.** A routed comparison's read is frozen *and* a
+    /// clone: reading the position alone leaves the walk at the clone's parameter,
+    /// and following the origin alone leaves it at the frozen position. Either half
+    /// alone answers [`None`] for every routed comparison, which is how the doubling
+    /// survived the first of them.
     pub fn parameter_value_path(&self, function: FunctionId, node: NodeId) -> Option<Vec<usize>> {
         // The mark's slot matches a state read structurally
         // (`docs/notes/loop-conversion.md`).
@@ -172,22 +198,39 @@ impl<P: Program> Module<P> {
         let value_class = self.class_root(value_cell);
         let mut path = Vec::new();
         let mut current = node;
+        // **One origin hop**, so a chain that reaches a clone's own parameter resumes
+        // at the template rather than walking the whole origin chain.
+        let mut followed = false;
         for _ in 0..16 {
             if self.class_root(current) == value_class {
                 // The chain reached the state's value: what was collected reads
                 // outermost-first.
                 return Self::state_path(path);
             }
-            let operation = self.node_operation(current)?;
+            let Some(operation) = self.node_operation(current) else {
+                // **The walk bottomed out**: a clone's chain ends at this
+                // instantiation's parameter, which is a value node the class test
+                // above never matches. The origin is the node the clone
+                // instantiates, so the walk continues where the template's read is.
+                let origin = self.node_origin(current)?;
+                if followed || origin == current {
+                    return None;
+                }
+                followed = true;
+                current = origin;
+                continue;
+            };
             if !matches!(
                 AsEnum::<LowOperator>::as_enum(&operation.operator),
                 Some(LowOperator::Index)
             ) {
                 return None;
             }
-            let operands = self.operands_of(current).ok()?;
-            let (target, selector) = (*operands.first()?, *operands.get(1)?);
-            let position = self.usize_value(selector)?;
+            // **The target must be this module's, the position need not be.**
+            let operand = operation.operand?;
+            let items = self.operand_items(operand).ok()?;
+            let target = items.first()?.node.dynamic()?;
+            let position = self.read_position(items.get(1)?.node)?;
             path.push(position);
             current = target;
         }
