@@ -115,6 +115,34 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 3: a merge of two decided classes has nothing to fill
+
+Timing the entries rather than counting calls found the merge's own walk: `add_equality`
+ran `fill_class_holes` on **every** merge where either side held a value, and for
+`fib 10` that was 21 751 walks of up to a couple hundred members — **21.1 ms** of a
+43 ms check, the single largest line item after evaluation itself.
+
+The walk is a no-op in the common case. **A class that holds a value has no holes**: a
+value write (`propagate_class_value`) and a hole fill both write *every* member, which is
+precisely the invariant `unify_inner` already reads a member's slot by ("Ask each class's
+value once, of the class: the representative may be a valueless node"). A merge of two
+classes that both hold a value therefore has no empty slot to fill — and that is the
+common case, since a comparison merges equal values. Only the merge with a class that
+holds *nothing* has holes.
+
+`add_equality` now fills only then. Measured on `fib 10`: 8 404 of 21 751 merges skip the
+walk, and the merge's inclusive time falls 21.1 → **9.5 ms**; `recursion.lichen`
+**49.6 → 41.9 ms** and `mathlib.lichen` **28.7 → 25.1 ms** (alternating A/B, medians of
+five), the corpus 716 → 681 ms (45 programs — `gc.lichen` is dropped from this reading
+because an unrelated regression panics in it, see below).
+
+Two slot-table reductions ride along, both exact:
+
+- `fill_class_holes` and `propagate_class_value` read the member's link and its slot
+  through **one** `SlotMap` lookup instead of two;
+- `evaluate_class_first` reads the three facts a member's turn depends on (visiting,
+  operation, run stamp) through **one** lookup instead of three.
+
 ## Round 2: the frozen pair guard, the node slot, and the per-apply buffers
 
 Three changes, each measured on its own, all on the same probe:
@@ -171,16 +199,28 @@ materialization and the checker's own graph, not the array-pair walk this round 
 
 ## What is left
 
+- **The per-run fixed cost is now the largest single line in the corpus reading.** Phase
+  timing separates `preprocess` (the store's own compiles) from the program's check: a
+  store compiles the **core prelude** from source every time (1.9–3.6 ms, ~2 MiB), and a
+  program that imports `compute.lichen` compiles that wrapper once per store too
+  ([lazy-plugin-registration](lazy-plugin-registration.md) made it deferred, not cheap).
+  Across 46 probe stores that is ~230 ms of the ~700 ms corpus total. It is paid once per
+  process on the shipping CLI path, so the user-visible gain is a small program's 2.4 ms —
+  a *shared registry* (directory runs, the example test, the server) or a persisted
+  prelude artifact would remove it, and the prelude artifact needs a companion record for
+  its `direct` names and source spans before it can be loaded without a compile.
 - **The node count, not the node slot, is where the peak now is.** `fib 10` ends with
   65 391 live nodes for a six-line program: 16 130 are the clone walk's, 17 020 are fresh
   undecided cells minted for a shared wildcard node, and ~12 000 came from reading a
   frozen ref, which materializes a fresh leaf each time. Sharing a *decided* static read
   would cut most of that and the peak with it, but a leaf is a cell a unification writes,
   so it is a semantic change and is not taken.
-- **The compute examples' allocation profile** is not the array-pair walk: `worldgen`
-  allocates 624 490 times while `recursion.lichen` now allocates 40 387. That is the next
-  measurement, and it belongs to the checker's static-function materialization.
-- The per-run fixed cost landed in
-  [lazy-plugin-registration](lazy-plugin-registration.md): the wrapper compiles on the
-  import that names it, which took a 91-byte program from 6.9 ms to 2.4 ms and its peak
-  live from 3 727 KiB to 1 017 KiB.
+- **The clone walk itself** is the remaining time: `node_apply` runs 60 881 times for
+  `fib 10` across 185 applies, and its inclusive time dwarfs every leaf measured here. A
+  per-visit membership walk (`Function::parent` chain) and the `origin` chain are the
+  candidates; neither has been measured in isolation yet.
+- **The upstream `gc.lichen` panic is not this note's.** `examples/gc.lichen` panics with
+  `invalid SlotMap key used` at `evaluate_pattern_argument_inner`, from a dynamic pattern
+  id that was never in the slot table; it appears at `fad1448e` (bisected: `93b4eb9c` is
+  clean) and is masked by the examples guard stopping at `decode.lichen` first. It is
+  unrelated to the changes above and its owner's to fix.

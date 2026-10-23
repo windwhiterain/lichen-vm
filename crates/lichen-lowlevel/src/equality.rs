@@ -96,7 +96,11 @@ impl<P: Program> Module<P> {
             self.refine_class_low_type(representative, shape);
         }
         if let Some(value) = left_value.or(right_value) {
-            self.fill_class_holes(representative, value);
+            // A class that holds a value has no holes, so only a merge with a valueless
+            // class fills.
+            if left_value.is_none() || right_value.is_none() {
+                self.fill_class_holes(representative, value);
+            }
         }
         representative
     }
@@ -113,9 +117,10 @@ impl<P: Program> Module<P> {
         // changes no member's class.
         let mut member = Some(representative);
         while let Some(current) = member {
-            member = self.nodes[current].meta().next();
-            if self.nodes[current].value.is_none() {
-                self.set_node_value(current, Some(value));
+            let node = &mut self.nodes[current];
+            member = node.meta().next();
+            if node.value.is_none() {
+                node.value = Some(value);
             }
         }
     }
@@ -370,8 +375,9 @@ impl<P: Program> Module<P> {
         // snapshot is needed.
         let mut member = Some(representative);
         while let Some(current) = member {
-            member = self.nodes[current].meta().next();
-            self.set_node_value(current, Some(value));
+            let node = &mut self.nodes[current];
+            member = node.meta().next();
+            node.value = Some(value);
         }
     }
 

@@ -110,7 +110,12 @@ impl<P: Program> Module<P> {
         for index in 0..members.len() {
             let member = members[index];
             // Only members that still owe an answer: the rest answer from their own slot.
-            if member != node && self.has_no_result_yet(member) && !self.nodes[member].visiting {
+            let owes = self.nodes.get(member).is_some_and(|entry| {
+                !entry.visiting
+                    && entry.operation.is_some()
+                    && (entry.value.is_none() || entry.runned == 0)
+            });
+            if member != node && owes {
                 self.evaluate_node(Dyn(member), None);
             }
         }
