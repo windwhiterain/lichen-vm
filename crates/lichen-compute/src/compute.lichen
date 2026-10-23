@@ -4,9 +4,10 @@ warp = 32
 KT = _x => struct{.I _, .O _}
 K = _x => struct{.native _, .I _, .O _}
 A = I => struct{.n Int, .I I}
-P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
+P = T: KT _ => struct{.n Int, .in T.I}
 S = T: KT _ => A T.I -> T.O
 Buf = T => struct{.native _, .element T}
+Buffer = T => struct{.count Int, .element T}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I # _ => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I # _ => {r = $call(k.native, a); r: k.O; r}
@@ -22,7 +23,7 @@ read = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
 write = (x : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
 write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # (perspective_of x.to))
 collect = (b : (Buf _)) => $collect(b)
-buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
+buffer = (x : (Buffer _)) => ($buffer(x.count, x.element) : (Buf _))
 Mma = T => struct{.s string, .a (Buf T) # warp, .b (Buf T) # warp, .c (Buf T) # warp}
 mma = (x : (Mma Int)) => ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # warp)
 graph = f => {f: _ -> _; $graph(f)}

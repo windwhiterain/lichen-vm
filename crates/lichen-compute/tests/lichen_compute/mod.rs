@@ -67,6 +67,7 @@ mod zz_if_in_fold_probe;
 mod zz_loop_write_probe;
 mod zz_masked_conv_probe;
 mod zz_operator_floor_probe;
+mod zz_pure_kernel_probe;
 mod zz_replicate_address_probe;
 mod zz_store_loop_probe;
 mod zz_subrange_write_probe;

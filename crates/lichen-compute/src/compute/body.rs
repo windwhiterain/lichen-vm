@@ -116,6 +116,16 @@ pub struct Lower<'a, P: Program> {
     block: usize,
     /// The active `@loop` nests, innermost last.
     loops: Vec<ActiveLoop>,
+    /// The declared buffers' lengths, one per declaration, in declaration order.
+    ///
+    /// # Invariant
+    /// A declaration's index **is** its output ordinal: a `write` whose target is a
+    /// declared buffer resolves through [`Self::declared`], so the order the body
+    /// declares them in is the order the fragment's outputs are allocated in
+    /// (`docs/notes/kernel-buffer-declarations.md`).
+    declarations: Vec<ValueId>,
+    /// The `compute.buffer` node each declaration was lowered from, by ordinal.
+    declared: HashMap<NodeId, usize>,
 }
 
 /// One `@loop` nest being emitted: the conversion's roles and the state each
@@ -231,6 +241,8 @@ where
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
+            declarations: Vec::new(),
+            declared: HashMap::new(),
         };
         let mut values = Vec::new();
         for node in lower.leaves_of(codomain)? {
@@ -285,6 +297,8 @@ where
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
+            declarations: Vec::new(),
+            declared: HashMap::new(),
         };
         for output in outputs {
             // The value a write leaves is discarded on purpose: see the doc.
@@ -925,10 +939,55 @@ where
             ComputeOperator::Read => self.buffer_read(operand),
             ComputeOperator::Write => self.buffer_write(operand),
             ComputeOperator::WriteAtomic => self.buffer_write_atomic(operand),
+            // **A buffer the body declares**: a length and an element type, and nothing
+            // about where it lives (`docs/notes/kernel-buffer-declarations.md`).
+            ComputeOperator::Buffer => self.buffer_declare(node, operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
             )),
         }
+    }
+
+    /// A declared buffer: its declaration order is its output ordinal.
+    ///
+    /// # Invariant
+    /// The body **names** the buffer instead of receiving it, so [`Self::declared`] is the
+    /// only authority over an ordinal: a write whose target is one of these fills the
+    /// position the declaration was lowered at, not a parameter path.
+    fn buffer_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
+        let items = self.module.operand_items(operand)?;
+        let Some(count) = items.first() else {
+            return Err(
+                "a `compute.buffer` declaration states no length: its operand array is empty and \
+                 a declaration states a length and an element type"
+                    .into(),
+            );
+        };
+        let count = self.value(dynamic(count.node)?)?;
+        let ordinal = self.declarations.len();
+        self.declarations.push(count);
+        self.declared.insert(node, ordinal);
+        // The declaration's value is the version token: which buffer it names is the node's
+        // identity, and no reader reads the value.
+        Ok(self.version_token())
+    }
+
+    /// The declaration a write's target names, if the body declared it.
+    ///
+    /// # Invariant
+    /// The target arrives as the `Write` struct's `.to` slot, so it is peeled like every
+    /// other wrapped operand and then asked for the value half — the node the declaration
+    /// produced. A buffer the *parameter* named answers `None` here and falls back to the
+    /// parameter path.
+    fn declared_ordinal(&self, target: NodeId) -> Option<usize> {
+        let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
+        let node = peeled.dynamic()?;
+        let value = self.module.pair_value_half(node).unwrap_or(node);
+        let definition = match self.module.define_in(self.function, value) {
+            Define::Computed(definition) => definition,
+            _ => return None,
+        };
+        self.declared.get(&definition).copied()
     }
 
     /// The lane's row (`Div`) or its column (`Rem`), taken over the launch's **second**
@@ -2198,17 +2257,26 @@ where
         {
             self.value(previous)?;
         }
-        let ordinal =
-            write_chain_output_pos(self.module, self.params, target)?.ok_or_else(|| {
+        // **The target is lowered before its ordinal is read**: a declaration registers its
+        // ordinal when it is walked, so the write's position is known only after that walk
+        // (`docs/notes/kernel-buffer-declarations.md`).
+        self.value(target)?;
+        // **A declared buffer names its position by declaration order**: the body creates
+        // the buffer instead of receiving it, and a buffer the parameter still names falls
+        // back to its path.
+        let ordinal = match self.declared_ordinal(target) {
+            Some(ordinal) => ordinal,
+            None => write_chain_output_pos(self.module, self.params, target)?.ok_or_else(|| {
                 let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
                     Some(roles) => format!("the parameter's outputs are {:?}", roles.outputs),
                     None => "the parameter declares no outputs".to_string(),
                 };
                 format!(
-                    "write's buffer argument is not an output buffer of the parallel parameter \
-                 ({seen})"
+                    "write's buffer argument is neither a declared buffer nor an output buffer \
+                     of the parallel parameter ({seen})"
                 )
-            })?;
+            })?,
+        };
         // The element a write fills is the parameter's own declaration where it states one.
         let element = self.declared_output_class(ordinal, value_node);
         if atomic && element == ScalarClass::BFloat16 {

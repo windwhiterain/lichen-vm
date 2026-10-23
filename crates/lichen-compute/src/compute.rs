@@ -22,8 +22,8 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic,
-    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
-    Release, StaticModule, ValueExt,
+    FunctionId, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt,
+    Program, Release, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -1764,9 +1764,11 @@ where
                 | ComputeOperator::Row
                 | ComputeOperator::Col
                 | ComputeOperator::Write
-                | ComputeOperator::WriteAtomic => {
+                | ComputeOperator::WriteAtomic
+                | ComputeOperator::Buffer => {
                     // Kernel-only operators: none of them reaches the VM as a
-                    // standalone apply — stay lazy.
+                    // standalone apply — stay lazy. A declared buffer is lowered in the
+                    // body it is declared in and has no host value.
                     None
                 }
                 ComputeOperator::BufferCollect => {
@@ -1934,44 +1936,6 @@ where
                         )),
                     ));
                     let wrapper = buf_value::<P>(module, block, payload, ScalarClass::Int)?;
-                    module.node_value(AnyNodeId::Dynamic(wrapper))
-                }
-                ComputeOperator::Buffer => {
-                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
-                    else {
-                        unreachable!("Buffer expects an operand array of [array]")
-                    };
-                    // SAFETY: `operands` is the array the VM just evaluated for
-                    // this operation; its home block is alive for the run.
-                    let operands = unsafe { operands.items() };
-                    let Some(entry) = operands.first().map(|item| item.node) else {
-                        return None;
-                    };
-                    let Some(LowValue::Array(elements)) = module
-                        .node_value(entry)
-                        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-                    else {
-                        return not_an_array::<P>(module, entry);
-                    };
-                    // SAFETY: `elements` was read out of a live node of `module` on
-                    // this borrow, so its block is alive for the copy below.
-                    let elements = unsafe { elements.items() };
-                    let Some((class, words)) = buffer_words::<P>(module, elements) else {
-                        return None;
-                    };
-                    let payload = module.alloc_payload(&pack_elements(class, &words), block);
-                    let payload = AnyNodeId::Dynamic(module.add_node(
-                        block,
-                        None,
-                        Some(<P::Value as From<ComputeValue>>::from(
-                            ComputeValue::Buffer(payload, class),
-                        )),
-                    ));
-                    // The wrapper is the value: `.native` holds the payload and
-                    // `.element` the class's type, which types a read of it.
-                    let Some(wrapper) = buf_value::<P>(module, block, payload, class) else {
-                        return None;
-                    };
                     module.node_value(AnyNodeId::Dynamic(wrapper))
                 }
                 ComputeOperator::Graph => {
@@ -2164,7 +2128,47 @@ where
     };
     // Undecided is not a mistake: a kernel compiled before its annotation
     // resolved waits for a later pass.
+    roles_from_type(module, type_slot, RoleSource::Parameter)
+}
 
+/// The codomain's roles: its buffer fields, all of them outputs, in field order.
+///
+/// # Invariant
+/// A parameter no longer carries `.out` (`docs/notes/kernel-buffer-declarations.md`), so the
+/// return type is where an output's element class and order are stated: the fragment's
+/// `roles.outputs` is this walk, and the body's declarations are the positions it fills.
+fn codomain_roles<P>(module: &mut Module<P>, return_node: NodeId) -> Result<KernelRoles, RoleUnread>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some(type_slot) = pair_type(module, return_node) else {
+        return Err(RoleUnread::Undecided);
+    };
+    roles_from_type(module, type_slot, RoleSource::Codomain)
+}
+
+/// Where a type's leaves take their role from.
+#[derive(Clone, Copy, PartialEq)]
+enum RoleSource {
+    /// The parameter: `.in` is input, `.out` output, anything else a runtime scalar.
+    Parameter,
+    /// The codomain: every buffer field is an output.
+    Codomain,
+}
+
+/// Walk a type's fields into [`KernelRoles`] under `source`'s rule.
+fn roles_from_type<P>(
+    module: &mut Module<P>,
+    type_slot: AnyNodeId,
+    source: RoleSource,
+) -> Result<KernelRoles, RoleUnread>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
     // The type slot holds either the type term or a node that holds one; the
     // decode decides which ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
@@ -2173,17 +2177,24 @@ where
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     // A reserved group may be absent or written empty: the walk treats both
     // alike, so neither needs a filler field.
-    let inputs_at = named("in");
-    let outputs_at = named("out");
+    let inputs_at = match source {
+        RoleSource::Parameter => named("in"),
+        RoleSource::Codomain => None,
+    };
+    let outputs_at = match source {
+        RoleSource::Parameter => named("out"),
+        RoleSource::Codomain => None,
+    };
     // SAFETY: `shape` is a live node of `module`.
     let Some(fields) = field_types_of(module, shape) else {
         return Err(RoleUnread::Undecided);
     };
     let mut roles = KernelRoles::default();
     for (field, &field_type) in fields.iter().enumerate() {
-        let role = match field {
-            at if inputs_at == Some(at) => LeafRole::Input,
-            at if outputs_at == Some(at) => LeafRole::Output,
+        let role = match (source, field) {
+            (RoleSource::Codomain, _) => LeafRole::Output,
+            (_, at) if inputs_at == Some(at) => LeafRole::Input,
+            (_, at) if outputs_at == Some(at) => LeafRole::Output,
             _ => LeafRole::Scalar,
         };
         walk_role(module, field_type, &[field], role, &mut roles)?;
@@ -2621,7 +2632,7 @@ where
 
     // The role table is decoded from the parameter's type, whose shape the low
     // vocabulary reads as a tuple of its fields.
-    let roles = parallel_roles(module, cfg_pair)?;
+    let mut roles = parallel_roles(module, cfg_pair)?;
     let type_classes = domain_type_classes(
         module,
         &[
@@ -2632,6 +2643,15 @@ where
     let type_classes_ref = &type_classes;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
+    // **The codomain states the outputs**: the parameter no longer carries `.out`
+    // (`docs/notes/kernel-buffer-declarations.md`), so a parameter that names none takes
+    // them from the return type, in field order.
+    if roles.outputs.is_empty()
+        && let Ok(codomain) = codomain_roles(module, body)
+    {
+        roles.outputs = codomain.outputs;
+        roles.output_classes = codomain.output_classes;
+    }
 
     // The slot is seeded with the ABI's signature: the parameter's leaves then
     // the index, each leaf classed by its field.
@@ -2713,8 +2733,13 @@ where
             )
             .into());
         }
-        // **A write fills the output it names**, not the position it is walked at.
-        if !conditional && !looping {
+        // **A write fills the output it names**, not the position it is walked at. A
+        // declared target is the codomain's own order by construction, so it names the
+        // position the declaration was lowered at and needs no parameter path.
+        let declared_target = write_target_node(module, *output)
+            .and_then(|target| target.dynamic())
+            .is_some_and(|target| is_declared_position(module, fid, target));
+        if !conditional && !looping && !declared_target {
             let named = write_chain_output_pos(module, &params, AnyNodeId::Dynamic(*output))?;
             if named != Some(position) {
                 return Err(match named {
@@ -2816,6 +2841,46 @@ where
         if module
             .callee_function(current)
             .is_some_and(|callee| module.loop_conversion(callee).is_ok())
+        {
+            return true;
+        }
+        match concrete_element(module, current) {
+            Some(next) => node = next,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Whether `node` is a buffer the body declared: its definition is a `compute.buffer`.
+///
+/// # Invariant
+/// A declared buffer is the *target* a write names, not a parameter path
+/// (`docs/notes/kernel-buffer-declarations.md`): the write's own position is the codomain's
+/// order, and the declaration's index is that order, so this is what tells the two apart
+/// before the body is lowered.
+fn is_declared_position<P>(module: &Module<P>, function: FunctionId, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut node = AnyNodeId::Dynamic(
+        value_of_node(module, node)
+            .or_else(|| pair_value(module, node))
+            .unwrap_or(node),
+    );
+    for _ in 0..8 {
+        let Some(current) = node.dynamic() else {
+            return false;
+        };
+        if let lichen_lowlevel::Define::Computed(definition) = module.define_in(function, current)
+            && module.node_operation(definition).is_some_and(|operation| {
+                matches!(
+                    AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+                    Some(ComputeOperator::Buffer)
+                )
+            })
         {
             return true;
         }
@@ -3720,10 +3785,10 @@ where
     let mut placed: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(outputs.len());
     for (position, &(payload, class)) in outputs.iter().enumerate() {
         let path = roles.outputs.get(position)?;
-        // Drop the `.out` step at the front: the result is the codomain itself.
-        let inner = path.get(1..)?;
+        // The paths are the codomain's own: `P` no longer carries an `.out` group to drop
+        // (`docs/notes/kernel-buffer-declarations.md`).
         let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
-        placed.push((inner.to_vec(), value));
+        placed.push((path.clone(), value));
     }
     let root = assemble_result::<P>(module, block, &placed, &[], 0)?;
     module.node_value(AnyNodeId::Dynamic(root))
@@ -7759,12 +7824,13 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$buffer(xs)` — copy `xs`'s elements into a `Buf`.
+    /// `$buffer(count, element)` — declare a buffer of `count` elements of `element`.
     ///
     /// # Invariant
-    /// The op states no type, as every native operator does; what it does state is that the
-    /// result **is** the wrapper, so the `.element` slot the wrapper reads is the class the
-    /// run copies the elements in.
+    /// **A declaration, not an allocation**: it states the length and the element type and
+    /// initialises nothing, and where the buffer lives is the pack's choice
+    /// (`docs/notes/kernel-buffer-declarations.md`). The two operands are the only facts a
+    /// declaration carries, so a body that names the wrong ones names them here.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -7772,8 +7838,9 @@ where
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
-        let xs = &args[0];
-        let operands = ctx.array_node(&[xs.value]);
+        let count = &args[0];
+        let element = &args[1];
+        let operands = ctx.array_node(&[count.value, element.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Buffer), Some(operands));
         NativeApply {
             value: op,
