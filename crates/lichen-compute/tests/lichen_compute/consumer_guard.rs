@@ -25,11 +25,14 @@ const DATA: [f32; 3] = [2.0, 4.0, 6.0];
 /// A `Σ` producer feeding a `max(d − r)` consumer, over a two-node recording.
 ///
 /// # Invariant
-/// The consumer reads the producer's output buffer at input position 1, the read the region
-/// derivation names with `ReadRoles::consumer(1)` and the node-local one reads as a datum.
+/// The consumer reads the producer's output buffer at input position 1, and the node-local
+/// one reads as a datum.
 ///
-/// The recording is the root's third element, so a test reads the two kernels and the graph
-/// without dispatching: a dispatch is the one step a device is needed for.
+/// The recording is the root's third element, so a test reads the kernels and the graph
+/// without dispatching: a dispatch needs a device.
+///
+/// No parameter carries an `.out` group: the body declares its buffer with
+/// `compute.slice`, and the write is the codomain's value.
 fn chain() -> String {
     r#"
 ---
@@ -37,21 +40,23 @@ fn chain() -> String {
 ---
 In   = struct{.d (compute.Buf Float)}
 OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{.n Int, .in In}
 producer_raw = (k : Par) => {
   i = compute.range k.n
+  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
@@ -65,7 +70,8 @@ built = compute.graph step
     .to_string()
 }
 
-/// The chain with its recording run over the [`elements`], which is what a differential needs.
+/// The chain with its recording run over the data the fill kernel writes, which is what a
+/// differential needs.
 ///
 /// # Invariant
 /// The run is appended rather than fused into [`chain`], so the recording is one program and a
@@ -74,31 +80,57 @@ fn running() -> String {
     with_run(chain())
 }
 
-/// The `COUNT` elements the launch reads, one `Float` literal each.
+/// The value the fill kernel writes at lane `i`.
 ///
 /// # Invariant
-/// The marked array's length is the launch's own count, so the buffer and the extent agree. The
-/// first three elements are [`DATA`] and the rest are zero, which a sum is indifferent to.
-fn elements() -> String {
-    (0..COUNT)
-        .map(|position| match DATA.get(position) {
-            Some(element) => format!("{element}.0"),
-            None => "0.0".to_string(),
-        })
+/// The first three lanes carry [`DATA`] and every other lane carries zero, which a sum is
+/// indifferent to. The cases are **summed** and not nested: a conditional in a kernel body
+/// reaches the lowering as one node, so an `else` arm that is itself a conditional is a node
+/// the body cannot emit.
+fn datum() -> String {
+    DATA.iter()
+        .enumerate()
+        .map(|(lane, element)| format!("(if i == {lane} then {element:?} else 0.0)"))
         .collect::<Vec<String>>()
-        .join(", ")
+        .join(" + ")
 }
 
-/// `source`'s recording, run over [`elements`].
+/// The fill kernel that builds the launch's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the buffer holds
+/// [`DATA`] and then zeros. The kernel runs on the host's own backend, because a host builds
+/// its data before a device ever sees it, and its parameter declares no `.in` group at all
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn filled() -> String {
+    format!(
+        r#"
+Data = struct{{.d (compute.Buf Float)}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  v = {datum}
+  ((Data)(.d (compute.write ((compute.Write _)(.to y, .at i, .value v)))))
+}}
+filler = compute.parallel fill "cpu" Data
+"#,
+        datum = datum(),
+    )
+}
+
+/// `source`'s recording, run over the data the fill kernel writes.
 ///
 /// # Invariant
 /// The buffer is the first value the graph takes and the count the second, which is the order
-/// `compute.graphrun` hands them over in; the source names its own three root elements.
+/// `compute.graphrun` hands them over in; the source names its own three root elements. The
+/// data is a kernel's own output, because a host builds its data by running a kernel
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn with_run(source: String) -> String {
     format!(
-        "{source}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, data))\nout\n",
+        "{source}\n{fill}\ndata = (compute.plrun filler ((Fill)(.n {count})) : Data)\nout = compute.collect (compute.graphrun built ({count}, data.d))\nout\n",
+        fill = filled(),
         count = COUNT,
-        elements = elements(),
     )
 }
 
@@ -116,20 +148,22 @@ fn bare_consumer() -> String {
 ---
 In   = struct{.d (compute.Buf Float)}
 OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{.n Int, .in In}
 producer_raw = (k : Par) => {
   i = compute.range k.n
+  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, 0.0 ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
@@ -150,13 +184,14 @@ struct Run {
     kernels: Vec<Instance>,
 }
 
-/// Compile, evaluate and read the chain's two kernels out of the kernel registry.
+/// Compile, evaluate and read the chain's two kernels, a list and not the pass's join.
 ///
 /// # Invariant
-/// The same walk [`install_tiling`] performs over a module, answering a list instead of a join:
-/// a node whose own value names a kernel is that kernel, and a kernel two nodes name is one entry
-/// because its id is. The registry is global and a process runs every test in it, so a program's
-/// kernels are read from **its own** module rather than from what the registry gained.
+/// The same walk [`install_tiling`] performs over a module: a node whose own value names a
+/// kernel is that kernel, and a kernel two nodes name is one entry because its id is. A
+/// kernel claiming no interface is not the chain's: the fill kernel is no subject of the
+/// guard. The registry is global, so the kernels are read from **its own** module, not from
+/// what the registry gained.
 fn run(source: &str) -> Run {
     let (module, value, _root) = common::run(source);
     let mut ids: Vec<usize> = module
@@ -166,14 +201,17 @@ fn run(source: &str) -> Run {
         .collect();
     ids.sort_unstable();
     ids.dedup();
-    let mut kernels: Vec<Instance> = ids
-        .into_iter()
-        .map(|kernel| Instance {
+    let mut kernels: Vec<Instance> = Vec::new();
+    for kernel in ids {
+        let Some(claim) = claim_of(kernel) else {
+            continue;
+        };
+        kernels.push(Instance {
             kernel,
-            claim: claim_of(kernel).expect("a kernel the module names claims an interface"),
+            claim,
             fragment: fragment_of(kernel).expect("the registry holds the fragment it compiled"),
-        })
-        .collect();
+        });
+    }
     // By buffer count, not by id: an id sort follows registration, not the source's order.
     kernels.sort_by_key(|kernel| kernel.fragment.inputs);
     Run {
