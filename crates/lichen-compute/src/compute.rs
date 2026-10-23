@@ -2223,10 +2223,11 @@ const BUF_NATIVE_FIELD: &str = "native";
 
 /// Whether a struct's field names are the `Buf` wrapper's.
 fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
-    names
-        .iter()
-        .filter_map(|name| *name)
-        .eq([BUF_NATIVE_FIELD, "element"])
+    // **The payload is the first field**: the older wrapper named the element field `element`,
+    // the value-indexed one names it `type` and adds `length` after it.
+    let fields: Vec<&'static str> = names.iter().filter_map(|name| *name).collect();
+    fields.as_slice() == [BUF_NATIVE_FIELD, "element"]
+        || fields.as_slice() == [BUF_NATIVE_FIELD, "type", "length"]
 }
 
 /// Record the role of one field of a parameter type, descending into groups.

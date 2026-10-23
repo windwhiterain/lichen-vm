@@ -1032,9 +1032,9 @@ where
             .module
             .usize_value(count_node)
             .map(|value| value as u32);
-        let count = self.value(count_node)?;
-        let ordinal = self.declarations.len();
-        self.declarations.push(count);
+        // **The length is read, not lowered**: a declaration's count may be the launch's runtime
+        // scalar, which has no value in the frozen template.
+        let ordinal = self.tally.output_extents.len();
         self.tally.output_extents.push(extent);
         let identity = self.canonical(node);
         self.declared.insert(identity, ordinal);
