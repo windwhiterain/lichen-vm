@@ -41,41 +41,42 @@ const PACK: &str = "elementwise-fan-out";
 /// The body declares its buffer and returns that write
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.d (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-ParE = struct{.n Int, .in In}
-ArgE = struct{.n Int, .I In}
-scale_raw = (k : ParE) => {
+In  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParE = struct{{.n Int, .in In}}
+ArgE = struct{{.n Int, .I In}}
+scale_raw = (k : ParE) => {{
   i = compute.range k.n
-  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
-}
+}}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-Arg2 = struct{.n Int, .I In2}
-offset_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+Arg2 = struct{{.n Int, .I In2}}
+offset_raw = (k : Par2) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element"))))))
-}
+}}
 offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun scale ((ArgE)(.n s.n, .I In(.d s.in.d))) : OutE)
   left = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
   right = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
   (left, right)
-}
+}}
 built = compute.graph step
 (scale, offset, built)
 "#
-    .to_string()
+    )
 }
 
 /// The diamond as a recording: the two kernels and the graph they recorded, nothing run.
@@ -90,17 +91,18 @@ fn recording() -> String {
 /// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
 /// before a device ever sees it, and its parameter declares no `.in` group.
 fn filled() -> String {
-    r#"
-Data = struct{.d (compute.Buf Float)}
-Fill = struct{.n Int}
-fill = (c : Fill) => {
+    format!(
+        r#"
+Data = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
   i = compute.range c.n
-  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
-}
+}}
 filler = compute.parallel fill "cpu" Data
 "#
-    .to_string()
+    )
 }
 
 /// The diamond as a program that runs its recording and answers it.
@@ -112,7 +114,7 @@ filler = compute.parallel fill "cpu" Data
 fn running() -> String {
     format!(
         "{head}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
-         r = (compute.graphrun built (count, data.d) : array{{(compute.Buf Float), 2}})\n\
+         r = (compute.graphrun built (count, data.d) : array{{(compute.Buf ((compute.BufParam _)(.type Float, .length {count}))), 2}})\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
         head = recording(),
         fill = filled(),
