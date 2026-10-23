@@ -128,32 +128,44 @@ no device), `decode.lichen` 4 of 25 ms, `mathlib.lichen` 5 of 28. A corpus total
 by 2 % says almost nothing about the checker; the language-heavy programs are the ones that
 do (`recursion.lichen` 25 ms, `mathlib` 21–28 ms).
 
-**Second finding: the clone walk mints per node what it then merges per class.** For
-`fib 10`: 24 801 clones are unified **18 841** times — 5 960 classes, so one clone per class
-would have sufficed — and the entry check finds only 12 % of those calls already same-class
-(9 % for mathlib). The 18 841 calls cost 6.8 ms of unify plus 18 841 clone paths that would
-become memo hits (≈1.4 ms of `add_node`, ≈3.7 ms of walk). That is the one remaining
-double-digit-percent target: **≈30–40 % of an apply-heavy program**, by memoising the walk
-by template **class root** instead of node, guarded by the decision inputs that can differ
-inside one class (the owner tag and the parameter verdict), falling back to the per-node
-clone when they do. It is not taken here: a shared clone's `origin` and therefore its marks
-attribution belongs to whichever member minted it, and that is observable to a diagnostic.
+**Second finding, corrected: the clone groups are small, and counting them needs a per-phase
+reset.** The round's first pass counted unifications over the whole process — the prelude's
+compile and the probe's second, check-only compile included — and read 18 841 of them, most
+of which looked like the clone groups' pairwise unification. Resetting the counters at
+`evaluate_raw` and dumping after it, `fib 10`'s run is **15 980 unifications**, of which the
+clone groups are **1 083 pairs**; the check-only compile adds 2 861 unifications and 359
+pairs. The rest are **answer commits** (one per computed node, `write_node_answer` joining a
+reader into its class) and the apply's own signature and parameter checks — inherent to the
+representation, not to the grouping.
 
-Measured ceilings for the safe alternatives:
+So the class-level clone memo that round 11 proposed is worth **≈2 %**, not 30–40 %: 1 083
+fewer unifications and 1 083 fewer clone paths out of a 22.6 ms run. It is not worth
+touching cell identity for, and the maintainer's approval of it was given on the wrong
+number; the correction is the point of this round.
+
+**The per-pass visited memo was tried and does not pay either.** Recorded as a proposal by
+round 11's table, it was implemented (a per-pass set of the nodes answered with themselves,
+checked after the wildcard branch and filled at the two "reference as-is" returns) and
+measured: `fib 10`'s allocations rose by 704 — a set per pass, growing — and the wall clock
+did not improve; the hash lookups cost what the saved verdicts were worth. Reverted.
+
+Measured ceilings for the safe alternatives, with the per-phase numbers:
 
 | refactor | `fib 10` | `mathlib` | class |
 |---|---|---|---|
-| per-pass visited memo in the walk | 60 881 visits to ≤214 nodes; ≈1.5–2 ms | 24 306 to 5 185 | exact |
+| per-pass visited memo in the walk | **tried: +704 allocations, no gain** | — | rejected |
 | chunked node storage (no growth memcpy) | 295 growth allocations, 25 MB moved; ≈1–2 ms | — | exact, container refactor |
 | `Arc`-shared `LowShape` for clones | 2 702 boxes (8 % of allocations) | 1 159 | exact |
 | parser allocation reduction | — | 22 986 allocations (20 106 ≤16 B), ≈0.8 ms | exact |
 | checker `Loc` (`vec![step]` per build) | — | 2 235 allocations | exact |
-| `unify` self-pair fast path | 11 of 18 841 | 71 of 4 667 | worthless |
+| `unify` self-pair fast path | 11 of 15 980 | 71 of 4 667 | worthless |
 
-The synthesis: no behaviour-preserving refactor of the language core exceeds ≈10–15 %, and
-the one that exceeds it is the class-level clone memo, which trades on a cell-identity
-question the maintainer has declined twice before (static leaves, wildcard cells) and is
-therefore left as a proposal.
+Where `fib 10`'s 22.6 ms actually goes, per phase: the prelude compile 2.7 ms, `add_node`
+5.1 ms, `unify` 4.5 ms (15 980 calls), the walk's own arithmetic ≈8 ms over 42 887 visits,
+the answer-class walks and the rest ≈2 ms. The synthesis is unchanged from round 11 and is
+now measured rather than argued: **no behaviour-preserving refactor of the language core
+exceeds ≈10–15 %**, and the volume behind that floor is the node count, which only the
+declined cell-identity changes reduce.
 
 ## Round 10: the node slot is 128 bytes, not 136
 
