@@ -19,19 +19,28 @@ use lichen_compute::language::new_store;
 /// `1`, and each reads its own element of a row `2` wide.
 const TWO_EXTENTS: &str = r#"
 --- compute = import "compute.lichen" ---
-In = struct{.a (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
-Par = struct{.n Int, .cols Int, .stride Int, .in In, .out Out}
+In = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Par = struct{.n Int, .cols Int, .stride Int, .in In}
 Host = struct{.n Int, .cols Int, .stride Int, .I In}
+Data = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Data
 body = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.stride + c))) : Float))))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.stride + c))) : Float)))))))
 }
 k = compute.parallel body "cpu" Out
-a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
-out = (compute.plrun k ((Host)(.n 6, .cols 3, .stride 2, .I In(.a a))) : Out)
+a = (compute.plrun filler ((Fill)(.n 6)) : Data)
+out = (compute.plrun k ((Host)(.n 6, .cols 3, .stride 2, .I In(.a a.d))) : Out)
 compute.collect out.z
 "#;
 
@@ -44,18 +53,27 @@ compute.collect out.z
 /// `i / stride`, which is a different program and not a refusal.
 const ONE_EXTENT: &str = r#"
 --- compute = import "compute.lichen" ---
-In = struct{.a (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
-Par = struct{.n Int, .in In, .out Out}
+In = struct{.a (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Par = struct{.n Int, .in In}
 Host = struct{.n Int, .I In}
+Data = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 6)))}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 6))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Data
 body = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at r)) : Float))))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at r)) : Float)))))))
 }
 k = compute.parallel body "cpu" Out
-a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
-out = (compute.plrun k ((Host)(.n 6, .I In(.a a))) : Out)
+a = (compute.plrun filler ((Fill)(.n 6)) : Data)
+out = (compute.plrun k ((Host)(.n 6, .I In(.a a.d))) : Out)
 compute.collect out.z
 "#;
 
