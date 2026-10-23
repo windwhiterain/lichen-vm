@@ -113,25 +113,28 @@
     `1` and `2` at `3`, so `3`; row 2 loses `3` and `0`, leaving two `7`s at `1` and `2`, so the \
     lower `1`; row 3 loses `0` and `1`, leaving `2` at `3` and `4` at `2`, so `2`; row 4 loses `3` \
     and `2`, leaving `1` at `0` and `2` at `1`, so `1`. Rank two is `[2, 3, 1, 2, 1]`. Lay the three \
-    rank-major for `.p` and row-major for `.t` and the two rows above are what the program prints."
+    rank-major for `.p` and row-major for `.t` and the two rows above are what the program prints. \
+    The host's data is built by **fill kernels**: the surface has no array-to-buffer conversion \
+    (`docs/notes/kernel-buffer-declarations.md`), so the scores are a fourth kernel and this file \
+    now runs four."
   output = "([3.0, 2.0, 3.0, 0.0, 3.0, 1.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 1.0], [3.0, 1.0, 2.0, 2.0, 0.0, 3.0, 3.0, 0.0, 1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0]): tuple{array{Float, 15}, array{Float, 15}}"
 ---
-Row  = struct{.x (compute.Buf Float)}
-Pick = struct{.p (compute.Buf Float)}
-Par0 = struct{.n Int, .w Int, .in Row, .out Pick}
+Row  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
+Pick = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+Par0 = struct{.n Int, .w Int, .in Row}
 Arg0 = struct{.n Int, .w Int, .I Row}
 rank0_raw = (k : Par0) => {
   lane = compute.range k.n
   base = lane * k.w
   @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Pick)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0))))))))
 }
 rank0 = compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
-Sel  = struct{.x (compute.Buf Float), .q (compute.Buf Float)}
-Cat1 = struct{.p (compute.Buf Float)}
-Cat2 = struct{.p (compute.Buf Float), .t (compute.Buf Float)}
-Par1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel, .out Cat1}
-Arg1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel}
+Sel1 = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 20))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+Cat1 = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 10)))}
+Par1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel1}
+Arg1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel1}
 rank1_raw = (k : Par1) => {
   lane = compute.range k.n
   rank = lane / k.rows
@@ -143,11 +146,14 @@ rank1_raw = (k : Par1) => {
     hit = (1 * (ri >= s(1))) * (1 * (i != low))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
   mine = if rank == 0 then low else (fold (k.w, 0, 0))
-  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element")))
+  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Cat1)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float mine ~ "element"))))))
 }
 rank1 = compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu" Cat1
-Par2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel, .out Cat2}
-Arg2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel}
+Sel2 = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 20))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length 10)))}
+Cat2 = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 15))), .t (compute.Buf ((compute.BufParam _)(.type Float, .length 15)))}
+Par2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel2}
+Arg2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel2}
 rank2_raw = (k : Par2) => {
   lane = compute.range k.n
   rank = lane / k.rows
@@ -160,11 +166,21 @@ rank2_raw = (k : Par2) => {
     hit = (1 * (ri >= s(1))) * (1 * (i != low)) * (1 * (i != mid))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
   mine = if rank == 0 then low else (if rank == 1 then mid else (fold (k.w, 0, 0)))
-  (compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element"))), compute.write ((compute.Write _)(.to k.out.t, .at (row * k.ranks + rank), .value (int2float mine ~ "element"))))
+  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  b_t = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Cat2)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float mine ~ "element")))), .t (compute.write ((compute.Write _)(.to b_t, .at (row * k.ranks + rank), .value (int2float mine ~ "element"))))))
 }
 rank2 = compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu" Cat2
-scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
+Fill = struct{.n Int}
+fill_scores_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 20))
+  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
+  ((Row)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_scores = compute.parallel fill_scores_raw "cpu" Row
+scores = (compute.plrun fill_scores ((Fill)(.n 20)) : Row).x
 r0 = (compute.plrun rank0 ((Arg0)(.n 5, .w 4, .I Row(.x scores))) : Pick)
-r1 = (compute.plrun rank1 ((Arg1)(.n 10, .w 4, .rows 5, .ranks 2, .I Sel(.x scores, .q r0.p))) : Cat1)
-r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scores, .q r1.p))) : Cat2)
+r1 = (compute.plrun rank1 ((Arg1)(.n 10, .w 4, .rows 5, .ranks 2, .I Sel1(.x scores, .q r0.p))) : Cat1)
+r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel2(.x scores, .q r1.p))) : Cat2)
 (compute.collect r2.p : array{Float, 15}, compute.collect r2.t : array{Float, 15})
