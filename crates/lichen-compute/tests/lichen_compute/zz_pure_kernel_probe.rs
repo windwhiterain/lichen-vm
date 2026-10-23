@@ -232,3 +232,36 @@ fn probe_two_outputs() {
         ),
     }
 }
+
+/// The settled spelling: a param struct, a value-indexed buffer type, and the
+/// declaration call.
+///
+/// # Invariant
+/// Print-only. It asks the front end two questions at once: does a **callee-inferred
+/// instantiation** (`_(.type Float, .length 192)`) parse and check, and does a **type
+/// function whose parameter is a value** (`Buf = x : (BufParam _) => …`) build a type
+/// from that value's fields?
+const SPELLING: &str = r#"
+--- compute = import "compute.lichen" ---
+Param = _ => struct{.type _, .length _}
+BufT = x : (Param _) => struct{.type x.type, .length x.length}
+buf = (x : (Param _)) => (BufT x)(.type x.type, .length x.length)
+e = buf _(.type Float, .length 192)
+e
+"#;
+
+#[test]
+fn probe_the_settled_spelling() {
+    let _slot = common::slot();
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(SPELLING, None, &mut store) {
+        Ok(text) => println!("[spelling] answered {text}"),
+        Err(diagnostics) => println!(
+            "[spelling] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| format!("{:?}: {}", diagnostic.span, diagnostic.message))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
