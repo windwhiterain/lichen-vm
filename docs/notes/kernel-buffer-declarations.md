@@ -88,9 +88,12 @@ the perspective is spelled at the declaration.
 
 - **The fragment's outputs are its body's declared buffers**, in declaration
   order. `KernelFragment.outputs` is their count and each carries its
-  `(count, class)`; `roles.outputs` is the codomain `O`'s buffer fields, in order,
-  and when the parameter names no `.out` group the codomain's field indices are
-  the paths.
+  `(count, class)`; `roles.outputs` is the codomain `O`'s buffer fields, in order.
+  **The parameter slot keeps the parameter's own roles and the fragment carries
+  the codomain's**: a write's target and a `@loop`'s carried state are read
+  against the parameter's paths, so a parameter leaf whose field index matches an
+  output's index must not be taken for that output (measured: `topk`'s rank-two
+  fold answered the seed for every lane before the split).
 - **A buffer's element class is its type's first shape position.** The wrapper's
   `.native` field type *is* the `$buf(type, length)` term, so the role walk reads
   the class from `buffer_shape(native).0`; the `.type` field is a `Type` value and
@@ -146,10 +149,9 @@ slice; the ruling above is what the earlier slices build toward.
    the tests and examples move to the declared form and to a kernel-built input
    where they need data. **A fill kernel spells an arbitrary table as a sum of
    one-level `if`s** — `(if i == 0 then 2.0 else 0.0) + (if i == 1 then 4.0 else
-   0.0) + …` — which the body lowers (measured, `consumer_guard`); a **nested**
-   `if` chain is refused by the template blocker (measured,
-   `zz_pure_kernel_probe`), so the summed spelling is the one to use. The outbound
-   boundary is `compute.collect`: reading a buffer's old `.native` payload is
+   0.0) + …` — which the body lowers (measured, `consumer_guard`), and a **nested**
+   chain lowers too (measured, `worldgen`'s biome kernel). The outbound boundary
+   is `compute.collect`: reading a buffer's old `.native` payload is
    refused (`frozen_buffer_reuse`).
 3. **The pack**: the file format, its reader, the space/slot mapping, and the
    perspective constraint enforced against it.
