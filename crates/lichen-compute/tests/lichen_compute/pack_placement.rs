@@ -37,12 +37,11 @@ fn closed_form() -> f32 {
 ///
 /// # Invariant
 /// The fold's bound is `i + 1`, the lane's own index plus one, so the program's own body is the
-/// per-lane schedule the pass replaces, and the seed is the marked literal both halves of the
-/// algebra survive lowering through (`docs/notes/graph-fusion.md` §3).
+/// per-lane schedule the pass replaces, and the seed is the marked literal the algebra survives
+/// lowering through (`docs/notes/graph-fusion.md` §3).
 ///
 /// No parameter carries an `.out` group: the body declares its buffer with `compute.buf` and
-/// returns the write as the codomain field's value, and the host's data is a kernel's own output
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// returns the write as the codomain field's value.
 fn declared() -> String {
     format!(
         r#"
