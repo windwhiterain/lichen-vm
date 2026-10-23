@@ -1846,11 +1846,11 @@ where
                             .map(|value| {
                                 scalar_item::<P>(module, block, LowValue::USize(value as usize))
                             })
-                            .collect(),
+                            .collect::<Option<Vec<_>>>()?,
                         ScalarData::Float(values) => values
                             .into_iter()
                             .map(|value| scalar_item::<P>(module, block, LowValue::Float(value)))
-                            .collect(),
+                            .collect::<Option<Vec<_>>>()?,
                     };
                     let handle = module.alloc_array(&items, block);
                     Some(<P::Value as From<LowValue>>::from(LowValue::Array(
@@ -4877,17 +4877,27 @@ where
 /// This is the one place that turns one element into one node, so the two classes
 /// cannot drift into two slightly different constructions: a collected array is
 /// homogeneous, and the class is only known at run time.
-fn scalar_item<P>(module: &mut Module<P>, block: BlockId, element: LowValue) -> ArrayItem
+///
+/// The node is the element's **slot** — `[value, type, attributes…]` — and not the
+/// bare value: an array's element read takes the element's value out of its slot
+/// (`docs/notes/compound-element-slots.md`), so a collected array read by position
+/// answers its element and not *its value is not a container*.
+fn scalar_item<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    element: LowValue,
+) -> Option<ArrayItem>
 where
     P: Program,
-    P::Value: From<LowValue>,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
-    let node = module.add_node(
+    let value = module.add_node(
         block,
         None,
         Some(<P::Value as From<LowValue>>::from(element)),
     );
-    ArrayItem::new(AnyNodeId::Dynamic(node))
+    let slot = element_slot(module, block, value)?;
+    Some(ArrayItem::new(AnyNodeId::Dynamic(slot)))
 }
 
 /// A buffer position holding something that is not a buffer.

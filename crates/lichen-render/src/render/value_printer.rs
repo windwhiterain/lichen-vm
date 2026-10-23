@@ -395,7 +395,13 @@ where
         // SAFETY: `array` is the payload of a value of the module being rendered.
         let items = unsafe { array.items() };
         let value = items.first().map(|item| item.node).unwrap_or(element);
-        let ty = items.get(1).map(|item| item.node).unwrap_or(shape_ty);
+        // **An undecided type half says nothing**: the slot's own type is the
+        // container's element type, which is the class the array declares.
+        let ty = items
+            .get(1)
+            .map(|item| item.node)
+            .filter(|node| self.module.node_value(*node).is_some())
+            .unwrap_or(shape_ty);
         (value, ty)
     }
 
