@@ -115,6 +115,46 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 11: where a bigger refactor could pay, measured
+
+This round asked a different question — not "what is left to tune" but "what is left to
+restructure for a larger gain" — so it measured the candidates a refactor could target
+instead of tuning any of them.
+
+**First finding: the corpus is not a language metric.** The 46-program corpus is dominated
+by compute work: `worldgen.lichen` spends **156 ms of its 183 ms inside the compute
+operator's `run`** (17 calls, 9.2 ms each — wasmi executing the kernels, since the probe has
+no device), `decode.lichen` 4 of 25 ms, `mathlib.lichen` 5 of 28. A corpus total that moves
+by 2 % says almost nothing about the checker; the language-heavy programs are the ones that
+do (`recursion.lichen` 25 ms, `mathlib` 21–28 ms).
+
+**Second finding: the clone walk mints per node what it then merges per class.** For
+`fib 10`: 24 801 clones are unified **18 841** times — 5 960 classes, so one clone per class
+would have sufficed — and the entry check finds only 12 % of those calls already same-class
+(9 % for mathlib). The 18 841 calls cost 6.8 ms of unify plus 18 841 clone paths that would
+become memo hits (≈1.4 ms of `add_node`, ≈3.7 ms of walk). That is the one remaining
+double-digit-percent target: **≈30–40 % of an apply-heavy program**, by memoising the walk
+by template **class root** instead of node, guarded by the decision inputs that can differ
+inside one class (the owner tag and the parameter verdict), falling back to the per-node
+clone when they do. It is not taken here: a shared clone's `origin` and therefore its marks
+attribution belongs to whichever member minted it, and that is observable to a diagnostic.
+
+Measured ceilings for the safe alternatives:
+
+| refactor | `fib 10` | `mathlib` | class |
+|---|---|---|---|
+| per-pass visited memo in the walk | 60 881 visits to ≤214 nodes; ≈1.5–2 ms | 24 306 to 5 185 | exact |
+| chunked node storage (no growth memcpy) | 295 growth allocations, 25 MB moved; ≈1–2 ms | — | exact, container refactor |
+| `Arc`-shared `LowShape` for clones | 2 702 boxes (8 % of allocations) | 1 159 | exact |
+| parser allocation reduction | — | 22 986 allocations (20 106 ≤16 B), ≈0.8 ms | exact |
+| checker `Loc` (`vec![step]` per build) | — | 2 235 allocations | exact |
+| `unify` self-pair fast path | 11 of 18 841 | 71 of 4 667 | worthless |
+
+The synthesis: no behaviour-preserving refactor of the language core exceeds ≈10–15 %, and
+the one that exceeds it is the class-level clone memo, which trades on a cell-identity
+question the maintainer has declined twice before (static leaves, wildcard cells) and is
+therefore left as a proposal.
+
 ## Round 10: the node slot is 128 bytes, not 136
 
 The peak is the node slot: `fib 10` ends with 65 391 nodes, and at 136 bytes each that is
