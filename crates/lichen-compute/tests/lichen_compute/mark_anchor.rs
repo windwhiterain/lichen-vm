@@ -44,13 +44,13 @@ Par2 = struct{{.n Int, .in In2}}
 scale_raw = (k : ParE) => {{
   i = compute.range k.n
   e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
 }}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 rescale_raw = (k : Par2) => {{
   i = compute.range k.n
   f = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutF)(.f (compute.write ((compute.Write _)(.to f, .at i, .value ((exp ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float))) ~ "element")))))
+  ((OutF)(.f (compute.write ((compute.Write _)(.to f, .at i, .value ((exp ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float))) ~ "element"))))))
 }}
 rescale = compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" OutF
 GArg = struct{{.n Int, .in In}}
@@ -112,7 +112,7 @@ ParE = struct{{.n Int, .in In}}
 scale_raw = (k : ParE) => {{
   i = compute.range k.n
   e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
 }}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 "#
