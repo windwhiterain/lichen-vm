@@ -4885,11 +4885,7 @@ where
 /// The node is the element's **slot** and not the bare value: an array's element
 /// read takes the element's value out of its slot
 /// (`docs/notes/compound-element-slots.md`).
-fn scalar_item<P>(
-    module: &mut Module<P>,
-    block: BlockId,
-    element: LowValue,
-) -> Option<ArrayItem>
+fn scalar_item<P>(module: &mut Module<P>, block: BlockId, element: LowValue) -> Option<ArrayItem>
 where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
