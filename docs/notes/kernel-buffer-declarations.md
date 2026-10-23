@@ -3,8 +3,8 @@
 > Status: **current design**, being implemented on `feature/pure-kernel-io`.
 > Supersedes the `.out`-as-a-parameter-group model in
 > [compute-kernel-struct](compute-kernel-struct.md)'s "The parallel parameter struct".
-> Points at: `crates/lichen-compute/src/compute.lichen` (`P`, `Buffer`, `buffer`),
-> `crates/lichen-compute/src/compute.rs` (`BufferOp`, `parallel_roles`,
+> Points at: `crates/lichen-compute/src/compute.lichen` (`BufParam`, `Buf`, `buf`),
+> `crates/lichen-compute/src/compute.rs` (`BufTypeOp`, `BufOp`, `parallel_roles`,
 > `compile_parallel_fragment`, `build_outputs`, `run_parallel_range`),
 > `crates/lichen-compute/src/compute/body.rs` (`Lower::write_call`,
 > `Lower::version_identity`), `crates/lichen-kernel-ir/src/lib.rs`
@@ -14,12 +14,16 @@
 
 - **A buffer's type carries its element type, its length and a native payload.**
   The declaration is a call that is **both a type and the value it creates**:
-  `compute.buf Buf(.type Float, .length 192)`. `Buf` states `.type` (the element
-  type — the field the old `.element` was), `.length`, and `.native` (the native
-  payload, kind `$buf(T, L)`); there is **no `.element`**. An undecided buffer is
-  that instance with holes that are exprs whose attributes are all undecided
-  (`_`). `$buf(T, L)` is a kind marker with the shape `[element type, length]`,
-  the shape `array{T, n}` already has, so the decode is the same walk.
+  `compute.buf ((compute.BufParam _)(.type Float, .length 192))`. `BufParam` is
+  the declaration's operand — `struct{.type _, .length _}` — and `Buf` is a
+  **value-indexed** type function: given a `BufParam` value `x` it states
+  `.native` (the payload, type `$buf(x.type, x.length)`), `.type` (`x.type`) and
+  `.length` (`x.length`). There is **no `.element`**. An undecided buffer is that
+  instance with holes that are exprs whose attributes are all undecided (`_`).
+  `$buf(T, L)` is a kind marker with the shape `[element type, length]`, the shape
+  `array{T, n}` already has, so the decode is the same walk. Two native operators
+  back it: `$buf_type(T, L)` builds the **type** term (decided where it is
+  written) and `$buf(T, L)` is the **payload** value (kernel-only).
 - **A kernel only declares its buffers.** It states each buffer's **element type**
   and **length**; it never states where the buffer lives.
 - **The pack decides the space**: `global`, `shared`, or `register`, and — for
@@ -28,14 +32,12 @@
   says how many lanes share it (`0` crosses workgroups, `1` is one lane, the warp
   width is one subgroup), and a placement the perspective does not admit is
   refused by name.
-- **`compute.slice` is the declaration, and it is the only one.** It takes the
-  **length and the element type**, takes **no array**, and **initialises
-  nothing** — the allocation holds whatever the allocator held, and filling it is
-  the program's job. **Its value is undecided**: the operation never evaluates to a
-  `Buffer` payload, so the node stays the identity the walk traces. A declaration
-  that really produced a physical buffer would be *decided*, and a decided value
-  cannot be traced back to the output it names — that is why the operator is a
-  slice and not a buffer.
+- **`compute.buf` is the declaration, and it is the only one.** It takes a
+  `BufParam` value — the element type and the length — takes **no array**, and
+  **initialises nothing** — the allocation holds whatever the allocator held, and
+  filling it is the program's job. **Its value is undecided**: the payload is the
+  `$buf` operator's, which never evaluates on the host, so the node stays the
+  identity the walk traces.
 - **A host builds an input buffer explicitly, with a kernel.** There is no
   array-to-buffer conversion: a kernel declares an uninitialised buffer, writes
   it, and returns it; the returned `Buf` is the input of the next launch.
@@ -43,22 +45,32 @@
 ## The surface
 
 ```lichen
-P = T: KT _ => struct{.n Int, .in T.I}                 // no `.out`
-S = T: KT _ => A T.I -> T.O                            // the function's signature, now literal
-Buffer = T => struct{.count Int, .element T}
-buffer = (x : (Buffer _)) => ($buffer(x.count, x.element) : (Buf _) # _)
+BufParam = _x => struct{.type _, .length _}
+Buf = x : (BufParam _) => struct{
+  .native $buf_type(x.type, x.length),
+  .type   x.type : Type,
+  .length x.length : Int,
+}
+buf = (x : (BufParam _)) => (Buf x)(.native $buf(x.type, x.length), .type @any, .length @any)
 ```
 
-A body:
+A parameter and a body:
 
 ```lichen
-raw = (c : Par) => {
+L    = 3
+In   = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
+Out  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
+Par  = struct{.n Int, .in In}
+raw  = (c : Par) => {
   i  = compute.range c.n
-  y  = compute.slice ((compute.Slice _)(.count c.n, .element Float))
-  compute.write ((compute.Write _)(.to y, .at i, .value (int2float s(0))))
-  ((Out)(.y y))
+  y  = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 1.0)))))
 }
 ```
+
+Reads, writes and `collect` keep `(compute.Read _)`-style instantiations: their
+length is open (`_`), because a read or a write does not care how long the buffer
+is. `Mma` states the cooperative matrix's fixed lengths (16, 32, 16).
 
 **`write` is itself a pure function, and its result is a buffer.** The wrapper
 ascribes the result `(Buf _)`: a write returns the buffer's **new version**, so
@@ -76,23 +88,29 @@ the perspective is spelled at the declaration.
 
 - **The fragment's outputs are its body's declared buffers**, in declaration
   order. `KernelFragment.outputs` is their count and each carries its
-  `(count, class)`; `roles.outputs` no longer comes from the parameter's `.out`
-  paths — it is the codomain `O`'s buffer fields, in order, and the two lists
-  must agree.
-- **A `write`'s target is a declared buffer**, so its output ordinal is the
-  declaration's index. `Lower::write_call` resolves a target that is a
-  `compute.slice` node to that ordinal instead of through a parameter path;
-  `Lower::version_identity` no longer needs a parameter slot for a declared
-  version. The per-position check that used to demand "output k is a write to
-  output k" is **gone** (`20d0c351`): the codomain's field order and the
+  `(count, class)`; `roles.outputs` is the codomain `O`'s buffer fields, in order,
+  and when the parameter names no `.out` group the codomain's field indices are
+  the paths.
+- **A buffer's element class is its type's first shape position.** The wrapper's
+  `.native` field type *is* the `$buf(type, length)` term, so the role walk reads
+  the class from `buffer_shape(native).0`; the `.type` field is a `Type` value and
+  answers nothing.
+- **A write's target is a declared buffer**, so its output ordinal is the
+  declaration's index. `Lower::write_call` resolves a target that is a `Buf`
+  instance through the registry (`Lower::declared_ordinal`), falling back to a
+  parameter path; `Lower::version_identity` no longer needs a parameter slot for a
+  declared version. The per-position check that used to demand "output k is a
+  write to output k" is **gone** (`20d0c351`): the codomain's field order and the
   declaration order are the same list, so a write always fills the output it
   names and a crossing is not an error the compiler can see any more.
 - **A declaration's identity survives a clone.** The body is walked from the
-  template, and the write's target is read from the clone the apply made: the
-  clone's `.native` payload records the template's `$buf` node as its origin
-  (measured), so the registry's key is the template's node. The lookup must
-  canonicalize the payload it peeled, or the declaration and the write that
-  names it are two keys and the write is refused.
+  template, and a declaration or write reached along the apply path is a clone of
+  the template's node: `node_origin` answers the template, and the lowering
+  follows it (`Lower::definition`), so one definition emits one instruction. The
+  registry's key is the canonical node.
+- **A declaration's length is read, not lowered.** A body states the launch's
+  runtime count (`k.n`), which has no value in the frozen template: the walk reads
+  a literal extent and leaves a runtime one to the launch count.
 - **The allocation is the declared length, uninitialised.** The runtime
   allocates each output with its `count` and element class, in the pack's space,
   and hands back the codomain struct (`build_outputs` by `O`'s fields).
@@ -119,23 +137,19 @@ slice; the ruling above is what the earlier slices build toward.
 
 ## Slices
 
-1. **The declaration and the pure signature** (this branch): `compute.slice`
-   takes `(count, element)`; `P` loses `.out`; the body declares, writes and
-   returns; the fragment's outputs are the declarations; the runtime allocates by
-   the declared count in `global` space; the perspective check refuses a
-   placement it does not admit (with no pack, that means: a `# warp`-style
-   declaration waits for a pack that names it). One vertical program runs on the
-   cpu and compiles for the gpu; **every other program is red on the branch
-   until slice 2**.
-2. **The migration**: every `compute.P …(.I In, .O Out)` and every
-   `compute.buffer (array)` / `compute.buffer (count, element)` in the tests and examples — 46 files, 15 done — moves to the
-   declared form and to a kernel-built input where it needs data. **A fill kernel
-   spells an arbitrary table as a sum of one-level `if`s** —
-   `(if i == 0 then 2.0 else 0.0) + (if i == 1 then 4.0 else 0.0) + …` — which the
-   body lowers (measured, `consumer_guard`); a **nested** `if` chain is refused by
-   the template blocker (measured, `zz_pure_kernel_probe`), so the summed spelling
-   is the one to use. The outbound boundary is `compute.collect`: reading a
-   buffer's old `.native` payload is refused on this branch
-   (`frozen_buffer_reuse`).
+1. **The declaration and the pure signature** (done): the body declares with
+   `compute.buf`, writes and returns; `P` loses `.out`; the fragment's outputs are
+   the declarations; the runtime allocates by the declared count in `global`
+   space; the perspective check refuses a placement it does not admit.
+2. **The value-indexed surface and the migration** (done): `BufParam`/`Buf`/`buf`
+   and the `$buf_type`/`$buf` operators replace the old `Buf`/`Slice` wrappers;
+   the tests and examples move to the declared form and to a kernel-built input
+   where they need data. **A fill kernel spells an arbitrary table as a sum of
+   one-level `if`s** — `(if i == 0 then 2.0 else 0.0) + (if i == 1 then 4.0 else
+   0.0) + …` — which the body lowers (measured, `consumer_guard`); a **nested**
+   `if` chain is refused by the template blocker (measured,
+   `zz_pure_kernel_probe`), so the summed spelling is the one to use. The outbound
+   boundary is `compute.collect`: reading a buffer's old `.native` payload is
+   refused (`frozen_buffer_reuse`).
 3. **The pack**: the file format, its reader, the space/slot mapping, and the
    perspective constraint enforced against it.
