@@ -10,16 +10,25 @@ use lichen_compute::language::{LangProgram, new_store};
 /// adds is the second reader: the helper `common::run` calls, and not a gate of its own.
 const MISPLACED_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.a Int}
-Out = struct{.c (compute.Buf _), .s (compute.Buf _)}
-Par = compute.P (compute.KT _)(.I In, .O Out)
+Data = struct{.d (compute.Buf Float)}
+Out = struct{.e (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+}
+filler = compute.parallel fill "cpu" Data
+data = (compute.plrun filler ((Fill)(.n 3)) : Data)
+In  = struct{.k (compute.Buf Float)}
+Par = struct{.n Int, .in In}
+Arg = struct{.n Int, .I In}
 f = (k : Par) => {
   i = compute.range k.n
-  (compute.write ((compute.Write _)(.to k.out.s, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.c, .at i, .value i)))
+  compute.write ((compute.Write _)(.to k.in.k, .at i, .value (99.0 : Float)))
 }
 k = compute.parallel f "cpu" Out
-outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-compute.collect (compute.collect outs.c, compute.collect outs.s)
+out = (compute.plrun k ((Arg)(.n 3, .I In(.k data.d))) : Out)
 "#;
 
 /// The suite's own helper refuses the program, by the CLI's own predicate.
@@ -41,7 +50,8 @@ fn a_compute_parallel_refusal_fails_the_helper() {
         .and_then(|payload| payload.downcast_ref::<String>().cloned())
         .expect("the helper refuses a program whose parallel kernel wrote the wrong output");
     assert!(
-        message.contains("compute.parallel") && message.contains("to output 1"),
+        message.contains("compute.parallel")
+            && message.contains("a kernel body's index cannot be placed"),
         "the refusal is named by the helper's own gate: {message}"
     );
 }
