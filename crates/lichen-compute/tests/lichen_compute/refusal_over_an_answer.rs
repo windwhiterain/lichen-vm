@@ -8,21 +8,30 @@ use lichen_compute::language::new_store;
 ///
 /// The kernel writes to the **input** buffer, which `compute.write` refuses by name, and
 /// the root collects that same input buffer — a value that arrives whatever the kernel
-/// did. See `crates/lichen-compute/tests/inplace_write_refusal.lichen`.
+/// did. The buffer is a fill kernel's own output, because a host builds its data with a
+/// kernel (`docs/notes/kernel-buffer-declarations.md`). See
+/// `crates/lichen-compute/tests/inplace_write_refusal.lichen`.
 const IN_PLACE_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.k (compute.Buf Float)}
-Out = struct{.e (compute.Buf Float)}
-Par = struct{.n Int, .in In, .out Out}
+In  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}
+Out = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}
+Par = struct{.n Int, .in In}
 Arg = struct{.n Int, .I In}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 1))
+  ((In)(.k (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+}
+filler = compute.parallel fill "cpu" In
 raw = (lane : Par) => {
   i = compute.range lane.n
-  compute.write ((compute.Write _)(.to lane.in.k, .at i, .value (99.0 : Float)))
+  ((Out)(.e (compute.write ((compute.Write _)(.to lane.in.k, .at i, .value (99.0 : Float))))))
 }
 k = compute.parallel raw "cpu" Out
-kbuf = (compute.buffer ([1.0] : array{Float, 1}) : (compute.Buf Float))
-out = (compute.plrun k ((Arg)(.n 1, .I In(.k kbuf))) : Out)
-compute.collect kbuf
+kbuf = (compute.plrun filler ((Fill)(.n 1)) : In)
+out = (compute.plrun k ((Arg)(.n 1, .I In(.k kbuf.k))) : Out)
+compute.collect kbuf.k
 "#;
 
 /// The refusal wins over the answer: it is what the program did, whatever it collected.
