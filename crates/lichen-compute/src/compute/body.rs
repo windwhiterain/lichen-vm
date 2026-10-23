@@ -913,8 +913,6 @@ where
             if let Some(slot) = self.parameter_path_of(node)? {
                 return self.parameter(slot);
             }
-            // **A parameter's buffer is an instance whose payload is the entry leaf**: the
-            // first slot names it, and the leaf is the value the host passed.
             if let Some(inner) = self.first_slot_value(node) {
                 return match self.parameter_path_of(inner)? {
                     Some(slot) => self.parameter(slot),
@@ -2408,8 +2406,7 @@ where
         {
             self.value(previous)?;
         }
-        // A declaration registers its ordinal when walked, so lower the target first. A
-        // parameter's buffer is its entry leaf, and the refusal below names it.
+        // Lower the target first: a declaration registers its ordinal when walked.
         match self.parameter_path_of(target)? {
             Some(slot) => {
                 let value = self.parameter(slot)?;
