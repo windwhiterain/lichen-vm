@@ -1703,7 +1703,7 @@ compute.collect out.z : array{Int, 4}
     let message = &messages[0];
     assert!(
         message.contains("compute.parallel")
-            && message.contains("neither a value nor an operation"),
+            && message.contains("neither a declared buffer nor an output buffer"),
         "the refusal must name its own cause: {message:?}"
     );
 }
