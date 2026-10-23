@@ -368,8 +368,7 @@ impl From<schema::Roles> for ir::KernelRoles {
                 .into_iter()
                 .map(|class| class.map(Into::into))
                 .collect(),
-            // A fused schema states no declared length: each output answers `None`, and the
-            // launch's element count is its extent (`KernelRoles::output_extents`).
+            // A fused schema states no length: each output answers `None`.
             output_extents: (0..output_count).map(|_| None).collect(),
         }
     }
