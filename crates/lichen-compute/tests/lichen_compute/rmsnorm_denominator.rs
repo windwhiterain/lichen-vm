@@ -31,30 +31,30 @@ fn program(denominator: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-Row  = struct{{.x (compute.Buf Float)}}
-Sums = struct{{.s (compute.Buf Float)}}
+Row  = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Sums = struct{{.s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 ParS = struct{{.n Int, .in Row}}
 sumsq_raw = (k : ParS) => {{
   i = compute.range k.n
-  sums = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  sums = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
   ((Sums)(.s (compute.write ((compute.Write _)(.to sums, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 sumsq = compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sums
-Scale = struct{{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float)}}
-OutY  = struct{{.y (compute.Buf Float)}}
+Scale = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutY  = struct{{.y (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 ParY  = struct{{.n Int, .in Scale}}
 rescale_raw = (k : ParY) => {{
   i = compute.range k.n
   x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
   d = {denominator}
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (((x / d) * w) ~ "element"))))))
 }}
 rescale = compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg = struct{{.n Int, .in All}}
-All  = struct{{.x (compute.Buf Float), .w (compute.Buf Float)}}
+All  = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 step = (s : GArg) => {{
   first = (compute.plrun sumsq ((compute.A Row)(.n s.n, .I Row(.x s.in.x))) : Sums)
   compute.plrun rescale ((compute.A Scale)(.n s.n, .I Scale(.x s.in.x, .w s.in.w, .s first.s)))
