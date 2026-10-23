@@ -59,37 +59,37 @@ fn program(step: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{{.d (compute.Buf Float)}}
-OutR = struct{{.r (compute.Buf Float)}}
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par  = struct{{.n Int, .in In}}
 Arg  = struct{{.n Int, .I In}}
 total_raw = (k : Par) => {{
   i = compute.range k.n
-  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  r = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
-OutZ = struct{{.z (compute.Buf Float)}}
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par2 = struct{{.n Int, .in In2}}
 Arg2 = struct{{.n Int, .I In2}}
 shift_raw = (k : Par2) => {{
   i = compute.range k.n
   p = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - p) ~ "element")) ~ "combine")
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }}
 shift = compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-In3  = struct{{.d (compute.Buf Float), .q (compute.Buf Float)}}
-OutY = struct{{.y (compute.Buf Float)}}
+In3  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutY = struct{{.y (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Par3 = struct{{.n Int, .in In3}}
 Arg3 = struct{{.n Int, .I In3}}
 lift_raw = (k : Par3) => {{
   i = compute.range k.n
   q = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float)
-  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - q + {BIAS:.1}) ~ "element")) ~ "combine")
   ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }}
@@ -122,27 +122,27 @@ fn recording() -> String {
 /// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
 /// before a device ever sees it, and its parameter declares no `.in` group.
 fn filled() -> String {
-    r#"
-Data = struct{.d (compute.Buf Float)}
-Fill = struct{.n Int}
-fill = (c : Fill) => {
+    format!(
+        r#"
+Data = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Fill = struct{{.n Int}}
+fill = (c : Fill) => {{
   i = compute.range c.n
-  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  d = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
-}
+}}
 filler = compute.parallel fill "cpu" Data
 "#
-    .to_string()
+    )
 }
 
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{head}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
+        "{head}\n{fill}count = ({COUNT})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
          out = compute.collect (compute.graphrun built (count, data.d))\nout\n",
         head = recording(),
         fill = filled(),
-        count = COUNT,
     )
 }
 
