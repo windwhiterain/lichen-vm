@@ -798,6 +798,31 @@ where
         }
     }
 
+    /// The `.native` slot's value node when `node` is a `Buf`-shaped instance.
+    ///
+    /// # Invariant
+    /// The wrapper states the payload first (`.native`, then `.type`, `.length`), so a
+    /// declaration instance is a struct whose first slot holds the `$buf` op
+    /// (`docs/notes/kernel-buffer-declarations.md`). Any other array is not a declaration.
+    fn instance_payload(&self, node: NodeId) -> Option<NodeId> {
+        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        let Some(LowValue::Array(items)) = AsEnum::<LowValue>::as_enum(&value) else {
+            return None;
+        };
+        // SAFETY: `items` is the payload of a live value of `module` on this borrow.
+        let items = unsafe { items.items() };
+        let slot = self
+            .module
+            .element_value_node(items.first()?.node)
+            .and_then(|slot| slot.dynamic())?;
+        let operation = self.module.node_operation(slot)?;
+        matches!(
+            AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+            Some(ComputeOperator::Buf)
+        )
+        .then_some(slot)
+    }
+
     /// A node nothing can resolve, **described rather than numbered**.
     fn opaque(&self, node: NodeId) -> Result<ValueId, String> {
         Err(format!(
@@ -840,6 +865,12 @@ where
             return Ok(value);
         }
         let Some(operation) = self.module.node_operation(node) else {
+            // **A declaration instance is its `.native` slot**: the wrapper states the payload
+            // first, so the `$buf` op inside it is the definition the walk wants
+            // (`docs/notes/kernel-buffer-declarations.md`).
+            if let Some(payload) = self.instance_payload(node) {
+                return self.lower_definition(payload);
+            }
             return self.opaque(node);
         };
         let Some(operand) = operation.operand else {
@@ -955,10 +986,11 @@ where
     /// position the declaration was lowered at, not a parameter path.
     fn buf_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
-        let Some(count) = items.first() else {
+        // The declaration's operands are `[type, length]`: the type first, the length second.
+        let Some(count) = items.get(1) else {
             return Err(
-                "a `compute.slice` declaration states no length: its operand array is empty and \
-                 a declaration states a length and an element type"
+                "a `compute.buf` declaration states no length: its operand array is [type, length] \
+                 and this one is short"
                     .into(),
             );
         };
@@ -977,6 +1009,37 @@ where
         Ok(self.version_token())
     }
 
+    /// The declaration whose `(type, length)` operands are `payload`'s.
+    ///
+    /// # Invariant
+    /// A wrapper call the body makes twice is two `$buf` ops over the same operand nodes, so
+    /// the operands are the identity a copy preserves; the declaration count is the number of
+    /// buffers a body declares, so the walk is bounded by it.
+    fn declared_matching(&self, payload: NodeId) -> Option<usize> {
+        let operand = self.module.node_operation(payload)?.operand?;
+        let wanted = self.module.operand_items(operand).ok()?;
+        for (declared, ordinal) in &self.declared {
+            let Some(operation) = self.module.node_operation(*declared) else {
+                continue;
+            };
+            let Some(operand) = operation.operand else {
+                continue;
+            };
+            let Ok(items) = self.module.operand_items(operand) else {
+                continue;
+            };
+            if items.len() == wanted.len()
+                && items
+                    .iter()
+                    .zip(wanted.iter())
+                    .all(|(left, right)| left.node == right.node)
+            {
+                return Some(*ordinal);
+            }
+        }
+        None
+    }
+
     /// The declaration a write's target names, if the body declared it.
     ///
     /// # Invariant
@@ -988,6 +1051,16 @@ where
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
         let node = peeled.dynamic()?;
         let value = self.module.pair_value_half(node).unwrap_or(node);
+        // **A target that is a `Buf` instance names the `$buf` op inside it**, so the
+        // declaration's ordinal is read through `.native` rather than from the node itself.
+        if let Some(payload) = self.instance_payload(value) {
+            if let Some(ordinal) = self.declared.get(&payload).copied() {
+                return Some(ordinal);
+            }
+            // **A declaration evaluated twice yields two `$buf` ops**, so a copy is matched by
+            // the `(type, length)` operands it shares with the declaration the body lowered.
+            return self.declared_matching(payload);
+        }
         let definition = match self.module.define_in(self.function, value) {
             Define::Computed(definition) => definition,
             _ => return None,
