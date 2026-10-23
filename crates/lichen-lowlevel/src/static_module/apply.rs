@@ -227,6 +227,7 @@ impl<P: Program> Module<P> {
     pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
+        argument: NodeId,
         block: BlockId,
         node: NodeId,
     ) {
@@ -255,6 +256,10 @@ impl<P: Program> Module<P> {
         self.static_node_apply(parameter, &mut ctx);
         if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
             self.applied_parameters.insert(node, cloned_parameter);
+            // The clone is bound to this call's argument, so a return attribute that
+            // names one of its fields reads the argument's field record
+            // (spec §3, "Every attribute is handled like the type").
+            self.unify_parameter_slots(cloned_parameter, argument, block);
         }
         self.applied_exprs.insert(node, applied);
     }
