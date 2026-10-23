@@ -156,28 +156,31 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 /// one binder, so a "free variable" is just a name the body reads that is not
 /// that parameter. That is what makes `s` a parameter and `doubler`/`data` free
 /// ones.
+///
+/// Each body declares its own buffer with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
-ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+ParA = struct{.n Int, .in InA}
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
 }) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
-ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+ParB = struct{.n Int, .in InB}
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
   j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
+  w = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((OutB)(.w (compute.write ((compute.Write _)(.to w, .at i, .value j + j)))))
 }) "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 InS  = struct{.b (compute.Buf _)}
-OutS = struct{.unused (compute.Buf _)}
-ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+ParS = struct{.n Int, .in InS}
 step = (s : ParS) => {
   out = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b data.z))) : OutB)
   out
@@ -251,14 +254,15 @@ const FROM_PARAMETER: &str = r#"---
 ---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
-ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+ParA = struct{.n Int, .in InA}
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
 }) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
-ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+ParB = struct{.n Int, .in InB}
 step = (s : ParB) => {
   out = (compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a 0))) : OutA)
   compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a out.z)))
@@ -379,18 +383,20 @@ const BACK_TO_FRONT: &str = r#"---
 ---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
-ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+ParA = struct{.n Int, .in InA}
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
 }) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
-ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+ParB = struct{.n Int, .in InB}
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
   j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
+  w = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((OutB)(.w (compute.write ((compute.Write _)(.to w, .at i, .value j + j)))))
 }) "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 step = (s : ParB) => {
@@ -399,7 +405,7 @@ step = (s : ParB) => {
   out = (compute.plrun doubler ((compute.A InB)(.n count, .I InB(.b buffer))) : OutB)
   out.w.native
 }
-step ((ParB)(.n 4, .in InB(.b data.z), .out OutB(.w data.z)))
+step ((ParB)(.n 4, .in InB(.b data.z)))
 "#;
 
 /// The `i64`s behind a buffer value.
