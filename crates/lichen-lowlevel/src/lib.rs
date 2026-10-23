@@ -872,16 +872,17 @@ pub struct Node<P: Program> {
     /// ([`Module::has_no_result_yet`]). An operation-bearing member holds that value
     /// while the stamp stays zero, so it still reads as owed an answer.
     value: Option<P::Value>,
-    /// The node's run stamp: zero means its operator never ran — a produced answer versus
-    /// an asserted one.
-    runned: u32,
+    /// The node's run stamp: `false` means its operator never ran — a produced answer
+    /// versus an asserted one.
+    runned: bool,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     ///
     /// # Invariant
-    /// A **box**, so a node costs one pointer and not the shape's 24 bytes: the slot is
+    /// A **shared pointer**, so a node costs one pointer and not the shape's 24 bytes, and
+    /// a clone adopts its source's shape by refcount rather than copying it: the slot is
     /// None on nearly every node, and a shape lives in docs/notes/lowlevel-low-types.md's
     /// class-routed slot rather than per member.
-    low_shape: Option<Box<LowShape>>,
+    low_shape: Option<std::sync::Arc<LowShape>>,
     /// The node's computation (operator plus one operand), or `None` for a value node; private.
     operation: Option<Operation<P>>,
     /// The function whose body owns this node, or `None`; private, read via `node_function`.
@@ -900,7 +901,11 @@ pub struct Node<P: Program> {
     /// The stamp comes from the apply node the instantiation is for, not from the walk or
     /// the evaluation order, so a converted loop's iterations are all stamped alike. Read
     /// through [`Module::node_depth`]; a frame counter could not state it.
-    depth: u32,
+    ///
+    /// # Invariant
+    /// A `u16` because [`Module::apply_depth_limit`] bounds the stamp an order of magnitude
+    /// below it, so the narrowing in [`Module::add_node`] never clamps.
+    depth: u16,
     /// The GC unit whose lifetime bounds this node; moved only by GC.
     block: BlockId,
     /// Whether an evaluation attempt is computing this node right now — the cycle mark.
@@ -1116,6 +1121,12 @@ pub struct Module<P: Program> {
     /// [`Module::value_apply`] pops one and pushes it back, empty, on every exit; an
     /// array's clone can reach another inside its own items, so this is a stack too.
     item_clone_scratch: Vec<Vec<crate::ArrayItem>>,
+    /// The visited sets a parameter check walks, kept for the same reason.
+    ///
+    /// # Invariant
+    /// [`Module::evaluate_pattern_argument`] pops one and pushes it back, empty, on every
+    /// exit; a pattern's item can hold a nested check, so this is a stack too.
+    pattern_seen: Vec<std::collections::HashSet<(AnyNodeId, AnyNodeId)>>,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
@@ -1291,4 +1302,6 @@ pub struct Registry<P: Program> {
     entries: HashMap<ModuleKey, Package<P>>,
     /// The counter behind [`Self::allocate_cell_key`]; the registry's, not a caller's.
     next_cell_key: u64,
+    /// The counter behind [`Self::allocate_module_key`], for a store with no device.
+    next_module_key: u64,
 }

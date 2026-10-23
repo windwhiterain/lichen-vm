@@ -54,6 +54,16 @@ struct ApplyCtx<'a> {
     /// The membership anchor: the applied function.  A node belongs to it iff its
     /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
+    /// [`Self::anchor`]'s own template, which the membership test also accepts; read once
+    /// per pass, because a slot lookup per visit is the walk's largest bookkeeping cost.
+    anchor_template: Option<FunctionId>,
+    /// The chain half of the membership verdict for the last `Node::function` tested.
+    ///
+    /// # Invariant
+    /// The chain verdict is a function of the node's own function and the pass's two
+    /// anchors alone, so one entry answers a run of nodes of one function; the
+    /// closure-scope hit stays per-node and is never cached here.
+    last_member: Option<(Option<FunctionId>, bool)>,
     /// The branch stack top: the id a freshly cloned closure hangs under
     /// ([`Function::parent`]).
     ///
@@ -316,6 +326,8 @@ impl<P: Program> Module<P> {
             blocks: HashMap::new(),
             // Membership is the chain test, not a scope snapshot.
             anchor: function,
+            anchor_template: self.functions[function].template,
+            last_member: None,
             branch_top: function,
             closure_scope: None,
             applied: function,
@@ -394,12 +406,13 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
     ) {
-        self.evaluate_pattern_argument_inner(
-            Dyn(pattern),
-            Dyn(argument),
-            block,
-            &mut HashSet::new(),
-        );
+        // The visited set is the module's, so a run's argument checks do not allocate one
+        // each; a nested check pops its own, because the walk re-enters itself.
+        let mut seen = self.pattern_seen.pop().unwrap_or_default();
+        seen.clear();
+        self.evaluate_pattern_argument_inner(Dyn(pattern), Dyn(argument), block, &mut seen);
+        seen.clear();
+        self.pattern_seen.push(seen);
     }
 
     #[stacksafe]
@@ -413,20 +426,18 @@ impl<P: Program> Module<P> {
         if !seen.insert((pattern, argument)) {
             return;
         }
-        // The argument goes through `evaluate_node` (a static ref resolves); the pattern is a
-        // dynamic clone, read raw.
-        self.evaluate_node(argument, Some(block));
+        // One force answers both reads: it fills the pattern's slot when the two are one
+        // class, and nothing between the reads writes the argument.
+        let forced = self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
             AnyNodeId::Static(pattern) => {
                 self.static_read(pattern).and_then(|value| value.as_enum())
             }
         };
-        let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) = (
-            pattern_value,
-            self.evaluate_node(argument, Some(block))
-                .and_then(|value| value.as_enum()),
-        ) else {
+        let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) =
+            (pattern_value, forced.and_then(|value| value.as_enum()))
+        else {
             return;
         };
         // SAFETY: both are live payloads of reachable nodes; the descent releases no block.
@@ -474,20 +485,25 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
+        // One read of the node's own facts: this walk asks for them several times, and each
+        // ask is a slot-table lookup.
+        let (value, operation, evaluated_deep, function, block, origin) = {
+            let source = &self.nodes[node];
+            (
+                source.value,
+                source.operation,
+                source.evaluated_deep,
+                source.function,
+                source.block,
+                source.origin,
+            )
+        };
         // One shared node: each reach mints its own undecided cell, never a cached one.
-        let wildcard = self.nodes[node].value.or_else(|| self.nodes[node].value);
-        if matches!(
-            wildcard.and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
+        if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
             return self.add_node(ctx.target, None, None);
         }
         // A closure is instantiated from its template, whose body a clone never names.
-        let anchor_template = self.functions[ctx.anchor].template;
-        let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
-            || anchor_template.is_some_and(|template| {
-                self.function_descends_from(self.nodes[node].function, template)
-            })
+        let member = self.template_member(function, ctx)
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
@@ -496,21 +512,19 @@ impl<P: Program> Module<P> {
         // `docs/notes/apply-clone-ownership.md`.
 
         // The clone computes the same thing, so the source's class low type seeds it.
-        let low_shape = self.class_low_type(node).cloned();
-        let (value, operation, evaluated_deep) = {
-            let source = &self.nodes[node];
-            (source.value, source.operation, source.evaluated_deep)
-        };
+        let low_shape = self.class_low_shape(node);
         // The template root a clone instantiates, whose block may still be a scope.
         let template_root = {
             let mut root = node;
+            let mut next = origin;
             let mut hops = 0;
-            while let Some(origin) = self.nodes[root].origin {
+            while let Some(origin) = next {
                 root = origin;
                 hops += 1;
                 if hops > 64 {
                     break;
                 }
+                next = self.nodes[root].origin;
             }
             root
         };
@@ -525,7 +539,7 @@ impl<P: Program> Module<P> {
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
         // A scope's content is this call's; a clone of a scope's node is scoped too.
-        let scoped = self.blocks[self.nodes[node].block].parent.is_some()
+        let scoped = self.blocks[block].parent.is_some()
             || self.blocks[self.nodes[template_root].block]
                 .parent
                 .is_some();
@@ -539,7 +553,7 @@ impl<P: Program> Module<P> {
             return node;
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
-        let scope = self.nodes[node].block;
+        let scope = block;
         let target = self.clone_target(scope, ctx);
         let clone = self.add_node(target, None, None);
         // A scope ends at its root, so the clone ends the image it landed in:
@@ -554,7 +568,7 @@ impl<P: Program> Module<P> {
         // takes the fresh id.
         self.nodes[clone].function = match ctx.closure_scope {
             Some(scope) if scope.contains(&node) => ctx.tag,
-            Some(_) => self.nodes[node].function,
+            Some(_) => function,
             None => ctx.tag,
         };
         ctx.remap.insert(node, clone);
@@ -597,9 +611,7 @@ impl<P: Program> Module<P> {
         self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
         // A clone is a singleton class here, so the slot write *is* the class write.
-        if let Some(low_shape) = low_shape {
-            self.nodes[clone].low_shape = Some(Box::new(low_shape));
-        }
+        self.nodes[clone].low_shape = low_shape;
         // A mark is **not** copied onto the clone: the anchor handoff is
         // `Module::marks_of`, which reads the clone's origin.
         clone
@@ -719,6 +731,8 @@ impl<P: Program> Module<P> {
                     target,
                     blocks: HashMap::new(),
                     anchor: ctx.anchor,
+                    anchor_template: ctx.anchor_template,
+                    last_member: None,
                     branch_top: fresh,
                     closure_scope: Some(&scope),
                     applied: function,
@@ -796,6 +810,22 @@ impl<P: Program> Module<P> {
             None => Self::copy_ext(self, value, target),
             _ => value,
         }
+    }
+
+    /// Whether `function`'s chain reaches the pass's anchor or the anchor's template — the
+    /// chain half of the membership test, answered from [`ApplyCtx::last_member`].
+    fn template_member(&self, function: Option<FunctionId>, ctx: &mut ApplyCtx<'_>) -> bool {
+        if let Some((tested, verdict)) = ctx.last_member
+            && tested == function
+        {
+            return verdict;
+        }
+        let verdict = self.function_descends_from(function, ctx.anchor)
+            || ctx
+                .anchor_template
+                .is_some_and(|template| self.function_descends_from(function, template));
+        ctx.last_member = Some((function, verdict));
+        verdict
     }
 
     /// Whether `function`'s chain of lexical parents reaches `anchor` — the template

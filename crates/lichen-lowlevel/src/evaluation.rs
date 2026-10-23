@@ -106,11 +106,24 @@ impl<P: Program> Module<P> {
         // the buffer is the module's.
         let mut members = self.class_snapshots.pop().unwrap_or_default();
         members.clear();
-        members.extend(self.class_members(representative));
+        // One pass over the member list: a member that does not owe an answer here never
+        // owes one later (`value` is never cleared and `runned` only grows), so the
+        // snapshot needs the owing members alone. `visiting` is the exception — a nested
+        // read can set it — so it is re-read at the member's own turn.
+        let mut current = Some(representative);
+        while let Some(member) = current {
+            let entry = &self.nodes[member];
+            current = entry.meta().next();
+            if member != node
+                && entry.operation.is_some()
+                && (entry.value.is_none() || !entry.runned)
+            {
+                members.push(member);
+            }
+        }
         for index in 0..members.len() {
             let member = members[index];
-            // Only members that still owe an answer: the rest answer from their own slot.
-            if member != node && self.has_no_result_yet(member) && !self.nodes[member].visiting {
+            if self.has_no_result_yet(member) && !self.nodes[member].visiting {
                 self.evaluate_node(Dyn(member), None);
             }
         }

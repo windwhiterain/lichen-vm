@@ -87,16 +87,25 @@ impl<P: Program> Module<P> {
     /// the conflicting arms instead. A merge of two decided-different classes is not a
     /// merge, and this is the one thing the write rules rely on.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        let left = self.class_low_type(a).cloned();
-        let right = self.class_low_type(b).cloned();
+        // The two roots once, compressed: the shape reads and the union below would
+        // otherwise walk the parents again, and this runs on every merge.
+        let root_a = disjoint::find(&mut self.nodes, a);
+        let root_b = disjoint::find(&mut self.nodes, b);
+        let left = self.nodes[root_a].low_shape.as_deref().cloned();
+        let right = self.nodes[root_b].low_shape.as_deref().cloned();
         let left_value = self.nodes[a].value;
         let right_value = self.nodes[b].value;
-        let representative = disjoint::union(&mut self.nodes, a, b);
+        // **A class that holds a value has no holes**, so only the valueless side fills,
+        // and it fills before the union: the walk then never visits the valued side's
+        // members, which are the many. The class it writes is uniform either way.
+        match (left_value, right_value) {
+            (None, Some(value)) => self.fill_class_holes(root_a, value),
+            (Some(value), None) => self.fill_class_holes(root_b, value),
+            _ => {}
+        }
+        let representative = disjoint::union(&mut self.nodes, root_a, root_b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
-        }
-        if let Some(value) = left_value.or(right_value) {
-            self.fill_class_holes(representative, value);
         }
         representative
     }
@@ -113,9 +122,10 @@ impl<P: Program> Module<P> {
         // changes no member's class.
         let mut member = Some(representative);
         while let Some(current) = member {
-            member = self.nodes[current].meta().next();
-            if self.nodes[current].value.is_none() {
-                self.set_node_value(current, Some(value));
+            let node = &mut self.nodes[current];
+            member = node.meta().next();
+            if node.value.is_none() {
+                node.value = Some(value);
             }
         }
     }
@@ -127,6 +137,15 @@ impl<P: Program> Module<P> {
     /// The class's **low type** through its representative. See docs/notes/lowlevel-low-types.md.
     pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
         self.nodes.get(self.class_root(node))?.low_shape.as_deref()
+    }
+
+    /// The class's low type as the **shared** shape a clone may adopt.
+    ///
+    /// # Invariant
+    /// A shape is written once and only replaced, never mutated in place, so a clone that
+    /// computes the same thing can share its source's shape instead of copying it.
+    pub fn class_low_shape(&self, node: NodeId) -> Option<std::sync::Arc<LowShape>> {
+        self.nodes.get(self.class_root(node))?.low_shape.clone()
     }
 
     /// The value the node's **class** holds, read through the representative.
@@ -185,7 +204,8 @@ impl<P: Program> Module<P> {
         };
         match current {
             None => {
-                self.nodes.get_mut(root).expect("a live class").low_shape = Some(Box::new(shape));
+                self.nodes.get_mut(root).expect("a live class").low_shape =
+                    Some(std::sync::Arc::new(shape));
                 true
             }
             Some(current) => {
@@ -370,8 +390,9 @@ impl<P: Program> Module<P> {
         // snapshot is needed.
         let mut member = Some(representative);
         while let Some(current) = member {
-            member = self.nodes[current].meta().next();
-            self.set_node_value(current, Some(value));
+            let node = &mut self.nodes[current];
+            member = node.meta().next();
+            node.value = Some(value);
         }
     }
 
@@ -975,16 +996,6 @@ impl<P: Program> Module<P> {
             }
             _ => a.value_eq(&b),
         }
-    }
-
-    /// `rep`'s class members, representative first; the union-find walk lives here once.
-    pub(crate) fn class_members(&self, rep: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        let mut member = Some(rep);
-        std::iter::from_fn(move || {
-            let current = member?;
-            member = self.nodes[current].meta().next();
-            Some(current)
-        })
     }
 
     /// Join `reader` into `target`'s class and evaluate the target.

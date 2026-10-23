@@ -4,7 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lichen_compute::language::new_store;
+use lichen_compute::language::{LangProgram, new_store_sharing};
+use lichen_language::persist::Registry;
 use lichen_language::preprocess::{Directive, block_directives, block_metadata, split_block};
 use lichen_language::render::render_all;
 use lichen_language::run::evaluate_raw;
@@ -145,8 +146,27 @@ pub fn declared_output(source: &str) -> Option<String> {
 
 /// The program's actual output, or a panic showing its diagnostics.  The file's
 /// own path is the import base.
+///
+/// # Invariant
+///
+/// Every call on a thread shares one registry, so the prelude and the plugin wrappers
+/// compile once for the whole run rather than once per program; each call still gets a
+/// store of its own, so one program's imports cannot be read through another's.
 pub fn program_output(file: &Path, source: &str) -> String {
-    let mut store = new_store(None).expect("the embedded compute package registers");
+    use std::cell::RefCell;
+    use std::sync::{Arc, RwLock};
+
+    thread_local! {
+        static REGISTRY: RefCell<Option<Arc<RwLock<Registry<LangProgram>>>>> =
+            const { RefCell::new(None) };
+    }
+    let registry = REGISTRY.with(|slot| {
+        slot.borrow_mut()
+            .get_or_insert_with(|| Arc::new(RwLock::new(Registry::new())))
+            .clone()
+    });
+    let mut store =
+        new_store_sharing(None, registry).expect("the embedded compute package registers");
     evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!("{}: failed\n{}", file.display(), render_all(source, &diags))
     })

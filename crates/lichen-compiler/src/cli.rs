@@ -182,6 +182,7 @@ fn staged_store<P>(
     source: &str,
     cache_root: &Path,
     native: &[NativePackage<P>],
+    shared: Option<&std::sync::Arc<std::sync::RwLock<lichen_lowlevel::Registry<P>>>>,
 ) -> (PackageStore<P>, Vec<lichen_language::diag::Diag<P>>)
 where
     P: LangProgramShape,
@@ -190,10 +191,19 @@ where
 {
     // A non-persistent codec never serializes, so the store stays in memory
     // and no artifact is written.
-    let mut store: PackageStore<P> = if P::Codec::PERSISTENT {
-        PackageStore::with_cache_dir(cache_root.to_path_buf())
+    let persistent = if P::Codec::PERSISTENT {
+        Some(cache_root.to_path_buf())
     } else {
-        PackageStore::new()
+        None
+    };
+    // A directory run hands every program the same registry, so the prelude and the
+    // plugins compile once for the process rather than once per file.
+    let mut store: PackageStore<P> = match shared {
+        Some(registry) => PackageStore::with_registry(persistent, registry.clone()),
+        None => match persistent {
+            Some(cache_dir) => PackageStore::with_cache_dir(cache_dir),
+            None => PackageStore::new(),
+        },
     };
     let mut diags = stage_depends::<P>(&mut store, source);
     for &(virtual_path, wrapper, native_ops) in native {
@@ -222,7 +232,7 @@ where
             return ExitCode::FAILURE;
         }
     };
-    let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
+    let (mut store, diags) = staged_store::<P>(&source, cache_root, native, None);
     if !diags.is_empty() {
         print!("{}", lichen_language::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
@@ -264,6 +274,10 @@ where
         }
     };
     files.sort();
+    // One registry for the whole run: the prelude and the plugin wrappers are the
+    // language's own modules, identical for every file, so a directory run costs one
+    // prelude rather than one per file.
+    let shared = std::sync::Arc::new(std::sync::RwLock::new(lichen_lowlevel::Registry::<P>::new()));
     let mut failed = 0;
     for file in files {
         let source = match std::fs::read_to_string(&file) {
@@ -274,7 +288,7 @@ where
                 continue;
             }
         };
-        let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
+        let (mut store, diags) = staged_store::<P>(&source, cache_root, native, Some(&shared));
         if !diags.is_empty() {
             failed += 1;
             eprintln!("{}: failed to stage dependencies", file.display());
@@ -321,7 +335,7 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let source = std::fs::read_to_string(path).unwrap_or_default();
-    let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
+    let (mut store, diags) = staged_store::<P>(&source, cache_root, native, None);
     if !diags.is_empty() {
         print!("{}", lichen_language::render::render_all(&source, &diags));
         return ExitCode::FAILURE;

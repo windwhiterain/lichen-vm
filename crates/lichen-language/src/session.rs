@@ -805,8 +805,11 @@ where
             .filter(|path| self.cells.reference(path).is_some())
             .count();
         // Lower the already-resolved program with the cells, then check.
+        // The session keeps its program for the next analysis, so this lowering runs on a
+        // copy: only the first compile of a source can move its statements.
+        let mut lowering = (*program).clone();
         let (ir, span_index, compiled_cells) = crate::compile::compile_resolved_with_cells(
-            &program,
+            &mut lowering,
             &resolved.import_binders,
             &resolved.prelude,
             Some(&self.cells),

@@ -90,6 +90,7 @@ impl<P: Program> Module<P> {
             unify_any_path: crate::ancestors::AncestorPairs::new(),
             class_snapshots: Vec::new(),
             item_clone_scratch: Vec::new(),
+            pattern_seen: Vec::new(),
             stamp_depth: 0,
             deep_depth: 0,
             budget_exhausted: None,
@@ -287,12 +288,12 @@ impl<P: Program> Module<P> {
     ) -> NodeId {
         let node = self.nodes.insert(Node {
             value,
-            runned: 0,
+            runned: false,
             operation,
             low_shape: None,
             function: None,
             origin: None,
-            depth: self.stamp_depth,
+            depth: u16::try_from(self.stamp_depth).unwrap_or(u16::MAX),
             block,
             visiting: false,
             evaluated_deep: None,
@@ -312,7 +313,7 @@ impl<P: Program> Module<P> {
     /// How many apply levels `node` was created under: `0` for a checker-built
     /// node, `d + 1` for a clone made at depth `d`.
     pub fn node_depth(&self, node: NodeId) -> u32 {
-        self.nodes[node].depth
+        u32::from(self.nodes[node].depth)
     }
 
     /// Record that the value `value` carries the marks `payloads`.
@@ -530,7 +531,7 @@ impl<P: Program> Module<P> {
 
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
-        self.nodes[node].runned = 1;
+        self.nodes[node].runned = true;
     }
 
     /// Write the node's run stamp from the boolean form the clone and freeze walks read.
@@ -538,7 +539,7 @@ impl<P: Program> Module<P> {
         if ran {
             self.stamp_node_ran(node);
         } else {
-            self.nodes[node].runned = 0;
+            self.nodes[node].runned = false;
         }
     }
 
@@ -549,7 +550,7 @@ impl<P: Program> Module<P> {
     /// The stamp is written once, when the operator runs, and cleared only by the walks that
     /// re-open a stalled subtree, so a node reading true has had its one attempt.
     pub(crate) fn run_stamp_is_set(&self, node: NodeId) -> bool {
-        self.nodes.get(node).is_some_and(|node| node.runned != 0)
+        self.nodes.get(node).is_some_and(|node| node.runned)
     }
 
     /// Whether a node's deep pass left it undecided
@@ -580,7 +581,7 @@ impl<P: Program> Module<P> {
             .into_iter()
             .filter(|node| {
                 self.nodes.get(*node).is_some_and(|node| {
-                    node.operation.is_some() && node.value.is_none() && node.runned != 0
+                    node.operation.is_some() && node.value.is_none() && node.runned
                 })
             })
             .collect();

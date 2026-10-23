@@ -288,8 +288,6 @@ pub struct PackageStore<P: ProgramCodecOf + 'static> {
     /// The device's cache directory (`None` = in-memory only).
     cache_dir: Option<PathBuf>,
     device: Option<DeviceRegistry>,
-    /// The in-memory key allocator, used when no cache directory is configured.
-    next_key: u64,
     /// The artifact codec `P::Codec` is a type-level marker (the codec value is
     /// `P::Codec::default()` at use).
     _codec: PhantomData<<P as ProgramCodecOf>::Codec>,
@@ -316,7 +314,6 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             vendored: HashMap::new(),
             cache_dir: None,
             device: None,
-            next_key: 0,
             _codec: PhantomData,
             compiled: 0,
             loaded_from_cache: 0,
@@ -330,6 +327,27 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         let mut store = PackageStore::new();
         store.cache_dir = Some(cache_dir);
         store.device = Some(device);
+        store
+    }
+
+    /// A store over `registry`, the compiled modules shared with whoever else holds it.
+    ///
+    /// # Invariant
+    ///
+    /// The registry is the **only** shared part: `packages`, `vendored`, `native` and the
+    /// device handle stay this store's, so a store's imports and its key allocation
+    /// (which comes from the device, or from the registry's own counter without one)
+    /// cannot be read through another store. A caller shares one registry to compile the
+    /// prelude and the plugins once for a process, and must still give each program a
+    /// store of its own.
+    pub fn with_registry(cache_dir: Option<PathBuf>, registry: Arc<RwLock<Registry<P>>>) -> Self {
+        let mut store = PackageStore::new();
+        store.registry = registry;
+        if let Some(cache_dir) = cache_dir {
+            let device = DeviceRegistry::open(cache_dir.clone());
+            store.cache_dir = Some(cache_dir);
+            store.device = Some(device);
+        }
         store
     }
 
@@ -463,8 +481,13 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         match &mut self.device {
             Some(device) => device.alloc(file_id),
             None => {
-                let key = ModuleKey::from_raw(self.next_key);
-                self.next_key += 1;
+                // The registry's counter, not this store's: a store may share the registry
+                // with another, and two stores must never be handed one key.
+                let key = self
+                    .registry
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .allocate_module_key();
                 (key, true)
             }
         }
@@ -1262,8 +1285,14 @@ where
         native_ops: NativeOps<P>,
         bindings: &[String],
     ) -> Result<PackageHandle, String> {
-        // Reuse an already-registered module, so one registry holds it once.
+        // Reuse an already-registered module, so one registry holds it once. Filed under
+        // its file name either way, because that is what `import "name"` resolves to.
         if let Some(handle) = self.registered_builtin(virtual_path) {
+            let name = Path::new(virtual_path)
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(virtual_path));
+            self.native.insert(name, handle.clone());
             return Ok(handle);
         }
         let line_starts = crate::lex::line_starts(source);

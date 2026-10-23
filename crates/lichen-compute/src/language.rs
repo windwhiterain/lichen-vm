@@ -174,3 +174,21 @@ pub fn store_with_device(
     register_compute(&mut store)?;
     Ok(store)
 }
+
+/// A store over this sub-language sharing `registry` with whoever else holds it.
+///
+/// # Invariant
+///
+/// The registry is the only shared part: a process that runs several programs gives each
+/// its own store, and the prelude and this package's wrapper compile once for all of them.
+pub fn new_store_sharing(
+    cache_root: Option<PathBuf>,
+    registry: std::sync::Arc<std::sync::RwLock<lichen_lowlevel::Registry<LangProgram>>>,
+) -> Result<PackageStore<LangProgram>, String> {
+    if let Some(root) = &cache_root {
+        configure_kernel_disk_cache(root);
+    }
+    let mut store = PackageStore::with_registry(cache_root, registry);
+    register_compute(&mut store)?;
+    Ok(store)
+}

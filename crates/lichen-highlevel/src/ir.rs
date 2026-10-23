@@ -186,7 +186,82 @@ pub struct Loc {
     /// The IR expression the diagnostic is about.
     pub expr: ExprId,
     /// The recursive descent of [`LocStep`]s (see [`Self`]).
-    pub path: Vec<LocStep>,
+    pub path: LocPath,
+}
+
+/// The descent of a [`Loc`]: one step inline, so the per-check location allocates nothing.
+///
+/// # Invariant
+/// The variants are ordered by length: `Empty` is no descent, `One` is a single step — the
+/// shape every check issues — and `Many` is the buffer a diagnostic's full-parse descent
+/// needs. `as_slice` is the one reader, so the three read alike.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub enum LocPath {
+    #[default]
+    Empty,
+    One(LocStep),
+    Many(Vec<LocStep>),
+}
+
+impl LocPath {
+    /// The descent as a slice, whichever variant holds it.
+    pub fn as_slice(&self) -> &[LocStep] {
+        match self {
+            LocPath::Empty => &[],
+            LocPath::One(step) => std::slice::from_ref(step),
+            LocPath::Many(steps) => steps,
+        }
+    }
+
+    /// Append a step, moving the inline step out to a buffer and growing it from there.
+    pub fn push(&mut self, step: LocStep) {
+        match self {
+            LocPath::Empty => *self = LocPath::One(step),
+            LocPath::One(first) => *self = LocPath::Many(vec![*first, step]),
+            LocPath::Many(steps) => steps.push(step),
+        }
+    }
+
+    /// Drop the last step.
+    pub fn pop(&mut self) {
+        match self {
+            LocPath::Empty => {}
+            LocPath::One(_) => *self = LocPath::Empty,
+            LocPath::Many(steps) => {
+                steps.pop();
+                if steps.len() == 1 {
+                    *self = LocPath::One(steps[0]);
+                }
+            }
+        }
+    }
+
+    /// The owned buffer form, for the descent builder that appends its own steps.
+    pub fn into_vec(self) -> Vec<LocStep> {
+        match self {
+            LocPath::Empty => Vec::new(),
+            LocPath::One(step) => vec![step],
+            LocPath::Many(steps) => steps,
+        }
+    }
+}
+
+impl std::ops::Deref for LocPath {
+    type Target = [LocStep];
+
+    fn deref(&self) -> &[LocStep] {
+        self.as_slice()
+    }
+}
+
+impl From<Vec<LocStep>> for LocPath {
+    fn from(steps: Vec<LocStep>) -> Self {
+        match steps.len() {
+            0 => LocPath::Empty,
+            1 => LocPath::One(steps[0]),
+            _ => LocPath::Many(steps),
+        }
+    }
 }
 
 /// One step of the recursive location descent.

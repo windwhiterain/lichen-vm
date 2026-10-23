@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use lichen_lowlevel::NodeId;
 
 use crate::checker::{Build, ExprState};
-use crate::ir::{ExprId, Loc, LocStep};
+use crate::ir::{ExprId, Loc, LocPath, LocStep};
 use crate::program::{HighProgram, ValueType};
 use crate::shape;
 
@@ -31,11 +31,11 @@ pub fn slot_of_path(path: &[LocStep]) -> Option<usize> {
 /// its index in the merged tail, so the checker stamps that node itself where
 /// it knows the index (see `Checker::check_ann`).
 fn slots_of(expr: ExprId, state: &ExprState) -> Vec<(NodeId, Loc)> {
-    let step = |path: Vec<LocStep>| Loc { expr, path };
+    let step = |path: LocPath| Loc { expr, path };
     [
-        (state.term, step(Vec::new())),
-        (state.val, step(vec![LocStep::Value])),
-        (state.ty, step(vec![LocStep::Type])),
+        (state.term, step(LocPath::Empty)),
+        (state.val, step(LocPath::One(LocStep::Value))),
+        (state.ty, step(LocPath::One(LocStep::Type))),
     ]
     .into_iter()
     .filter_map(|(node, loc)| Some((node?, loc)))

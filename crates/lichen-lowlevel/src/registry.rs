@@ -16,7 +16,22 @@ impl<P: Program> Registry<P> {
         Registry {
             entries: HashMap::new(),
             next_cell_key: 0,
+            next_module_key: 0,
         }
+    }
+
+    /// A fresh module key for a store with **no device**: unique within this registry.
+    ///
+    /// # Invariant
+    ///
+    /// The counter is the registry's, not a store's, so two in-memory stores that share
+    /// one registry cannot be handed the same key — which is why they can share it at
+    /// all. A device-backed store takes its keys from the device's own dense counter
+    /// instead, whose holes the device reclaims.
+    pub fn allocate_module_key(&mut self) -> ModuleKey {
+        let key = ModuleKey::from_raw(self.next_module_key);
+        self.next_module_key += 1;
+        key
     }
 
     /// A fresh key for a **retained cell**'s artifact, unique within this registry.
