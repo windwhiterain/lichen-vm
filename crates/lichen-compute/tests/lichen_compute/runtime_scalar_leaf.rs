@@ -62,24 +62,26 @@ fn program(step: &str, bias: Option<f32>) -> String {
 ---
 Row   = struct{{.x (compute.Buf Float)}}
 Sums  = struct{{.s (compute.Buf Float)}}
-ParS  = compute.P (compute.KT Float)(.I Row, .O Sums)
+ParS  = struct{{.n Int, .in Row}}
 row_sum_raw = (k : ParS) => {{
   i = compute.range k.n
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+  ((Sums)(.s (compute.write ((compute.Write _)(.to y, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
 }}
 row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Sums
 Sumsq = struct{{.q (compute.Buf Float)}}
-ParQ  = compute.P (compute.KT Float)(.I Row, .O Sumsq)
+ParQ  = struct{{.n Int, .in Row}}
 row_sumsq_raw = (k : ParQ) => {{
   i = compute.range k.n
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.q, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+  ((Sumsq)(.q (compute.write ((compute.Write _)(.to y, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
 }}
 row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sumsq
 Moments = struct{{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}}
 OutY    = struct{{.y (compute.Buf Float)}}
-ParY    = struct{{.n Int, .eps Float, .in Moments, .out OutY}}
+ParY    = struct{{.n Int, .eps Float, .in Moments}}
 normalise_raw = (k : ParY) => {{
   i = compute.range k.n
   count = int2float k.n
@@ -88,7 +90,8 @@ normalise_raw = (k : ParY) => {{
   d = sqrt (v + k.eps)
   x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value {term}))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value {term})))))
 }}
 normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "gpu" OutY
 All   = struct{{.x (compute.Buf Float), .w (compute.Buf Float)}}
@@ -115,6 +118,10 @@ fn step() -> &'static str {
 }
 
 /// `program` as a recording: the three kernels and the graph they recorded, nothing run.
+///
+/// # Invariant
+/// Each body declares its buffer with `compute.slice` and returns the write as the codomain
+/// field's value (`docs/notes/kernel-buffer-declarations.md`).
 fn recording(bias: Option<f32>) -> String {
     format!(
         "{}(row_sum, row_sumsq, normalise, built)\n",
@@ -122,23 +129,58 @@ fn recording(bias: Option<f32>) -> String {
     )
 }
 
-/// The elements of `row`, as the literals a `compute.buffer` call takes.
-fn literals(row: &[f32; 4]) -> String {
+/// The two fill kernels that build the launch's data, one per buffer.
+///
+/// # Invariant
+/// One lane per element and each lane writes the element at its own index, so each buffer holds
+/// the list the old `compute.buffer` call held: a host builds its data with a kernel, because
+/// there is no array-to-buffer conversion any more (`docs/notes/kernel-buffer-declarations.md`).
+fn filled() -> String {
+    format!(
+        r#"
+Fill = struct{{.n Int}}
+Weights = struct{{.w (compute.Buf Float)}}
+row_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Row)(.x (compute.write ((compute.Write _)(.to y, .at i, .value {row})))))
+}}
+weight_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Weights)(.w (compute.write ((compute.Write _)(.to y, .at i, .value {weight})))))
+}}
+row_filler = compute.parallel row_raw "cpu" Row
+weight_filler = compute.parallel weight_raw "cpu" Weights
+"#,
+        row = table(&ROW),
+        weight = table(&WEIGHT),
+    )
+}
+
+/// The elements of `row`, as the sum of one-level `if`s the fill kernel writes.
+///
+/// # Invariant
+/// One arm per element and each arm names its own lane, so the sum is the list the old array
+/// literal held and not a formula of it: a nested `if` chain is refused
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn table(row: &[f32]) -> String {
     row.iter()
-        .map(|value| format!("{value:.1}"))
+        .enumerate()
+        .map(|(position, value)| format!("(if i == {position} then {value:.1} else 0.0)"))
         .collect::<Vec<String>>()
-        .join(", ")
+        .join(" + ")
 }
 
 /// `recording`, run over the row through `graphrun`.
 fn running(bias: Option<f32>) -> String {
     format!(
-        "{}\nx = (compute.buffer ([{row}] : array{{Float, 4}}) : (compute.Buf Float))\nw = (compute.buffer \
-         ([{weight}] : array{{Float, 4}}) : (compute.Buf Float))\nout = compute.collect (compute.graphrun built \
-         (4, {eps:.1}, x, w))\nout\n",
-        recording(bias),
-        row = literals(&ROW),
-        weight = literals(&WEIGHT),
+        "{recording}\n{fill}row = (compute.plrun row_filler ((Fill)(.n {elements})) : Row)\nweight = \
+         (compute.plrun weight_filler ((Fill)(.n {elements})) : Weights)\nout = compute.collect \
+         (compute.graphrun built (4, {eps:.1}, row.x, weight.w))\nout\n",
+        recording = recording(bias),
+        fill = filled(),
+        elements = ROW.len(),
         eps = EPS,
     )
 }
