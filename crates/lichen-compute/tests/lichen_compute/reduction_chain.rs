@@ -97,7 +97,10 @@ fn combine_operator(expr: &Expr) -> Option<BinaryOp> {
 /// # Invariant
 /// The fold's bound is `k.n`, a runtime value, so the definition pass leaves the nest undecided
 /// and the emitter lowers it: only then is the marked seed visited and `identity` published
-/// (`docs/notes/graph-fusion.md` §3). A literal bound loses both halves of the algebra.
+/// (`docs/notes/graph-fusion.md` §3). A literal bound loses both halves of the algebra. The
+/// parameter carries no `.out` group: the body declares the output with `compute.slice` and the
+/// write is the codomain field's value, so the write is reachable from the return and survives
+/// the freeze (`docs/notes/kernel-buffer-declarations.md`).
 fn source() -> &'static str {
     r#"
 ---
@@ -105,11 +108,12 @@ fn source() -> &'static str {
 ---
 In  = struct{.b (compute.Buf Float)}
 Out = struct{.z (compute.Buf Float)}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k

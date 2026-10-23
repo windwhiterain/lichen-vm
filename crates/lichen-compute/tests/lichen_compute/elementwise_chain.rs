@@ -24,14 +24,17 @@ const COUNT: usize = 8;
 /// The mark rides the **whole** expression — a top-level routed operator anchors to the
 /// product and not to its first operand (`docs/notes/graph-fusion.md` §3) — so the region's
 /// node 0 records the element function this kernel computes and nothing else. The extent is
-/// `k.n`, a run-time value, so the recorded node's count is the graph's own.
+/// `k.n`, a run-time value, so the recorded node's count is the graph's own. `ParE` carries
+/// no `.out` group: the body declares `e` with `compute.slice` and the write is the codomain
+/// field's value (`docs/notes/kernel-buffer-declarations.md`).
 const SCALE: &str = r#"
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
+ParE = struct{.n Int, .in In}
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 "#;
@@ -51,12 +54,13 @@ fn chain() -> String {
 {SCALE}
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{{.n Int, .in In2}}
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - r) ~ "element")) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{{.n Int, .in In}}
@@ -85,10 +89,11 @@ fn elementwise_chain() -> String {
 {SCALE}
 In2  = struct{{.p (compute.Buf Float)}}
 OutF = struct{{.f (compute.Buf Float)}}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutF)
+Par2 = struct{{.n Int, .in In2}}
 rescale_raw = (k : Par2) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.f, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) * 3.0) ~ "element")))
+  f = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutF)(.f (compute.write ((compute.Write _)(.to f, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) * 3.0) ~ "element")))))
 }}
 rescale = compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" OutF
 GArg = struct{{.n Int, .in In}}

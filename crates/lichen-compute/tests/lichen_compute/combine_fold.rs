@@ -25,6 +25,9 @@ const PER_LANE: f32 = 1.0;
 /// # Invariant
 /// One expression differs and the algebra with it: the marked combine canonicalizes to
 /// `(+ t (* d d))`, so its **top-level operator** is still `+` while its datum is not the datum.
+/// The fold's parameter carries no `.out` group and the data is a fill kernel's own output,
+/// because a kernel declares its buffers and a host builds its data by running a kernel
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn squares() -> String {
     let mut source = String::from(
         r#"
@@ -33,27 +36,30 @@ fn squares() -> String {
 ---
 In  = struct{.b (compute.Buf Float)}
 Out = struct{.z (compute.Buf Float)}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float))) ~ "combine" ~ "accumulator"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, 0.0 ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
 }
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step = (s : Par) => {
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }
 built = compute.graph step
-data = (compute.buffer ([ELEMENTS] : array{Float, COUNT}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built (COUNT, data))
+Fill = struct{.n Int}
+fill_raw = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value ((int2float i + 1.0) ~ "element"))))))
+}
+filler = compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" Out
+data = (compute.plrun filler ((Fill)(.n COUNT)) : Out)
+out = compute.collect (compute.graphrun built (COUNT, data.z))
 out
 "#,
     );
-    let elements = (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ");
-    source = source.replace("ELEMENTS", &elements);
     source.replace("COUNT", &COUNT.to_string())
 }
 

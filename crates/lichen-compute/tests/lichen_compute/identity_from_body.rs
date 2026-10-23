@@ -5,7 +5,7 @@ use super::common;
 use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
-use lichen_compute::fusion_claim::{fragment_of, kernel_id};
+use lichen_compute::fusion_claim::{REDUCTION, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_lowlevel::Module;
@@ -13,55 +13,42 @@ use lichen_lowlevel::Module;
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
 const COUNT: usize = 3 * LANES as usize;
 
-/// The row a `max` folds: every element **below** the `(0.0 - 1000000.0)` the defect was seeded with.
+/// The datum a fill kernel writes at lane `i` for the row a `max` folds.
 ///
 /// # Invariant
-/// `−2_000_000 … −2_000_191` descending, so the row's maximum is its first element. The old seed
-/// is above every one of them, which is the whole defect: it was never checked against the data,
-/// and the data is what the pass never sees.
-fn below_the_old_seed() -> Vec<f32> {
-    (0..COUNT)
-        .map(|offset| -2_000_000.0 - offset as f32)
-        .collect()
-}
+/// `(0.0 - 2000000.0) - int2float i` is the row `−2_000_000 … −2_000_191` descending, so the
+/// row's maximum is its first element, and **every** element is below the
+/// `(0.0 - 1000000.0)` the defect was seeded with. That is the whole defect: the old seed was
+/// never checked against the data, and the data is what the pass never sees.
+const BELOW_THE_OLD_SEED: &str = "(0.0 - 2000000.0) - int2float i";
 
 /// The row a `min` folds: `0.0 … 191.0`, the row the defect was measured over.
 ///
 /// # Invariant
 /// Ascending from zero, so the row's minimum is its first element and the old `(0.0 - 1000000.0)`
-/// seed answered a value no element of it holds.
+/// seed answered a value no element of the row holds.
 fn a_row_of_positives() -> Vec<f32> {
     (0..COUNT).map(|value| value as f32).collect()
 }
 
-/// One element as the language spells it: it has no unary minus, so a negative is a subtraction.
+/// The datum a fill kernel writes at lane `i` for [`a_row_of_positives`]'s row.
 ///
 /// # Invariant
-/// Every element goes through this one spelling, so the array the device folds is the row this
-/// test derived its own maximum and minimum from and the two cannot drift apart.
-fn literal(value: f32) -> String {
-    if value < 0.0 {
-        let magnitude = -(value as i64);
-        format!("(0.0 - {magnitude}.0)")
-    } else {
-        format!("{value}.0")
-    }
-}
+/// `int2float i` is `a_row_of_positives()[i]` lane for lane, so the row the device folds and the
+/// row this test derives its own minimum from are one list.
+const A_ROW_OF_POSITIVES: &str = "int2float i";
 
-/// A `Reduction` program folding `combine` over `data` from `seed`.
+/// A `Reduction` program folding `combine` over the row `data_at_i` writes, from `seed`.
 ///
 /// # Invariant
 /// The fold's bound is `i + 1`, the lane's own index plus one, so the program's own body is the
 /// per-lane schedule the tiling pass replaces and the two answers are read at `out[COUNT - 1]`
 /// and `out[0]` — which is what makes the comparison a statement about **tile ≡ body** rather
-/// than about a number chosen here.
-fn fold_over(combine: &str, seed: &str, data: &[f32]) -> String {
-    let elements = data
-        .iter()
-        .copied()
-        .map(literal)
-        .collect::<Vec<String>>()
-        .join(", ");
+/// than about a number chosen here. `Par` declares no `.out` group: the body declares `z` with
+/// `compute.slice` and the write is the codomain field's value, and the input data is a fill
+/// kernel's own output, because a host builds its data by running a kernel
+/// (`docs/notes/kernel-buffer-declarations.md`).
+fn fold_over(combine: &str, seed: &str, data_at_i: &str) -> String {
     let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
     format!(
         r#"
@@ -70,37 +57,50 @@ fn fold_over(combine: &str, seed: &str, data: &[f32]) -> String {
 ---
 In  = struct{{.b (compute.Buf Float)}}
 Out = struct{{.z (compute.Buf Float)}}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{{.n Int, .in In}}
 reduction = (k : Par) => {{
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, {combine} ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, {seed} ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, {seed} ~ "identity"))))))
 }}
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step = (s : Par) => {{
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }}
 built = compute.graph step
-data = (compute.buffer ([{elements}] : array{{Float, {COUNT}}}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built ({COUNT}, data))
+Fill = struct{{.n Int}}
+fill_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value ({data_at_i} ~ "element"))))))
+}}
+filler = compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" Out
+data = (compute.plrun filler ((Fill)(.n {count})) : Out)
+out = compute.collect (compute.graphrun built ({count}, data.z))
 out
 "#,
         combine = combine.replace("READ", read),
+        count = COUNT,
     )
 }
 
 /// The one-node graph the recording's own fragment makes.
 ///
 /// # Invariant
-/// The node is built from the registry's own fragment and not from a run's, so the pass is
-/// handed exactly the body the program compiled: a refusal is then the derivation's answer to
-/// that body, and the consultation dispatches nothing.
+/// The fragment is the kernel whose claim names [`REDUCTION`], chosen by the claim and not by
+/// the order the module compiled in: the program compiles the fill kernel as well as the fold, and
+/// the pass is handed the fold's body and not the fill's. The node is built from the registry's
+/// own fragment and not from a run's, so the pass is handed exactly the body the program
+/// compiled: a refusal is then the derivation's answer to that body, and the consultation
+/// dispatches nothing.
 fn recorded_graph(module: &Module<LangProgram>) -> Graph {
     let kernel = module
         .nodes
         .iter()
         .find_map(|(id, _node)| kernel_id(module, id).ok())
-        .expect("the program compiled one parallel kernel");
+        .filter(|id| claim_of(*id).is_some_and(|claim| claim.interface == REDUCTION))
+        .expect("the program compiled one parallel kernel that folds");
     let fragment = fragment_of(kernel).expect("the registry holds the fragment it compiled");
     let mut graph = Graph::with_inputs(1);
     let node = graph
@@ -151,13 +151,16 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// # Invariant
 /// The seed is the unit of `max` — `((0.0 - 1.0) / 0.0)`, which folds to `−∞` — and it is **the
 /// body's own mark**: a claim spells `Reduction(combine,identity)` and carries no value to
-/// disagree with. The two answers are one number off two schedules, and it is the row's maximum
-/// as derived here from the literals the device folded.
+/// disagree with. The row the device folds is the one [`BELOW_THE_OLD_SEED`] writes, whose
+/// maximum is its first element and every one of which is below the old seed.
 #[test]
 fn a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers() {
     let (_stub, _guard) = common::stub();
-    let data = below_the_old_seed();
-    let source = fold_over("(max s(1) (READ))", "((0.0 - 1.0) / 0.0)", &data);
+    let source = fold_over(
+        "(max s(1) (READ))",
+        "((0.0 - 1.0) / 0.0)",
+        BELOW_THE_OLD_SEED,
+    );
 
     // The floor: the program runs its own body, and a stub computes nothing.
     let (module, _value, _root) = common::run(&source);
@@ -187,7 +190,7 @@ fn a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers(
 fn a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers() {
     let (_stub, _guard) = common::stub();
     let data = a_row_of_positives();
-    let source = fold_over("(min s(1) (READ))", "(1.0 / 0.0)", &data);
+    let source = fold_over("(min s(1) (READ))", "(1.0 / 0.0)", A_ROW_OF_POSITIVES);
 
     let (module, value, _root) = common::run(&source);
     let body = common::float_array(&module, &value);
@@ -228,7 +231,7 @@ fn a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers() {
 #[test]
 fn a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name() {
     // `0.0 / 0.0` is a `NaN` and not an infinity, so it keeps its tree and is no literal.
-    let not_a_literal = fold_over("(max s(1) (READ))", "(0.0 / 0.0)", &a_row_of_positives());
+    let not_a_literal = fold_over("(max s(1) (READ))", "(0.0 / 0.0)", A_ROW_OF_POSITIVES);
     let report = consulted(&not_a_literal);
     println!("the tiling pass reported:\n  {}", report.join("\n  "));
     assert!(
@@ -243,7 +246,7 @@ fn a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name() {
     let missing = fold_over(
         "(max s(1) (READ))",
         "((0.0 - 1.0) / 0.0)",
-        &a_row_of_positives(),
+        A_ROW_OF_POSITIVES,
     )
     .replace(
         "claim:Reduction(combine,identity)",
