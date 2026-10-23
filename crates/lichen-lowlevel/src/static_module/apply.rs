@@ -227,14 +227,24 @@ impl<P: Program> Module<P> {
     pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
+        argument: NodeId,
         block: BlockId,
         node: NodeId,
     ) {
         let module = self.static_module(function.module);
-        let Some((r#return, parameter)) = module
+        let Some(r#return) = module
             .functions
             .get(function.index.0)
-            .map(|entry| (entry.r#return, entry.parameter))
+            .map(|entry| entry.r#return)
+        else {
+            return;
+        };
+        // One materialization for the whole call: the parameter clone and the return
+        // expression share one remap, so a reference inside the return names the same
+        // parameter clone the argument binds — the type side's shape
+        // (spec §3, "Every attribute is handled like the type").
+        let Some((parameter, _codomain, remap)) =
+            self.materialize_static_signature_with_classes(function, block)
         else {
             return;
         };
@@ -242,7 +252,7 @@ impl<P: Program> Module<P> {
         let mut ctx = StaticApplyCtx {
             target: block,
             module,
-            remap: HashMap::new(),
+            remap,
             applied: function.index,
             branch_top: None,
             tag: self.nodes[node].function,
@@ -252,10 +262,11 @@ impl<P: Program> Module<P> {
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
         let applied = self.static_return_type_apply(r#return, &mut ctx);
-        self.static_node_apply(parameter, &mut ctx);
-        if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
-            self.applied_parameters.insert(node, cloned_parameter);
-        }
+        self.applied_parameters.insert(node, parameter);
+        // The clone is bound to this call's argument, so a return attribute that
+        // names one of its fields reads the argument's field record
+        // (spec §3, "Every attribute is handled like the type").
+        self.unify_parameter_slots(parameter, argument, block);
         self.applied_exprs.insert(node, applied);
     }
 

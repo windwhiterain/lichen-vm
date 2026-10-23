@@ -25,6 +25,57 @@ impl<P: Program> Module<P> {
         true
     }
 
+    /// Unify the parameter's positions with the argument's, **without recording**
+    /// anything: the binding an apply needs when another side owns the failure.
+    ///
+    /// # Invariant
+    /// Every position is unified, the attribute positions included: the parameter's
+    /// positions and the argument's are the same expression's slots
+    /// (spec §3, "Every attribute is handled like the type").
+    pub(super) fn unify_parameter_slots(
+        &mut self,
+        cloned_param: NodeId,
+        argument: NodeId,
+        block: BlockId,
+    ) {
+        let lengths = (
+            unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
+            unsafe { self.array_items(argument) }.map(|items| items.len()),
+        );
+        match lengths {
+            (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
+                // SAFETY: both nodes are live members of this module; the unify only
+                // reads them.
+                let parameters = unsafe { self.array_items(cloned_param) };
+                let supplieds = unsafe { self.array_items(argument) };
+                let width = parameters
+                    .map_or(0, |items| items.len())
+                    .max(supplieds.map_or(0, |items| items.len()));
+                for slot in 0..width {
+                    // The type position is the reporting side's: binding it here makes
+                    // the signature's codomain the argument's type, which is not this
+                    // side's to decide.
+                    if slot == 1 {
+                        continue;
+                    }
+                    let (Some(parameters), Some(supplieds)) = (parameters, supplieds) else {
+                        break;
+                    };
+                    let (Some(left), Some(right)) = (parameters.get(slot), supplieds.get(slot))
+                    else {
+                        continue;
+                    };
+                    let left = self.as_dynamic(left.node, block);
+                    let right = self.as_dynamic(right.node, block);
+                    self.unify(left, right);
+                }
+            }
+            _ => {
+                self.unify(cloned_param, argument);
+            }
+        }
+    }
+
     /// The post-clone parameter check shared by both apply paths; `true` when it failed.
     ///
     /// # Invariant
