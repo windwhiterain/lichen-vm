@@ -14,13 +14,12 @@
 
 - **A buffer's type carries its element type, its length and a native payload.**
   The declaration is a call that is **both a type and the value it creates**:
-  `compute.buf Buf(.type Float, .length 192)`. `Buf` states `.type`, `.length`,
-  `.native` (the native payload, kind `$buf(T, L)`) and `.element @any` — the
-  last kept so the lichen side can read and display an element; an undecided
-  buffer is that instance with holes that are exprs whose attributes are all
-  undecided (`_`). `$buf(T, L)` is a kind marker with the shape
-  `[element type, length]`, the shape `array{T, n}` already has, so the decode is
-  the same walk.
+  `compute.buf Buf(.type Float, .length 192)`. `Buf` states `.type` (the element
+  type — the field the old `.element` was), `.length`, and `.native` (the native
+  payload, kind `$buf(T, L)`); there is **no `.element`**. An undecided buffer is
+  that instance with holes that are exprs whose attributes are all undecided
+  (`_`). `$buf(T, L)` is a kind marker with the shape `[element type, length]`,
+  the shape `array{T, n}` already has, so the decode is the same walk.
 - **A kernel only declares its buffers.** It states each buffer's **element type**
   and **length**; it never states where the buffer lives.
 - **The pack decides the space**: `global`, `shared`, or `register`, and — for
