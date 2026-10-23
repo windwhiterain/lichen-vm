@@ -19,7 +19,8 @@ const COUNT: usize = 8;
 /// # Invariant
 /// The two kernels and their claims are `fuse_licence.rs`'s byte for byte except that
 /// `offset` also reads the buffer it was handed at `.d`, so an answer moves with whichever
-/// argument buffers the step names rather than with the chain's shape alone.
+/// argument buffers the step names rather than with the chain's shape alone. Each body declares
+/// its buffer with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
 const HEAD: &str = r#"
 ---
   compute = import "compute.lichen"
@@ -28,18 +29,20 @@ Pair = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
 Side = struct{.p (compute.Buf Float)}
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
+ParE = struct{.n Int, .in In}
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 offset_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)) ~ "element")))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)) ~ "element"))))))
 }
 offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 "#;
@@ -95,14 +98,40 @@ built
 /// The recording, run over two buffers whose elements are `1 … COUNT` and `10 … COUNT + 9`.
 fn running() -> String {
     format!(
-        "{}\ncount = ({count})\nfirst = (compute.buffer ([{one}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nsecond = (compute.buffer ([{ten}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, first, \
-         second))\nout\n",
+        "{}\n{fill}count = ({count})\nfirst = (compute.plrun ones_filler ((Fill)(.n {count})) : \
+         OutE)\nsecond = (compute.plrun tens_filler ((Fill)(.n {count})) : OutE)\nout = \
+         compute.collect (compute.graphrun built (count, first.e, second.e))\nout\n",
         chain(TWO_BUFFERS),
+        fill = filled(),
         count = COUNT,
-        one = values(1, COUNT),
-        ten = values(10, COUNT),
+    )
+}
+
+/// The two fill kernels that build the launch's input data, one per buffer.
+///
+/// # Invariant
+/// One lane per element and each writes the element at its own lane, so each buffer holds the
+/// list the old `compute.buffer` call held: `first.0 … (first + COUNT - 1).0`. Neither declares
+/// an `.in` group at all, because a host builds its data before a device ever sees it.
+fn filled() -> String {
+    format!(
+        r#"
+Fill = struct{{.n Int}}
+ones_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {one})))))
+}}
+tens_raw = (c : Fill) => {{
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {ten})))))
+}}
+ones_filler = compute.parallel ones_raw "cpu" OutE
+tens_filler = compute.parallel tens_raw "cpu" OutE
+"#,
+        one = datum(1),
+        ten = datum(10),
     )
 }
 
@@ -113,12 +142,13 @@ fn chain(declaration: &str) -> String {
     source
 }
 
-/// The `elements` float literals `first.0 … (first + elements - 1).0`.
-fn values(first: usize, elements: usize) -> String {
-    (1..=elements)
-        .map(|position| format!("{}.0", position + first - 1))
-        .collect::<Vec<String>>()
-        .join(", ")
+/// The datum the fill kernel writes at lane `i`: `first.0 + i`.
+///
+/// # Invariant
+/// The list is index-computable, so the body computes it from `i` rather than spelling one arm
+/// per element: there is no array to build a buffer from.
+fn datum(first: usize) -> String {
+    format!("int2float i + {first}.0")
 }
 
 /// The answer `z[i] = 2·a[i] + e[i] + b[i]` has over `a = 1 … COUNT` and `b = 10 … COUNT + 9`.
