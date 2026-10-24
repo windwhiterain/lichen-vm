@@ -1147,9 +1147,9 @@ scale_raw = (k : ScalePar) => {
   value = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   weight = (compute.read ((compute.Read _)(.from k.in.w, .at j)) : Float)
   b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Normed)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((value * weight) / divisor))))))
+  ((Normed)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (((value * weight) / divisor) ~ "element"))))))
 }
-scale = compute.parallel scale_raw "gpu" Normed
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Normed
 MatvecPar = struct{.n Int, .dim Int, .per Int, .in MatvecIn}
 MatvecArg = struct{.n Int, .dim Int, .per Int, .I MatvecIn}
 matvec_raw = (k : MatvecPar) => {

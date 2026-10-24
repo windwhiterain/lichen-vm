@@ -787,28 +787,25 @@ pub fn derive_regions(
 /// Which graph positions form each fusible region, in evaluation order.
 ///
 /// # Invariant
-/// A region is a **weakly-connected component** of the producer/consumer relation, and an unclaimed
-/// node is its boundary: a node joins the component an earlier node of its run belongs to, **fed by
-/// it or feeding it**. Two independent producers are the siblings one consumer joins, and reading
-/// adjacency forward alone is what started a second region for the second one.
+/// A region is a **weakly-connected component** of the **claimed** nodes' producer/consumer
+/// relation: a node joins an earlier claimed node's component, **fed by it or feeding it**, and
+/// two producers one consumer reads are one component. An unclaimed node belongs to no region and
+/// is not a run separator, so a claimed consumer may join a claimed producer across it.
 pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
-    let mut regions: Vec<Vec<usize>> = Vec::new();
     let mut run: Vec<usize> = Vec::new();
     for (position, _) in graph.nodes().iter().enumerate() {
         if registry
             .matched(fragment_at(graph, position))
             .is_unclaimed()
         {
-            // A node no row of the join holds is a boundary, so a component never spans one.
-            regions.extend(components(graph, &starts, std::mem::take(&mut run)));
+            // A node no row of the join holds is in no region, and it separates no run.
             continue;
         }
         run.push(position);
     }
-    regions.extend(components(graph, &starts, run));
-    regions
+    components(graph, &starts, run)
 }
 
 /// The weakly-connected components of one run of claimed nodes, each in evaluation order.
