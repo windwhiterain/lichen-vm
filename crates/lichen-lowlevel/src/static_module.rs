@@ -215,12 +215,26 @@ impl<P: Program> Module<P> {
 
     /// The dynamic node behind `id`: a static ref becomes a fresh leaf in
     /// `block`, so `NodeId` machinery binds it.
+    ///
+    /// # Invariant
+    /// An **open** frozen position is this call's own cell, never the artifact's, so
+    /// the leaf copies the value with those positions materialized
+    /// ([`Self::copy_frozen_value`]). See `docs/notes/kernel-parameter-class.md`.
     pub fn materialize_leaf(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
-        let value = self.static_read(sref);
+        let mut remap = std::collections::HashMap::new();
+        let value = self
+            .static_read(sref)
+            .map(|value| self.copy_frozen_value(value, block, &mut remap));
         self.add_node(block, None, value)
     }
 
-    /// [`AnyNodeId::Dynamic`] as-is, or a static ref materialized into a leaf.
+    /// [`AnyNodeId::Dynamic`] as-is, or a static ref materialized into a leaf whose
+    /// **open** positions are this call's own cells.
+    ///
+    /// # Invariant
+    /// A leaf a **unify** meets may not name a template cell: its open positions
+    /// would be cells nothing can bind, so they are materialized here
+    /// ([`Self::copy_frozen_value`]).
     pub fn as_dynamic(&mut self, id: AnyNodeId, block: BlockId) -> NodeId {
         match id {
             Dyn(node) => node,
