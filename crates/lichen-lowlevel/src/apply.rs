@@ -32,12 +32,7 @@ impl<P: Program> Module<P> {
     /// Every position is unified, the attribute positions included: the parameter's
     /// positions and the argument's are the same expression's slots
     /// (spec §3, "Every attribute is handled like the type").
-    pub(super) fn unify_parameter_slots(
-        &mut self,
-        cloned_param: NodeId,
-        argument: NodeId,
-        block: BlockId,
-    ) {
+    pub(super) fn unify_parameter_slots(&mut self, cloned_param: NodeId, argument: NodeId) {
         // The reporting side owns the failure; this binding only needs the classes.
         let recorded = self.unify_errors.len();
         let lengths = (
@@ -61,9 +56,7 @@ impl<P: Program> Module<P> {
                     else {
                         continue;
                     };
-                    let left = self.as_dynamic(left.node, block);
-                    let right = self.as_dynamic(right.node, block);
-                    self.unify(left, right);
+                    self.unify_ref(left.node, right.node);
                 }
             }
             _ => {
@@ -119,9 +112,7 @@ impl<P: Program> Module<P> {
                     else {
                         continue;
                     };
-                    let left = self.as_dynamic(left.node, block);
-                    let right = self.as_dynamic(right.node, block);
-                    self.unify(left, right);
+                    self.unify_ref(left.node, right.node);
                 }
             }
             _ => {
@@ -196,8 +187,7 @@ impl<P: Program> Module<P> {
                         if item.shallow {
                             continue;
                         }
-                        let item = self.as_dynamic(item.node, block);
-                        self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
+                        self.evaluate_node(item.node, Some(block));
                     }
                 }
                 result

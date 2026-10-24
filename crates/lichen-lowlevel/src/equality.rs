@@ -490,6 +490,48 @@ impl<P: Program> Module<P> {
     }
 
     /// Whether `id` names a self-referential two-element array; a read, no path compression.
+
+    /// [`Self::unify`] over **refs**: a static side is compared by value and written into
+    /// an open cell, never materialized.
+    ///
+    /// # Invariant
+    /// A consumer names the node it holds. Turning a frozen ref into a leaf first would
+    /// hand the frozen payload's open positions refs nothing can write.
+    pub fn unify_ref(&mut self, a: AnyNodeId, b: AnyNodeId) -> AnyNodeId {
+        let mut path = std::mem::take(&mut self.unify_path);
+        let mut steps = std::mem::take(&mut self.unify_steps);
+        let mut any_path = std::mem::take(&mut self.unify_any_path);
+        path.clear();
+        steps.clear();
+        any_path.clear();
+        let a_side = Side::of(a, self.node_value(a));
+        let b_side = Side::of(b, self.node_value(b));
+        self.unify_inner(
+            a_side,
+            b_side,
+            &mut path,
+            0,
+            &mut steps,
+            &mut any_path,
+            (node_or_default(a), node_or_default(b)),
+        );
+        self.unify_path = path;
+        self.unify_steps = steps;
+        self.unify_any_path = any_path;
+        match a {
+            Dyn(node) => Dyn(self.class_root(node)),
+            AnyNodeId::Static(_) => a,
+        }
+    }
+
+    /// [`Self::is_function_type`] for a ref: a frozen function type is read in its own
+    /// module.
+    pub fn is_function_type_ref(&self, id: AnyNodeId) -> bool {
+        match id {
+            Dyn(node) => self.is_function_type(node),
+            AnyNodeId::Static(sref) => self.static_function_type_function(sref).is_some(),
+        }
+    }
     pub fn is_self_referential(&self, id: AnyNodeId) -> bool {
         match id {
             Dyn(node) => {

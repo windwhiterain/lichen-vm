@@ -85,11 +85,10 @@ impl<P: Program> Module<P> {
             if let Some(cell) = cell
                 && let Some(codomain) = self.expr_type_item(applied)
             {
-                // A decided codomain stays the frozen ref the clone walk carried; a
-                // leaf in this block gives the bind its value.
-                let codomain = self.as_dynamic(codomain, block);
-                self.evaluate_node(Dyn(codomain), Some(block));
-                self.unify(cell, codomain);
+                // A decided codomain stays the frozen ref the clone walk carried; the
+                // bind consumes it as a ref.
+                self.evaluate_node(codomain, Some(block));
+                self.unify_ref(Dyn(cell), codomain);
             }
             self.wire_apply_result(node, result, applied, block)
         };
@@ -253,7 +252,7 @@ impl<P: Program> Module<P> {
         self.applied_parameters.insert(node, parameter);
         // The clone is bound to the argument: a return attribute naming one of
         // its fields reads the argument's field record.
-        self.unify_parameter_slots(parameter, argument, block);
+        self.unify_parameter_slots(parameter, argument);
         self.applied_exprs.insert(node, applied);
     }
 

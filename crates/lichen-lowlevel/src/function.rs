@@ -155,11 +155,11 @@ impl<P: Program> Module<P> {
         if let Some(cell) = cell
             && let Some(codomain) = self.expr_type_item(instantiation.applied)
         {
-            let codomain = self.as_dynamic(codomain, block);
-            self.evaluate_node(Dyn(codomain), Some(block));
-            if !self.is_function_type(codomain) {
-                let (_, recorded) = self.try_unify(cell, codomain);
-                self.unify_errors.truncate(recorded.start);
+            self.evaluate_node(codomain, Some(block));
+            if !self.is_function_type_ref(codomain) {
+                let before = self.unify_errors.len();
+                self.unify_ref(Dyn(cell), codomain);
+                self.unify_errors.truncate(before);
             }
         }
         self.wire_apply_result(node, result, instantiation.applied, block)
@@ -213,12 +213,11 @@ impl<P: Program> Module<P> {
         let Some(codomain) = self.expr_type_item(applied) else {
             return false;
         };
-        let codomain = self.as_dynamic(codomain, block);
-        self.evaluate_node(Dyn(codomain), Some(block));
-        // A decided codomain stays the frozen ref the clone walk carried; a leaf in
-        // this block gives the bind its value.
+        self.evaluate_node(codomain, Some(block));
+        // A decided codomain stays the frozen ref the clone walk carried; the bind
+        // consumes it as a ref, so nothing is materialized to hold its value.
         if let Some(cell) = cell {
-            self.unify(cell, codomain);
+            self.unify_ref(Dyn(cell), codomain);
         }
         true
     }
