@@ -1160,7 +1160,7 @@ matvec_raw = (k : MatvecPar) => {
   b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((Rows)(.y (compute.write ((compute.Write _)(.to b_y, .at row, .value (fold (k.dim, 0.0 ~ "identity")))))))
 }
-matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" Rows
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Rows
 RopePar = struct{.n Int, .position Int, .in RopeIn}
 RopeArg = struct{.n Int, .position Int, .I RopeIn}
 rope_raw = (k : RopePar) => {

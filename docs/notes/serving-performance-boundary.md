@@ -90,11 +90,13 @@ fuses a producer and its consumer into one kernel — had never run in this path
   with a claim, and these have none (`merge_probe`);
 - with the scale of the pre-attention composite claimed (`claim:Elementwise(element)` plus the
   `~ "element"` mark), the derivation joins the claimed nodes **across** the unclaimed rotation, and
-  the composite derives **one region** (nodes 0–4 and 6–9). The merge refuses it with
-  `NoElementRole`: the matvec (region-local node 2) reads the scale (node 1) and its claim,
-  `Reduction(combine,identity)`, declares no `element` role, so the code between them is no
-  projection of either. The tiling pass, separately, refuses the Elementwise kernels by name
-  (`UnknownInterface`).
+  the composite derives **one region** (nodes 0–4 and 6–9). The matvec claims the element role
+  too, so the region **derives a schema**; the merge then refuses it with `NotAReductionChain`,
+  because the norm feeds three projections and the floor's own proof holds a reduction chain only.
+  A `fuse` pack naming the region's hash (`sha256:7c4649db…`, `fuse_probe`) licenses the merge, and
+  the composition refuses it with `ShapesDiffer`: the composite's kernels declare a third scalar
+  leaf, and a producer is composable only when its domain is exactly `(extent, index)`. The tiling
+  pass, separately, refuses the Elementwise kernels by name (`UnknownInterface`).
 
 The bridge is the limit behind the rotation: claiming it made the whole graph one region (nodes
 0–10) and the schema derivation then refused at the rotation's element function —
@@ -125,23 +127,27 @@ The pipeline, in the order the code runs it:
 5. **Licence and merge** — a region needs a licence (a `fuse` pack naming its schema, or a
    reduction chain the pass can prove), then the merge's legality checks, then `compose`.
 
-Two places were **coarser than the dataflow**; the first is fixed, the second is open:
+Two places were **coarser than the dataflow**; the first is fixed, the second is fixed too:
 
 - **The run split (fixed).** It used to sever a claimed consumer from a claimed producer across an
   unclaimed node. `region_positions` no longer flushes at an unclaimed node, so the pre-attention
   graph now derives **one region** (nodes 0–4 and 6–9) with the rotation outside it, and
   `merge_probe` shows the other side: an all-unclaimed chain still derives no region.
-- **The shape set (open).** The classifier admits a pair, a chain, a fan-out or a fan-in — shallow
-  shapes, depth at most two — and the composition has one `compose` per shape. A fan-out **of
-  chains** (the norm feeding three projections, each followed by a norm) is none of them: fusion
-  composes chains, stars and fan-ins, **not a fold over a DAG**.
+- **The shape set (fixed).** The classifier admitted a pair, a chain, a fan-out or a fan-in —
+  shallow shapes, depth at most two — and the composition had one `compose` per shape. The merge
+  now **folds over the region's DAG**: a node reading the body before it is a chain step, a node
+  reading several producers is a fan-in over the branch's own bodies, and a node several consumers
+  read is a fan-out over the branches it splits the region into. A fan-out **of chains** (the norm
+  feeding three projections, each followed by a norm) is one of those folds.
 
 The claim itself is not the coarse part: membership through a claim is the right predicate (a body
 no claim describes has no algebra to read), and the merge's fan-out composition exists. What
-remains is the **shape set** (a fold over the DAG replacing the three shallow shapes, the next
-slice) and the licence policy; the rotation's lane-dependent gather is the one limit that is
-genuinely in the language, because the bridge models a read as the value at the element's own
-position.
+remains is the **licence policy** and the **kernels' own domains**: the pre-attention kernels
+declare a third scalar leaf beside the extent and the index, and `spliced_scalars` admits a
+producer only when its domain is exactly `(extent, index)`, so the fold refuses the region with
+`ShapesDiffer` before it composes a body. The rotation's lane-dependent gather is the one limit
+that is genuinely in the language, because the bridge models a read as the value at the element's
+own position.
 
 ## The edges now
 
