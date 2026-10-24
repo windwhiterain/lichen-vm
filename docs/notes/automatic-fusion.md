@@ -57,7 +57,7 @@ the region as the named unit:
   "strategy": "greedy_sibling",
   "budget": {
     "max_region_nodes": 32,
-    "max_region_depth": 4,
+    "max_region_depth": 8,
     "compute_tolerance": 0.30,
     "staging_bytes": 49152,
     "passes": 2
@@ -157,6 +157,9 @@ The merge pass reads the plan's policy before any legality check: a barred regio
 by name (`RegionIsBarrier`), and a region over the budget is left alone by name
 (`RegionOverBudget`, carrying the region's own node count and depth beside the budget's two
 bounds). The strategy is reported once, as `strategy "greedy_sibling"`.
+
+The pre-attention region is **9 nodes and 5 deep** (measured by `fusion_file_probe`), which is
+why the sketch budget above admits it.
 
 **The rule that did not move**: the gate may only *decline*. A region the gate lets through is
 still refused by every legality check that stands under it — the probe shows the pre-attention
