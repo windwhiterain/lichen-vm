@@ -15,12 +15,13 @@ use lichen_graph_ir::{
     Count, Graph, KernelNode, Node, Scalar as GraphScalar, ValueId as GraphValueId,
 };
 use lichen_kernel_ir::{
-    ComposeRefusal, KernelFragment, Producer, ScalarClass, compose, compose_fan_in, compose_fan_out,
+    ComposeRefusal, KernelFragment, Producer, ScalarClass, Sibling, compose, compose_fan_in,
+    compose_fan_out, compose_siblings,
 };
 
 use crate::fusion_claim::{
-    Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, SchemaRefusal, derive_regions,
-    offsets, region_positions,
+    Instance, PortKind, REDUCTION, Region, RegionSchema, RegionShape, SchemaHash, SchemaRefusal,
+    offsets, ordinary_regions, producer_ordinal, sibling_regions,
 };
 use crate::fusion_file::{Budget, FusionPlan, Strategy};
 use crate::graph_pass::{GraphPass, LaunchExtent};
@@ -201,34 +202,43 @@ impl GraphPass for RegionMerge {
             lines.push(format!("strategy \"{}\"", strategy.as_str()));
         }
         let starts = offsets(graph);
-        let positions = region_positions(graph, instances);
+        // **The strategy shapes the regions**: one groups, the other splits.
+        let regions: Vec<Region> = match self.strategy {
+            Some(Strategy::Sibling) => sibling_regions(graph, instances),
+            _ => ordinary_regions(graph, instances),
+        };
         // A node no region holds is named too: "no fusible region" and "no claim" are two answers.
-        for position in skipped(graph, &positions) {
+        for position in skipped(graph, &regions) {
             lines.push(unclaimed(position));
         }
-        let derived = derive_regions(graph, instances);
         let mut decisions: Vec<Decision> = Vec::new();
-        for (index, (region, positions)) in derived.iter().zip(positions.iter()).enumerate() {
-            let (line, merge) = match region {
+        for (index, region) in regions.iter().enumerate() {
+            let (line, merge) = match &region.schema {
                 Err(refusal) => (
-                    refused_line(index, positions, refusal.name(), &refusal.message()),
+                    refused_line(index, &region.positions, refusal.name(), &refusal.message()),
                     None,
                 ),
                 Ok(schema) => {
                     // The licence says the merge may be *attempted*; every condition below
                     // stands whatever answered it.
                     match self
-                        .gate(graph, &starts, positions, &schema)
-                        .and_then(|()| licence(&schema, positions, &self.packs))
+                        .gate(graph, &starts, &region.positions, &schema)
+                        .and_then(|()| licence(&schema, &region.positions, &self.packs))
                         .and_then(|licensed| {
-                            merge_region(graph, &starts, positions).map(|m| (licensed, m))
+                            merge_region(graph, &starts, &region.positions, &region.shape)
+                                .map(|m| (licensed, m))
                         }) {
                         Ok((licensed, merge)) => (
-                            merged_line(index, &merge, &licensed, &schema.hash),
+                            merged_line(index, &merge, &licensed, &schema.hash, &region.shape),
                             Some(merge),
                         ),
                         Err(refusal) => (
-                            refused_line(index, positions, refusal.name(), &refusal.message()),
+                            refused_line(
+                                index,
+                                &region.positions,
+                                refusal.name(),
+                                &refusal.message(),
+                            ),
                             None,
                         ),
                     }
@@ -465,6 +475,41 @@ pub enum MergeRefusal {
         /// How many the node binds.
         got: usize,
     },
+    /// A branch of a sibling region does not read the shared producer's value.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is about the region's own shape: a
+    /// sibling merge reads the producer's value at one port, and a branch that does not read it
+    /// has no claim on that port — so the merge would carry a port no body uses.
+    TheProducerIsNotRead {
+        /// The graph node that should have read the producer's value.
+        node: usize,
+    },
+    /// The merged node would stand before a value it reads.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is about the **placement** of the
+    /// merged node: a sibling region's merged node stands at the region's first position, and a
+    /// value the region reads that a node inside the region's own span produces would then be
+    /// read before it was written.
+    InputIsProducedAfterTheMerge {
+        /// The value the merged node would read.
+        value: GraphValueId,
+        /// The node that produces it.
+        node: usize,
+    },
+    /// The merged node would stand after a value it writes.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is about the **placement** of the
+    /// merged node: a sibling region's merged node stands at the region's first position, and a
+    /// sink a node inside the region's own span reads would then be read before it was written.
+    OutputIsReadBeforeTheMerge {
+        /// The value the merged node would write.
+        value: GraphValueId,
+        /// The node that reads it.
+        node: usize,
+    },
 }
 
 impl MergeRefusal {
@@ -491,6 +536,9 @@ impl MergeRefusal {
             MergeRefusal::RegionOverBudget { .. } => "RegionOverBudget",
             MergeRefusal::RegionIsBarrier { .. } => "RegionIsBarrier",
             MergeRefusal::ScalarArityDiffers { .. } => "ScalarArityDiffers",
+            MergeRefusal::TheProducerIsNotRead { .. } => "TheProducerIsNotRead",
+            MergeRefusal::InputIsProducedAfterTheMerge { .. } => "InputIsProducedAfterTheMerge",
+            MergeRefusal::OutputIsReadBeforeTheMerge { .. } => "OutputIsReadBeforeTheMerge",
         }
     }
 
@@ -600,6 +648,21 @@ impl fmt::Display for MergeRefusal {
                 "graph node {node} binds {got} runtime scalar(s) and its fragment declares \
                  {wanted}, so it has no leaf to give the merged fragment's parameter list"
             ),
+            MergeRefusal::TheProducerIsNotRead { node } => write!(
+                formatter,
+                "graph node {node} does not read the shared producer's value, so the sibling \
+                 merge has no shared port to read"
+            ),
+            MergeRefusal::InputIsProducedAfterTheMerge { value, node } => write!(
+                formatter,
+                "graph value {value} is produced by node {node}, which the merged node would \
+                 stand before, so it would read a value no node had written yet"
+            ),
+            MergeRefusal::OutputIsReadBeforeTheMerge { value, node } => write!(
+                formatter,
+                "graph value {value} is read by node {node}, which the merged node would stand \
+                 after, so it would be read before it was written"
+            ),
         }
     }
 }
@@ -622,13 +685,13 @@ fn write_inert(
 /// The graph positions no region holds, in evaluation order.
 ///
 /// # Invariant
-/// The complement of [`region_positions`], read off that grouping rather than off a second join:
-/// the grouping is what decides a node carries no claim, so a node it skipped is exactly a node
-/// no instance's fragment is, and the two answers cannot disagree.
-fn skipped(graph: &Graph, positions: &[Vec<usize>]) -> Vec<usize> {
+/// The complement of the regions' own nodes, read off those groupings rather than off a second
+/// join: the grouping is what decides a node carries no claim, so a node it skipped is exactly
+/// a node no instance's fragment is, and the two answers cannot disagree.
+fn skipped(graph: &Graph, regions: &[Region]) -> Vec<usize> {
     let mut grouped = vec![false; graph.len()];
-    for region in positions {
-        for &position in region {
+    for region in regions {
+        for &position in &region.positions {
             grouped[position] = true;
         }
     }
@@ -712,12 +775,15 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 /// # Invariant
 /// **A fold over the region's DAG, in evaluation order**, and every condition below is the
 /// region's own: the fold composes the region's bodies, then one absorbed position per edge is
-/// checked, and a merge that slipped past either would be a node reading a buffer the program
-/// never wired to it — the union cannot make one, and `PortsDoNotCorrespond` is where that stops.
+/// checked — `PortsDoNotCorrespond` is where a missing port stops.
+///
+/// **The survivor is where the merged node stands**: an ordinary region's last position, and a
+/// sibling region's first.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
     positions: &[usize],
+    shape: &RegionShape,
 ) -> Result<Merge, MergeRefusal> {
     // Two or more nodes, so a survivor and a first node are both named.
     if positions.len() < 2 {
@@ -725,9 +791,14 @@ fn merge_region(
             nodes: positions.len(),
         });
     }
-    let survivor = *positions
-        .last()
-        .expect("a region is decided over two or more");
+    let survivor = match shape {
+        RegionShape::Ordinary => *positions
+            .last()
+            .expect("a region is decided over two or more"),
+        RegionShape::Sibling { .. } => *positions
+            .first()
+            .expect("a region is decided over two or more"),
+    };
     // **A node binds as many runtime scalars as its fragment declares.**
     for &position in positions {
         let Node::Kernel(node) = &graph.nodes()[position];
@@ -746,7 +817,7 @@ fn merge_region(
             value: absorbed_value(graph, &links[0]),
         });
     };
-    let folded = composed(graph, positions, &links)?;
+    let folded = composed(graph, starts, positions, &links, shape)?;
     // The values the merged fragment fills: the region's sinks, in the fold's own order.
     let (outputs, deleted) = written_and_deleted(graph, starts, positions, &folded.writes);
     if let Some(value) = deleted.iter().find(|value| returns.contains(value)) {
@@ -781,18 +852,41 @@ fn merge_region(
     }
     // The union the region's own edges name, against the ports the merged fragment holds.
     let absorbed: Vec<Vec<usize>> = absorbed_positions(positions, &links);
-    let mut union: Vec<GraphValueId> = first_node.inputs.clone();
-    for (index, position) in positions.iter().enumerate().skip(1) {
-        let Node::Kernel(node) = &graph.nodes()[*position];
-        union.extend(
-            node.inputs
-                .iter()
-                .copied()
-                .enumerate()
-                .filter(|(ordinal, _)| !absorbed[index].contains(ordinal))
-                .map(|(_, value)| value),
-        );
-    }
+    let union: Vec<GraphValueId> = match shape {
+        RegionShape::Ordinary => {
+            let mut union: Vec<GraphValueId> = first_node.inputs.clone();
+            for (index, position) in positions.iter().enumerate().skip(1) {
+                let Node::Kernel(node) = &graph.nodes()[*position];
+                union.extend(
+                    node.inputs
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .filter(|(ordinal, _)| !absorbed[index].contains(ordinal))
+                        .map(|(_, value)| value),
+                );
+            }
+            union
+        }
+        // **The shared value is one port**, however many branches read it.
+        RegionShape::Sibling { producer, .. } => {
+            let shared = produced(graph, starts, *producer).collect::<Vec<_>>();
+            let mut union: Vec<GraphValueId> = Vec::new();
+            for (index, position) in positions.iter().enumerate() {
+                let Node::Kernel(node) = &graph.nodes()[*position];
+                for (ordinal, value) in node.inputs.iter().copied().enumerate() {
+                    if absorbed[index].contains(&ordinal) {
+                        continue;
+                    }
+                    if shared.contains(&value) && union.contains(&value) {
+                        continue;
+                    }
+                    union.push(value);
+                }
+            }
+            union
+        }
+    };
     // The merged node reads the ports the fold holds, in the fold's own order.
     let inputs: Vec<GraphValueId> = folded
         .ports
@@ -829,8 +923,34 @@ fn merge_region(
             merged: None,
         });
     }
+    // **The merged node stands where its inputs are produced and its outputs are read.**
+    if let RegionShape::Sibling { .. } = shape {
+        for &value in &inputs {
+            let Some(producer) = producer_of(graph, starts, value) else {
+                continue;
+            };
+            if producer >= survivor {
+                return Err(MergeRefusal::InputIsProducedAfterTheMerge {
+                    value,
+                    node: producer,
+                });
+            }
+        }
+        for &value in &outputs {
+            if let Some(node) = readers(graph, value)
+                .into_iter()
+                .find(|node| *node < survivor)
+            {
+                return Err(MergeRefusal::OutputIsReadBeforeTheMerge { value, node });
+            }
+        }
+    }
     Ok(Merge {
-        absorbed: positions[..positions.len() - 1].to_vec(),
+        absorbed: positions
+            .iter()
+            .copied()
+            .filter(|position| *position != survivor)
+            .collect(),
         survivor,
         links,
         outputs,
@@ -838,6 +958,19 @@ fn merge_region(
         inputs,
         scalars: folded.scalars,
     })
+}
+
+/// The node that produced `value`, when one of the graph's nodes did.
+fn producer_of(graph: &Graph, starts: &[usize], value: GraphValueId) -> Option<usize> {
+    graph
+        .nodes()
+        .iter()
+        .enumerate()
+        .find_map(|(position, node)| {
+            let Node::Kernel(kernel) = node;
+            (value >= starts[position] && value < starts[position] + kernel.fragment.outputs)
+                .then_some(position)
+        })
 }
 
 /// The graph values the node at `position` produces.
@@ -851,10 +984,105 @@ fn produced(graph: &Graph, starts: &[usize], position: usize) -> std::ops::Range
 /// **One fragment per region, and every body in it is one the region dispatched**: the fold
 /// composes the region's own bodies and nothing else, so a merged node computes what the
 /// region's nodes computed and no more.
-fn composed(graph: &Graph, positions: &[usize], links: &[Link]) -> Result<Folded, MergeRefusal> {
+fn composed(
+    graph: &Graph,
+    starts: &[usize],
+    positions: &[usize],
+    links: &[Link],
+    shape: &RegionShape,
+) -> Result<Folded, MergeRefusal> {
     let nodes = region_nodes(graph, positions, links);
-    let members: Vec<usize> = (0..nodes.len()).collect();
-    fold_branch(&nodes, &members)
+    match shape {
+        RegionShape::Ordinary => {
+            let members: Vec<usize> = (0..nodes.len()).collect();
+            fold_branch(&nodes, &members)
+        }
+        RegionShape::Sibling { producer, branches } => {
+            sibling_fold(graph, starts, positions, &nodes, *producer, branches)
+        }
+    }
+}
+
+/// The fragment the sibling region's branches fold into, or the decision the fold cannot make.
+///
+/// # Invariant
+/// **Each branch is folded on its own, and the branches are merged into one fragment**: a
+/// branch is a chain the producer's value enters at its head, and the merge reads that value
+/// at one port however many branches read it.
+fn sibling_fold(
+    graph: &Graph,
+    starts: &[usize],
+    positions: &[usize],
+    nodes: &[RegionNode<'_>],
+    producer: usize,
+    branches: &[Vec<usize>],
+) -> Result<Folded, MergeRefusal> {
+    let local = |position: usize| positions.iter().position(|&held| held == position);
+    let mut folded: Vec<Folded> = Vec::with_capacity(branches.len());
+    // **The shared port of each branch**: the branch's head and the input the producer's
+    // value reaches there.
+    let mut shared: Vec<(usize, usize)> = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let members: Vec<usize> = branch
+            .iter()
+            .filter_map(|&position| local(position))
+            .collect();
+        let Some(&root) = members.first() else {
+            return Err(MergeRefusal::RegionIsNotAPair {
+                nodes: members.len(),
+            });
+        };
+        let branch_folded = fold_branch(nodes, &members)?;
+        let Some(ordinal) = producer_ordinal(graph, starts, producer, positions[root]) else {
+            return Err(MergeRefusal::TheProducerIsNotRead {
+                node: positions[root],
+            });
+        };
+        let Some(at) = branch_folded
+            .ports
+            .iter()
+            .position(|&(member, held)| member == root && held == ordinal)
+        else {
+            return Err(MergeRefusal::TheProducerIsNotRead {
+                node: positions[root],
+            });
+        };
+        shared.push((root, at));
+        folded.push(branch_folded);
+    }
+    // **The branches merge into one fragment.**
+    let siblings: Vec<Sibling<'_>> = folded
+        .iter()
+        .zip(shared.iter())
+        .map(|(branch, &(_, at))| Sibling {
+            fragment: &branch.fragment,
+            shared: at as u32,
+        })
+        .collect();
+    let fragment = compose_siblings(&siblings)
+        .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
+    // **The merged ports**: the first branch's own, then each branch's but the shared one.
+    let mut ports = folded[0].ports.clone();
+    let mut writes = folded[0].writes.clone();
+    let mut scalars = folded[0].scalars.clone();
+    for (index, branch) in folded.iter().enumerate().skip(1) {
+        let (root, at) = shared[index];
+        ports.extend(
+            branch
+                .ports
+                .iter()
+                .copied()
+                .filter(|&(member, held)| !(member == root && held == at)),
+        );
+        writes.extend(branch.writes.iter().copied());
+        scalars.extend(branch.scalars.iter().copied());
+    }
+    Ok(Folded {
+        fragment,
+        ports,
+        writes,
+        scalars,
+    })
 }
 
 /// The region's nodes, with the edges among them in region-local positions.
@@ -1246,10 +1474,11 @@ fn produced_by(graph: &Graph, starts: &[usize], position: usize, value: GraphVal
 /// The region's edges, one per absorbed input, in (reader, input ordinal) order.
 ///
 /// # Invariant
-/// **One absorbed position per edge**, each naming the producer whose value fills it, and read off
-/// the graph's own table rather than off the shape: a node that reads a producer twice names no
-/// slot to inline, and the region is refused by that name rather than merged against either. The
-/// shape has already been decided, so every edge here is one the composition can serve.
+/// **One absorbed position per edge**, each naming the producer whose value fills it, and read
+/// off the graph's own table rather than off the shape.
+///
+/// **Both ends are graph positions**, as [`Link`] states: the region's own order is not the
+/// graph's, and an edge that named a rank would point at another node.
 fn links(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Vec<Link>, MergeRefusal> {
     let mut links: Vec<Link> = Vec::with_capacity(positions.len().saturating_sub(1));
     for (index, &to) in positions.iter().enumerate().skip(1) {
@@ -1271,10 +1500,11 @@ fn links(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Vec<Lin
         if repeated.is_some() {
             return Err(MergeRefusal::AbsorbedEdgeIsNotOne { inputs: 2 });
         }
-        links.extend(
-            read.into_iter()
-                .map(|(input, from)| Link { from, to, input }),
-        );
+        links.extend(read.into_iter().map(|(input, from)| Link {
+            from: positions[from],
+            to,
+            input,
+        }));
     }
     links.sort_by_key(|link| (link.to, link.input));
     Ok(links)
@@ -1514,10 +1744,26 @@ fn licensed_by(licensed: &Licence<'_>, region: &SchemaHash) -> String {
 /// know whether a pack's `fuse` decided this merge or the engine's own proof did. A region of
 /// more than two nodes names **every** node and **every** absorbed position, each with the node
 /// it is an input of rather than by its rank.
-fn merged_line(index: usize, merge: &Merge, licensed: &Licence<'_>, region: &SchemaHash) -> String {
+fn merged_line(
+    index: usize,
+    merge: &Merge,
+    licensed: &Licence<'_>,
+    region: &SchemaHash,
+    shape: &RegionShape,
+) -> String {
     let licence = licensed_by(licensed, region);
     let unregistered = "the merged fragment is unregistered, so it carries no claim and a later \
                         digest-keyed pass cannot name it";
+    // **A sibling merge absorbs no input position**: its branches stand beside one another.
+    if let RegionShape::Sibling { producer, .. } = shape {
+        let nodes = merge.absorbed.iter().copied().chain([merge.survivor]);
+        return format!(
+            "region {index}: nodes {} merged into one node at {} (the survivor), the branches of \
+             node {producer} reading its value at one port, {licence}; {unregistered}",
+            join(nodes),
+            merge.survivor,
+        );
+    }
     if merge.absorbed.len() == 1 && merge.links.len() == 1 {
         return format!(
             "region {index}: nodes {} and {} merged into one node at {} (the survivor), absorbing \

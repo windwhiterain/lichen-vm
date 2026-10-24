@@ -1,7 +1,7 @@
 //! The region schema derived from a recorded graph.
 //! See docs/notes/graph-fusion.md §4.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Write as _};
 
 use lichen_fusion::{BinaryOp, Expr, FAN_IN_INPUTS, Reduction, Variable, normalize};
@@ -780,8 +780,356 @@ pub fn derive_regions(
     let starts = offsets(graph);
     region_positions(graph, instances)
         .iter()
-        .map(|positions| region_schema(graph, &starts, &registry, positions))
+        .map(|positions| region_schema(graph, &starts, &registry, positions, &[]))
         .collect()
+}
+
+/// The shape of a region the fold reads.
+///
+/// # Invariant
+/// **One shape per region, and the shape says how the fold composes it**: an ordinary region is
+/// one body composed from the region's own nodes, and a sibling region is several branches
+/// composed apart and merged into one body that reads the shared producer's value once.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegionShape {
+    /// The ordinary shape: the region's nodes compose into one body.
+    Ordinary,
+    /// The sibling shape: the shared producer stays outside, and the branches compose apart.
+    Sibling {
+        /// The graph position of the shared producer, which the region does not hold.
+        producer: usize,
+        /// The branches, each a list of graph positions.
+        branches: Vec<Vec<usize>>,
+    },
+}
+
+/// One region the merge pass attempts: its nodes, its shape, and its schema.
+///
+/// # Invariant
+/// **The positions are the region's own nodes in graph order**, and the schema is the one those
+/// nodes derive, so a reader of a region never asks the graph a second time.
+#[derive(Debug, Clone)]
+pub struct Region {
+    /// The region's nodes, in graph order.
+    pub positions: Vec<usize>,
+    /// The shape the fold reads.
+    pub shape: RegionShape,
+    /// The region's schema, or the refusal that names why it has none.
+    pub schema: Result<RegionSchema, SchemaRefusal>,
+}
+
+/// The regions the ordinary rule derives, in evaluation order.
+///
+/// # Invariant
+/// **One region per component of the claimed nodes**, as [`region_positions`] groups them, and
+/// each region's schema is the one its own nodes derive.
+pub fn ordinary_regions(graph: &Graph, instances: &[Instance]) -> Vec<Region> {
+    let registry = Registry::new(instances);
+    let starts = offsets(graph);
+    region_positions(graph, instances)
+        .into_iter()
+        .map(|positions| {
+            let schema = region_schema(graph, &starts, &registry, &positions, &[]);
+            Region {
+                positions,
+                shape: RegionShape::Ordinary,
+                schema,
+            }
+        })
+        .collect()
+}
+
+/// The regions the sibling strategy derives, in evaluation order.
+///
+/// # Invariant
+/// **A shared producer's consumers become one region and the producer stays outside it**: the
+/// region is the union of those consumers' descendant subgraphs, and the producer keeps a
+/// region of its own, so it stays materialized and its value is read once.
+///
+/// **The branches are grouped by the extent they dispatch over**, because one kernel dispatches
+/// over one extent.
+pub fn sibling_regions(graph: &Graph, instances: &[Instance]) -> Vec<Region> {
+    let registry = Registry::new(instances);
+    let starts = offsets(graph);
+    let components = components(graph, &starts, claimed_run(graph, &registry));
+    let mut regions = Vec::new();
+    for component in components {
+        sibling_component(graph, &starts, &registry, component, &mut regions);
+    }
+    regions.sort_by_key(|region| region.positions.first().copied().unwrap_or(usize::MAX));
+    regions
+}
+
+/// The regions one component of the claimed nodes yields under the sibling strategy.
+///
+/// # Invariant
+/// **The shared producer is left outside**, in a region of its own, and the branches are the
+/// regions beside it: the component's remaining nodes keep the ordinary rule, so nothing the
+/// sibling rule does not claim is lost.
+fn sibling_component(
+    graph: &Graph,
+    starts: &[usize],
+    registry: &Registry<'_>,
+    component: Vec<usize>,
+    regions: &mut Vec<Region>,
+) {
+    let Some((producer, branches)) = shared_producer(graph, starts, &component) else {
+        regions.push(ordinary_region(graph, starts, registry, component));
+        return;
+    };
+    // **The producer keeps a region of its own**: it stays materialized.
+    regions.push(ordinary_region(graph, starts, registry, vec![producer]));
+    for group in groups_by_extent(graph, &branches) {
+        if group.len() < 2 {
+            // **One branch is a chain, not a sibling set.**
+            regions.push(ordinary_region(graph, starts, registry, group[0].clone()));
+            continue;
+        }
+        regions.push(sibling_region(graph, starts, registry, producer, group));
+    }
+    // **What the branches did not claim** keeps the ordinary rule.
+    let claimed: Vec<usize> = branches.iter().flatten().copied().collect();
+    let rest: Vec<usize> = component
+        .iter()
+        .copied()
+        .filter(|position| *position != producer && !claimed.contains(position))
+        .collect();
+    for group in components(graph, starts, rest) {
+        regions.push(ordinary_region(graph, starts, registry, group));
+    }
+}
+
+/// One ordinary region: the nodes, and the schema they derive.
+fn ordinary_region(
+    graph: &Graph,
+    starts: &[usize],
+    registry: &Registry<'_>,
+    positions: Vec<usize>,
+) -> Region {
+    let schema = region_schema(graph, starts, registry, &positions, &[]);
+    Region {
+        positions,
+        shape: RegionShape::Ordinary,
+        schema,
+    }
+}
+
+/// One sibling region: the branches, and the schema they derive.
+///
+/// # Invariant
+/// **The roots name the producer's value**: a branch's head reads the producer's output, and the
+/// schema reads that arrival as the producer's own slot — so the region's code between the
+/// producer and each branch says what the branch does with it.
+fn sibling_region(
+    graph: &Graph,
+    starts: &[usize],
+    registry: &Registry<'_>,
+    producer: usize,
+    branches: Vec<Vec<usize>>,
+) -> Region {
+    let mut positions: Vec<usize> = branches.iter().flatten().copied().collect();
+    positions.sort_unstable();
+    let mut roots: Vec<(usize, usize)> = Vec::with_capacity(branches.len());
+    for branch in &branches {
+        let Some(&root) = branch.first() else {
+            continue;
+        };
+        let Some(local) = positions.iter().position(|held| *held == root) else {
+            continue;
+        };
+        let Some(ordinal) = producer_ordinal(graph, starts, producer, root) else {
+            continue;
+        };
+        roots.push((local, ordinal));
+    }
+    let schema = region_schema(graph, starts, registry, &positions, &roots);
+    Region {
+        positions,
+        shape: RegionShape::Sibling { producer, branches },
+        schema,
+    }
+}
+
+/// The shared producer of a component, and the branches its consumers hold.
+///
+/// # Invariant
+/// **The earliest node with several claimed consumers whose descendant sets are pairwise
+/// disjoint**: a branch that met another would not be independent, and the merge would read one
+/// branch's value in another. The branches are those consumers' descendant subgraphs.
+fn shared_producer(
+    graph: &Graph,
+    starts: &[usize],
+    component: &[usize],
+) -> Option<(usize, Vec<Vec<usize>>)> {
+    let consumers = consumers_within(graph, starts, component);
+    for (index, &position) in component.iter().enumerate() {
+        let held = &consumers[index];
+        if held.len() < 2 {
+            continue;
+        }
+        let Some(branches) = branches_of(&consumers, held) else {
+            continue;
+        };
+        let branches: Vec<Vec<usize>> = branches
+            .into_iter()
+            .map(|branch| {
+                let mut branch: Vec<usize> =
+                    branch.into_iter().map(|local| component[local]).collect();
+                branch.sort_unstable();
+                branch
+            })
+            .collect();
+
+        if branches_are_not_independent(graph, starts, &branches) {
+            continue;
+        }
+        return Some((position, branches));
+    }
+    None
+}
+
+/// The branches a producer's consumers hold, and whether they are independent.
+///
+/// # Invariant
+/// **A branch is a consumer and everything it reaches**, and no node is in two branches: a
+/// branch that met another would not be independent, and the merge would read one branch's
+/// value in another.
+fn branches_of(consumers: &[Vec<usize>], held: &[usize]) -> Option<Vec<Vec<usize>>> {
+    let mut claimed: HashSet<usize> = HashSet::new();
+    let mut branches: Vec<Vec<usize>> = Vec::with_capacity(held.len());
+    for &consumer in held {
+        let mut branch = Vec::new();
+        let mut visited: HashSet<usize> = HashSet::new();
+        reach_branch(consumer, consumers, &mut visited, &mut branch);
+        // **No node is in two branches.**
+        if branch.iter().any(|local| claimed.contains(local)) {
+            return None;
+        }
+        claimed.extend(branch.iter().copied());
+        branches.push(branch);
+    }
+    Some(branches)
+}
+
+/// The nodes a consumer reaches.
+fn reach_branch(
+    local: usize,
+    consumers: &[Vec<usize>],
+    visited: &mut HashSet<usize>,
+    branch: &mut Vec<usize>,
+) {
+    if !visited.insert(local) {
+        return;
+    }
+    branch.push(local);
+    for &consumer in &consumers[local] {
+        reach_branch(consumer, consumers, visited, branch);
+    }
+}
+
+/// The claimed consumers of each node of a component, in region-local positions.
+///
+/// # Invariant
+/// **A consumer is a node that reads what the node produced**, and the relation is read over the
+/// component's own nodes: a node outside the component is not a consumer of one inside it.
+fn consumers_within(graph: &Graph, starts: &[usize], component: &[usize]) -> Vec<Vec<usize>> {
+    let mut producer_of: HashMap<GraphValueId, usize> = HashMap::with_capacity(component.len());
+    for (index, &position) in component.iter().enumerate() {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        for value in starts[position]..starts[position] + node.fragment.outputs {
+            producer_of.insert(value, index);
+        }
+    }
+    let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); component.len()];
+    for (index, &position) in component.iter().enumerate() {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        let read: Vec<GraphValueId> = node
+            .inputs
+            .iter()
+            .copied()
+            .chain(extent_of(graph, position))
+            .collect();
+        for value in read {
+            if let Some(&producer) = producer_of.get(&value)
+                && producer < index
+            {
+                consumers[producer].push(index);
+            }
+        }
+    }
+    consumers
+}
+
+/// Whether one branch reads a value another branch produced.
+///
+/// # Invariant
+/// **A sibling merge composes the branches apart**, so a branch that read another would read a
+/// value the merged body does not hold — the shape is not a sibling set at all.
+fn branches_are_not_independent(graph: &Graph, starts: &[usize], branches: &[Vec<usize>]) -> bool {
+    for (index, branch) in branches.iter().enumerate() {
+        for &position in branch {
+            let Node::Kernel(node) = &graph.nodes()[position];
+            for value in node.inputs.iter().copied() {
+                let Some(producer) = producer_position(graph, starts, value) else {
+                    continue;
+                };
+                if branches
+                    .iter()
+                    .enumerate()
+                    .any(|(other, other_branch)| other != index && other_branch.contains(&producer))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The node that produced `value`, when one of the graph's nodes did.
+fn producer_position(graph: &Graph, starts: &[usize], value: GraphValueId) -> Option<usize> {
+    graph
+        .nodes()
+        .iter()
+        .enumerate()
+        .find_map(|(position, node)| {
+            let Node::Kernel(kernel) = node;
+            (value >= starts[position] && value < starts[position] + kernel.fragment.outputs)
+                .then_some(position)
+        })
+}
+
+/// The input ordinal the producer's value reaches at `consumer`.
+pub(crate) fn producer_ordinal(
+    graph: &Graph,
+    starts: &[usize],
+    producer: usize,
+    consumer: usize,
+) -> Option<usize> {
+    let Node::Kernel(node) = &graph.nodes()[consumer];
+    let Node::Kernel(source) = &graph.nodes()[producer];
+    let first = starts[producer];
+    let last = first + source.fragment.outputs;
+    node.inputs
+        .iter()
+        .position(|value| *value >= first && *value < last)
+}
+
+/// The branches grouped by the extent they dispatch over, in the branches' own order.
+fn groups_by_extent(graph: &Graph, branches: &[Vec<usize>]) -> Vec<Vec<Vec<usize>>> {
+    let mut groups: Vec<(Count, Vec<Vec<usize>>)> = Vec::new();
+    for branch in branches {
+        let Some(&head) = branch.first() else {
+            continue;
+        };
+        let Node::Kernel(node) = &graph.nodes()[head];
+        let count = node.count;
+        match groups.iter_mut().find(|(held, _)| *held == count) {
+            Some((_, group)) => group.push(branch.clone()),
+            None => groups.push((count, vec![branch.clone()])),
+        }
+    }
+    groups.into_iter().map(|(_, group)| group).collect()
 }
 
 /// Which graph positions form each fusible region, in evaluation order.
@@ -794,18 +1142,27 @@ pub fn derive_regions(
 pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
+    components(graph, &starts, claimed_run(graph, &registry))
+}
+
+/// The claimed nodes of the graph, in evaluation order.
+///
+/// # Invariant
+/// **A node no row of the join holds is in no region and separates no run**: the run is the
+/// claimed nodes alone, so a claimed consumer may join a claimed producer across an unclaimed
+/// node.
+fn claimed_run(graph: &Graph, registry: &Registry<'_>) -> Vec<usize> {
     let mut run: Vec<usize> = Vec::new();
     for (position, _) in graph.nodes().iter().enumerate() {
         if registry
             .matched(fragment_at(graph, position))
             .is_unclaimed()
         {
-            // A node no row of the join holds is in no region, and it separates no run.
             continue;
         }
         run.push(position);
     }
-    components(graph, &starts, run)
+    run
 }
 
 /// The weakly-connected components of one run of claimed nodes, each in evaluation order.
@@ -883,6 +1240,7 @@ fn region_schema(
     starts: &[usize],
     registry: &Registry<'_>,
     positions: &[usize],
+    roots: &[(usize, usize)],
 ) -> Result<RegionSchema, SchemaRefusal> {
     let mut matched: Vec<&Instance> = Vec::with_capacity(positions.len());
     for &position in positions {
@@ -903,7 +1261,13 @@ fn region_schema(
     let edges = region_edges(graph, starts, positions)?;
     // Each node's roles are decided once, from the edges that arrive at it.
     let roles: Vec<ReadRoles> = (0..positions.len())
-        .map(|consumer| roles_of(&edges, consumer))
+        .map(|consumer| {
+            let root = roots
+                .iter()
+                .find(|(local, _)| *local == consumer)
+                .map(|(_, ordinal)| *ordinal);
+            roles_of(&edges, consumer, root)
+        })
         .collect();
     let mut nodes = Vec::with_capacity(positions.len());
     for (local, instance) in matched.iter().enumerate() {
@@ -992,20 +1356,23 @@ struct Edge {
 /// The roles one node's projection is read under: every input a region's producer fills.
 ///
 /// # Invariant
-/// **In input-ordinal order**, so the slot a producer is read as is decided by the body's
-/// own parameter order and not by the order the edges were met in: two readers of one
-/// consumer cannot disagree about which producer a second slot names.
+/// **In input-ordinal order**, so the slot a producer is read as is decided by the body's own
+/// parameter order and not by the order the edges were met in.
 ///
-/// The first region reads every input as a datum; a consumer wider than
-/// [`FAN_IN_INPUTS`] is refused by [`region_edges`] first.
-fn roles_of(edges: &[Edge], consumer: usize) -> ReadRoles {
+/// **A root reads the producer's value at the slot the caller named**: the producer is outside
+/// the region, so its arrival is not one of the region's own edges.
+fn roles_of(edges: &[Edge], consumer: usize, root: Option<usize>) -> ReadRoles {
     let mut inputs: Vec<usize> = edges
         .iter()
         .filter(|edge| edge.consumer == consumer)
         .map(|edge| edge.input)
         .collect();
     inputs.sort_unstable();
-    ReadRoles::consumers(&inputs).expect("region_edges admits no consumer wider than the table")
+    match root {
+        Some(ordinal) => ReadRoles::consumer(ordinal),
+        None => ReadRoles::consumers(&inputs)
+            .expect("region_edges admits no consumer wider than the table"),
+    }
 }
 
 /// The producer-to-consumer edges among a region's nodes.

@@ -126,7 +126,7 @@ declines a region, and it never accepts one.
 
 | field | what it says | what spends it |
 |---|---|---|
-| `strategy` | the family the pass runs under | `greedy_sibling` is the only one; another is refused by name |
+| `strategy` | the family the pass runs under | `greedy_sibling` folds the chains; `sibling` also derives the sibling regions |
 | `budget.max_region_nodes` | the most nodes a region may hold and still be attempted | the gate |
 | `budget.max_region_depth` | the deepest a region's own DAG may be | the gate |
 | `budget.compute_tolerance` | the recomputation the plan tolerates | carried |
@@ -186,6 +186,58 @@ check and refuses at `ForwardedValueIsLaneDependent`: the composite's `squares` 
 a value a loop carried forward, and the norm reads it at another lane, so the cone cannot be
 rebuilt at the read's address. That limit is the reduction's own, not the domains'.
 
+### The sibling merge (H4)
+
+The `sibling` strategy derives a second shape of region: the **sibling region**. Where the
+ordinary rule groups the claimed nodes into components, the sibling rule looks inside a component
+for a **shared producer** — a claimed node with several claimed consumers whose descendant sets
+are pairwise disjoint — and makes the union of those consumers' descendant subgraphs one region.
+The producer keeps a region of its own, so it stays **materialized** and its value is read once
+by the merged kernel instead of being copied into every consumer.
+
+The branches are **grouped by the extent they dispatch over**, because one kernel dispatches over
+one extent: the pre-attention composite's three branches are two over 1024 lanes and one over
+2048, so the sibling regions are the two that can share a kernel and the one that cannot.
+
+The fold is two steps: **each branch composes on its own** (the chain fold, H2), and the branch
+fragments **merge into one fragment** (H4). The second step needed a new primitive:
+`compose_siblings` in `lichen-kernel-ir`. Neither existing primitive can say it —
+`compose_fan_out` copies the producer's cone into every consumer (the duplication the survey
+warns about) and `compose_fan_in` chains the bodies, so each reads the one before it. The sibling
+merge wants **independent bodies that share one input**: no branch reads another branch's output,
+and the value they share is one port of the merged fragment however many of them read it.
+
+The primitive is small and sound under the existing invariants: the branches run in the list's
+order, the merged inputs are the branches' own ports less the shared one, the merged outputs are
+the branches' sinks, the merged parameter list is the union of the branches' scalar leaves, and
+each body binds its own leaves. The refusals are named: `NoBranchToInline`,
+`OneBranchIsNotASiblingSet`, and the shared input's own (`AbsorbedIsOutOfRange`,
+`AbsorbedIsNotRead`).
+
+**The merge of a sibling region stands at the region's first position**, not at its last: a
+sibling region's sinks are read by nodes that may sit inside the region's own span (the pre-
+attention's rope reads the key branch's sink), so the merged node stands before them. Two
+refusals guard that placement — `InputIsProducedAfterTheMerge` and `OutputIsReadBeforeTheMerge`.
+
+**The licence still applies**: a sibling region is a fan-out of the shared producer, so the
+floor's own proof does not hold it and a pack whose `fuse` names the region's schema is what
+licenses it.
+
+**What the pre-attention composite shows.** The sibling strategy derives four regions: the sum of
+squares alone, the norm alone (the shared producer), the **sibling region** (the key projection
+chain and the value projection — the two branches over 1024 lanes), and the query chain alone
+(over 2048 lanes). The sibling region's schema is
+`sha256:d9a255a265038a7d160ef9c7477b58927ecdea8856e727725021a1a057ba1f3a`, and a pack naming it
+licenses the merge — but the merge then refuses at `ForwardedValueIsLaneDependent`: **the branch
+chain is the limit now, not the shared producer**. The key branch is a matvec feeding a squares
+feeding a norm, and the matvec's accumulator is state a loop carried forward, so the chain cannot
+be rebuilt at the norm's address.
+
+**That is the honest shape of the claim in this note.** H2 + H4 move the *shared producer* out of
+the merge — that is what the sibling strategy buys, and it is measured — but they do not lift the
+reduction's own limit *inside* a branch. A sibling region whose branches are single kernels (no
+chain to fold) merges; one whose branches are reduction-headed chains does not.
+
 ### What is not true yet
 
 - **The file is read, not emitted.** The pass does not write a plan back.
@@ -193,8 +245,8 @@ rebuilt at the read's address. That limit is the reduction's own, not the domain
   tiling pass, and the plan's pass count is carried, not spent.
 - **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
   staging is checked against the budget.
-- **The strategy steers nothing yet.** It is reported once and it names the family; the
-  regions are still attempted in the graph's own order, and no sibling merge is attempted.
+- **The strategy steers the regions' shape and nothing else.** `sibling` derives the sibling
+  regions beside the ordinary ones; the regions are still attempted in the graph's own order.
 - **The file's `refuse` booleans are carried.** The engine's own refusals — `NotAReductionChain`
   for a shared producer, `InterfacesAreNotProved` for an unproved interface — stand whatever the
   file says.

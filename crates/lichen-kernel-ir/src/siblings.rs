@@ -8,13 +8,13 @@
 
 use crate::compose::{
     Renumber, ScalarUnion, branch_targeting, buffer_reads, compact, duplicated_mark,
-    first_slice_ordinal, landed_slot, mapped_terminator, position_constant, shifted_past,
-    shifted_write_positions, shapes_differ, splice_runtime_scalars,
+    first_slice_ordinal, landed_slot, mapped_terminator, position_constant, shapes_differ,
+    shifted_past, shifted_write_positions, splice_runtime_scalars,
 };
 use crate::fan_in::returns_of;
 use crate::{
     Barrier, BasicBlock, ComposeRefusal, KernelFragment, KernelMark, KernelRoles, KernelShape,
-    Terminator, ValueDef, ValueId,
+    ValueDef, ValueId,
 };
 
 /// One branch of a sibling merge: the fragment, and the input the shared value reaches.
@@ -34,14 +34,11 @@ pub struct Sibling<'a> {
 /// The fragment the branches become, or the decision the merge cannot make.
 ///
 /// # Invariant
-/// **The bodies run in the list's order and the merged inputs are their union less the shared
-/// one**: the shared value is one port, read by every branch, and every other port is one
-/// branch's own.
+/// **The merged inputs are the branches' own ports less the shared one**: the shared value is
+/// one port, read by every branch, and every other port is one branch's own.
 ///
-/// **The merged parameter list is the union of the branches' scalar leaves**, each its own.
-///
-/// The merged outputs are **the branches' own, in order**: a branch's sink is a buffer the
-/// merged body writes, so a sibling merge keeps every branch's result and drops none.
+/// **The merged parameter list is the union of the branches' scalar leaves**, each its own, and
+/// the merged outputs are **the branches' sinks, in order**.
 pub fn compose_siblings(branches: &[Sibling<'_>]) -> Result<KernelFragment, ComposeRefusal> {
     let [head, ..] = branches else {
         return Err(ComposeRefusal::NoBranchToInline);
@@ -83,8 +80,8 @@ pub fn compose_siblings(branches: &[Sibling<'_>]) -> Result<KernelFragment, Comp
     };
     // **Every condition before a body is touched**, with every fragment still alone.
     let mut edges = Vec::with_capacity(branches.len());
-    for (index, branch) in branches.iter().enumerate() {
-        edges.push(Edge::of(branch, index, first, ports)?);
+    for branch in branches.iter() {
+        edges.push(Edge::of(branch, first, ports)?);
     }
     // **Every branch binds its own domain**, or it has no leaf to bind.
     for (index, edge) in edges.iter().enumerate() {
@@ -158,8 +155,8 @@ pub fn compose_siblings(branches: &[Sibling<'_>]) -> Result<KernelFragment, Comp
         let landed: Vec<Option<ValueId>> = (0..branch.body.values.len())
             .map(|value| renumber.reserve(ValueId(value as u32), &mut body))
             .collect();
-        // **Every surviving read takes the union's position for it**, and the shared one takes
-        // the shared port — one port, read by every branch.
+        // **Every surviving read takes the union's position for it**; the shared one takes the
+        // shared port.
         let mut shifted = shifted_past(&mut body, &edge.reads, unions[index], &[edge.shared]);
         let shared = position_constant(&mut body, i64::try_from(shared_port).unwrap_or(i64::MAX));
         for read in &edge.reads_shared {
@@ -271,7 +268,7 @@ pub fn compose_siblings(branches: &[Sibling<'_>]) -> Result<KernelFragment, Comp
         outputs,
         input_classes,
         output_classes,
-        result_classes: first.result_classes.clone(),
+        result_classes: edges[edges.len() - 1].fragment.result_classes.clone(),
         target: first.target,
         slices,
         marks,
@@ -306,7 +303,6 @@ impl<'a> Edge<'a> {
     /// Everything one branch must answer before the merged body is built.
     fn of(
         branch: &'a Sibling<'a>,
-        index: usize,
         first: &KernelFragment,
         ports: usize,
     ) -> Result<Edge<'a>, ComposeRefusal> {
@@ -334,16 +330,7 @@ impl<'a> Edge<'a> {
             return Err(ComposeRefusal::ConsumerEntryIsABranchTarget { block });
         }
         // **The block the next branch lands on**, so a branch must return from exactly one.
-        let returns = returns_of(fragment)?;
-        // **The merged body keeps one return**: a branch that returned values would lose them.
-        if let Terminator::Return { values } = &fragment.body.blocks[returns].terminator
-            && !values.is_empty()
-        {
-            return Err(ComposeRefusal::BranchReturnsValues {
-                branch: index,
-                values: values.len(),
-            });
-        }
+        returns_of(fragment)?;
         let shared = branch.shared as usize;
         if shared >= fragment.inputs {
             return Err(ComposeRefusal::AbsorbedIsOutOfRange {

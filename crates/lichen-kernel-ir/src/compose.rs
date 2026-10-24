@@ -646,17 +646,6 @@ pub enum ComposeRefusal {
         /// How many branches the list holds.
         branches: usize,
     },
-    /// A branch of a sibling set returns values, and the merged body keeps one return.
-    ///
-    /// # Invariant
-    /// The merged body holds the branches' bodies in one control flow, and only the last
-    /// branch's return survives it, so a branch that returned values would lose them.
-    BranchReturnsValues {
-        /// Which branch, in the order the composition named them.
-        branch: usize,
-        /// How many values it returns.
-        values: usize,
-    },
     /// A fan-in of one body is not a fan-in: nothing absorbs from the only body.
     ///
     /// # Invariant
@@ -854,7 +843,6 @@ impl ComposeRefusal {
             ComposeRefusal::NoProducerToInline => "NoProducerToInline",
             ComposeRefusal::NoBranchToInline => "NoBranchToInline",
             ComposeRefusal::OneBranchIsNotASiblingSet { .. } => "OneBranchIsNotASiblingSet",
-            ComposeRefusal::BranchReturnsValues { .. } => "BranchReturnsValues",
             ComposeRefusal::OneBodyIsNotAFanIn { .. } => "OneBodyIsNotAFanIn",
             ComposeRefusal::AbsorbedIsNotAnEarlierBody { .. } => "AbsorbedIsNotAnEarlierBody",
             ComposeRefusal::OneInputIsFilledTwice { .. } => "OneInputIsFilledTwice",
@@ -907,11 +895,6 @@ impl std::fmt::Display for ComposeRefusal {
                 formatter,
                 "the sibling set names {branches} branch(es), and a sibling set is two or more \
                  independent bodies that read one shared input"
-            ),
-            ComposeRefusal::BranchReturnsValues { branch, values } => write!(
-                formatter,
-                "branch {branch} returns {values} value(s), and the merged body keeps one return, \
-                 so the values it returned would be lost"
             ),
             ComposeRefusal::OneBodyIsNotAFanIn { bodies } => write!(
                 formatter,
@@ -1407,7 +1390,10 @@ pub(crate) fn shifted_write_positions(
         if at == value as usize {
             continue;
         }
-        shifted.insert(write, position_constant(merged, i64::try_from(at).unwrap_or(i64::MAX)));
+        shifted.insert(
+            write,
+            position_constant(merged, i64::try_from(at).unwrap_or(i64::MAX)),
+        );
     }
     shifted
 }

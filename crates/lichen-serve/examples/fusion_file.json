@@ -1,5 +1,5 @@
 {
-  "strategy": "greedy_sibling",
+  "strategy": "sibling",
   "budget": {
     "max_region_nodes": 32,
     "max_region_depth": 8,
@@ -16,7 +16,7 @@
   ],
   "overrides": [
     {
-      "region": "sha256:7c4649dbe5642915bc1cc6c2a52f225dc255e6f461fcce85248429d7aaafbfc3",
+      "region": "sha256:d9a255a265038a7d160ef9c7477b58927ecdea8856e727725021a1a057ba1f3a",
       "action": "force_merge",
       "reason": "the pre-attention region, the one the runner already names in a pack"
     }

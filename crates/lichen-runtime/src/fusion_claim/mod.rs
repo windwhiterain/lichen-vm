@@ -13,11 +13,12 @@ use crate::kernel_registry::{kernel_claim, kernel_fragment};
 
 mod schema;
 
-pub(crate) use schema::offsets;
 pub use schema::{
-    Between, DeclaredFold, ELEMENTWISE, Instance, Port, PortKind, REDUCTION, RegionSchema,
-    RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, derive_regions, region_positions,
+    Between, DeclaredFold, ELEMENTWISE, Instance, Port, PortKind, REDUCTION, Region, RegionSchema,
+    RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, derive_regions,
+    ordinary_regions, region_positions, sibling_regions,
 };
+pub(crate) use schema::{offsets, producer_ordinal};
 
 /// The interface a registered kernel claims, or `None` when it claims none.
 ///

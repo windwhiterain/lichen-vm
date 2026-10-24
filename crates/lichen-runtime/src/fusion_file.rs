@@ -37,13 +37,16 @@ pub struct FusionFile {
 /// The strategy the merge pass runs under.
 ///
 /// # Invariant
-/// One variant, and it is the family the survey chose: a consumer-side greedy pass (H2) and a
-/// sibling merge (H4), the shape that improves a fan-out without duplicating the producer
+/// One variant per family the survey names: a consumer-side greedy pass (H2) folds a chain, and
+/// a sibling merge (H4) keeps a shared producer materialized and fuses its consumers into one
+/// kernel that reads the producer's output once
 /// (`docs/notes/automatic-fusion.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
-    /// The greedy sibling pass.
+    /// The greedy sibling pass: the chain fold alone.
     GreedySibling,
+    /// The sibling merge pass: the chain fold and the sibling merge beside it.
+    Sibling,
 }
 
 impl Strategy {
@@ -51,6 +54,7 @@ impl Strategy {
     pub fn as_str(&self) -> &'static str {
         match self {
             Strategy::GreedySibling => "greedy_sibling",
+            Strategy::Sibling => "sibling",
         }
     }
 
@@ -58,6 +62,7 @@ impl Strategy {
     pub fn parse(text: &str) -> Option<Strategy> {
         match text {
             "greedy_sibling" => Some(Strategy::GreedySibling),
+            "sibling" => Some(Strategy::Sibling),
             _ => None,
         }
     }
@@ -235,7 +240,7 @@ impl fmt::Display for FusionFileRefusal {
             FusionFileRefusal::UnknownStrategy { found } => write!(
                 formatter,
                 "the file names the strategy `{found}`, which is not one the pass runs under: the \
-                 only one is `greedy_sibling` (`docs/notes/automatic-fusion.md`)"
+                 ones are `greedy_sibling` and `sibling` (`docs/notes/automatic-fusion.md`)"
             ),
             FusionFileRefusal::BadRegionHash { found } => write!(
                 formatter,
