@@ -407,7 +407,7 @@ the end of §8.
 | U7 | a fold's trip count read from a buffer | **yes** | `zz_dynamic_trip_probe`: one compiled kernel answers `7.0` at `lim = 3` and `31.0` at `lim = 5` |
 | U8 | a fold recorded into a graph, its bound an earlier node's output | **yes** | `zz_graph_bound_probe`: `7.0`; moving one numeral in the producer (`+1` → `+10`) moves the consumer to `63.0` |
 | U8b | an out-of-buffer read inside a fold | **answers `0`** | that `63.0` folds twelve terms over six elements: `1+2+4+8+16+32` |
-| U8c | a one-node graph's own return | **refused** | `two answers met on one node: GraphValue(1) against GraphValue(0)` |
+| U8c | a one-node graph's own return | **yes, since the numbering fix** | the record refusal and the run refusal were two defects; `prepare_steps` records every one-node step and `token_cost` answers `[9707, 25, 358, 2776, 4460]` through them |
 | U1 | a write at an offset into the output | **the offset applies; the slot is `count` long** | `zz_subrange_write_probe`: `off 2` answers `[0,0,1,2]`, `off 4` answers `[0,0,0,0]`, and a collect declared `array{Int,8}` still renders four |
 | U1b | a runtime scalar inside a recorded graph | **yes — the open item is stale** | `zz_graph_scalar_probe`: `off 0 → [1,2,3,4]`, `off 2 → [0,0,1,2]`; and `Scalar::Value(ValueId)`, pinned by `graph_runtime_scalar.rs` |
 | U3 | argmax as three single-class folds | **yes, all-`Float`** | `zz_argmax_probe`: max `9.0`, then `[…, 5.0, …]`, then token `5.0`; the mixed spelling is refused below |
@@ -703,11 +703,14 @@ Three verdicts were given and are recorded here rather than left in a transcript
      first rule and the node-count one below, and the exact cell-matching condition is still to
      be pinned down. It is recorded here as a warning rather than as a rule, because a reader who
      took it as one would exclude the shape that already works.
-   A **one-node** step fails separately, with *"two answers met on one node"*, so a step needs
-   at least two nodes. With the first rule obeyed `zz_graph_step_shape_probe.rs` prints
-   `[4.0, 8.0, 12.0]` for a two-node step. **The defect to file is the conflation itself**: a
-   kernel's parameter cell is not a graph input slot, and the recording treats one as the
-   other; the fix belongs there and not in the backend.
+   A **one-node** step also failed, first at record with *"two answers met on one node"* and then
+   at run with *"node 0 was given value 2 as a buffer"*. Both were the conflation itself: a
+   kernel's parameter cell is not a graph input slot. The run half is fixed in
+   [`finish`](../../crates/lichen-compute/src/compute/graph.rs): an input's value number is its
+   slot, because the caller passes its arguments positionally, so a rank among the read slots
+   shifted every buffer down past a leading cell the parameter leaves unread (`PREFILL_STEP` and
+   the norms carry one). With the first rule obeyed `zz_graph_step_shape_probe.rs` prints
+   `[4.0, 8.0, 12.0]` for a two-node step, and the shipped one-node steps record and run.
 7. **`compute.graphrun` reaches `Async` and never `Batch`, and `Async` saves nothing.**
    `compute.rs`'s `GRAPH_POLICY` defaults to `Policy::Async`, and its own comment says *"`Batch`
    needs a host that asks for it"* — `set_graph_policy` is that ask. Measured on the same three

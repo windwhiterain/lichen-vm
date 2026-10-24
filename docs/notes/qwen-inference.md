@@ -828,22 +828,27 @@ last consumer. Measured with `token_cost` (two tokens, same start):
 **The readback was not the clock.** The probe now times the projections too — they were the one
 stage without `add_stage`, which is where the old "35% around the stages" came from. With every
 stage timed, four tokens read **stages 2.365 s of 2.445 s (97%), around 0.080 s (3%)**. The warm
-token is spent *inside* the steps, and a step is its dispatches plus its fence: 840 dispatches at
-~0.4 ms is ~336 ms, 420 steps at ~0.5 ms of fence is ~210 ms, and the sum is the 0.55 s. Removing
-196 of the 648 submissions per token moved neither term, and the numbers say why.
+token is spent *inside* the steps, and a step is its dispatches plus its fence. S1b below prices a
+node inside a step at **~0.05 ms** and a step at **~1.2 ms**, so 840 nodes are ~42 ms and 420 steps
+are the other ~0.5 s: the step's recording and fence, not the node. Removing 196 of the 648
+submissions per token moved neither term, and the numbers say why.
 
-So the lever this measurement names is the **node count**, not the readbacks. The first candidate is
-the copy node every projection, rotation and product carries — ten a layer, 280 a token. A one-node
-step **records** at this tip (the old "two answers met on one node" refusal is gone at `eeee34d4`), but a **run refuses** it:
+So the lever this measurement names is the **node count**, not the readbacks. The first candidate
+was the copy node every projection, rotation and product carried — ten a layer, 280 a token. A
+one-node step **records** at this tip, and after a fix it **runs** too: `finish()` numbered an
+input densely over the read slots, so a parameter that leaves a leading cell unread (`PREFILL_STEP`
+and the norms carry one) shifted every buffer down one and handed a count to `in.x`. An input's
+value number is now its slot, because the caller passes its arguments positionally, and the copies
+are gone.
 
-    this graph could not be run: node 0 was given value 2 as a buffer, and that value is a number
+| | before S1b | after S1b |
+|---|---|---|
+| nodes a layer | 30 | **20** |
+| nodes a token | 840 | **560** |
+| tokens | `[9707, 25, 358, 2776, 4460]` | same |
+| warm token | 0.55–0.56 s | **0.532–0.550 s** |
 
-That is the argument-table conflation [inference-service](inference-service.md) §8 item 6 files: a
-kernel's parameter cell is not a graph input slot, and the recording hands one to the graph as the
-other. The refusal is `GraphRefusal::NotBufferData`, raised from `compute.rs`'s input collection
-when a dispatch's buffer input is placed through `graph::place` as the step parameter's slot: a
-one-node graph's value table then holds a count where the node's input expects a buffer. The fix
-belongs to that placement, not to the model, and it is a compute-side slice of its own. The copy dispatch is the workaround, so the 280 nodes are gated on that defect and not on the
-kernel surface. **The next slice is fewer nodes** — the copy's 280 first if the argument table is
-fixed, the tiled projection after it — and composing a layer's fifteen steps into one recorded graph
-is the other half of the same ledger, because that removes fences rather than nodes.
+That is **~3%** for 280 nodes, and it prices the two terms: a node inside a step is ~0.05 ms while a
+step is ~1.2 ms, because a step pays a recording and a fence. So the node count is the smaller term
+and **the step count is the lever that is left** — the fifteen stage calls a layer, and the
+per-sequence rotation and attention calls, are what a composed graph would remove.

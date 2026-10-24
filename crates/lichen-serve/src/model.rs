@@ -455,8 +455,7 @@ fill = compute.parallel (fill_raw ~ "claim:Reduction(element)") "gpu" KVOut
 StepIn = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .nk (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .nv (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .pos (compute.Buf ((compute.BufParam _)(.type Int, .length _)))}
 GArg = struct{.n Int, .count Int, .in StepIn}
 step = (s : GArg) => {
-  a = (compute.plrun fill ((FillArg)(.n s.n, .cap 4, .dim 5, .count s.count, .I In(.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos))) : KVOut)
-  compute.plrun fill ((FillArg)(.n s.n, .cap 4, .dim 5, .count 0, .I In(.k a.k, .v a.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos)))
+  (compute.plrun fill ((FillArg)(.n s.n, .cap 4, .dim 5, .count s.count, .I In(.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos))) : KVOut)
 }
 built = compute.graph step
 built
@@ -544,8 +543,7 @@ copy_raw = (k : CopPar) => {
 copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .dim Int, .per Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .per s.per, .I In(.x s.in.x, .w s.in.w))) : Rows)
-  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+  (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .per s.per, .I In(.x s.in.x, .w s.in.w))) : Rows)
 }
 built = compute.graph step
 built
@@ -582,8 +580,7 @@ copy_raw = (k : CopPar) => {
 copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .dim Int, .per Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .per s.per, .I In(.x s.in.x, .w s.in.w))) : Rows)
-  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+  (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .per s.per, .I In(.x s.in.x, .w s.in.w))) : Rows)
 }
 built = compute.graph step
 built
@@ -621,8 +618,7 @@ copy_raw = (k : CopPar) => {
 copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .dim Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Rows)
-  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+  (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Rows)
 }
 built = compute.graph step
 built
@@ -672,8 +668,7 @@ copy_raw = (k : CopPar) => {
 copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .position Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun rope ((RopeArg)(.n s.n, .position s.position, .I In(.x s.in.x))) : Out)
-  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+  (compute.plrun rope ((RopeArg)(.n s.n, .position s.position, .I In(.x s.in.x))) : Out)
 }
 built = compute.graph step
 built
@@ -712,8 +707,7 @@ copy_raw = (k : CopPar) => {
 copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun glue ((GlueArg)(.n s.n, .I In(.g s.in.g, .u s.in.u))) : Out)
-  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.m)))
+  (compute.plrun glue ((GlueArg)(.n s.n, .I In(.g s.in.g, .u s.in.u))) : Out)
 }
 built = compute.graph step
 built

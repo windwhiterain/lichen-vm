@@ -76,12 +76,12 @@ roadmap is allowed to argue against.
 
 Three conclusions follow directly, and they are the frame for everything below.
 
-- **The step is dispatch- and fence-bound.** 840 dispatches at ~0.4 ms are ~336 ms, and 420 steps
-  at ~0.5 ms of fence are ~210 ms of the 0.55 s warm token; the work *around* the steps — the
-  fetches, the uploads, the host arithmetic — measured **0.080 s of 2.445 s (3%)** over four tokens
-  once every stage was timed. A chain that removed 23% of the submissions moved the clock not at
-  all ([qwen-inference](qwen-inference.md), "The resident chain"). The levers are the node count
-  and the step count, and the fetch was never one.
+- **The step is fence-bound, not node-bound.** 840 nodes at ~0.05 ms are ~42 ms, and 420 steps at
+  ~1.2 ms are the other ~0.5 s of the 0.55 s warm token; the work *around* the steps — the fetches,
+  the uploads, the host arithmetic — measured **0.080 s of 2.445 s (3%)** over four tokens once
+  every stage was timed. A chain that removed 23% of the submissions moved the clock not at all,
+  and removing 280 nodes bought ~3% ([qwen-inference](qwen-inference.md), "The resident chain").
+  The lever is the **step count**: a step's recording and fence.
 - **The batch is not the lever.** Sixteen sequences cost one sequence's submission and fence, and
   throughput is flat past eight clients because the step rate is the bound. Widening the batch buys
   latency, not tokens. **The per-step clock is the throughput.**
@@ -415,12 +415,13 @@ had already paid, and a step's clock is its dispatches plus its fence: 840 at ~0
 possible; it is not a throughput win, and this note records it as a negative on the hypothesis that
 opened it. **The levers it names are the node count and the step count.**
 
-**S1b, the copy nodes: blocked on the argument table, not on a kernel surface.** Every projection,
-rotation and product carries a second copy dispatch (ten a layer, 280 a token) so that its step has
-two nodes. A one-node step now **records**, but a **run refuses** it — *"node 0 was given value 2 as
-a buffer, and that value is a number"* — the argument-table conflation
-[inference-service](inference-service.md) §8 item 6 files. The copies come out when that defect
-does, and they are the cheapest 280 nodes in the tree.
+**S1b, the copy nodes: landed.** The run refusal was the argument-table numbering: `finish()`
+numbered an input densely over the read slots, so a parameter that leaves a leading cell unread
+(`PREFILL_STEP`, the norms) shifted every buffer down one and handed a count to `in.x`. An input's
+value number is now its slot, because the caller passes its arguments positionally. The ten copy
+dispatches a layer came out: **20 nodes a layer, 560 a token** (was 30/840), the tokens
+`[9707, 25, 358, 2776, 4460]` are unchanged, and the warm token is **0.53 s against 0.55 s** — ~3%,
+which prices a node at ~0.05 ms and a step at ~1.2 ms. **The step count is what is left.**
 
 ### S2 — a row's rotation in one dispatch, and the batch's attention in one dispatch
 
@@ -572,9 +573,8 @@ measure, and the model answers the checkpoint's own tokens again (recorded in
 [qwen-inference](qwen-inference.md)).
 
 **S1 was built and measured**, and its result re-ranks the roadmap: the readbacks removed were
-**3%** of a token, so S1b (the copy nodes, gated on the argument table), S2 (the per-sequence
-rotations and attention) and S3 (the tiled projection) are the slices that remove **nodes and
-steps**. The checkpoint is restored by `scripts/dump_bf16.py`, which flattens the public
+**3%** of a token, so S1b (the copy nodes, landed) removed **280 nodes for ~3%**, and S2 (the per-sequence
+rotations and attention) and composing a layer into one graph are the slices that remove **steps**. The checkpoint is restored by `scripts/dump_bf16.py`, which flattens the public
 safetensors shards into the loader's layout — the layout is the `SHAPES` contract in `qwen.rs`, and
 the two must move together. The S1 measurement is in [qwen-inference](qwen-inference.md)'s "The
 resident chain, and the 35% that was not there".
