@@ -231,10 +231,18 @@ Measured and rejected in the same round, each on its own build:
   487 arrives as a *type expression* the clone walk produced, and its value position
   is an open template cell.
 
-The next hypothesis to check, and the cheapest: whether the assert's clone of the
-codomain's own cell is the **same node** as that expression's value position. If it
-is not, the sharing needed is between the assert's instantiation and the return
-expression's, inside one application — not between the call's two sides.
+What the clone probes then settled: 975 is a clone made in a **type-side**
+instantiation (`value=false`) of a function with **no asserts** (`asserts=0`), while the
+same function's **value side** does instantiate and bind its own type item
+(`PROBE f3 value=true applied=… type_item=…` then `f3-value-bind … is_fn=false`). Both
+bind the same cell, so the two type items land in one class — yet the node the test
+reads is not among the cells any bind names (the bind probe listed `286`, `554`, `786`,
+`919`; the read is `487`). The failing node is therefore a type **expression** the
+clone walk built for the *type* side, and nothing binds it.
+
+So the next question is a checker one, not an apply one: which path stores that
+type-side expression as the program's `root_ty`, and whether it should store the
+value side's (evaluated) type item instead. That is where the next attempt starts.
 
 ### The two language-server reds are older than this session
 
