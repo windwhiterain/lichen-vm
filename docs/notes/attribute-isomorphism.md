@@ -254,12 +254,27 @@ Measured and rejected in the same round: disabling the fill guard of `619a2606`
 `jit_inline` tests stay green and compute stays 235/2 — so the guard is not what blocks
 the merge.
 
-So the next step is the ordering and the count, not the sharing: why the type side
-instantiates twice for one call, and whether a call whose type the value side binds
-should defer the cell to it (the static path already does).
-So the next question is a checker one, not an apply one: which path stores that
-type-side expression as the program's `root_ty`, and whether it should store the
-value side's (evaluated) type item instead. That is where the next attempt starts.
+Where the two type-side binds come from, measured: `check_app` runs **once** per call
+(a probe prints one line per expression: `PROBE check_app expr=ExprId(63)
+type_apply=NodeId(291) cell=NodeId(286) report=false`), and the second bind is the
+**eval-time** type apply — `evaluation.rs`'s `apply_callee_type` → `Module::apply_type`
+(the "apply the type where the value is not concrete yet" path). So a call is
+type-applied at check and again at eval, and value-applied once: three instantiations,
+three clone generations, one cell.
+
+Tried and rejected: reusing the check-time instantiation at eval
+(`apply_value_applies` reverse pairing, then binding the recorded `applied_exprs`
+codomain instead of re-instantiating). Compute stays 235/2 and two tests break
+(`language::gc_block::a_gc_block_calls_a_curried_binding_per_element`,
+`checker::a_direct_call_result_annotation_is_checked_against_the_return_type`), because
+each **evaluation** needs its own cells — the second type apply is legitimate.
+
+What that leaves: the three clones each carry their **own** copy of the codomain's
+denotation cell, and the assert that decides it (`f : I -> O` inside `jit`) fills only
+one of them. 975 is never written by anything, which is why the fill log never named
+it. The next check is therefore on the **checker**: does the binding `O = _` contribute
+**one** node to both the annotation `f : I -> O` and the value use `.O O`, or two? If
+two, that is the sharing to fix, and it is a binding-level invariant, not an apply one.
 
 ### The two language-server reds are older than this session
 
@@ -291,10 +306,12 @@ the same at `359b18c4`**, the commit this session started from:
   a fresh class, so one value reads as several. The rule sits at
   `Module::node_value` and `shape::node_value`, and the copy walk that broke it
   (`a524e578`, `f0f8f668`) is reverted.
-- **One call, one clone.** The codomain's open cell is a per-call clone the body never
-  fills (`Module::node_apply` made it), while the body's own clone is a different node.
-  So the next attempt must make the two sides of one call read the *same* clone — not
-  add another copy, and not special-case a position.
+- **One call, one clone — and a call is instantiated three times.** The check-time type
+  apply, the eval-time type apply (`apply_callee_type`) and the value apply each build
+  their own graph, so the codomain's denotation cell exists three times and the assert
+  fills one. Reusing a graph across those applies is measured wrong (every evaluation
+  needs its own cells), so the sharing to look for sits inside the **binding**: the
+  checker should give one node for `O = _`'s two uses.
 - **The doc/code pair moves together.** This branch is **not mergeable** while any
   test is red, because the spec on this branch states the rule the code keeps.
 - **Bisect before theorising.** Mechanism 2 cost this session hours of reading
