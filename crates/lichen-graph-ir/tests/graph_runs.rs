@@ -171,7 +171,7 @@ impl ParallelBackend for BatchStub {
                 .inputs
                 .iter()
                 .map(|input| match input {
-                    BatchInput::Host(data) => Stub::words(data),
+                    BatchInput::Host(_, data) => Stub::words(data),
                     BatchInput::Resident(id) => self.stub.column(*id),
                     BatchInput::Produced { dispatch, ordinal } => {
                         computed[*dispatch][*ordinal].clone()

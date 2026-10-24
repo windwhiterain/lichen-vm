@@ -371,7 +371,7 @@ impl<'backend> Value<'backend> {
     /// Readiness and kind are two different facts: "a submission not yet waited for" and
     /// "a device buffer that was waited for" are the same kind with different fixes, so a
     /// refusal naming only the kind would hand a caller the wrong one.
-    fn state(&self) -> &'static str {
+    pub(crate) fn state(&self) -> &'static str {
         match self {
             Value::Host { .. } => "host data",
             Value::Device { .. } => "a device buffer that was waited for",

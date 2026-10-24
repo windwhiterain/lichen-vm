@@ -357,9 +357,8 @@ impl<'a> LaunchSet<'a> {
 /// and none per device one.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BatchInput<'a> {
-    /// Data the host already holds: `count` elements, read as the class the fragment
-    /// declares for this position.
-    Host(&'a [u8]),
+    /// Data the host holds at the class it was passed with, converted to the slot's declared class.
+    Host(ScalarClass, &'a [u8]),
     /// A buffer this backend is already holding, from an earlier run.
     Resident(ResidentId),
     /// The `ordinal`-th output of the `dispatch`-th dispatch before this one.

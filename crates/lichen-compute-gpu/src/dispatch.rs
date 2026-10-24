@@ -1429,14 +1429,14 @@ impl GpuContext {
             context: self,
             buffers: Vec::new(),
         };
-        let bound = self.bound(inputs)?;
+        let bound = self.bound(inputs, launch)?;
         let staging_bytes = self.staged_bytes(
             launch,
             bound
                 .iter()
                 .enumerate()
                 .filter_map(|(index, input)| match input {
-                    Bound::Host(data) => Some((index, *data)),
+                    Bound::HostAt(class, data) => Some((index, *class, *data)),
                     Bound::Resident(_) => None,
                 }),
         )?;
@@ -1467,11 +1467,20 @@ impl GpuContext {
     }
 
     /// The buffers a caller's slots name, as this backend's own form of them.
-    fn bound<'a>(&self, inputs: &[BufferSlot<'a>]) -> Result<Vec<Bound<'a>>, RunError> {
+    fn bound<'a>(
+        &self,
+        inputs: &[BufferSlot<'a>],
+        launch: &LaunchSet<'_>,
+    ) -> Result<Vec<Bound<'a>>, RunError> {
+        let class = spirv::module_class(launch.root()).map_err(RunError::Emit)?;
         inputs
             .iter()
-            .map(|input| match input {
-                BufferSlot::Host(data) => Ok(Bound::Host(data)),
+            .enumerate()
+            .map(|(index, input)| match input {
+                BufferSlot::Host(data) => Ok(Bound::HostAt(
+                    spirv::buffer_class_of(launch.root(), index, class),
+                    data,
+                )),
                 BufferSlot::Resident(id) => self.resident_buffer(*id).map(Bound::Resident),
             })
             .collect()
@@ -1511,14 +1520,16 @@ impl GpuContext {
     fn staged_bytes<'a>(
         &self,
         launch: &LaunchSet<'_>,
-        hosts: impl Iterator<Item = (usize, &'a [u8])>,
+        hosts: impl Iterator<Item = (usize, ScalarClass, &'a [u8])>,
     ) -> Result<vk::DeviceSize, RunError> {
         let fragment = launch.root();
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
         let mut bytes: vk::DeviceSize = 0;
-        for (index, data) in hosts {
-            let width = spirv::buffer_class_of(fragment, index, class).byte_width();
-            let len = own_elements(data, width);
+        for (index, passed, data) in hosts {
+            let buffer_class = spirv::buffer_class_of(fragment, index, class);
+            let width = buffer_class.byte_width();
+            let data = at_class(data, passed, buffer_class);
+            let len = own_elements(data.as_ref(), width);
             bytes += (len * width) as vk::DeviceSize;
         }
         Ok(bytes)
@@ -1535,7 +1546,7 @@ impl GpuContext {
                     .iter()
                     .enumerate()
                     .filter_map(|(index, input)| match input {
-                        BatchInput::Host(data) => Some((index, *data)),
+                        BatchInput::Host(class, data) => Some((index, *class, *data)),
                         _ => None,
                     }),
             )?;
@@ -1600,8 +1611,10 @@ impl GpuContext {
             let buffer = match input {
                 // Used where it lies: a chained run costs one upload, not two.
                 Bound::Resident(buffer) => *buffer,
-                Bound::Host(data) => {
+                Bound::HostAt(passed, data) => {
                     let buffer_class = spirv::buffer_class_of(fragment, index, class);
+                    let data = at_class(data, *passed, buffer_class);
+                    let data = data.as_ref();
                     let element = buffer_class.byte_width() as vk::DeviceSize;
                     // The buffer's own length, not the count: above it there are real elements too.
                     let len = own_elements(data, buffer_class.byte_width()) as vk::DeviceSize;
@@ -1694,7 +1707,7 @@ impl GpuContext {
         inputs
             .iter()
             .map(|input| match input {
-                BatchInput::Host(data) => Ok(Bound::Host(data)),
+                BatchInput::Host(class, data) => Ok(Bound::HostAt(*class, data)),
                 BatchInput::Resident(id) => self.resident_buffer(*id).map(Bound::Resident),
                 BatchInput::Produced { dispatch, ordinal } => produced
                     .get(*dispatch)
@@ -2850,6 +2863,29 @@ pub fn installed_backend_name() -> Option<&'static str> {
 pub fn uninstall() {
     lichen_kernel_ir::clear_parallel_backend();
 }
+fn at_class<'a>(data: &'a [u8], from: ScalarClass, to: ScalarClass) -> std::borrow::Cow<'a, [u8]> {
+    use ScalarClass::{BFloat16, Float};
+    match (from, to) {
+        (Float, BFloat16) => std::borrow::Cow::Owned(
+            data.chunks_exact(4)
+                .flat_map(|word| {
+                    let bits = u32::from_le_bytes(word.try_into().unwrap_or_default());
+                    ((bits >> 16) as u16).to_le_bytes()
+                })
+                .collect(),
+        ),
+        (BFloat16, Float) => std::borrow::Cow::Owned(
+            data.chunks_exact(2)
+                .flat_map(|word| {
+                    let half = u16::from_le_bytes(word.try_into().unwrap_or_default());
+                    ((half as u32) << 16).to_le_bytes()
+                })
+                .collect(),
+        ),
+        _ => std::borrow::Cow::Borrowed(data),
+    }
+}
+
 /// One input, resolved to what this backend can bind.
 ///
 /// # Invariant
@@ -2857,8 +2893,8 @@ pub fn uninstall() {
 /// device buffer is carried by value rather than named by [`ResidentId`], because a batch
 /// binds an output of the submission it is still recording and has issued no id for.
 enum Bound<'a> {
-    /// Data the host already holds, uploaded when the dispatch is recorded.
-    Host(&'a [u8]),
+    /// Data the host holds at the class it was passed at, staged after conversion to its slot's.
+    HostAt(ScalarClass, &'a [u8]),
     /// A buffer this backend is already holding.
     Resident(DeviceBuffer),
 }

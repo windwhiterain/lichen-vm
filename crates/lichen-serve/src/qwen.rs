@@ -701,7 +701,7 @@ impl<'session> Steps<'session> {
             .step(vec![
                 RunArgument::Count(values.len() as i64),
                 RunArgument::Count(row_len),
-                floats(values),
+                self.payload(values),
                 floats(positions),
             ])
             .map_err(QwenRefusal::Step)?;

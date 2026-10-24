@@ -259,14 +259,18 @@ impl<'backend> Runner<'backend> {
                 _ => match values
                     .get(value)
                     .ok_or(GraphRefusal::UnknownValue { node: index, value })?
-                    .slot()
-                    .map_err(|found| GraphRefusal::NotBufferData {
-                        node: index,
-                        value,
-                        found,
-                    })? {
-                    BufferSlot::Host(data) => BatchInput::Host(data),
-                    BufferSlot::Resident(id) => BatchInput::Resident(id),
+                {
+                    Value::Host { class, data } => BatchInput::Host(*class, data),
+                    Value::Device { id, .. } | Value::Pending { id, .. } => {
+                        BatchInput::Resident(*id)
+                    }
+                    other => {
+                        return Err(GraphRefusal::NotBufferData {
+                            node: index,
+                            value,
+                            found: other.state(),
+                        });
+                    }
                 },
             });
         }
@@ -494,7 +498,7 @@ fn slots_of<'a>(
     inputs
         .iter()
         .map(|input| match input {
-            BatchInput::Host(data) => Ok(BufferSlot::Host(data)),
+            BatchInput::Host(_, data) => Ok(BufferSlot::Host(data)),
             BatchInput::Resident(id) => Ok(BufferSlot::Resident(*id)),
             BatchInput::Produced { dispatch, ordinal } => {
                 issued(*dispatch, *ordinal).map(BufferSlot::Resident)
