@@ -63,6 +63,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `db153f72` | `unify_ref` is the ref-native entry: a static side is compared by value and written into an open cell; the codomain binds, the parameter-slot compares and the result deep-eval all name their refs |
 | `aed0737e` | the apply chain (evaluator arm, `function_apply`, `apply_type`, `instantiate`, the parameter check, the loop, both static apply entries) takes `argument`/`cell` as **refs**; `array_items_ref`/`expr_type_item_ref` read a frozen payload in place |
 | `e4890a24` | the checker's field-attribute unify reads its shape, slot and declared attribute by ref (`slot_attribute` and `evaluate_node_deep_ref` take refs); its leaf copies drop 23636 → 1345 per compute run |
+| `30aa9107` | `attribute_value` walks a ref instead of a fresh leaf per step — its 677 copies per compute run go to 0 |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -371,14 +372,14 @@ back). It sits on `SortOp::run`, untouched by this branch.
 A probe in `as_dynamic` (removed after the measurement) counted every check-time handle
 the compute suite builds, by consumer frame:
 
-| site | before | after `e4890a24` |
+| site | before | now |
 |---|---|---|
-| `unify_value_field_attributes` | 23636 | **1345** |
-| `structs::slot_read`'s resolved arm | 9122 | 9123 |
-| `check_term` closure | 2292 | 2290 |
-| `slot_types_of` | 1624 | 1624 |
+| `unify_value_field_attributes` | 23636 | **1346** |
+| `structs::slot_read`'s resolved arm | 9122 | 9122 |
+| `check_term` closure | 2292 | 2292 |
+| `slot_types_of` | 1624 | 1622 |
 | `instantiation_field_types` | 1623 | 1624 |
-| `attribute_value` | 677 | 677 |
+| `attribute_value` | 677 | **0** |
 
 What is left is **not** laziness: the checker's own state is `NodeId`
 (`state[e].ty`, `deferred_requirements`, the extension API's `unify_slots`/`is_subtype`),
