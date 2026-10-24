@@ -101,6 +101,33 @@ fn spelled(program: &str, buffer: &str, index: &str, demand: &str) -> String {
         .replace("DEMAND", demand)
 }
 
+/// A **frozen** field's requirement is enforced at the call site.
+///
+/// # Invariant
+/// `Write.to` states `# warp` in the imported module, so a lane-varying write target is
+/// refused there: the requirement is read from the frozen type, the same reading a
+/// locally declared field gets. A materialized copy that lost the requirement would let
+/// the program through.
+#[test]
+fn a_frozen_field_requirement_is_enforced_at_the_call_site() {
+    let report = compile(&spelled(&write(), "1", "0", "0"));
+    assert!(
+        !report.ok(),
+        "a lane-varying write target must be refused by `Write.to`'s frozen `# warp`"
+    );
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 32, found 1")),
+        "the refusal must name both perspectives: {messages:?}"
+    );
+}
+
 #[test]
 fn a_read_takes_its_perspective_from_the_buffer_and_the_index() {
     // `divisor(from, at)`: a uniform index keeps the buffer's perspective, a
