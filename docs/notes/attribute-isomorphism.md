@@ -353,12 +353,12 @@ One red remains and it is **pre-existing**: `lichen-language`'s lib test
 (measured: patch saved, the two files checked out, the test re-run, the patch applied
 back). It sits on `SortOp::run`, untouched by this branch.
 
-### Next — the checker's handle census, then the landing
+### The checker's handle census: storage, not consumption
 
 A probe in `as_dynamic` (removed after the measurement) counted every check-time handle
 the compute suite builds, by consumer frame:
 
-| site | before | now |
+| site | before | after the ref slices |
 |---|---|---|
 | `unify_value_field_attributes` | 23636 | **1346** |
 | `structs::slot_read`'s resolved arm | 9122 | 9122 |
@@ -367,19 +367,26 @@ the compute suite builds, by consumer frame:
 | `instantiation_field_types` | 1623 | 1624 |
 | `attribute_value` | 677 | **0** |
 
-What is left is **not** laziness: the checker's own state is `NodeId`
-(`state[e].ty`, `deferred_requirements`, the extension API's `unify_slots`/`is_subtype`),
-so a position the state must name is a node. `slot_read` is the codomain seam: it
-materializes the field type into `state[e].ty` and into the element expr, and that leaf is
-what made the frozen `.O` cell reachable — closing the codomain at `unify` was enough
-*because nothing binds that leaf any more*. Widening the checker's state to `AnyNodeId`
-(or the extension API) is the next slice if the census is worth it; it is a refactor, not a
-fix, and the tests are green with the current line.
+The maintainer's ruling — **every node consumer (unify, evaluation) supports static nodes
+and never clones** — is satisfied where it governs: the lowlevel unify/evaluation surface
+is ref-native (`unify_ref`, `array_items_ref`, `expr_type_item_ref`,
+`evaluate_node_deep_ref`, `function_type_function_ref`, `is_function_type_ref`), and the
+apply chain takes `argument` and `cell` as refs.
 
-Landed: the branch merged to `dev` at `7e9921df` (a fast-forward after merging `dev` in, so
-the commits this note cites by hash stay valid), and the branch was deleted. The `sort_op`
-red is outside this branch's files and predates it (its `default_attributes()?` requirement
-came in `dd4cd0e1`, an ancestor of `dev`), so it belongs to its own slice.
+What the census's remaining sites do is **store**, not consume: the checker's graph is a
+dynamic graph by construction (`state[e].ty`, `deferred_requirements`, the extension API's
+`unify_slots`/`is_subtype`), so a type it names in *its own* state has to be a node of that
+graph. `slot_read` is the codomain seam, and it materialized the field type into
+`state[e].ty`; the codomain closed at `unify` anyway because nothing binds that leaf any
+more.
+
+Widening the checker's state to `AnyNodeId` (with `Ctx::check_unify*` and `AttrExt`'s
+`unify_slots`/`is_subtype`) would remove those copies, but it is a **design change to the
+checker's core type**, not pending cleanup, and nothing currently misbehaves because of it.
+Take it as its own decision, with a problem it must solve, not as a leftover.
+
+The `sort_op` red is unrelated and predates the landing: its `default_attributes()?`
+requirement came in `dd4cd0e1`, an ancestor of `dev`, and it fails on the unmodified tree.
 
 ## Traps (each cost time this session)
 
