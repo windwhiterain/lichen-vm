@@ -2,11 +2,10 @@
 //! See docs/notes/graph-fusion.md §5 and §8.
 //!
 //! # Invariant
-//! The pass merges and never reorders: the surviving node stands at the region's last position,
-//! every other value keeps its order, and a region the pass declines changes nothing.
-//!
-//! A pack decides **which** regions are merged, never **what** a merge must satisfy: every
-//! legality condition refuses by name under a pack exactly as it does under the floor.
+//! The pass merges and never reorders: an ordinary region's survivor stands at its last position,
+//! a sibling region's at its first, and a declined region changes nothing. A pack decides which
+//! regions are merged, never what a merge must satisfy: every legality condition refuses by name
+//! under a pack as it does under the floor.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
