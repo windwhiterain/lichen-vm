@@ -1092,9 +1092,8 @@ where
     }
 
     /// Canonical attribute `canonical` of `node`, through its layout and the default.
-    pub(super) fn slot_attribute(&self, node: NodeId, canonical: u32) -> Option<AnyNodeId> {
-        // SAFETY: `node` is a live node of this module; its value is the payload.
-        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+    pub(super) fn slot_attribute(&self, node: AnyNodeId, canonical: u32) -> Option<AnyNodeId> {
+        let value = self.module.node_value(node)?;
         let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
         self.module.array_attribute(&value, canonical)
     }
@@ -1107,7 +1106,8 @@ where
     /// term's value where a perspective belongs.
     pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
         P::Attr::ORDER.iter().find_map(|marker| {
-            let node = self.slot_attribute(slot, marker.order_index() as u32)?;
+            let node =
+                self.slot_attribute(AnyNodeId::Dynamic(slot), marker.order_index() as u32)?;
             let stated = self
                 .module
                 .node_value(node)
@@ -1257,7 +1257,7 @@ where
         for index in 0..P::Attr::ORDER.len() {
             // An undecided element's attribute is a lazy read of it.
             let slot = match self
-                .slot_attribute(element, index as u32)
+                .slot_attribute(AnyNodeId::Dynamic(element), index as u32)
                 .and_then(|node| node.dynamic())
             {
                 Some(slot) => slot,

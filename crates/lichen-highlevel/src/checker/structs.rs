@@ -851,23 +851,24 @@ where
         let Some(shape) = expr_items.first().map(|item| item.node) else {
             return;
         };
-        let shape = self.module.as_dynamic(shape, self.current_block);
-        let Some(field_items) = (unsafe { self.module.array_items(shape) }) else {
+        // SAFETY: the type expr's shape is live; the read only touches it. A frozen
+        // shape is read where it lives, never copied to be walked.
+        let Some(field_items) = (unsafe { self.module.array_items_ref(shape) }) else {
             return;
         };
         for (field, position) in field_items.iter().zip(positions) {
             let Some(argument) = position.and_then(|index| arguments.get(index)).copied() else {
                 continue;
             };
-            let slot = self.module.as_dynamic(field.node, self.current_block);
+            let slot = field.node;
             for marker in P::Attr::ORDER {
                 let Some(item) = self.slot_attribute(slot, marker.order_index() as u32) else {
                     continue;
                 };
-                let declared = self.module.as_dynamic(item, self.current_block);
-                self.module.evaluate_node_deep(declared, None);
+                self.module.evaluate_node_deep_ref(item, None);
                 let value = self
-                    .node_value(declared)
+                    .module
+                    .node_value(item)
                     .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
                 if value == Some(LowValue::Any) {
                     continue;
@@ -881,11 +882,13 @@ where
                 let Some(element) = (unsafe { items.items() }).first().map(|item| item.node) else {
                     continue;
                 };
-                let declared = self.module.as_dynamic(element, self.current_block);
-                self.module.evaluate_node_deep(declared, None);
-                if self.node_value(declared).is_none() {
+                self.module.evaluate_node_deep_ref(element, None);
+                if self.module.node_value(element).is_none() {
                     continue;
                 }
+                // The extension API names a node, so this one position crosses; the
+                // reads above consumed the ref itself.
+                let declared = self.module.as_dynamic(element, self.current_block);
                 let loc = self.loc(argument, shape::EXPR_ATTR_BASE);
                 self.unify_declared_value(argument, marker, declared, loc);
             }

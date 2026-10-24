@@ -541,8 +541,19 @@ impl<P: Program> Module<P> {
         node: NodeId,
         current: Option<BlockId>,
     ) -> Option<P::Value> {
+        self.evaluate_node_deep_ref(Dyn(node), current)
+    }
+
+    /// [`Self::evaluate_node_deep`] over a ref: a frozen position is read where it
+    /// lives, never copied into a leaf to be walked.
+    #[stacksafe]
+    pub fn evaluate_node_deep_ref(
+        &mut self,
+        node: AnyNodeId,
+        current: Option<BlockId>,
+    ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
-        self.evaluate_node_deep_inner(Dyn(node), current, &mut cache)
+        self.evaluate_node_deep_inner(node, current, &mut cache)
     }
 
     /// The tail of a [`LowOperator::TableGet`]: a found element is read by reference, an absent

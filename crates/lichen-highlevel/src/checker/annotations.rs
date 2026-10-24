@@ -164,7 +164,7 @@ where
             return None;
         }
         let expr = self.state[value].term?;
-        match self.slot_attribute(expr, marker.order_index() as u32)? {
+        match self.slot_attribute(AnyNodeId::Dynamic(expr), marker.order_index() as u32)? {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
         }
@@ -219,7 +219,7 @@ where
         match self.ir[argument].kind {
             ExprKind::NamedField { container, .. } if container == parameter => {
                 let record = self.state[argument].term?;
-                self.slot_attribute(record, marker.order_index() as u32)?
+                self.slot_attribute(AnyNodeId::Dynamic(record), marker.order_index() as u32)?
                     .dynamic()
             }
             _ => None,
@@ -251,7 +251,8 @@ where
         // position, not the missing value (spec §1).
         if let ExprKind::Placeholder = self.ir[e].kind
             && let Some(expr) = self.state[e].term
-            && let Some(slot) = self.slot_attribute(expr, marker.order_index() as u32)
+            && let Some(slot) =
+                self.slot_attribute(AnyNodeId::Dynamic(expr), marker.order_index() as u32)
             && let Some(slot) = slot.dynamic()
         {
             return slot;
@@ -713,7 +714,7 @@ where
                 if !placeholder {
                     return any;
                 }
-                self.slot_attribute(value_term, index as u32)
+                self.slot_attribute(AnyNodeId::Dynamic(value_term), index as u32)
                     .and_then(|node| node.dynamic())
                     .unwrap_or(any)
             })

@@ -127,7 +127,7 @@ where
         };
         for marker in &tail {
             if let Some(AnyNodeId::Dynamic(node)) =
-                self.slot_attribute(term, marker.order_index() as u32)
+                self.slot_attribute(AnyNodeId::Dynamic(term), marker.order_index() as u32)
             {
                 slots[marker.order_index()] = node;
             }
