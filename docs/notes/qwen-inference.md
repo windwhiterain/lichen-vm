@@ -754,3 +754,52 @@ special case: the first token's own softmax over one weight is the same dispatch
 test walks four positions and asserts the host's whole chain, `9707 → 25 → 358 → 2776 → 4460`, which
 also pins the short length: the first two tokens are the ones the two-position step answered, so a
 regression in either half fails the same assertion.
+
+## The model was written against a surface the tree had left
+
+At `a641ff3e` **no step of the serving model prepared**. `crates/lichen-serve/src/model.rs` was
+written against the kernel I/O surface
+[kernel-buffer-declarations](kernel-buffer-declarations.md) **supersedes**: a buffer was spelled
+`compute.Buf Float` (the element type straight on `Buf`), and a kernel declared an `.out` buffer in
+its parameter struct and wrote through `k.out.<field>`. The current surface spells the type
+`(compute.Buf ((compute.BufParam _)(.type T, .length _)))`, carries **only inputs** in the
+parameter, and makes the body **declare its output with `compute.buf`, write it, and return the
+write's value** in the output struct — the rule that a write is the value of an output position
+([code-audit D17](code-audit.md)). The first refusal named the shape, not the spelling:
+
+    expected struct{.type Type, .length Int}, found Type
+
+and every program after it failed at `k.out.<field>` with *"a kernel body's index cannot be placed:
+its target is a computation and its index is the constant 3"* — the field is the parameter's fourth,
+and the parameter's own read could not be placed.
+
+The migration is mechanical once the shape is known, and it changes **no arithmetic and no dispatch
+count**: a declared output buffer is the allocation the old `.out` field named. All thirteen
+programs prepare again, with the node counts they had (`RMS_NORM_STEP` 2, `ATTEND_CACHE_STEP` 4,
+`DECODE_STEP` 3, `PREFILL_STEP` 2, `SAMPLE_STEP` 7, `LAYER_STEP`/`BLOCK` 13). The model was
+prepared **with no pack** in the probe and through the narrowed pack in the binary, so the migration
+is verified on both paths.
+
+The checkpoint is restored by `scripts/dump_bf16.py`, the other half of the `SHAPES` contract in
+`qwen.rs`: it reads the public shards' index, copies each layer's eleven tensors **unconverted**, and
+writes `layer00_bf16.bin` … `layer27_bf16.bin`, the tied embedding and the final norm. On the
+RTX 3060 Ti this workspace runs on, the model then answers the checkpoint's own tokens again:
+
+    generating 2 token(s) after 9707 at Narrowed, temperature 0 top 0
+      25
+      358
+    tokens: [9707, 25, 358]
+      token 1 took 1.14 s
+      token 2 took 0.58 s
+
+Those are held in host memory, not placed (the binary under `hold_in_memory`), and the times are
+this machine's, not the 6 GB laptop's the earlier tables came from. The **warm token's 0.58 s is the
+number to attack**, and [serving-frontier](serving-frontier.md) §2 breaks it into the measured parts:
+281 dispatches at `~0.4 ms` are 93–136 ms, and the measured share around the stages was 0.25 s of a
+0.708 s step. The next slice is the one the roadmap names **S1**: one fetch a token instead of one a
+stage.
+
+The reading is one command, and it is the one to re-run after a surface change:
+`cargo run --release -p lichen-serve --example prepare_steps` prints one line a step — the node
+count when it prepares, the refusal when it does not — and every program in `model.rs` is in its
+list. That probe is how the staleness above was found, and it costs no checkpoint.
