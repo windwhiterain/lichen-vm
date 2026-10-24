@@ -142,9 +142,11 @@ Two places are **coarser than the dataflow**:
   separates the norm's consumers: the key chain lands in region [0..4] and the value and query
   projections in later regions, so the norm's fan-out — a legal `Shape::FanOut` — is never a
   candidate.
-- **The shape set is fixed.** The classifier admits a pair, a chain, a fan-out or a fan-in; a
-  fan-out **of chains** (the norm feeding three projections, each followed by a norm) is none of
-  them, so even a region that crossed the boundary would be refused before its schema is asked.
+- **The shape set is fixed.** The classifier admits a pair, a chain, a fan-out or a fan-in —
+  shallow shapes, depth at most two — and the composition has one `compose` per shape. A fan-out
+  **of chains** (the norm feeding three projections, each followed by a norm) is none of them, so
+  even a region that crossed the boundary would be refused before its schema is asked: fusion
+  composes chains, stars and fan-ins, **not a fold over a DAG**.
 
 The claim itself is not the coarse part: membership through a claim is the right predicate (a
 body no claim describes has no algebra to read), and the merge's fan-out composition exists. The
