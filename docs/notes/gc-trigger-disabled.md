@@ -1,11 +1,13 @@
 # The read-path collection was disabled — the ruling and the trace
 
-> **Superseded.** The collection is enabled again with a repaired trigger: the read is
-> shallow and the root's own slot decides, a pending assert's condition is a collect root,
-> and the walk goes on into a node outside the vacated subtree. See
-> [gc-trigger-design](gc-trigger-design.md) for the design and the readings, and
-> [gc-block](gc-block.md) for the shipped contract. This note keeps the ruling and the trace
-> that motivated it.
+> Status: historical — superseded: the collection is enabled again with a repaired
+> trigger (the read is shallow and the root's own slot decides, a pending assert's
+> condition is a collect root, and the walk goes on into a node outside the vacated
+> subtree). See [gc-trigger-design](gc-trigger-design.md) for the design and the
+> readings, and [gc-block](gc-block.md) for the shipped contract. This note keeps the
+> ruling and the trace that motivated it.
+> Points at: `crates/lichen-lowlevel/src/evaluation.rs` (the scope read),
+> `crates/lichen-lowlevel/src/gc.rs` (the collector).
 
 **The maintainer's ruling.** The engine-side trigger of garbage collection has a defect, so it is off until
 the person who owns the collector repairs it: a scope read no longer compacts its scope away. The collector

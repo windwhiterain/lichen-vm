@@ -1,9 +1,13 @@
 # Specialize-then-normalize: a named access should become a tuple index once the type is known
 
-**Status: measured as unimplementable under the current graph invariants.** Nothing implements this, and the
-measurement below says nothing can at the clone either: the name table is readable there in 20 of the 46
-observed cases and a position resolves in none of them, while every later point is closed by the invariants.
-The compute-side fold is therefore not a stand-in for this work; it is the only shape this engine allows.
+> Status: historical — measured as unimplementable under the current graph invariants.
+> Nothing implements this, and the measurement below says nothing can at the clone
+> either: the name table is readable there in 20 of the 46 observed cases and a
+> position resolves in none of them, while every later point is closed by the
+> invariants. The compute-side fold is therefore not a stand-in for this work; it is
+> the only shape this engine allows.
+> Points at: `crates/lichen-highlevel/src/checker.rs` (the choice),
+> `crates/lichen-compute/src/compute/graph.rs` (the stand-in that was measured).
 
 ## The claim
 

@@ -1,5 +1,12 @@
 # Writing a solver: the order that works
 
+> Status: current — a guide: the recipe the physics rounds produced, in the order it
+> has to be done.
+> Points at: `examples/{stencil,torus,filter,convolution2d,pooling}.lichen` (the
+> samples), `crates/lichen-compute/src/` (the launcher and the leaves),
+> `crates/lichen-language/src/` (the fold and the annotation rule).
+> Companion: [physics-operators](physics-operators.md) (how each rule was found).
+
 A recipe for somebody who wants to write a GPU operator or a time-stepping solver in lichen and has
 not read the research. [physics-operators](physics-operators.md) is the record of *how* each rule was
 found; this is the order to do things in. The five acceptance samples are

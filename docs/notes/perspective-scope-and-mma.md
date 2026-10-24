@@ -1,5 +1,13 @@
 # The register perspective MMA needs, and the scope question behind it
 
+> Status: in progress — the decision record between the landed `Perspective` work and
+> the MMA item on the roadmap: what is enforced today, what the GPU path reads, and
+> the register-side shape the author has ruled is the right home. §6 holds the
+> verdicts.
+> Points at: `crates/lichen-highlevel/src/attr.rs` (the perspective vocabulary),
+> `crates/lichen-compute-gpu/src/spirv.rs` (the GPU path).
+> Companion: [gpu-mma](gpu-mma.md) (the product this note's perspective serves).
+
 This note is the decision record between the `Perspective` work that is landed and the
 MMA item on the roadmap. It states what is enforced today, what the GPU path reads, why
 the kernel-config annotation fails (a separate diagnostic-quality finding, not the MMA

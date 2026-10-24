@@ -1,5 +1,9 @@
 # Non-termination is the program's own
 
+> Status: current — the maintainer's ruling, and what was measured before it.
+> Points at: `crates/lichen-highlevel/src/checker.rs` (the definition pass),
+> `crates/lichen-lowlevel/src/apply.rs` (the budget counters).
+
 **The maintainer's ruling.** An unbounded recursion is the program author's to avoid. The definition
 pass does not promise to detect it, and no diagnostic is owed when it happens: `f = n => f n; f 3`
 simply runs. The two tests that asserted a `NonTerminating` diagnostic for that shape are removed.

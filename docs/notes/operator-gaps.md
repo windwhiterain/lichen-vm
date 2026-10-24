@@ -1,5 +1,11 @@
 # What the operator line cannot express, and who owns it
 
+> Status: current — an inventory: five measured gaps and three traps, each with the
+> probe that prints it and the side that decides it. An entry is current until
+> somebody re-runs that probe and sees it change.
+> Points at: `crates/lichen-compute/src/` (the probes),
+> `crates/lichen-compute-gpu/src/spirv.rs` (the fold template).
+
 Every entry below was measured by the operator line, and each names the probe that prints it, so an
 entry is current until somebody re-runs that probe and sees it change. The owner column names the side
 that decides the reading — most of these are not the operator line's to fix.

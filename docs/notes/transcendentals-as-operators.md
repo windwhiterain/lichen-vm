@@ -1,11 +1,14 @@
 # Transcendentals as operators: what `ln` costs, and what "the new op" can be
 
-**Status:** landed — `ln` is an operator and the hand-assembled `sin` and `cos`
-were switched onto the same mechanism. §3 is the measurement that made it
-possible; §5 is the `Invariant` that was withdrawn to allow the switch, and §7
-is the gate.
-
-Points at [floating-point](floating-point.md) §6, §7 and §8 for the definitions
+> Status: current — landed: `ln` is an operator and the hand-assembled `sin` and `cos`
+> were switched onto the same mechanism. §3 is the measurement that made it possible;
+> §5 is the `Invariant` that was withdrawn to allow the switch, and §7 is the gate.
+> `ln`'s GPU column and an emitted-vs-modelled test are unmeasured.
+> Points at: `crates/lichen-language-lex/src/`, `crates/lichen-language-parser/src/`,
+> `crates/lichen-highlevel/src/`, `crates/lichen-kernel-ir/src/`,
+> `crates/lichen-compute/src/` (both lowerings), `crates/lichen-compute-gpu/src/`,
+> `crates/lichen-fusion-bridge/src/`, `crates/lichen-runtime/src/` (the codec).
+> Points at [floating-point](floating-point.md) §6, §7 and §8 for the definitions
 themselves and their accuracy; [operators](operators.md) for the primitive set;
 [lowering-map](lowering-map.md) for the walk that reaches a kernel body. The
 claims this note measures are `ln`'s own; it does not restate the four existing

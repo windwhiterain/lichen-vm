@@ -1,5 +1,10 @@
 # A class carries the call, not only the fact
 
+> Status: current — measured: a declared type's class holds this call's cells too,
+> so sharing a fact by merging classes shares them as well.
+> Points at: `crates/lichen-lowlevel/src/equality.rs` (`alias_read`),
+> `crates/lichen-compute/src/compute/graph.rs` (the recording).
+
 **The finding, measured on the reported defect's own program** (`buf_element_class_recorded.lichen`):
 the class of the parameter's declared type holds the template's facts and **nothing of this call** when the
 recording has built its cells — three members, all valued, no placeholder among them. The call's cells

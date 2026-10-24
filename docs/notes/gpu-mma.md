@@ -1,5 +1,13 @@
 # The cooperative matrix product, and what the backend has of it
 
+> Status: in progress — the first slice: the device's cooperative-matrix facts, the
+> SPIR-V module the backend emits, and the two readings that pin it. The op's
+> surface and the CPU path are the next slice, and are named at the end.
+> Points at: `crates/lichen-compute-gpu/src/spirv.rs` (the emitter),
+> `crates/lichen-compute-gpu/src/dispatch.rs` (the dispatch).
+> Companion: [perspective-scope-and-mma](perspective-scope-and-mma.md) (the
+> register-side perspective the product needs).
+
 This note records the first slice of the hardware MMA item: the device's own
 cooperative-matrix facts, the SPIR-V module the backend can emit, and the two
 readings that pin it. The step after this one — the op's surface and the CPU path —

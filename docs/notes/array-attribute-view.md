@@ -1,11 +1,13 @@
 # The array attribute view: sparse storage, full-width reading
 
-Status: **complete** — stages 1–5 landed (`df24812c`, `58ca01c2`, this round's stage-4
-commit, and the full-width generation): the storage and registry, the checker's
-layout-carrying builders and readers, the default array, the unify wiring by canonical
-index, the `type_of`-shaped `perspective_of` spelling that replaced the call-site
-references, and the annotated expr generated full width. The measured results are at the
-end of this note.
+> Status: current — complete: stages 1–5 landed (`df24812c`, `58ca01c2`, the stage-4
+> commit, and the full-width generation): the storage and registry, the checker's
+> layout-carrying builders and readers, the default array, the unify wiring by canonical
+> index, the `type_of`-shaped `perspective_of` spelling that replaced the call-site
+> references, and the annotated expr generated full width. The measured results are at
+> the end of this note.
+> Points at: `crates/lichen-lowlevel/src/{lib,module,codec,static_module}.rs`,
+> `crates/lichen-highlevel/src/{shape,checker}.rs`.
 
 ## The problem, in the superior's words
 

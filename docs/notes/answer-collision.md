@@ -1,5 +1,13 @@
 # A colliding answer is a unify error
 
+> Status: current — the maintainer's ruling, the chain measured behind thirteen
+> compute failures, and the three diagnostic fixes (the span, the carried values,
+> and a message that names the collision and its two values when both cells are open).
+> Points at: `crates/lichen-lowlevel/src/equality.rs` (`write_node_answer`),
+> `crates/lichen-compute/src/compute/graph.rs` (the recording).
+> Companion: [class-carries-the-call](class-carries-the-call.md) (the class the two
+> answers meet in).
+
 **The maintainer's ruling.** When two answers for one node disagree, the engine reports a unify error, and
 that is the intended behaviour — *"答案相撞就 unify error 啊，有什么问题"*. Nothing in the engine is wrong
 here, and no rule about class values or recording cells changes because of it.

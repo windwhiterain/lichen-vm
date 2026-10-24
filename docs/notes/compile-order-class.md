@@ -1,5 +1,12 @@
 # Which write fills a `Buf` element cell? — measurement
 
+> Status: current — the defect is **fixed** (`7eedb125`): the three pins are
+> ordinary passing tests now, not ignored ones.
+> Points at: `crates/lichen-compute/src/compute.rs` (the role table),
+> `crates/lichen-lowlevel/src/equality.rs` (the equality classes),
+> `crates/lichen-highlevel/src/shape.rs` (the shape cells),
+> `crates/lichen-compute/tests/lichen_compute/buf_element_class_recorded.rs`.
+
 Worktree: `C:\resource\lichen-vm\.worktrees\classfill`, branch `feature/classfill`, base `dev` @ `fc0761c4`.
 
 The question the brief asks: **in the passing program, which write fills the element cell that

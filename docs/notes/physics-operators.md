@@ -1,5 +1,11 @@
 # Physics operators: a stencil, and the boundary that is the padding
 
+> Status: current — the ladder's first non-ML operator, and the first whose read set
+> is wider than its lane.
+> Points at: `examples/stencil.lichen` (the operator),
+> `crates/lichen-compute/src/compute.rs` (the host read rule),
+> `crates/lichen-compute-gpu/src/dispatch.rs` (the tail-lane guard).
+
 `examples/stencil.lichen` is the ladder's first **non-ML** operator and its first whose **read set
 is wider than its lane**: every operator below it reads `x[i]`, or a slice from `0`, while this one
 reads `i - 1` and `i + 1` as well. One explicit step of the 1D heat equation is enough to state the

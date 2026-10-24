@@ -1,5 +1,16 @@
 # Late writes under a plain deep gate — the elimination map
 
+> Status: current — the writes that land after a verdict must be eliminated, not
+> tolerated. The concrete-only deep gate has landed, §12 measures the remaining
+> ones and finds their elimination worth one descent in 929 488, §13 measures the
+> plain gates and finds the re-run they remove is load-bearing, §14 removes that
+> dependency for the recording with a bounded local retry, and §15 records the
+> retirement landing with the same three failures by name.
+> Points at: `crates/lichen-lowlevel/src/evaluation.rs` (the late writes),
+> `crates/lichen-compute/src/compute/graph.rs` (the recording).
+> Companion: [incremental-evaluation](incremental-evaluation.md) §7 (the decision
+> this map is the measurement behind).
+
 > **§1–§10 are the measurement slice and are kept as it was written**: that slice
 > changed no behaviour, and its gate was a scratch edit reverted before the commit.
 > **§11 records what has since landed** — the concrete-only deep gate, the suites it
