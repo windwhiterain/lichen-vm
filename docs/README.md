@@ -173,6 +173,7 @@ authority, and this table only names the state.
 | [Open issues after the slot isomorphism](notes/open-issues.md) | `lichen-lowlevel` (`function.rs`'s clone rule), `lichen-compute` (the recording pass) | current — the slot isomorphism's evidence (highlevel 136/136, language 275/275, lowlevel 164) and what is left open: the compute graph block's regression (the ten `graph_jit` tests, with the low type's value-versus-slot question before the checker hand-off) |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule enforced in CI by `comments-check` |
 | [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current — the lib binary and one external binary, the `#[path]` root that names its modules, and the argument that selects a single test; the bound is enforced in CI by `test-layout-check` |
+| [The attribute isomorphism — handoff](notes/attribute-isomorphism.md) | `lichen-highlevel` (`checker`, `checker/annotations`, `checker/lambda`, `shape`), `lichen-lowlevel` (`apply`, `static_module/apply`), `lichen-compute` (`compile_fragment`) | **in progress, handed over** — the rule is in the spec and the attribute records are gone; `a_write_returns...` passes; the read certificate and the frozen type record stay red, with the probes that found each |
 
 ## The book
 
