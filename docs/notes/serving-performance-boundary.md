@@ -41,11 +41,15 @@ kernel reaches when its reads are many ([qwen-inference](qwen-inference.md)). Th
    is a **step that holds a whole layer**: the language and the recorder already build such a step
    (`LAYER_STEP`, `BLOCK`), so this is a serving-side composition, not a new primitive — except for
    the class rule below.
-2. **A dispatch reads its buffers at one class.** The rope batch step proved it: with bf16 values
-   and float positions, the positions were read as bf16. That rule is what blocks a composed layer
-   today: its intermediates are float while its weights are bf16, and one dispatch cannot read both
-   at their own classes. The capability is **per-buffer classes in one dispatch** (or a
-   class-homogeneous graph), and it is the gate on composition.
+2. **A dispatch reads each buffer at the fragment's class for that slot — and the caller's class
+   is converted to it.** This was the edge that blocked composition: a host argument carried its
+   class, but the class was dropped where the graph handed the bytes to the backend, so a float
+   positions buffer beside bf16 values was read as bf16 (the rope batch step's alternate rows).
+   **Landed**: the class now travels on the host input and is converted per buffer when it is
+   staged; bf16 values beside float positions answer the same tokens. What remains is the
+   *declared* side: a program's buffers are declared uniform (a narrow pack narrows a program), so a
+   composed layer graph needs either per-node packs or a float program whose bf16 weights are
+   converted at binding — the second now works, which is the gate on a composed layer step.
 3. **A runtime extent keeps the projection off the tiling pass.** The projection is 69% of a token
    and runs at 6.7 GB/s because each lane folds 2048 elements serially; splitting the fold did not
    move it, so the cost is the per-lane serial read, which a workgroup tiling would cut. The tiling
@@ -69,11 +73,12 @@ kernel reaches when its reads are many ([qwen-inference](qwen-inference.md)). Th
 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
-| 1 | per-buffer classes in a dispatch | composed steps (edge 1) | 420 steps a token |
-| 2 | tiling at a runtime extent | the projection (edge 3) | 1.664 s of 2.324 s |
-| 3 | layer pass over a prompt block + causal attention | prefill (edge 4) | 0.47 s a position |
-| 4 | resident or paged KV | long context (edge 5) | 8 MB a row a layer |
-| 5 | two-stage head | the vocabulary read (edge 6) | 0.380 s of 2.324 s |
+| 1 | ~~per-buffer classes in a dispatch~~ **landed** | the caller's class is converted per buffer | bf16 values + float positions answer |
+| 2 | a composed layer step (serving side) | the 420 steps (edge 1) | 420 steps a token |
+| 3 | tiling at a runtime extent | the projection (edge 3) | 1.664 s of 2.324 s |
+| 4 | layer pass over a prompt block + causal attention | prefill (edge 4) | 0.47 s a position |
+| 5 | resident or paged KV | long context (edge 5) | 8 MB a row a layer |
+| 6 | two-stage head | the vocabulary read (edge 6) | 0.380 s of 2.324 s |
 
 ## What is already at its floor
 
