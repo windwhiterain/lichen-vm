@@ -268,6 +268,29 @@ pub fn record(
     source: &str,
     packs: &[lichen_compute::placement_pack::PlacementPack],
 ) -> Result<Recorded, ServeRefusal> {
+    record_with(source, packs, None)
+}
+
+/// Compile `source` and record the step its tail names, with `packs` and the `plan` installed.
+///
+/// # Invariant
+/// The same recording as [`record`], with the plan's policy on the region merge: the plan
+/// names the strategy the pass runs under and the regions it may attempt, and the packs and
+/// the plan's own overrides are the licences a merge still needs.
+pub fn record_with_plan(
+    source: &str,
+    packs: &[lichen_compute::placement_pack::PlacementPack],
+    plan: &lichen_compute::fusion_file::FusionPlan,
+) -> Result<Recorded, ServeRefusal> {
+    record_with(source, packs, Some(plan))
+}
+
+/// The recording both entry points make, with the plan's policy or without one.
+fn record_with(
+    source: &str,
+    packs: &[lichen_compute::placement_pack::PlacementPack],
+    plan: Option<&lichen_compute::fusion_file::FusionPlan>,
+) -> Result<Recorded, ServeRefusal> {
     let mut store = lichen_compute::language::new_store(None)
         .map_err(|error| ServeRefusal::Device(error.to_string()))?;
     if let Err(diagnostics) = lichen_language::run::evaluate_raw(source, None, &mut store) {
@@ -281,9 +304,13 @@ pub fn record(
     let mut store = lichen_compute::language::new_store(None)
         .map_err(|error| ServeRefusal::Device(error.to_string()))?;
     let build = lichen_language::testing::compile_at(source, None, &mut store);
-    if !packs.is_empty() {
+    match plan {
         // The floor is the region merge **then** the tiling pass: a merge leaves fewer nodes.
-        lichen_compute::floor::install_floor_with_packs(&build.module, packs);
+        Some(plan) => lichen_compute::floor::install_floor_with_plan(&build.module, packs, plan),
+        None if !packs.is_empty() => {
+            lichen_compute::floor::install_floor_with_packs(&build.module, packs);
+        }
+        None => {}
     }
     let (module, value, _root) = lichen_language::testing::finish(build);
     // A pass is asked while the graph is recorded, which is here: its lines are taken below.
@@ -349,6 +376,27 @@ impl Session {
         packs: &[lichen_compute::placement_pack::PlacementPack],
     ) -> Result<Prepared<'_>, ServeRefusal> {
         let recorded = record(source, packs)?;
+        Ok(Prepared {
+            session: self,
+            graph: recorded.graph,
+            backend: recorded.backend,
+            report: recorded.report,
+        })
+    }
+
+    /// Compile `source` once, with `packs` and the `plan` installed as graph passes.
+    ///
+    /// # Invariant
+    /// The same recording as [`Session::prepare_with_packs`], with the plan's policy on the
+    /// region merge: the plan names the strategy the pass runs under and the regions it may
+    /// attempt, and it changes nothing a legality check refuses.
+    pub fn prepare_with_plan(
+        &self,
+        source: &str,
+        packs: &[lichen_compute::placement_pack::PlacementPack],
+        plan: &lichen_compute::fusion_file::FusionPlan,
+    ) -> Result<Prepared<'_>, ServeRefusal> {
+        let recorded = record_with_plan(source, packs, plan)?;
         Ok(Prepared {
             session: self,
             graph: recorded.graph,

@@ -5,6 +5,7 @@ use crate::compute::{GraphPass, pass_chain, set_graph_pass};
 use lichen_lowlevel::Module;
 
 use crate::automatic_tiling::tiling_pass_with_packs;
+use crate::fusion_file::FusionPlan;
 use crate::language::LangProgram;
 use crate::placement_pack::PlacementPack;
 use crate::region_merge::region_merge_pass_with_packs;
@@ -22,6 +23,20 @@ pub fn install_floor(module: &Module<LangProgram>) {
 /// rather than follow it, so a caller would get one transform and not both.
 pub fn install_floor_with_packs(module: &Module<LangProgram>, packs: &[PlacementPack]) {
     set_graph_pass(floor_pass_with_packs(module, packs));
+}
+
+/// Install the floor for `module`, with the packs and the plan a runner installed there.
+///
+/// # Invariant
+/// The same two stages as [`install_floor_with_packs`], and the plan rides the **region merge**
+/// alone: a plan states which regions are attempted and how large they may be, and the tiling
+/// pass tiles what the merge left.
+pub fn install_floor_with_plan(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+    plan: &FusionPlan,
+) {
+    set_graph_pass(floor_pass_with_plan(module, packs, plan));
 }
 
 /// Install the floor for a run, before that run's program is compiled.
@@ -46,6 +61,22 @@ pub fn floor_pass_with_packs(
 ) -> Box<dyn GraphPass> {
     pass_chain(vec![
         region_merge_pass_with_packs(module, packs),
+        tiling_pass_with_packs(module, packs),
+    ])
+}
+
+/// The pass `install_floor_with_plan` installs, for a caller that wants to wrap it.
+///
+/// # Invariant
+/// The same two stages in the same order, with the plan's policy on the region merge: a
+/// caller that wraps this chain wraps what a run dispatches.
+pub fn floor_pass_with_plan(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+    plan: &FusionPlan,
+) -> Box<dyn GraphPass> {
+    pass_chain(vec![
+        crate::region_merge::region_merge_pass_with_plan(module, packs, plan),
         tiling_pass_with_packs(module, packs),
     ])
 }

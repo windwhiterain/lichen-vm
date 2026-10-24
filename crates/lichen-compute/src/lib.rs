@@ -5,6 +5,7 @@ pub mod automatic_tiling;
 pub mod compute;
 pub mod floor;
 pub mod fusion_claim;
+pub mod fusion_file;
 pub mod language;
 pub mod packs;
 pub mod placement_pack;

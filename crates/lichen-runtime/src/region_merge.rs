@@ -22,6 +22,7 @@ use crate::fusion_claim::{
     Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, SchemaRefusal, derive_regions,
     offsets, region_positions,
 };
+use crate::fusion_file::{Budget, FusionPlan, Strategy};
 use crate::graph_pass::{GraphPass, LaunchExtent};
 use crate::kernel_registry::claimed_kernels;
 use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
@@ -36,6 +37,31 @@ pub fn region_merge_pass(instances: Vec<Instance>, packs: &[PlacementPack]) -> B
     Box::new(RegionMerge {
         instances,
         packs: packs.to_vec(),
+        strategy: None,
+        budget: Budget::unlimited(),
+        barriers: Vec::new(),
+    })
+}
+
+/// The pass that merges the regions `instances` names, under `packs` and the `plan`'s policy.
+///
+/// # Invariant
+/// The plan's force-merge overrides are installed beside the packs the runner handed over, so
+/// a plan alone steers the merges it names. Its budget and its barriers are the policy the
+/// pass reads, and the licence every merge still needs stands whatever they say.
+pub fn region_merge_pass_with_plan(
+    instances: Vec<Instance>,
+    packs: &[PlacementPack],
+    plan: &FusionPlan,
+) -> Box<dyn GraphPass> {
+    let mut installed = packs.to_vec();
+    installed.extend(plan.overrides.iter().cloned());
+    Box::new(RegionMerge {
+        instances,
+        packs: installed,
+        strategy: Some(plan.strategy),
+        budget: plan.budget,
+        barriers: plan.barriers.clone(),
     })
 }
 
@@ -46,6 +72,12 @@ struct RegionMerge {
     instances: Vec<Instance>,
     /// The installed packs, in the order they are consulted.
     packs: Vec<PlacementPack>,
+    /// The strategy the pass reports, when a plan named one.
+    strategy: Option<Strategy>,
+    /// The bounds the gate reads.
+    budget: Budget,
+    /// The regions a plan barred from merging.
+    barriers: Vec<SchemaHash>,
 }
 
 /// What licensed one region's merge, as the report names it.
@@ -158,6 +190,9 @@ impl GraphPass for RegionMerge {
         } else {
             &self.instances
         };
+        if let Some(strategy) = &self.strategy {
+            lines.push(format!("strategy \"{}\"", strategy.as_str()));
+        }
         let starts = offsets(graph);
         let positions = region_positions(graph, instances);
         // A node no region holds is named too: "no fusible region" and "no claim" are two answers.
@@ -175,9 +210,12 @@ impl GraphPass for RegionMerge {
                 Ok(schema) => {
                     // The licence says the merge may be *attempted*; every condition below
                     // stands whatever answered it.
-                    match licence(&schema, positions, &self.packs).and_then(|licensed| {
-                        merge_region(graph, &starts, positions).map(|m| (licensed, m))
-                    }) {
+                    match self
+                        .gate(graph, &starts, positions, &schema)
+                        .and_then(|()| licence(&schema, positions, &self.packs))
+                        .and_then(|licensed| {
+                            merge_region(graph, &starts, positions).map(|m| (licensed, m))
+                        }) {
                         Ok((licensed, merge)) => (
                             merged_line(index, &merge, &licensed, &schema.hash),
                             Some(merge),
@@ -221,6 +259,60 @@ impl GraphPass for RegionMerge {
             }
         }
     }
+}
+
+impl RegionMerge {
+    /// The plan's own refusals, asked before any legality check.
+    ///
+    /// # Invariant
+    /// **The gate may only decline.** A barrier and a budget say which regions are *attempted*,
+    /// and a region they let through is still refused by every legality check that stands under
+    /// them: a pack decides which regions are merged, never what a merge must satisfy.
+    fn gate(
+        &self,
+        graph: &Graph,
+        starts: &[usize],
+        positions: &[usize],
+        schema: &RegionSchema,
+    ) -> Result<(), MergeRefusal> {
+        if self.barriers.contains(&schema.hash) {
+            return Err(MergeRefusal::RegionIsBarrier {
+                region: schema.hash.clone(),
+            });
+        }
+        let nodes = positions.len();
+        let depth = region_depth(graph, starts, positions);
+        if nodes > self.budget.max_region_nodes || depth > self.budget.max_region_depth {
+            return Err(MergeRefusal::RegionOverBudget {
+                nodes,
+                depth,
+                max_nodes: self.budget.max_region_nodes,
+                max_depth: self.budget.max_region_depth,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The depth of the region's own DAG: the most nodes on one path inside it.
+///
+/// # Invariant
+/// **The region's own edges**, read off the graph: a node that reads a body the region
+/// produced continues that body's path, so the depth counts the nodes on the longest path and
+/// a region of one node is one deep.
+fn region_depth(graph: &Graph, starts: &[usize], positions: &[usize]) -> usize {
+    let mut depths: Vec<usize> = vec![1; positions.len()];
+    let mut deepest = 1;
+    for (index, &position) in positions.iter().enumerate() {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        for &value in &node.inputs {
+            if let Some(producer) = region_producer(graph, starts, positions, index, value) {
+                depths[index] = depths[index].max(depths[producer] + 1);
+            }
+        }
+        deepest = deepest.max(depths[index]);
+    }
+    deepest
 }
 
 /// Why one region's two nodes did not become one.
@@ -330,6 +422,28 @@ pub enum MergeRefusal {
         /// A pack that named it and whose constraints did not hold, when one was consulted.
         inert: Option<(String, ConstraintRefusal)>,
     },
+    /// The region is over the plan's budget.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is not one: the budget says which
+    /// regions are *attempted*, and the legality arms say what a merge must satisfy. The arm
+    /// carries both sides of the comparison, so a report names what the region was and what the
+    /// plan allowed.
+    RegionOverBudget {
+        /// How many nodes the region holds.
+        nodes: usize,
+        /// How deep the region's own DAG is.
+        depth: usize,
+        /// The most nodes the plan allows.
+        max_nodes: usize,
+        /// The deepest the plan allows.
+        max_depth: usize,
+    },
+    /// The plan bars this region from merging.
+    RegionIsBarrier {
+        /// The region the plan bars.
+        region: SchemaHash,
+    },
 }
 
 impl MergeRefusal {
@@ -353,6 +467,8 @@ impl MergeRefusal {
             MergeRefusal::CompositionRefused { refusal } => refusal.name(),
             MergeRefusal::NotAReductionChain { .. } => "NotAReductionChain",
             MergeRefusal::InterfacesAreNotProved { .. } => "InterfacesAreNotProved",
+            MergeRefusal::RegionOverBudget { .. } => "RegionOverBudget",
+            MergeRefusal::RegionIsBarrier { .. } => "RegionIsBarrier",
         }
     }
 
@@ -442,6 +558,21 @@ impl fmt::Display for MergeRefusal {
                 )?;
                 write_inert(formatter, inert)
             }
+            MergeRefusal::RegionOverBudget {
+                nodes,
+                depth,
+                max_nodes,
+                max_depth,
+            } => write!(
+                formatter,
+                "the region holds {nodes} node(s) and its own DAG is {depth} deep, over the \
+                 plan's budget of {max_nodes} node(s) and {max_depth} deep"
+            ),
+            MergeRefusal::RegionIsBarrier { region } => write!(
+                formatter,
+                "the plan bars the region {region} from merging, and a bar is the file's own \
+                 refusal to merge it"
+            ),
         }
     }
 }

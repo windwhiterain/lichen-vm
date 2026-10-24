@@ -11,6 +11,7 @@ pub mod automatic_tiling;
 pub mod device;
 pub mod fused;
 pub mod fusion_claim;
+pub mod fusion_file;
 pub mod graph_pass;
 pub mod kernel_registry;
 pub mod load;
@@ -27,6 +28,10 @@ pub use fused::schema::FORMAT_VERSION as ARTIFACT_FORMAT_VERSION;
 pub use fused::{
     FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, malformed_at, read_fused_kernel,
     write_fused_kernel,
+};
+pub use fusion_file::{
+    Action, Budget, FusionFile, FusionFileRefusal, FusionPlan, Override, Pattern, Refusals,
+    Strategy, read_fusion_file,
 };
 pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
 pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};

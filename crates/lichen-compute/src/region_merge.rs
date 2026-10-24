@@ -12,6 +12,7 @@ use lichen_lowlevel::Module;
 
 use crate::compute::{GraphPass, set_graph_pass};
 use crate::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
+use crate::fusion_file::FusionPlan;
 use crate::language::LangProgram;
 use crate::placement_pack::PlacementPack;
 
@@ -32,6 +33,20 @@ pub fn install_region_merge_with_packs(module: &Module<LangProgram>, packs: &[Pl
     set_graph_pass(region_merge_pass_with_packs(module, packs));
 }
 
+/// Install the region merge pass for `module`, with the packs and the plan a runner installed.
+///
+/// # Invariant
+/// The plan's budget and its barriers are the policy the pass reads, and the plan's own
+/// force-merge overrides are installed beside the packs: a plan alone steers the merges it
+/// names, and every legality check stands whatever the plan says.
+pub fn install_region_merge_with_plan(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+    plan: &FusionPlan,
+) {
+    set_graph_pass(region_merge_pass_with_plan(module, packs, plan));
+}
+
 /// The pass `install_region_merge` installs, for a caller that wants to wrap it.
 pub fn region_merge_pass(module: &Module<LangProgram>) -> Box<dyn GraphPass> {
     region_merge_pass_with_packs(module, &[])
@@ -43,6 +58,15 @@ pub fn region_merge_pass_with_packs(
     packs: &[PlacementPack],
 ) -> Box<dyn GraphPass> {
     lichen_runtime::region_merge::region_merge_pass(instances(module), packs)
+}
+
+/// The pass `install_region_merge_with_plan` installs, for a caller that wants to wrap it.
+pub fn region_merge_pass_with_plan(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+    plan: &FusionPlan,
+) -> Box<dyn GraphPass> {
+    lichen_runtime::region_merge::region_merge_pass_with_plan(instances(module), packs, plan)
 }
 
 /// The claimed kernels a module's own nodes name, as the derivation reads them.

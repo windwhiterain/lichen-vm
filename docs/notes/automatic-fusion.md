@@ -113,6 +113,70 @@ regions are attempted, never what a merge must satisfy** ([graph-fusion](graph-f
    the resident token (`resident_token`) for the dispatch count and wall time; the serve suite
    and the comments/fmt checks for the tree.
 
+## What landed
+
+The first slice of the strategy space is a **file the runner installs**, a **plan it answers**
+and a **gate the merge pass reads**. None of it decides what a merge must satisfy: the gate
+declines a region, and it never accepts one.
+
+### The file
+
+`crates/lichen-runtime/src/fusion_file.rs` reads the manifest with `facet_json`, and
+`read_fusion_file` is its only constructor. The schema it accepts is the one this note sketches:
+
+| field | what it says | what spends it |
+|---|---|---|
+| `strategy` | the family the pass runs under | `greedy_sibling` is the only one; another is refused by name |
+| `budget.max_region_nodes` | the most nodes a region may hold and still be attempted | the gate |
+| `budget.max_region_depth` | the deepest a region's own DAG may be | the gate |
+| `budget.compute_tolerance` | the recomputation the plan tolerates | carried |
+| `budget.staging_bytes` | the staging the plan allows | carried |
+| `budget.passes` | how many merge passes the plan asks for | carried |
+| `refuse.shared_producer_duplication` | whether a shared producer may be duplicated | carried |
+| `refuse.opaque_is_barrier` | whether an unproved interface bars the merge | carried |
+| `patterns` | the nodes a human matched by hand | carried |
+| `overrides` | one action per region | the plan |
+
+**A field the file omits takes the floor's own answer**: a budget field left out bounds
+nothing, and the refusals the engine already makes stand whatever the file says. The refusals
+are named and quote the field they met (`UnknownStrategy`, `BadRegionHash`,
+`RegionIsOverriddenTwice`, `PackRefused`), in the pack's own style.
+
+### The plan
+
+`FusionFile::plan` answers a `FusionPlan { strategy, budget, overrides, barriers }`. A
+**force-merge** override becomes a `fuse` pack naming the region and asking for `one_kernel`,
+read with the pack's own reader (`read_placement_pack`), so a pack the file spells is a pack
+the engine already knows. A **barrier** names the region and asks for no merge — the pack
+vocabulary cannot spell that, because `fuse` is the only directive that names a region and it
+asks for a merge — so the plan carries the barred regions beside the packs.
+
+### The gate
+
+The merge pass reads the plan's policy before any legality check: a barred region is refused
+by name (`RegionIsBarrier`), and a region over the budget is left alone by name
+(`RegionOverBudget`, carrying the region's own node count and depth beside the budget's two
+bounds). The strategy is reported once, as `strategy "greedy_sibling"`.
+
+**The rule that did not move**: the gate may only *decline*. A region the gate lets through is
+still refused by every legality check that stands under it — the probe shows the pre-attention
+region refused by `ShapesDiffer` under the plan that names it, and refused by
+`RegionOverBudget` under a tighter budget of the same plan.
+
+### What is not true yet
+
+- **The file is read, not emitted.** The pass does not write a plan back.
+- **`passes` is parsed and the floor runs one merge.** The chain is one region merge and one
+  tiling pass, and the plan's pass count is carried, not spent.
+- **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
+  staging is checked against the budget.
+- **The strategy steers nothing yet.** It is reported once and it names the family; the
+  regions are still attempted in the graph's own order, and no sibling merge is attempted.
+- **The file's `refuse` booleans are carried.** The engine's own refusals — `NotAReductionChain`
+  for a shared producer, `InterfacesAreNotProved` for an unproved interface — stand whatever the
+  file says.
+- **`patterns` are carried.** Nothing consults them yet.
+
 ## References
 
 - TVM operator fusion (`FuseOps`, post-dominators): <https://github.com/apache/tvm/blob/main/docs/arch/fusion.rst>
