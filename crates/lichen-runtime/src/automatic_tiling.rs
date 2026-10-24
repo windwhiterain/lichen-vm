@@ -172,11 +172,21 @@ impl GraphPass for AutomaticTiling {
                 &self.packs,
             ));
         }
-        // A pack stating a class lands its node whatever its staging did: the two sentences are apart.
-        let mut classed: Vec<(usize, Instance, ScalarClass)> = Vec::new();
+        // A class constraint lands on any kernel node; a schema-less pack is every node's.
+        let wildcard = self
+            .packs
+            .iter()
+            .find(|pack| pack.schema().is_none())
+            .and_then(|pack| pack.class());
+        let mut classed: Vec<(usize, Option<Instance>, ScalarClass)> = Vec::new();
         for (position, node) in rewritten.nodes().iter().enumerate() {
             let Node::Kernel(kernel) = node;
-            let Some(Ok(instance)) = instances.get(&fragment_digest(&kernel.fragment)) else {
+            let digest = fragment_digest(&kernel.fragment);
+            if let Some(class) = wildcard {
+                classed.push((position, None, class));
+                continue;
+            }
+            let Some(Ok(instance)) = instances.get(&digest) else {
                 continue;
             };
             let hash = instance.schema.hash();
@@ -186,11 +196,14 @@ impl GraphPass for AutomaticTiling {
                 .find(|pack| pack.schema() == Some(&hash))
                 .and_then(|pack| pack.class());
             if let Some(class) = class {
-                classed.push((position, instance.clone(), class));
+                classed.push((position, Some(instance.clone()), class));
             }
         }
         for (position, instance, class) in classed {
-            lines.push(classed_node(&mut rewritten, position, &instance, class));
+            lines.push(match instance {
+                Some(instance) => classed_node(&mut rewritten, position, &instance, class),
+                None => classed_plain(&mut rewritten, position, class),
+            });
         }
         Some(rewritten)
     }
@@ -213,6 +226,26 @@ fn classed_node(
     let artifact = write_fused_kernel(&FusedKernel {
         fragment,
         claim: Some(instance.claim.clone()),
+        plan: Plan::default(),
+    });
+    match land_fused_kernel(graph, position, &artifact) {
+        Ok(_) => format!("node {position}: the pack states {class:?}"),
+        Err(refusal) => format!("node {position}: refused: {}", landing_reason(&refusal)),
+    }
+}
+
+/// Land a node at the pack's class with no claim: the class needs no algebra.
+///
+/// # Invariant
+/// The fragment is the program's and the class is the pack's; a composed node has no claim to
+/// carry, and adding none is what lets a class pack reach a graph the claim join refuses.
+fn classed_plain(graph: &mut Graph, position: usize, class: ScalarClass) -> String {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    let mut fragment = node.fragment.clone();
+    fragment.states_the_class(class);
+    let artifact = write_fused_kernel(&FusedKernel {
+        fragment,
+        claim: None,
         plan: Plan::default(),
     });
     match land_fused_kernel(graph, position, &artifact) {

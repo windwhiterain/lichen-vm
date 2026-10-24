@@ -17,6 +17,16 @@ pub fn pack_text(schema: &str) -> String {
     )
 }
 
+/// The pack a graph with no listed nodes takes: the class applies to every node.
+pub fn wildcard_pack_text() -> String {
+    r#"{
+  "name": "narrow",
+  "requires": { "class": "bfloat16" },
+  "plan": { "staging": [] }
+}"#
+    .to_string()
+}
+
 /// The `sha256:<hex>` a node's line prints.
 pub fn reported_schema(lines: &[String]) -> Option<String> {
     let line = lines.iter().find(|line| line.contains("sha256:"))?;
@@ -45,16 +55,16 @@ pub fn narrowed<'session>(
     let probe = session
         .prepare_with_packs(source, &[placeholder])
         .map_err(QwenRefusal::Step)?;
-    let Some(schema) = reported_schema(probe.report()) else {
-        return Err(QwenRefusal::Weights(format!(
-            "a preparation names its nodes' schemas: {:?}",
-            probe.report()
-        )));
-    };
+    let schema = reported_schema(probe.report());
     drop(probe);
     clear_graph_pass();
-    let pack = read_placement_pack(&pack_text(&schema))
-        .map_err(|refusal| QwenRefusal::Weights(format!("the pack for {schema}: {refusal}")))?;
+    // A composed graph names no node, so the wildcard states the class for every node.
+    let text = match &schema {
+        Some(schema) => pack_text(schema),
+        None => wildcard_pack_text(),
+    };
+    let pack = read_placement_pack(&text)
+        .map_err(|refusal| QwenRefusal::Weights(format!("the pack for {schema:?}: {refusal}")))?;
     session
         .prepare_with_packs(source, &[pack])
         .map_err(QwenRefusal::Step)

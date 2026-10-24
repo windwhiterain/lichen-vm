@@ -307,15 +307,16 @@ pub fn read_placement_pack(text: &str) -> Result<PlacementPack, PackRefusal> {
         })
         .transpose()?;
     let plan: Plan = pack.plan.into();
-    if plan.staging.is_empty() && fuse.as_ref().and_then(Fuse::region).is_none() {
+    let class = pack.requires.class.map(ScalarClass::from);
+    // A class constraint is not a staging: a pack that only states a class needs no plan.
+    if plan.staging.is_empty() && fuse.as_ref().and_then(Fuse::region).is_none() && class.is_none()
+    {
         return Err(PackRefusal::EmptyPlan { name: pack.name });
     }
     Ok(PlacementPack {
         schema,
         name: pack.name,
-        requires: Constraints {
-            class: pack.requires.class.map(ScalarClass::from),
-        },
+        requires: Constraints { class },
         fuse,
         plan,
     })

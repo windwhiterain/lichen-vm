@@ -1109,3 +1109,95 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// The attention half of one row as one graph: norm, three projections, two norms, two rotations.
+///
+/// # Invariant
+/// Every extent is the model's own shape written as a literal, because this step is one row.
+/// The three written buffers are the step's return, so the caller fetches exactly what it appends.
+pub const PRE_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+SquareIn = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Squared  = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+ScaleIn  = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .x (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Normed   = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+MatvecIn = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Rows     = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+RopeIn   = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+RopeOut  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Pre      = struct{.key (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .value (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .query (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+SquarePar = struct{.n Int, .dim Int, .in SquareIn}
+SquareArg = struct{.n Int, .dim Int, .I SquareIn}
+squares_raw = (k : SquarePar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float))) ~ "combine" ~ "element"))
+  b_s = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Squared)(.s (compute.write ((compute.Write _)(.to b_s, .at lane, .value (fold (k.dim, 0.0 ~ "identity")))))))
+}
+squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Squared
+ScalePar = struct{.n Int, .dim Int, .in ScaleIn}
+ScaleArg = struct{.n Int, .dim Int, .I ScaleIn}
+scale_raw = (k : ScalePar) => {
+  i = compute.range k.n
+  head = i / k.dim
+  j = i - head * k.dim
+  total = (compute.read ((compute.Read _)(.from k.in.s, .at head)) : Float)
+  mean = total / (int2float k.dim)
+  divisor = sqrt (mean + 0.000001)
+  value = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  weight = (compute.read ((compute.Read _)(.from k.in.w, .at j)) : Float)
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Normed)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((value * weight) / divisor))))))
+}
+scale = compute.parallel scale_raw "gpu" Normed
+MatvecPar = struct{.n Int, .dim Int, .per Int, .in MatvecIn}
+MatvecArg = struct{.n Int, .dim Int, .per Int, .I MatvecIn}
+matvec_raw = (k : MatvecPar) => {
+  row = compute.range k.n
+  sequence = row / k.per
+  weight_row = row - (sequence * k.per)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (((s(0) - 1) * k.per) + weight_row))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((sequence * k.dim) + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Rows)(.y (compute.write ((compute.Write _)(.to b_y, .at row, .value (fold (k.dim, 0.0 ~ "identity")))))))
+}
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" Rows
+RopePar = struct{.n Int, .position Int, .in RopeIn}
+RopeArg = struct{.n Int, .position Int, .I RopeIn}
+rope_raw = (k : RopePar) => {
+  i = compute.range k.n
+  head = i / 128
+  j = i - head * 128
+  low = j < 64
+  other_index = if low then (i + 64) else (i - 64)
+  own = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at other_index)) : Float)
+  turned = if low then j else (j - 64)
+  exponent = (0.0 - (int2float turned)) / 64.0
+  scale = exp (exponent * (ln (1000000.0)))
+  angle = (int2float k.position) * scale
+  cosine = cos angle
+  sine = sin angle
+  signed = if low then (0.0 - 1.0) else 1.0
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((RopeOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((own * cosine) + ((signed * other) * sine)))))))
+}
+rope = compute.parallel rope_raw "gpu" RopeOut
+PreIn = struct{.hidden (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .gain (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .k (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .knorm (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .qnorm (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+GArg = struct{.position Int, .in PreIn}
+step = (s : GArg) => {
+  sq = (compute.plrun squares ((SquareArg)(.n 2048, .dim 2048, .I SquareIn(.x s.in.hidden))) : Squared)
+  nm = (compute.plrun scale ((ScaleArg)(.n 2048, .dim 2048, .I ScaleIn(.s sq.s, .x s.in.hidden, .w s.in.gain))) : Normed)
+  key1 = (compute.plrun matvec ((MatvecArg)(.n 1024, .dim 2048, .per 1024, .I MatvecIn(.x nm.y, .w s.in.k))) : Rows)
+  key2 = (compute.plrun squares ((SquareArg)(.n 1024, .dim 128, .I SquareIn(.x key1.y))) : Squared)
+  key3 = (compute.plrun scale ((ScaleArg)(.n 1024, .dim 128, .I ScaleIn(.s key2.s, .x key1.y, .w s.in.knorm))) : Normed)
+  key = (compute.plrun rope ((RopeArg)(.n 1024, .position s.position, .I RopeIn(.x key3.y))) : RopeOut)
+  value = (compute.plrun matvec ((MatvecArg)(.n 1024, .dim 2048, .per 1024, .I MatvecIn(.x nm.y, .w s.in.v))) : Rows)
+  query1 = (compute.plrun matvec ((MatvecArg)(.n 2048, .dim 2048, .per 2048, .I MatvecIn(.x nm.y, .w s.in.q))) : Rows)
+  query2 = (compute.plrun squares ((SquareArg)(.n 2048, .dim 128, .I SquareIn(.x query1.y))) : Squared)
+  query3 = (compute.plrun scale ((ScaleArg)(.n 2048, .dim 128, .I ScaleIn(.s query2.s, .x query1.y, .w s.in.qnorm))) : Normed)
+  query = (compute.plrun rope ((RopeArg)(.n 2048, .position s.position, .I RopeIn(.x query3.y))) : RopeOut)
+  ((Pre)(.key key.y, .value value.y, .query query.y))
+}
+built = compute.graph step
+built
+"#;
