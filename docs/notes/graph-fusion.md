@@ -1443,8 +1443,8 @@ Still open, cheapest to settle before the interface syntax is written:
   4. **Licence** — a region the pass cannot prove needs a pack's `fuse`; the file is where that
      pack comes from, which is also the manual override.
 
-  The open questions are the run split, the closed shape set, the licence policy, and the
-  rotation's gather — the one limit that is the language's rather than the derivation's. The
+  The open questions are the licence policy and the rotation's gather — the one limit that is
+  the language's rather than the derivation's; the run split and the shape set are closed. The
   order of work: research the heuristics, implement the derivation and the fold, review. The
   survey, the families it chooses (consumer-side greedy plus sibling merge), the signals and the
   file's schema are in [automatic-fusion](automatic-fusion.md).
