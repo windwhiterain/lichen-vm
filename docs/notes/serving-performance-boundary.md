@@ -52,6 +52,29 @@ resident, a relabel, a held model); the path to it was dead.** A boundary measur
 would have said the projection is 69% and the answer is a tiled kernel. Measured on the working
 path, the projection is 43% and the answer is **fewer steps**.
 
+## The wall this round hit: a composed step cannot be prepared at the narrowed width
+
+The next optimization was a **pre-attention composite**: one graph per layer's norm, q/k/v
+projections, both norms and both rotations — eleven dispatches, one step. It **records** (the
+unpacked probe prepares it, eleven nodes). Preparing it the way the model's projections are
+prepared — through the narrowed helper — is refused by the placement report:
+
+    a preparation names its nodes' schemas: node 1: refused: no claim is registered for the
+    fragment at 1, so it is in no row of the digest join and no algebra can be derived for it;
+    a composed fragment is exactly this, because composition registers neither body it joins
+
+The report is per kernel; a graph of kernels has no row. The two escapes are closed: the language
+cannot spell the narrowed class (`unresolved name 'BFloat16'`), and preparing the graph unpacked
+would read the bf16 weights as Float, because a **resident is bound as-is** — the per-buffer
+conversion landed earlier covers host inputs, not device values.
+
+So the composed step needs the framework to type a graph's nodes: **per-node classes in the pack**
+(a matcher that names a node rather than a program) or **a class conversion for resident values**
+(a resident at one class feeding a kernel that declares another). The prize is measured by
+submission count: the pre-attention composite removes 7 submissions a layer (196 a token) and the
+feed-forward half another 8 (224 a token), taking 648 to about 230, a **65% cut** — the largest
+remaining lever on this machine.
+
 ## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
@@ -82,11 +105,11 @@ path, the projection is 43% and the answer is **fewer steps**.
 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
-| 1 | a composed layer step (serving side) | 648 submissions a token | 648 × ~0.2 ms |
+| 1 | **per-node packs or a resident class conversion** — the gate | the composed step (the wall above) | 648 → ~230 submissions |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |
-| 5 | per-node packs | the composed step's classes | bf16 weights + f32 intermediates |
+| 5 | a composed layer step (serving side) — after #1 | 648 submissions a token | 648 × ~0.2 ms |
 
 ## Already at its floor
 
