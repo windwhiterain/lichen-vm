@@ -1,10 +1,11 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `02d31d8f`, working tree clean, not merged. The rule is landed in the language
+> `c36cdce4`, working tree clean, not merged. The rule is landed in the language
 > spec and the attribute-specific record machinery is gone. Three reds remain: the
-> kernel codomain (mechanism 2b, with the verdict that governs it), and two
-> language-server tests that read the same at this session's start commit.
+> kernel codomain (mechanism 2b carries the verdict and the measured origin of its
+> open cell), and two language-server tests that read the same at this session's
+> start commit.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -165,36 +166,50 @@ no second owner to defer to.
 Both read the launch's result type, which is `k.O` — the kernel struct's codomain
 field.
 
-Measured (`type_head` on the root type node): the result type is a five-position type
-expression whose slots 1–4 are decided and whose slot 0 — the denotation — is a free
-cell; a fill log over the whole program never named it, so nothing ever unified it.
-Both tests pass at `aeac9efe`, so this is the second casualty of `5d585047`: the
-non-reporting binding now unifies the type position, and the frozen signature's
-return expression it meets names a **template hole** in its value position. With
-`619a2606` that skeleton no longer fills anything, but the pair is never made either
-(the node-less arm returns before descending), so the codomain stays open.
+Both tests pass at `aeac9efe`, so this is the second casualty of `5d585047`: before it,
+the non-reporting binding skipped the type position (`slot == 1`) and the caller's own
+inference decided it; the commit made the type position ride the same rule as every
+other, which is correct — the isomorphism — and exposed a clone that nothing binds.
 
 ### The verdict: a static node is read directly
 
 A frozen position is **read in its own module**, exactly as a dynamic one, and never
-copied into a dynamic node in order to be read. The rule now sits at both readers
+copied into a dynamic node in order to be read. The rule sits at both readers
 (`Module::node_value`, `shape::node_value`) as their `# Invariant`. A copy gives the
 position a fresh class, so one value reads as several.
 
 This was learned by trying the opposite (`a524e578`, `f0f8f668`): a copy walk that
 materialized every open frozen position into a fresh cell. It made the codomain read
-(`compute` 237/0, the two pinned renderings back to `(raw Kernel, Int, Int)`), and it
-was still wrong — the copy is what has to go, not the read. Both commits are reverted
-by `484e9fa2`, and `02d31d8f` restores the two pins to `raw none`, which is what a
-direct read sees while the codomain is open.
+(compute 237/0, the two pinned renderings back to `(raw Kernel, Int, Int)`) and it was
+still wrong: the copy is what had to go, not the read. `484e9fa2` reverts it, and
+`02d31d8f` restores the two pins to `raw none`, which is what a direct read sees while
+the codomain is open.
 
-So the codomain closes **where the type side installs its cells**, not where a reader
-reads: the return type a call binds has to be this call's clone — a fresh cell from
-the apply's own remap — so a plain direct read of it is decided. The measurements
-that bound that work: `report=false` for every `apply_function_type` in these
-programs, so `materialize_static_return_apply` is the only static type apply there is
-(candidate D has no second owner to defer to), and cloning every `undecided()` ref in
-`clone_static_signature_node` changes nothing (candidate F).
+### What the open cell actually is, measured
+
+A probe in `type_head` (`lichen-language/src/testing.rs`) prints, for
+`a_jit_kernel_crosses...`: `node=NodeId(487) items=5 item0=Dynamic(NodeId(975))
+value=false`. The call's type cell holds a five-position **expression** whose value
+position is a **dynamic** cell with no value — nothing frozen at the failure, so the
+"a cross-module open ref is kept frozen" reading is wrong.
+
+A second probe in `Module::add_node` catches 975's creation, and its backtrace names
+`Module::node_apply` → `function::value_apply`, the **dynamic clone walk**. So 975 is a
+per-call clone made for the value side, and the cell the type position reads belongs to
+a **different clone** of the same expression: the body's evaluation fills its own copy,
+the type cell's copy stays open, and no unify ever reaches it (which is why the fill
+log never named it).
+
+So the remaining defect is **duplication of the clone**, not a frozen read: one
+expression gets one clone for the body and another for the type position. The rule to
+land is `6521974a`'s "one materialization per call", extended across the dynamic clone
+walk (`node_apply`) and the type-side copy — one call, one clone, whichever side reads
+it.
+
+Measured and rejected in the same round: calling `register_static_type_asserts` from
+`materialize_static_return_apply`, so the type side's own remap re-checks the asserts
+(no change: compute stays 235/2 — the asserts never reach the type cell's clone); and
+materializing at the unify slot sites only (no effect); and candidate F (235/2).
 
 ### The two language-server reds are older than this session
 
@@ -207,11 +222,8 @@ the same at `359b18c4`**, the commit this session started from:
   removed alike, so no clone-at-read is involved.
 - `statement_values::compute_wrapper_functions_hover_with_named_type_variables` counts
   **198** type variables where it pins **24** — also 198 at `359b18c4`, so this is not
-  the copy walk either: it is the attribute-widened expression the checker builds, 
-  whose every position is a cell of its own.
-
-Both need their own investigation, and neither re-opens the verdict above.
-
+  the copy walk either: it is the attribute-widened expression the checker builds, whose
+  every position is a cell of its own.
 ## Traps (each cost time this session)
 
 - **Do not special-case an attribute against the type.** A `slot == 1` skip in
@@ -228,8 +240,11 @@ Both need their own investigation, and neither re-opens the verdict above.
   exactly as a dynamic one; copying it into a dynamic node first gives every position
   a fresh class, so one value reads as several. The rule sits at
   `Module::node_value` and `shape::node_value`, and the copy walk that broke it
-  (`a524e578`, `f0f8f668`) is reverted. The codomain fix has to happen in the
-  **type-side apply**, where a per-call clone is the natural product, not in a reader.
+  (`a524e578`, `f0f8f668`) is reverted.
+- **One call, one clone.** The codomain's open cell is a per-call clone the body never
+  fills (`Module::node_apply` made it), while the body's own clone is a different node.
+  So the next attempt must make the two sides of one call read the *same* clone — not
+  add another copy, and not special-case a position.
 - **The doc/code pair moves together.** This branch is **not mergeable** while any
   test is red, because the spec on this branch states the rule the code keeps.
 - **Bisect before theorising.** Mechanism 2 cost this session hours of reading
