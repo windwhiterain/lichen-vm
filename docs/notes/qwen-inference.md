@@ -853,24 +853,32 @@ step is ~1.2 ms, because a step pays a recording and a fence. So the node count 
 and **the step count is the lever that is left** — the fifteen stage calls a layer, and the
 per-sequence rotation and attention calls, are what a composed graph would remove.
 
-## S2a: a batch's rotation is one dispatch
+## S2: a batch's rotation and attention, one dispatch each
 
-`layer_batch` called the rotation once a sequence, because a single-row step names one position. A
-positions buffer — one float a row — and a `row_len` make it one dispatch for the whole batch, the
-position read off the lane's row. On eight rows and four tokens:
+`layer_batch` called the rotation and the attention once a sequence, because a single-row step names
+one position and one cache. Both now have batch steps:
 
-| | per-sequence rotations | one rotation a batch |
-|---|---|---|
-| submissions a token | 1 824 | **1 040 (−43%)** |
-| eight rows' tokens | `[9707, 25, 358, 2776, 4460]` | same, all eight |
-| a token | 0.839 s | **0.745 s (−11%)** |
+- `ROPE_ROWS_STEP` takes a positions buffer and a `row_len`, so every row turns in one dispatch;
+- `ATTEND_ROWS_STEP` packs the caches row after row and takes `p` plus the three extents, so the
+  attention is four dispatches for the whole batch. `layer_batch` takes this path only when every
+  row is at the same position, because a row of another length would need the longest row's stride;
+  a mixed-length batch keeps the per-sequence step.
 
-The first attempt answered wrongly, and the reason is worth keeping: the rows alternated between a
-turned and an unturned key. A dispatch reads its input buffers at **one class**, and the values
-buffer was bf16 (the narrowed width's payload) while the positions buffer was float; the float
-positions were read as bf16, so the odd rows read a position of zero. Both buffers now go as floats —
-the position has to be exact, and this is the one place the narrowed width stops. The 43% fewer
-fences buying 11% of the clock is S1's reading again: what remains is the device's own work at eight
-rows, which the rotation shares but does not remove. The attention is still one dispatch a
-sequence; its cache is per sequence and batching it needs a per-row length and stride
-([serving-frontier](serving-frontier.md) S2).
+Eight rows, four tokens:
+
+| | per-sequence | rotation batched | both batched |
+|---|---|---|---|
+| submissions a token | 1 824 | 1 040 | **648 (−64%)** |
+| a token | 0.839 s | 0.745 s | **0.710 s (−15%)** |
+| tokens | — | — | all eight `[9707, 25, 358, 2776, 4460]` |
+
+Two probes earned their keep. The rotation first answered with alternate rows wrong: a dispatch
+reads its input buffers at **one class**, and the values were bf16 while the positions were float, so
+the float positions were read as bf16 — a position of zero on the odd rows. Both buffers now go as
+floats; the position has to be exact, and this is where the narrowed width stops. The attention then
+answered `[9707, 0, 0, 0, 0]`, and a comparison with the per-sequence step on two rows of three
+positions found the packed score missing its `0.0883883476` scale — a single position cannot show
+it, because a softmax over one weight is that weight whatever the scale.
+
+The two steps removed 64% of a token's submissions and 15% of its clock: the rest is the device's
+work at eight rows, which the batch shares but does not remove.

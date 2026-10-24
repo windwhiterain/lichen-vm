@@ -434,9 +434,11 @@ a turned and an unturned key; both now ride as floats, which is also the exactne
 needs. That the fence count fell 43% and the clock 11% is the same reading as S1's: a step's fence
 is not the whole step, and the device's own work at eight rows is the rest.
 
-The attention half is open for the same reason as before: each sequence's cache is its own, so
-batching it needs a per-row length and stride, which `ATTEND_CACHE_STEP` does not read. Its saving
-is the other 392 submissions a token at eight rows.
+The attention half landed next: `ATTEND_ROWS_STEP` packs the caches row after row and takes `p` and
+the extents, and `layer_batch` takes it when every row shares a position; a mixed-length batch keeps
+the per-sequence step, whose per-row length and stride the kernel still does not take. At eight rows
+the two steps are **1 824 → 648 submissions a token (−64%)** and **0.839 s → 0.710 s (−15%)**, with
+all eight rows answering the same five tokens.
 
 ### S3 — a tiled projection, with a runtime extent
 
