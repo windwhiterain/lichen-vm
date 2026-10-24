@@ -1,10 +1,12 @@
 # Normalization is a function's birth, not an application
 
-> Status: **current.** The normative definition of "normalize" in this tree: what
-> it is, when it runs, and what an apply does instead. It exists because the
-> class-read investigation called an apply-time read "an apply clone's run-time
-> normalize"; the maintainer's correction is that a normalize belongs to a **new
-> function's first appearance**, never to an apply.
+> Status: **current.** The contract is stated in the code's three `# Invariant`
+> sections (`checker.rs`'s `build_with`, `static_module/apply.rs`'s
+> `static_function_apply`, and `equality.rs`'s `unify`); this note is why it has
+> this shape — what "normalize" is, when it runs, and what an apply does instead.
+> It exists because the class-read investigation called an apply-time read "an
+> apply clone's run-time normalize"; the maintainer's correction is that a
+> normalize belongs to a **new function's first appearance**, never to an apply.
 > Points at: `crates/lichen-highlevel/src/checker.rs` (the definition pass and its
 > lambda-value loop), `crates/lichen-lowlevel/src/static_module/apply.rs`
 > (`static_function_apply`, the runtime unify), and
@@ -51,7 +53,11 @@ What an apply does is the third sanctioned unify producer, the **runtime unify**
 the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
 `static_function_apply`; `apply.rs:78` and `apply.rs:139`).
 
-## 3. The contract
+## 3. Why the contract has this shape
+
+The code states the contract at `checker.rs`'s `build_with`, `static_module/apply.rs`'s
+`static_function_apply`, and `equality.rs`'s `unify` (each an `# Invariant`). The
+rulings below are why it has this shape; they are not a second statement of it.
 
 1. **A function's types are determined at its normalize.** The maintainer's
    ruling: *"normalize 的时候类型应当确定。"* After a function is born, every type

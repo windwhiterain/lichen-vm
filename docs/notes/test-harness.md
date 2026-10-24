@@ -87,13 +87,15 @@ only be produced by turning source text into IR, it belongs to the frontend's
 crate**, and a hand-built equivalent would test the harness rather than the
 program.
 
-## The two invariants this keeps
+## Why the harness keeps two rules
 
-- **A test asserts a semantic fact** — a value, a node's structure, a
-  diagnostic's *kind* — never a rendered string. See
-  [tests-do-not-render](tests-do-not-render.md); the moved tests keep that rule,
-  which is why `table.rs`'s ten became `DiagKind` assertions rather than the
-  message text they used to match on.
-- **A refusal is still a build.** `Probe::build` refuses a failing program
-  outright; `Probe::build_refusing` returns it, because for most tests the
-  refusal is the subject.
+Both rules are stated in the code: `crates/lichen-testkit/src/lib.rs`'s second
+`# Invariant` and `Probe::build_refusing`'s. This section is why they are drawn
+there, not a second home for them.
+
+- The moved tests became `DiagKind` assertions rather than the message text they
+  used to match on: a message belongs to the printer, so pinning it makes a test
+  move whenever the printer does. See [tests-do-not-render](tests-do-not-render.md).
+- `Probe::build` refuses a failing program outright; a test whose subject *is*
+  the refusal needs a door that returns the build, because a panic would take the
+  diagnostic away from it.

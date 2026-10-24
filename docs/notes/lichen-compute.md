@@ -809,7 +809,10 @@ tuple value or passed through from the caller's own parameter (see
 inside the compiled region, and a `GlobalExt`-based compute global (the kernel registry is
 currently process-global).
 
-### The every-field-written invariant
+### Why every field is written
+
+The rule is `compute.rs`'s every-ordinal-written `# Invariant`; this section is why it holds
+structurally.
 
 A parallel body dispatches writes and produces no value, so output field `k` is written on every
 index. That holds **structurally**: the lowered body is straight-line, and the subset's only

@@ -46,6 +46,10 @@ where
 
     /// Check `program` **without** refusing a failed build — the refusal is the
     /// fact under test.
+    ///
+    /// # Invariant
+    /// A refusal is still a build: the program is returned, so a test can read the
+    /// diagnostic that is its subject rather than lose the build to a panic.
     pub fn build_refusing(program: Program<P::Attr, P::Literal>) -> Self {
         let Program { ir, names, .. } = program;
         Probe {

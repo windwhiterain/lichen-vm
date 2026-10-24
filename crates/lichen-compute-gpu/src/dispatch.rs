@@ -2500,6 +2500,7 @@ impl GpuContext {
                             size: COUNT_BYTES,
                         }],
                     );
+                    // Device extent: TRANSFER_WRITE -> DRAW_INDIRECT; the reader is the command processor.
                     device.cmd_pipeline_barrier(
                         command,
                         vk::PipelineStageFlags::TRANSFER,
@@ -2514,8 +2515,7 @@ impl GpuContext {
                     device.cmd_dispatch_indirect(command, block, 0)
                 }
             }
-            // The trailing barrier names every reader of these results, including a later
-            // dispatch in the same command buffer.
+            // The trailing barrier names every reader: a later dispatch as a shader, a fetch or a chain as a transfer.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,

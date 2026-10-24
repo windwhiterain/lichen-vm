@@ -8,6 +8,34 @@ lichen code examples: examples/
 - always avoid replication, if exists, merge or reference.
 - **Check the decision record before briefing a behaviour change.** `docs/notes/code-audit.md` carries numbered items with explicit decisions (`wontfix:D<n>`, each with the rejected alternatives written out). A brief that called a measured behaviour a "defect" was wrong: P1-42 was `verified` and decided `wontfix:D17`, whose sentence *is* the semantics, and both fixes the brief offered were alternatives D17 had already rejected. Grep that note for the behaviour before asking anyone to change it, and treat a "wontfix:D" line as a contract.
 
+## Invariants
+
+An **implementation invariant** — a rule the code must keep, not a description of
+what it currently does — lives at the code it governs, in the comment an editor
+reads before changing that code: a `# Invariant` rustdoc section, or a short `//`
+comment when the rule is local. The question is not "where is this explained?"
+but "what will the agent changing this line read?".
+
+- **The code comment states the rule itself, not a pointer to it.** `See
+  docs/notes/...` is background, not an invariant. If the line can be changed
+  wrongly without opening the note, the rule is not in the code yet.
+- **A note is never the only home of an invariant.** `docs/notes` carries the
+  rationale, the measurements, the rejected alternatives and the history; the
+  code comment carries what must hold. When a note states a rule, the code it
+  governs states it too, and the note links to the code rather than restating it.
+- **The budget splits the two.** `comments-test.toml` gives `# Invariant` 400
+  characters: enough for the rule, not for the argument. Put the rule in the
+  section and the argument in the note; do not drop the rule because the whole
+  argument no longer fits.
+- **The language contract is the exception, not the implementation's.** The
+  language spec and the book state what a program means and stay authoritative;
+  a code comment that implements one cites the section. Workflow rules (this
+  file, `comments-test.toml`) stay here.
+- **Moving an invariant does not change it.** Rewording one, or dropping a
+  condition from an `# Invariant` or `# Safety`, is a semantic change and needs
+  the maintainer's permission; restating an existing sentence at its code site
+  is a migration.
+
 ## Comments
 
 A comment states an invariant or a safety condition, and nothing else. The rule

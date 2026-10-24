@@ -86,6 +86,9 @@ that chooses the class cannot.
 
 ### The boundary rules
 
+The rules are `shape.rs`'s second `# Invariant`; this note is why they are where
+they are.
+
 - **Do not unify `ScalarClass` and `LowShape`.** A shape is a structure (`Tuple`,
   `Array`, `Function`, `Table`, `Unknown`); a class is one bit of meaning
   (integer or float). `low_type_of` returning `Unknown` for a struct is correct,

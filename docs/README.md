@@ -18,6 +18,13 @@ documentation in exactly two places, on purpose:
 > about to repeat a fact, *link to it* instead. A note's source of truth is the code;
 > read the note, then read the modules it names.
 >
+> **Rule: an implementation invariant lives in the code.** A rule the code must
+> keep is stated in a `# Invariant` section at the code it governs; a note may
+> explain why it exists and record the measurement, but it is never the only
+> place the rule is written. A note that states a rule links to the code section
+> that owns it. The language contract is the exception: `language-spec.md` and
+> the book state what a program means, and code cites them.
+>
 > **Rule: a dead path is named as dead.** A note may cite a path that no longer
 > exists only when the note itself says what became of it — a probe reverted after its
 > measurement, a module that moved, a deliberate "there is no such file" correction.

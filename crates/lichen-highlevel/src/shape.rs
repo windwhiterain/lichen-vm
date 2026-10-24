@@ -5,6 +5,12 @@
 //! Every expression compiles to a `[value, type, attrs…]` pair, every kinded
 //! type expression to `[shape, [marker, universe]]`, and every type spine
 //! bottoms out at the self-referential universe `K = [Type, ↺]`.
+//!
+//! # Invariant
+//! `LowShape` and `ScalarClass` are not unified: a shape is a structure (Tuple,
+//! Array, Function, Table, Unknown) and a class is one bit of meaning (integer or
+//! float), so `low_type_of`'s `Unknown` for a struct is correct and its gap is an
+//! accessor's. The encoding lives here, above `lichen-lowlevel`, never inside it.
 
 use lichen_lowlevel::{
     AnyHandle, AnyNodeId, ArrayItem, LowShape, LowValue, Module, NodeId, Program, StaticNodeId,

@@ -139,7 +139,11 @@ the representative (`class_value`) — what is member-local is the write rule's
 test, not the read API.  A **merge** is a separate rule, and §1.1.3 is where it
 is stated and measured.
 
-### 1.1.1 The invariant this rule exists to keep
+### 1.1.1 Why the two halves stay separate
+
+The invariant is stated at the code — `equality.rs`'s `write_node_value`,
+`propagate_class_value` and `fill_class_holes` each carry their `# Invariant`.
+This section is why the two halves stay separate:
 
 **A class holds one value; a node's own answer is a separate, per-node fact.**
 Both are needed, and the rule above is what keeps them apart:
