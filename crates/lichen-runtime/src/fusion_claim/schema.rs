@@ -1,7 +1,7 @@
 //! The region schema derived from a recorded graph.
 //! See docs/notes/graph-fusion.md §4.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{self, Write as _};
 
 use lichen_fusion::{BinaryOp, Expr, FAN_IN_INPUTS, Reduction, Variable, normalize};
@@ -879,16 +879,17 @@ fn sibling_component(
     };
     // **The producer keeps a region of its own**: it stays materialized.
     regions.push(ordinary_region(graph, starts, registry, vec![producer]));
+    // **The branches are grouped by the extent they dispatch over**, and only a group of two
+    // or more is a sibling set.
+    let mut claimed: Vec<usize> = Vec::new();
     for group in groups_by_extent(graph, &branches) {
         if group.len() < 2 {
-            // **One branch is a chain, not a sibling set.**
-            regions.push(ordinary_region(graph, starts, registry, group[0].clone()));
             continue;
         }
+        claimed.extend(group.iter().flatten().copied());
         regions.push(sibling_region(graph, starts, registry, producer, group));
     }
-    // **What the branches did not claim** keeps the ordinary rule.
-    let claimed: Vec<usize> = branches.iter().flatten().copied().collect();
+    // **What the sibling regions did not claim** keeps the ordinary rule, chain and all.
     let rest: Vec<usize> = component
         .iter()
         .copied()
@@ -953,9 +954,9 @@ fn sibling_region(
 /// The shared producer of a component, and the branches its consumers hold.
 ///
 /// # Invariant
-/// **The earliest node with several claimed consumers whose descendant sets are pairwise
-/// disjoint**: a branch that met another would not be independent, and the merge would read one
-/// branch's value in another. The branches are those consumers' descendant subgraphs.
+/// **The earliest node with several claimed consumers**: the branches are those consumers
+/// themselves, and a consumer that read another would not be independent — the merge would read
+/// one branch's value in another.
 fn shared_producer(
     graph: &Graph,
     starts: &[usize],
@@ -967,64 +968,16 @@ fn shared_producer(
         if held.len() < 2 {
             continue;
         }
-        let Some(branches) = branches_of(&consumers, held) else {
-            continue;
-        };
-        let branches: Vec<Vec<usize>> = branches
-            .into_iter()
-            .map(|branch| {
-                let mut branch: Vec<usize> =
-                    branch.into_iter().map(|local| component[local]).collect();
-                branch.sort_unstable();
-                branch
-            })
+        let branches: Vec<Vec<usize>> = held
+            .iter()
+            .map(|consumer| vec![component[*consumer]])
             .collect();
-
         if branches_are_not_independent(graph, starts, &branches) {
             continue;
         }
         return Some((position, branches));
     }
     None
-}
-
-/// The branches a producer's consumers hold, and whether they are independent.
-///
-/// # Invariant
-/// **A branch is a consumer and everything it reaches**, and no node is in two branches: a
-/// branch that met another would not be independent, and the merge would read one branch's
-/// value in another.
-fn branches_of(consumers: &[Vec<usize>], held: &[usize]) -> Option<Vec<Vec<usize>>> {
-    let mut claimed: HashSet<usize> = HashSet::new();
-    let mut branches: Vec<Vec<usize>> = Vec::with_capacity(held.len());
-    for &consumer in held {
-        let mut branch = Vec::new();
-        let mut visited: HashSet<usize> = HashSet::new();
-        reach_branch(consumer, consumers, &mut visited, &mut branch);
-        // **No node is in two branches.**
-        if branch.iter().any(|local| claimed.contains(local)) {
-            return None;
-        }
-        claimed.extend(branch.iter().copied());
-        branches.push(branch);
-    }
-    Some(branches)
-}
-
-/// The nodes a consumer reaches.
-fn reach_branch(
-    local: usize,
-    consumers: &[Vec<usize>],
-    visited: &mut HashSet<usize>,
-    branch: &mut Vec<usize>,
-) {
-    if !visited.insert(local) {
-        return;
-    }
-    branch.push(local);
-    for &consumer in &consumers[local] {
-        reach_branch(consumer, consumers, visited, branch);
-    }
 }
 
 /// The claimed consumers of each node of a component, in region-local positions.

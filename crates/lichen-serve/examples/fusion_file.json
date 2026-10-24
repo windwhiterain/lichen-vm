@@ -16,9 +16,9 @@
   ],
   "overrides": [
     {
-      "region": "sha256:d9a255a265038a7d160ef9c7477b58927ecdea8856e727725021a1a057ba1f3a",
+      "region": "sha256:820a9163de05d5657e7e011c994c6cfb8812f71144850b41de8e9e180f1cd41f",
       "action": "force_merge",
-      "reason": "the pre-attention region, the one the runner already names in a pack"
+      "reason": "the pre-attention sibling region: the key and value projections, which share the norm's output"
     }
   ]
 }
