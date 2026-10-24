@@ -1,9 +1,9 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `bdde4d8d`, working tree clean, not merged. The rule is landed in the language
-> spec and the attribute-specific record machinery is gone; **one test stays red**
-> and it is a pinned *rendering* the literal rule changes, not a mechanism.
+> `4c0f1b50`, working tree clean, not merged. The rule is landed in the language
+> spec and the attribute-specific record machinery is gone; **one language-server
+> test stays red**, and it is a per-call *sharing* question rather than a mechanism.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -53,22 +53,23 @@ decides relaxation. `@any` states nothing, at any position.
 | `619a2606` | `unify`'s fill refuses an answer that still holds an **open frozen position**, so a template's skeleton binds nothing — **and both `jit_inline` tests pass** |
 | `f0f8f668` | a frozen **hole** is materialized as this call's cell when a value is copied (`materialize_leaf`), while a signature cell the unify compares by identity is copied verbatim (`materialize_leaf_verbatim`) — **and both codomain tests pass, the two pinned renderings return to their decided form** |
 | `fc834b67`, `c0802cab`, `bdde4d8d` | the comment budget: every section the branch added fits its 120-character preamble limit |
+| `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
 
 ## Readings (the tool's own `test result:` lines)
 
 | suite | result |
 |---|---|
 | `lichen-highlevel --test highlevel` | **136 passed; 0 failed** |
-| `lichen-language --test language` | **274 passed; 1 failed** |
+| `lichen-language --test language` | **275 passed; 0 failed** |
 | `lichen-compute --test lichen_compute` | **237 passed; 0 failed; 1 ignored** |
+| `lichen-lowlevel` | **164 passed; 0 failed; 1 ignored** |
 
 Red:
 
-- `language::field_read_kinds::a_named_read_of_a_deferred_struct_is_accepted` — the
-  program renders `1 # 0: Int` where the pinned expectation says `1: Int`. The
-  literal rule ("a constant states `# 0`") makes the attribute visible, so this is
-  a **stale pin**, not a mechanism: it needs the maintainer's word before the
-  expectation moves.
+- `language_server::statement_values::compute_wrapper_functions_hover_with_named_type_variables`
+  — the hover counts **198** type variables where it pins **24**, because a per-call
+  materialization mints a fresh remap per `Module::as_dynamic` read (see mechanism
+  2b's cost below). This is the one thing between the branch and a merge.
 
 ## Closed mechanism 1 — a read's lane-varying index stays warp-uniform
 
@@ -194,6 +195,19 @@ candidate D (no second owner to defer to), candidate F (cloning every `undecided
 ref: 235/2), and materializing at the unify slot sites only (no effect: the hole is
 nested inside a value the slot already holds).
 
+**The cost it left: `lichen-language-server`'s hover stops being stable.**
+`statement_values::compute_wrapper_functions_hover_with_named_type_variables` pins
+`cells.len() == 24` ("jit names twelve cells twice") and now counts **198**: every
+`Module::as_dynamic` read mints a fresh remap, so one frozen position read through
+several checker paths becomes several classes, and the printer names each. The
+shapes also render `raw[…]` where they used to read as arrows; registering the copy
+of an arrow did not change the count. So the materialization needs **one materialization
+per read pass** (a per-block memo of `sref → clone`) before this can be green, or the
+reads must stay verbatim and the codomain tests go back to red. That is the next
+step, and it is a decision: sharing changes what "per call" means for a read that is
+not a call.
+
+## Traps (each cost time this session)
 
 - **Do not special-case an attribute against the type.** A `slot == 1` skip in
   `unify_parameter_slots` made five pinned renderings pass and was rejected: it
