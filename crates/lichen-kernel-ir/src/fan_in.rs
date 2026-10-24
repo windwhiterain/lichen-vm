@@ -10,14 +10,14 @@
 use std::collections::HashMap;
 
 use crate::compose::{
-    Renumber, branch_targeting, buffer_reads, compact, copy_cone, duplicated_mark,
-    first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator, merged_scalars,
-    read_address, shifted_past, shifted_write_positions, splice_runtime_scalars, spliced_scalars,
-    write_edge, write_sites,
+    Renumber, ScalarUnion, branch_targeting, buffer_reads, compact, copy_cone, duplicated_mark,
+    first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator, read_address,
+    shapes_differ, shifted_past, shifted_write_positions, splice_runtime_scalars, write_edge,
+    write_sites,
 };
 use crate::{
     Barrier, BasicBlock, ComposeRefusal, Cone, KernelFragment, KernelMark, KernelRoles,
-    ScalarClass, Terminator, ValueDef, ValueId,
+    KernelShape, ScalarClass, Terminator, ValueDef, ValueId,
 };
 
 /// One body of a fan-in, and the producers whose values reach its inputs.
@@ -46,8 +46,10 @@ pub struct Producer<'a> {
 /// **The bodies run in the list's order and the merged inputs are their union**, and **one cone
 /// is built per producer**, asked of that producer's own body.
 ///
-/// A third shape beside [`compose`](crate::compose) and [`compose_fan_out`]: those land every
-/// consumer on one block, and this lands each body on the block the one before it returns from.
+/// **The merged parameter list is the union of the bodies' scalar leaves**, each its own.
+///
+/// A third shape beside [`compose`](crate::compose): this lands each body on the block the one
+/// before it returns from.
 pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, ComposeRefusal> {
     let [head, ..] = producers else {
         return Err(ComposeRefusal::NoProducerToInline);
@@ -69,10 +71,48 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
         });
     }
     let ports = ports(producers);
+    // **The union of the bodies' domains**, in the order the bodies are composed.
+    let shapes: Vec<&KernelShape> = producers
+        .iter()
+        .map(|producer| &producer.fragment.param_shape)
+        .collect();
+    let Some(scalars) = ScalarUnion::of(&shapes) else {
+        return Err(shapes_differ(
+            first,
+            producers[producers.len() - 1].fragment,
+            "one of the domains names no extent and index, so it has no runtime scalar to tell \
+             from the index"
+                .to_string(),
+        ));
+    };
     // **Every condition before a body is touched**, with every fragment still alone.
     let mut edges = Vec::with_capacity(producers.len());
     for (body, producer) in producers.iter().enumerate() {
         edges.push(Edge::of(producer, body, first, producers.len(), ports)?);
+    }
+    // **Every body binds its own domain**, or it has no leaf to bind.
+    for (body, producer) in producers.iter().enumerate() {
+        let fragment = producer.fragment;
+        let parameters = fragment.body.parameters().len();
+        let leaves = fragment.param_shape.flat_arity();
+        if parameters == leaves {
+            continue;
+        }
+        if body == 0 {
+            return Err(shapes_differ(
+                first,
+                producers[producers.len() - 1].fragment,
+                format!(
+                    "the first body's entry block receives {parameters} parameter(s) and its \
+                     domain declares {leaves} leaf(ies), so it has no runtime scalar to bind"
+                ),
+            ));
+        }
+        return Err(ComposeRefusal::ParameterCountsDiffer {
+            producer: first.body.parameters().len(),
+            consumer: parameters,
+            leaves,
+        });
     }
     // **Where each body's surviving inputs land**: the first body's own stay where they are.
     let mut unions = vec![0; edges.len()];
@@ -126,18 +166,8 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
 
     let mut body = first.body.clone();
     // **The runtime scalars are spliced into the merged body's own domain.**
-    let spliced: Vec<usize> = edges.iter().map(|edge| edge.spliced).collect();
-    let Some(total) = merged_scalars(&spliced) else {
-        let offender = edges
-            .iter()
-            .find(|edge| edge.spliced != 0 && edge.spliced != spliced[spliced.len() - 1])
-            .map_or(edges[0].fragment, |edge| edge.fragment);
-        return Err(ComposeRefusal::ShapesDiffer {
-            producer: first.param_shape.clone(),
-            consumer: offender.param_shape.clone(),
-        });
-    };
-    splice_runtime_scalars(&mut body, total);
+    let total = scalars.total();
+    splice_runtime_scalars(&mut body, scalars.own(0), total - scalars.own(0));
     // **The first producer's store goes**: its buffer is not an output of the merged fragment.
     for block in &mut body.blocks {
         block.instrs.retain(|&value| value != edges[0].stores[0]);
@@ -164,7 +194,8 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
         for (slot, &parameter) in consumer.body.parameters().iter().enumerate() {
             renumber.bind(
                 parameter,
-                first_parameters[landed_slot(slot, edge.spliced, total)],
+                first_parameters
+                    [landed_slot(slot, scalars.own(index), scalars.before(index), total)],
             );
         }
         for &(read, _, _) in &edge.reads_absorbed {
@@ -343,7 +374,7 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
     compact(&mut body, &mut marks);
     let consumer = edges[edges.len() - 1].fragment;
     let fragment = KernelFragment {
-        param_shape: consumer.param_shape.clone(),
+        param_shape: scalars.shape(),
         roles: KernelRoles::default(),
         body,
         inputs: ports,
@@ -368,8 +399,8 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
 ///
 /// # Invariant
 /// **Every condition is checked before a body is touched**: the `absorbed` ordinals are resolved
-/// against the body's own inputs, each named producer is an earlier entry of the same list, and the
-/// shape, target, parameter list and mark facts are asked of the first body — so an edge this
+/// against the body's own inputs, each named producer is an earlier entry of the same list, and
+/// the shape, the parameter list and the mark facts are asked of each body — so an edge this
 /// composition cannot serve is refused while every fragment still stands alone.
 struct Edge<'a> {
     fragment: &'a KernelFragment,
@@ -381,8 +412,6 @@ struct Edge<'a> {
     reads_absorbed: Vec<(ValueId, usize, ValueId)>,
     /// The body's own stores, which the merged body drops.
     stores: Vec<ValueId>,
-    /// How many runtime scalars this body's domain splices into the first body's.
-    spliced: usize,
 }
 
 impl<'a> Edge<'a> {
@@ -398,15 +427,6 @@ impl<'a> Edge<'a> {
         if let Err(cause) = fragment.body.validate() {
             return Err(ComposeRefusal::ConsumerIsNotWellFormed { cause });
         }
-        let spliced = match spliced_scalars(&first.param_shape, &fragment.param_shape) {
-            Some(spliced) => spliced,
-            None => {
-                return Err(ComposeRefusal::ShapesDiffer {
-                    producer: first.param_shape.clone(),
-                    consumer: fragment.param_shape.clone(),
-                });
-            }
-        };
         if first.target != fragment.target {
             return Err(ComposeRefusal::TargetsDiffer {
                 producer: first.target,
@@ -420,13 +440,6 @@ impl<'a> Edge<'a> {
                     fragment.inputs,
                     fragment.input_classes.len()
                 ),
-            });
-        }
-        let parameters = fragment.body.parameters();
-        if parameters.len() != first.body.parameters().len() + spliced {
-            return Err(ComposeRefusal::ParameterCountsDiffer {
-                producer: first.body.parameters().len(),
-                consumer: parameters.len(),
             });
         }
         duplicated_mark(&fragment.marks)?;
@@ -517,7 +530,6 @@ impl<'a> Edge<'a> {
             reads,
             reads_absorbed,
             stores,
-            spliced,
         })
     }
 

@@ -111,6 +111,8 @@ struct Merge {
     fragment: KernelFragment,
     /// The surviving node's inputs: the first node's, then each later node's but the absorbed ones.
     inputs: Vec<GraphValueId>,
+    /// The runtime scalars the merged node binds, in the merged fragment's own order.
+    scalars: Vec<GraphScalar>,
 }
 
 /// One edge of a region the merge inlines: `from`'s output reaches `to` at `input`.
@@ -148,6 +150,8 @@ struct Edge {
 struct RegionNode<'a> {
     /// The fragment the node dispatched.
     fragment: &'a KernelFragment,
+    /// The runtime scalars the node binds, in the fragment's own order.
+    scalars: &'a [GraphScalar],
     /// The edges into this node from inside the region, in input-ordinal order.
     absorbed: Vec<Edge>,
     /// The edges out of this node to inside the region, in (reader, input) order.
@@ -157,9 +161,10 @@ struct RegionNode<'a> {
 /// The fragment a fold produced, and the region's ports it reads and writes.
 ///
 /// # Invariant
-/// **The ports and the writes are the region's own, in the fragment's own order**: a port is a
-/// (node, input ordinal) the merged fragment reads, and a write is a node whose value the
-/// merged fragment holds, so the graph's values are renumbered from these two lists alone.
+/// **The ports, the writes and the scalars are the region's own, in the fragment's own order**:
+/// a port is a (node, input ordinal) the merged fragment reads, a write is a node whose value
+/// the merged fragment holds, and a scalar is the number one body was launched with — so the
+/// graph's values are renumbered from these lists alone, and each body binds its own scalars.
 struct Folded {
     /// The merged fragment.
     fragment: KernelFragment,
@@ -167,6 +172,8 @@ struct Folded {
     ports: Vec<(usize, usize)>,
     /// The nodes whose values the fragment writes, in output order.
     writes: Vec<usize>,
+    /// The runtime scalars the merged node binds, in the merged fragment's own order.
+    scalars: Vec<GraphScalar>,
 }
 
 impl GraphPass for RegionMerge {
@@ -444,6 +451,20 @@ pub enum MergeRefusal {
         /// The region the plan bars.
         region: SchemaHash,
     },
+    /// A node binds a different number of runtime scalars than its fragment declares.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is about the region's own nodes: the
+    /// merged fragment's parameter list is the union of the bodies' scalar leaves, and a body that
+    /// binds another number has no leaf to give it.
+    ScalarArityDiffers {
+        /// The graph node whose scalars do not match its fragment.
+        node: usize,
+        /// How many the fragment declares.
+        wanted: usize,
+        /// How many the node binds.
+        got: usize,
+    },
 }
 
 impl MergeRefusal {
@@ -469,6 +490,7 @@ impl MergeRefusal {
             MergeRefusal::InterfacesAreNotProved { .. } => "InterfacesAreNotProved",
             MergeRefusal::RegionOverBudget { .. } => "RegionOverBudget",
             MergeRefusal::RegionIsBarrier { .. } => "RegionIsBarrier",
+            MergeRefusal::ScalarArityDiffers { .. } => "ScalarArityDiffers",
         }
     }
 
@@ -572,6 +594,11 @@ impl fmt::Display for MergeRefusal {
                 formatter,
                 "the plan bars the region {region} from merging, and a bar is the file's own \
                  refusal to merge it"
+            ),
+            MergeRefusal::ScalarArityDiffers { node, wanted, got } => write!(
+                formatter,
+                "graph node {node} binds {got} runtime scalar(s) and its fragment declares \
+                 {wanted}, so it has no leaf to give the merged fragment's parameter list"
             ),
         }
     }
@@ -701,6 +728,18 @@ fn merge_region(
     let survivor = *positions
         .last()
         .expect("a region is decided over two or more");
+    // **A node binds as many runtime scalars as its fragment declares.**
+    for &position in positions {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        let wanted = node.fragment.runtime_scalars();
+        if node.scalars.len() != wanted {
+            return Err(MergeRefusal::ScalarArityDiffers {
+                node: position,
+                wanted,
+                got: node.scalars.len(),
+            });
+        }
+    }
     let links = links(graph, starts, positions)?;
     let Some(returns) = graph.returns() else {
         return Err(MergeRefusal::GraphReturnsEveryValue {
@@ -797,6 +836,7 @@ fn merge_region(
         outputs,
         fragment: folded.fragment,
         inputs,
+        scalars: folded.scalars,
     })
 }
 
@@ -828,6 +868,7 @@ fn region_nodes<'a>(graph: &'a Graph, positions: &[usize], links: &[Link]) -> Ve
         .iter()
         .map(|&position| RegionNode {
             fragment: fragment_at(graph, position),
+            scalars: scalars_at(graph, position),
             absorbed: Vec::new(),
             consumers: Vec::new(),
         })
@@ -971,6 +1012,7 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                     fragment: nodes[*local].fragment.clone(),
                     ports: own_ports(*local, &nodes[*local]),
                     writes: vec![*local],
+                    scalars: own_scalars(&nodes[*local]),
                 });
                 pending.clear();
             }
@@ -989,12 +1031,14 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                 fragment: node.fragment.clone(),
                 ports: own_ports(local, node),
                 writes: vec![local],
+                scalars: own_scalars(node),
             },
             Some(producer) => Folded {
                 fragment: compose(&producer.fragment, node.fragment, input as u32)
                     .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?,
                 ports: chained_ports(&producer, local, node, input),
                 writes: vec![local],
+                scalars: chained_scalars(&producer, node),
             },
         });
     }
@@ -1028,10 +1072,15 @@ fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRef
             .last()
             .expect("a fan-in holds the body that reads them"),
     ];
+    let scalars: Vec<GraphScalar> = bodies
+        .iter()
+        .flat_map(|body| own_scalars(&nodes[*body]))
+        .collect();
     Ok(Folded {
         fragment,
         ports,
         writes,
+        scalars,
     })
 }
 
@@ -1068,10 +1117,15 @@ fn fan_out(
         );
         writes.extend(branch.writes.iter().copied());
     }
+    let mut scalars = producer.scalars.clone();
+    for branch in folded {
+        scalars.extend(branch.scalars.iter().copied());
+    }
     Ok(Folded {
         fragment,
         ports,
         writes,
+        scalars,
     })
 }
 
@@ -1080,6 +1134,11 @@ fn own_ports(local: usize, node: &RegionNode<'_>) -> Vec<(usize, usize)> {
     (0..node.fragment.inputs)
         .map(|ordinal| (local, ordinal))
         .collect()
+}
+
+/// The runtime scalars a body's own node binds.
+fn own_scalars(node: &RegionNode<'_>) -> Vec<GraphScalar> {
+    node.scalars.to_vec()
 }
 
 /// The ports the merged fragment reads: the producer's own, then the consumer's but the one
@@ -1097,6 +1156,13 @@ fn chained_ports(
             .map(|ordinal| (local, ordinal)),
     );
     ports
+}
+
+/// The runtime scalars a merged node binds: the producer's own, then the consumer's.
+fn chained_scalars(producer: &Folded, node: &RegionNode<'_>) -> Vec<GraphScalar> {
+    let mut scalars = producer.scalars.clone();
+    scalars.extend(own_scalars(node));
+    scalars
 }
 
 /// The fan-in's bodies: the branch's own fragments, each with the edges it absorbs.
@@ -1277,6 +1343,12 @@ fn fragment_at(graph: &Graph, position: usize) -> &KernelFragment {
     &node.fragment
 }
 
+/// The runtime scalars the node at `position` binds, in its fragment's own order.
+fn scalars_at(graph: &Graph, position: usize) -> &[GraphScalar] {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    &node.scalars
+}
+
 /// Whether the two nodes dispatch over one extent, as `Count` states it.
 fn extents_correspond(producer: Count, consumer: Count) -> bool {
     match (producer, consumer) {
@@ -1296,21 +1368,37 @@ fn extents_correspond(producer: Count, consumer: Count) -> bool {
     }
 }
 
-/// Every read of `value` in the graph, one entry per read position.
+/// Every read of `value` in the graph, one entry per reading node.
+///
+/// # Invariant
+/// **One entry per node, whatever it reads the value with**: a node reads a value as an input,
+/// as the extent it dispatches over, or as one of its runtime scalars, and the merge deletes a
+/// value only when nothing reads it.
 fn readers(graph: &Graph, value: GraphValueId) -> Vec<usize> {
     let mut read = Vec::new();
     for (position, node) in graph.nodes().iter().enumerate() {
         let Node::Kernel(kernel) = node;
+        let mut reads = false;
         for &held in &kernel.inputs {
             if held == value {
-                read.push(position);
+                reads = true;
+            }
+        }
+        for scalar in &kernel.scalars {
+            if let GraphScalar::Value(held) = scalar
+                && *held == value
+            {
+                reads = true;
             }
         }
         match kernel.count {
             Count::Value(extent) | Count::Device { value: extent, .. } if extent == value => {
-                read.push(position);
+                reads = true;
             }
             _ => {}
+        }
+        if reads {
+            read.push(position);
         }
     }
     read
@@ -1341,12 +1429,18 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
             continue;
         }
         let Node::Kernel(kernel) = node;
-        let (fragment, reads, outputs) = match merges.get(&position) {
-            Some(merge) => (merge.fragment.clone(), &merge.inputs, merge.outputs.clone()),
+        let (fragment, reads, outputs, scalars) = match merges.get(&position) {
+            Some(merge) => (
+                merge.fragment.clone(),
+                &merge.inputs,
+                merge.outputs.clone(),
+                merge.scalars.clone(),
+            ),
             None => (
                 kernel.fragment.clone(),
                 &kernel.inputs,
                 (starts[position]..starts[position] + kernel.fragment.outputs).collect(),
+                kernel.scalars.clone(),
             ),
         };
         let count = mapped_count(kernel.count, &map)?;
@@ -1354,8 +1448,7 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
             .iter()
             .map(|value| map[*value])
             .collect::<Option<Vec<_>>>()?;
-        let scalars: Vec<GraphScalar> = kernel
-            .scalars
+        let scalars: Vec<GraphScalar> = scalars
             .iter()
             .map(|scalar| scalar.map_value(|v| map[v]))
             .collect::<Option<Vec<_>>>()?;

@@ -163,8 +163,28 @@ why the sketch budget above admits it.
 
 **The rule that did not move**: the gate may only *decline*. A region the gate lets through is
 still refused by every legality check that stands under it — the probe shows the pre-attention
-region refused by `ShapesDiffer` under the plan that names it, and refused by
+region refused by `ForwardedValueIsLaneDependent` under the plan that names it, and refused by
 `RegionOverBudget` under a tighter budget of the same plan.
+
+### The scalar union
+
+The composition now admits a producer whose domain declares runtime scalars beside the extent and
+the index. **The merged parameter list is the union of the bodies' own scalar leaves**: the
+extent, then each body's runtime scalars in the order the bodies are composed, then the index —
+and **each body binds its own leaves**, so a body never reads another body's number. The merged
+graph node binds the same union, in the merged fragment's own order, so the launch supplies every
+body's own numbers.
+
+The refusals are named: `ShapesDiffer` when the two bodies cannot share one parameter list (a
+domain that names no extent and index, or a body whose entry block does not receive its own
+domain's leaves), `ParameterCountsDiffer` for the same fact on a consumer, and
+`ScalarArityDiffers` when a node binds another number of runtime scalars than its fragment
+declares.
+
+**The pre-attention region still does not merge, for a different reason.** It gets past the shape
+check and refuses at `ForwardedValueIsLaneDependent`: the composite's `squares` reduction stages
+a value a loop carried forward, and the norm reads it at another lane, so the cone cannot be
+rebuilt at the read's address. That limit is the reduction's own, not the domains'.
 
 ### What is not true yet
 

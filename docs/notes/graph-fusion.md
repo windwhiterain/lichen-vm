@@ -742,8 +742,9 @@ value is reachable from the producer's invocation index, so binding it in-lane w
 lane's — a slice and a barrier rather than an inlining), `DuplicatedMark` (two of the **surviving**
 marks carry one text, which dropping a side cannot resolve), `SlicesCollide`, and a shape, target or
 class disagreement. Its preconditions are the caller's, and they are stated rather than checked
-infallibly: equal `param_shape`, `target` and entry-parameter counts with the entry parameters
-corresponding position for position; the producer's output ordinals and the consumer's surviving input
+infallibly: equal `target`; a producer and a consumer whose domains are each the extent, their own
+runtime scalars and the index, with the entry parameters corresponding position for position; the
+producer's output ordinals and the consumer's surviving input
 ordinals naming the same buffers in the same order; exactly one producer write and one return block; a
 consumer entry block that is no branch target; and constant read positions. **`compose` never sees the
 graph** — the region between a composed fragment and the graph rebuild that repoints the edges is the
@@ -777,6 +778,21 @@ to declare an input they never read in order to satisfy the old rule, which comp
 ordinals instead of building the union. A buffer **both** bodies name is listed **twice**, once per
 port: the union counts ports, not buffers, and a caller that reads the merged node's `inputs` sees the
 duplicate. `input_classes` follows the same order, so the merged fragment's digest moves with it.
+
+**The merged fragment's parameter list is the union of the bodies' scalar leaves.** A domain is the
+extent, the body's own runtime scalars and the index, so the merged list is the extent, then **each
+body's own runtime scalars in the order the bodies are composed**, then the index — and **each body
+binds its own leaves**: the producer's scalars land on the producer's own entries and the consumer's
+on the consumer's, so a body never reads another body's number. The old rule refused a producer that
+declared a runtime scalar at all, because a spliced leaf the producer's body could read would carry
+the *consumer's* number; the union answers that by giving each body a leaf of its own, and the
+composition's cost is a wider parameter list (one leaf per body per scalar).
+
+The refusals are named: `ShapesDiffer` when the two bodies cannot share one parameter list — a domain
+that names no extent and index, or a body whose entry block does not receive its own domain's leaves
+— and `ParameterCountsDiffer` for the same fact on a consumer. At the graph, the merged node binds
+the union of the bodies' runtime scalars in the merged fragment's own order, and a node that binds
+another number than its fragment declares is refused by `ScalarArityDiffers`.
 
 **What the merge can reach today is narrower than "shape-changing fusion", and the reason is a
 classification `compose` does not yet make — not staging.** `compose` refuses a forwarded value that is

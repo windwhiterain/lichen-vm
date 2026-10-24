@@ -800,6 +800,17 @@ impl KernelShape {
             KernelShape::Tuple(items) => items.iter().flat_map(KernelShape::leaf_classes).collect(),
         }
     }
+
+    /// How many runtime scalars a launch fixes for a domain of this shape: its leaves but the
+    /// extent and the index.
+    ///
+    /// # Invariant
+    /// **The extent is the count the launch dispatches over and the index is the lane's**: neither
+    /// is a value the launch fixes beside them, so a domain of `n` leaves declares `n - 2` runtime
+    /// scalars, and a domain too small to name an index declares none.
+    pub fn runtime_scalars(&self) -> usize {
+        self.flat_arity().saturating_sub(2)
+    }
 }
 
 /// One launch scalar: the value of a parameter's scalar leaf, at that leaf's own class.
@@ -1283,9 +1294,10 @@ impl KernelFragment {
     /// # Invariant
     /// **The extent is not a runtime scalar.** It is the count the launch dispatches over, which
     /// every backend already holds, and the ABI's first scalar by definition — so a launch states
-    /// it once, as the count, rather than twice.
+    /// it once, as the count, rather than twice. The index is the lane's, and the domain's own
+    /// leaves say which is which.
     pub fn runtime_scalars(&self) -> usize {
-        self.scalar_leaves().saturating_sub(1)
+        self.param_shape.runtime_scalars()
     }
 }
 

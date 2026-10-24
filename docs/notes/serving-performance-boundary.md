@@ -94,9 +94,10 @@ fuses a producer and its consumer into one kernel — had never run in this path
   too, so the region **derives a schema**; the merge then refuses it with `NotAReductionChain`,
   because the norm feeds three projections and the floor's own proof holds a reduction chain only.
   A `fuse` pack naming the region's hash (`sha256:7c4649db…`, `fuse_probe`) licenses the merge, and
-  the composition refuses it with `ShapesDiffer`: the composite's kernels declare a third scalar
-  leaf, and a producer is composable only when its domain is exactly `(extent, index)`. The tiling
-  pass, separately, refuses the Elementwise kernels by name (`UnknownInterface`).
+  the composition refuses it with `ForwardedValueIsLaneDependent`: the composite's `squares`
+  reduction stages a value a loop carried forward, and the norm reads it at another lane, so the
+  cone cannot be rebuilt at the read's address. The tiling pass, separately, refuses the
+  Elementwise kernels by name (`UnknownInterface`).
 
 The bridge is the limit behind the rotation: claiming it made the whole graph one region (nodes
 0–10) and the schema derivation then refused at the rotation's element function —
@@ -141,17 +142,19 @@ pinned for the shallow shapes, but the DAG case is not measured yet:
   bodies, and a node several consumers read is a fan-out over the branches it splits the region
   into. The three shallow shapes are pinned by `chain_merge`/`fan_out_merge`/`fan_in_merge`; a
   fan-out **of chains** (the norm feeding three projections, each followed by a norm) is what the
-  fold is written for, but the composite refuses at `ShapesDiffer` before a body is composed, so
-  that path has not been measured on a device.
+  fold is written for, but the composite refuses at `ForwardedValueIsLaneDependent` before a body
+  is composed, so that path has not been measured on a device.
 
 The claim itself is not the coarse part: membership through a claim is the right predicate (a body
-no claim describes has no algebra to read), and the merge's fan-out composition exists. What
-remains is the **licence policy** and the **kernels' own domains**: the pre-attention kernels
-declare a third scalar leaf beside the extent and the index, and `spliced_scalars` admits a
-producer only when its domain is exactly `(extent, index)`, so the fold refuses the region with
-`ShapesDiffer` before it composes a body. The rotation's lane-dependent gather is the one limit
-that is genuinely in the language, because the bridge models a read as the value at the element's
-own position.
+no claim describes has no algebra to read), and the merge's fan-out composition exists. The
+**kernels' own domains** are no longer the limit: the composition carries the **union** of the
+bodies' scalar leaves, each body bound to its own, so a producer that declares a runtime scalar
+of its own composes into a consumer that declares one of its own. What remains is the **licence
+policy** and the **reduction's own algebra**: the fold refuses the region with
+`ForwardedValueIsLaneDependent`, because the composite's reduction stages a value a loop carried
+forward and the norm reads it at another lane. The rotation's lane-dependent gather is the other
+limit that is genuinely in the language, because the bridge models a read as the value at the
+element's own position.
 
 ## The edges now
 

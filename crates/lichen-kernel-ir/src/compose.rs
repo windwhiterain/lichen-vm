@@ -28,12 +28,13 @@ pub fn compose(
 /// The fragment `producer` and every one of `consumers` become, or the decision it cannot make.
 ///
 /// # Invariant
-/// **One producer, several consumers**: each entry names the input ordinal at which the
-/// producer's output reaches one consumer. The store goes once and **one cone is built for
-/// it**, copied at every absorbed read at that read's own address.
+/// **One producer, several consumers**: each entry names the input ordinal the producer's output
+/// reaches. The store goes once and **one cone is copied per read**.
 ///
-/// The union is the producer's inputs then each consumer's survivors, and **every consumer but
-/// the last must leave** the return block.
+/// **The merged inputs are the producer's then each consumer's survivors**; every consumer but the
+/// last leaves the return block.
+///
+/// **The merged parameter list is the union of the bodies' scalar leaves**, each its own.
 pub fn compose_fan_out(
     producer: &KernelFragment,
     consumers: &[(&KernelFragment, u32)],
@@ -54,6 +55,32 @@ pub fn compose_fan_out(
         });
     }
     let producer_parameters = producer.body.parameters();
+    // **The union of the bodies' domains**, in the order the bodies are composed.
+    let mut shapes: Vec<&KernelShape> = Vec::with_capacity(consumers.len() + 1);
+    shapes.push(&producer.param_shape);
+    shapes.extend(consumers.iter().map(|(consumer, _)| &consumer.param_shape));
+    let Some(scalars) = ScalarUnion::of(&shapes) else {
+        return Err(shapes_differ(
+            producer,
+            consumers[0].0,
+            "one of the domains names no extent and index, so it has no runtime scalar to tell \
+             from the index"
+                .to_string(),
+        ));
+    };
+    // **The producer's body is the merged body**, so it must bind its own domain.
+    if !binds_its_domain(producer) {
+        return Err(shapes_differ(
+            producer,
+            consumers[0].0,
+            format!(
+                "the producer's entry block receives {} parameter(s) and its domain declares {} \
+                 leaf(ies), so it has no runtime scalar to bind",
+                producer_parameters.len(),
+                producer.param_shape.flat_arity()
+            ),
+        ));
+    }
     // The union, folded from the consumers' own ports: the running `union` below is it counted
     // forward.
     let ports = consumers
@@ -137,18 +164,8 @@ pub fn compose_fan_out(
 
     let mut body = producer.body.clone();
     // **The runtime scalars are spliced into the merged body's own domain.**
-    let spliced: Vec<usize> = edges.iter().map(|edge| edge.spliced).collect();
-    let Some(total) = merged_scalars(&spliced) else {
-        let offender = edges
-            .iter()
-            .find(|edge| edge.spliced != 0 && edge.spliced != spliced[spliced.len() - 1]);
-        let offender = offender.map_or(edges[0].fragment, |edge| edge.fragment);
-        return Err(ComposeRefusal::ShapesDiffer {
-            producer: producer.param_shape.clone(),
-            consumer: offender.param_shape.clone(),
-        });
-    };
-    splice_runtime_scalars(&mut body, total);
+    let total = scalars.total();
+    splice_runtime_scalars(&mut body, scalars.own(0), total - scalars.own(0));
     // **The merged body's own parameter list**, which each consumer binds to position for position.
     let merged_parameters = body.blocks[body.entry].params.clone();
     // The producer's store goes: its buffer is not an output of the merged fragment.
@@ -173,7 +190,12 @@ pub fn compose_fan_out(
         for (slot, &parameter) in consumer.body.parameters().iter().enumerate() {
             renumber.bind(
                 parameter,
-                merged_parameters[landed_slot(slot, edge.spliced, total)],
+                merged_parameters[landed_slot(
+                    slot,
+                    scalars.own(index + 1),
+                    scalars.before(index + 1),
+                    total,
+                )],
             );
         }
         for &(read, _) in &edge.absorbed_reads {
@@ -325,7 +347,7 @@ pub fn compose_fan_out(
 
     compact(&mut body, &mut marks);
     let fragment = KernelFragment {
-        param_shape: edges[edges.len() - 1].fragment.param_shape.clone(),
+        param_shape: scalars.shape(),
         roles: KernelRoles::default(),
         body,
         inputs: ports,
@@ -346,68 +368,111 @@ pub fn compose_fan_out(
     Ok(fragment)
 }
 
-/// How many runtime scalars `consumer`'s domain splices into `producer`'s.
+/// The parameter list the composed bodies share: the extent, each body's own runtime scalars, the
+/// index.
 ///
 /// # Invariant
-/// **The producer's own domain is exactly `extent, index`.** Splicing adds a leaf the producer's
-/// body cannot read; a producer that declared a runtime scalar of its own would read the merged
-/// leaf, which carries the *consumer's* number, and nothing here compares the two. The consumer's
-/// leaves are then free: each is bound to the value its own node was launched with.
-pub fn spliced_scalars(producer: &KernelShape, consumer: &KernelShape) -> Option<usize> {
-    let expr = [ScalarClass::Int, ScalarClass::Int];
-    if producer.leaf_classes() != expr {
-        return None;
-    }
-    let leaves = consumer.leaf_classes();
-    if leaves.len() < expr.len() || leaves.first() != Some(&ScalarClass::Int) {
-        return None;
-    }
-    if leaves.last() != Some(&ScalarClass::Int) {
-        return None;
-    }
-    let extra = leaves.len() - expr.len();
-    if extra == 0 && producer != consumer {
-        return None;
-    }
-    Some(extra)
+/// **Each body's own runtime scalars, in the order the bodies are composed**: a body's leaves
+/// are bound to its own entries and to no other's, so a body never reads another body's number.
+/// The extent is the count the launch dispatches over and the index is the lane's, so both stay
+/// at the ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScalarUnion {
+    /// Each body's own runtime scalar count, in the order the bodies are composed.
+    counts: Vec<usize>,
+    /// Each runtime scalar's class, in the merged list's own order.
+    classes: Vec<ScalarClass>,
 }
 
-/// How many runtime scalars the merged parameter list carries.
+impl ScalarUnion {
+    /// The union of the bodies' domains.
+    ///
+    /// # Invariant
+    /// **A domain is the extent, its runtime scalars and the index**: a domain that names no index
+    /// has no runtime scalar to tell from one, and a domain whose ends are not integers names a
+    /// count or an index the launch does not bind. Either is refused here rather than read as a
+    /// domain of leaves the merged list cannot hold.
+    pub fn of(shapes: &[&KernelShape]) -> Option<Self> {
+        let mut counts = Vec::with_capacity(shapes.len());
+        let mut classes = Vec::new();
+        for shape in shapes {
+            let leaves = shape.leaf_classes();
+            let [extent, .., index] = leaves.as_slice() else {
+                return None;
+            };
+            if *extent != ScalarClass::Int || *index != ScalarClass::Int {
+                return None;
+            }
+            counts.push(leaves.len() - 2);
+            classes.extend(leaves[1..leaves.len() - 1].iter().copied());
+        }
+        Some(ScalarUnion { counts, classes })
+    }
+
+    /// How many runtime scalars the merged parameter list carries.
+    pub fn total(&self) -> usize {
+        self.counts.iter().sum()
+    }
+
+    /// How many runtime scalars the body at `ordinal` declares.
+    pub fn own(&self, ordinal: usize) -> usize {
+        self.counts[ordinal]
+    }
+
+    /// How many runtime scalars the bodies before `ordinal` declare.
+    pub fn before(&self, ordinal: usize) -> usize {
+        self.counts[..ordinal].iter().sum()
+    }
+
+    /// The merged parameter list's shape: the extent, every body's own runtime scalars, the index.
+    ///
+    /// # Invariant
+    /// **The same leaves the bodies bind, in the order they bind them**: a body's own runtime
+    /// scalars sit beside the extent, so a caller that reads the merged domain's leaves reads each
+    /// body's own numbers and nobody else's.
+    pub fn shape(&self) -> KernelShape {
+        let mut leaves = Vec::with_capacity(self.classes.len() + 2);
+        leaves.push(KernelShape::Scalar(ScalarClass::Int));
+        leaves.extend(self.classes.iter().map(|&class| KernelShape::Scalar(class)));
+        leaves.push(KernelShape::Scalar(ScalarClass::Int));
+        KernelShape::Tuple(leaves)
+    }
+}
+
+/// Whether a body's entry block receives its domain's leaves, position for position.
 ///
 /// # Invariant
-/// **A body's own domain is the merged one or the producer's.** Nothing here says which of a
-/// body's leaves is which of the merged ones — two bodies that each declare `eps` are not asked
-/// whether they were launched with the same number — so a count strictly between the two has no
-/// correspondence, and is refused rather than bound to leaves of the wrong kind.
-pub fn merged_scalars(spliced: &[usize]) -> Option<usize> {
-    let total = *spliced.last()?;
-    spliced
-        .iter()
-        .all(|count| *count == 0 || *count == total)
-        .then_some(total)
+/// **A body binds the extent, its own runtime scalars and its index**: a body whose entry block
+/// receives another number has no leaf to bind — its index would stand where a runtime scalar
+/// stands — so the merged list would answer one number where the body asked for another.
+pub fn binds_its_domain(fragment: &KernelFragment) -> bool {
+    fragment.body.parameters().len() == fragment.param_shape.flat_arity()
 }
 
 /// The merged parameter a body's `slot`-th entry parameter lands on.
 ///
 /// # Invariant
-/// **The extent stays at `0` and the index follows the merged domain's own width**: a body that
-/// declared no runtime scalar of its own contributes those two leaves alone, so its index lands
-/// `total` leaves further along, while the body that did declare them binds position for position.
-pub fn landed_slot(slot: usize, spliced: usize, total: usize) -> usize {
-    if spliced == total || slot == 0 {
-        slot
+/// **The extent stays at `0`, a body's own runtime scalars land on its own entries and its index
+/// lands last**: a body reads its own numbers and no other's, so its `j`-th runtime scalar lands
+/// `before + j` and its index lands after every body's.
+pub fn landed_slot(slot: usize, own: usize, before: usize, total: usize) -> usize {
+    if slot == 0 {
+        0
+    } else if slot <= own {
+        before + slot
     } else {
-        slot + total
+        total + 1
     }
 }
 
-/// `extra` fresh entry-block parameters on `body`, between its extent and its index.
+/// `extra` fresh entry-block parameters on `body`, between its own runtime scalars and its index.
 ///
 /// # Invariant
-/// **Every entry-block parameter but the extent moves past the spliced leaves**, so the body's own
-/// index lands where `consumer`'s does and the two bind position for position as they did when
-/// the shapes were equal. `extra` of `0` changes nothing at all.
-pub fn splice_runtime_scalars(body: &mut KernelBody, extra: usize) {
+/// **Every entry-block parameter but the extent and the body's own runtime scalars moves past the
+/// spliced leaves**, so the body's own index lands where the merged domain's index does and the
+/// bodies bind position for position as they did when the shapes were equal. `extra` of `0`
+/// changes nothing at all.
+pub fn splice_runtime_scalars(body: &mut KernelBody, own: usize, extra: usize) {
     if extra == 0 {
         return;
     }
@@ -415,18 +480,18 @@ pub fn splice_runtime_scalars(body: &mut KernelBody, extra: usize) {
     for definition in &mut body.values {
         if let ValueDef::BlockParam { block, index } = definition
             && *block == entry
-            && *index > 0
+            && *index > own as u32
         {
             *index += extra as u32;
         }
     }
     let base = body.blocks[entry].params.len() as u32;
-    let at = usize::from(base > 0);
+    let at = ((own as u32) + 1).min(base) as usize;
     for ordinal in 0..extra as u32 {
         let value = ValueId(body.values.len() as u32);
         body.values.push(ValueDef::BlockParam {
             block: entry,
-            index: base + ordinal,
+            index: at as u32 + ordinal,
         });
         body.blocks[entry]
             .params
@@ -444,16 +509,15 @@ struct Edge<'a> {
     absorbed: usize,
     reads: Vec<(ValueId, u32)>,
     absorbed_reads: Vec<(ValueId, ValueId)>,
-    /// How many runtime scalars this consumer's domain splices into the producer's.
-    spliced: usize,
 }
 
 /// Everything one consumer must answer before the merged body is built.
 ///
 /// # Invariant
-/// **Every condition is checked before a body is touched**, and the one that needs the merged
-/// shape is stated here: a consumer that does not leave its entry block has nowhere for the next
-/// consumer's body to go, while the last consumer keeps the merged body's terminator.
+/// **Every condition is checked before a body is touched**, and the two that need the merged
+/// parameter list are stated at the composition: a consumer that does not leave its entry block
+/// has nowhere for the next consumer's body to go, while the last consumer keeps the merged
+/// body's terminator.
 fn consumer_edge<'a>(
     producer: &KernelFragment,
     consumer: &'a KernelFragment,
@@ -465,15 +529,6 @@ fn consumer_edge<'a>(
     if let Err(cause) = consumer.body.validate() {
         return Err(ComposeRefusal::ConsumerIsNotWellFormed { cause });
     }
-    let spliced = match spliced_scalars(&producer.param_shape, &consumer.param_shape) {
-        Some(spliced) => spliced,
-        None => {
-            return Err(ComposeRefusal::ShapesDiffer {
-                producer: producer.param_shape.clone(),
-                consumer: consumer.param_shape.clone(),
-            });
-        }
-    };
     if producer.target != consumer.target {
         return Err(ComposeRefusal::TargetsDiffer {
             producer: producer.target,
@@ -503,10 +558,12 @@ fn consumer_edge<'a>(
         });
     }
     let consumer_parameters = consumer.body.parameters();
-    if producer_parameters.len() + spliced != consumer_parameters.len() {
+    // **The consumer's own parameter list is its domain's leaves.**
+    if consumer_parameters.len() != consumer.param_shape.flat_arity() {
         return Err(ComposeRefusal::ParameterCountsDiffer {
             producer: producer_parameters.len(),
             consumer: consumer_parameters.len(),
+            leaves: consumer.param_shape.flat_arity(),
         });
     }
     duplicated_mark(&consumer.marks)?;
@@ -536,8 +593,25 @@ fn consumer_edge<'a>(
         absorbed: absorbed_at,
         reads,
         absorbed_reads,
-        spliced,
     })
+}
+
+/// The refusal two bodies earn when they cannot share one parameter list.
+///
+/// # Invariant
+/// **The two domains and what met them**: a merged fragment carries one parameter list, and it is
+/// the union of the bodies' scalar leaves, so a body that does not bind its own domain has no
+/// leaf to bind.
+pub(crate) fn shapes_differ(
+    producer: &KernelFragment,
+    consumer: &KernelFragment,
+    blocker: String,
+) -> ComposeRefusal {
+    ComposeRefusal::ShapesDiffer {
+        producer: producer.param_shape.clone(),
+        consumer: consumer.param_shape.clone(),
+        blocker,
+    }
 }
 
 /// Why two fragments could not become one.
@@ -613,12 +687,19 @@ pub enum ComposeRefusal {
         /// What `KernelBody::validate` refused.
         cause: String,
     },
-    /// The two domains are not the same shape, and not one with runtime scalars spliced in.
+    /// The two bodies cannot share one parameter list.
+    ///
+    /// # Invariant
+    /// A merged fragment carries **one** parameter list, and it is the union of the bodies' own
+    /// scalar leaves: a body that does not bind its own domain has no leaf to bind, so the two
+    /// domains and the bodies that read them are refused together.
     ShapesDiffer {
         /// The producer's domain.
         producer: KernelShape,
         /// The consumer's domain.
         consumer: KernelShape,
+        /// What the two bodies met that stopped them.
+        blocker: String,
     },
     /// The two fragments declare different targets.
     TargetsDiffer {
@@ -634,12 +715,19 @@ pub enum ComposeRefusal {
         /// The class the consumer's absorbed input declares.
         expected: ScalarClass,
     },
-    /// The two entry blocks do not receive the same number of parameters.
+    /// The consumer's entry block does not receive the leaves its domain declares.
+    ///
+    /// # Invariant
+    /// **A body's parameter list is its domain's leaves**: the consumer is bound position for
+    /// position into the merged list, so a consumer whose entry block receives another number has
+    /// no leaf to bind — its index would stand where a runtime scalar stands.
     ParameterCountsDiffer {
         /// How many the producer's entry block receives.
         producer: usize,
         /// How many the consumer's entry block receives.
         consumer: usize,
+        /// How many leaves the consumer's domain declares.
+        leaves: usize,
     },
     /// The position to absorb is not one of the consumer's declared inputs.
     AbsorbedIsOutOfRange {
@@ -816,12 +904,16 @@ impl std::fmt::Display for ComposeRefusal {
             ComposeRefusal::ConsumerIsNotWellFormed { cause } => {
                 write!(formatter, "the consumer's body is not well formed: {cause}")
             }
-            ComposeRefusal::ShapesDiffer { producer, consumer } => write!(
+            ComposeRefusal::ShapesDiffer {
+                producer,
+                consumer,
+                blocker,
+            } => write!(
                 formatter,
                 "the producer's domain {producer:?} and the consumer's {consumer:?} are not the \
-                 same shape and not one with runtime scalars spliced in — a runtime scalar is one \
-                 value the launch fixes for every lane, so it can be added to a producer that \
-                 declares none, and a merged fragment has one parameter list"
+                 same shape and not one with runtime scalars spliced in — a merged fragment has one \
+                 parameter list, and it is the union of the two bodies' scalar leaves with each \
+                 body bound to its own; {blocker}"
             ),
             ComposeRefusal::TargetsDiffer { producer, consumer } => write!(
                 formatter,
@@ -833,10 +925,15 @@ impl std::fmt::Display for ComposeRefusal {
                 "the producer stages a {produced:?} element and the consumer's absorbed input \
                  declares {expected:?}, so the forwarded value would be read at the wrong class"
             ),
-            ComposeRefusal::ParameterCountsDiffer { producer, consumer } => write!(
+            ComposeRefusal::ParameterCountsDiffer {
+                producer,
+                consumer,
+                leaves,
+            } => write!(
                 formatter,
                 "the producer's entry block receives {producer} parameter(s) and the consumer's \
-                 {consumer}, so an absorbed read cannot be bound position for position"
+                 {consumer}, and the consumer's domain declares {leaves} leaf(ies), so the \
+                 consumer has no leaf to bind position for position"
             ),
             ComposeRefusal::AbsorbedIsOutOfRange { absorbed, inputs } => write!(
                 formatter,
