@@ -673,6 +673,46 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+/// The rotation over a batch: one dispatch for every sequence's rows, the position read per row.
+///
+/// # Invariant
+/// `row_len` is the values a row turns (the heads times their width), and the position buffer
+/// holds one entry a row: the kernel derives the row from the lane, so a batch is one dispatch
+/// rather than one a sequence, and the angles are the same the single-row step computes.
+pub const ROPE_ROWS_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+RowsIn = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .pos (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Out    = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+RopeRowsPar = struct{.n Int, .row_len Int, .in RowsIn}
+RopeRowsArg = struct{.n Int, .row_len Int, .I RowsIn}
+rope_rows_raw = (k : RopeRowsPar) => {
+  i = compute.range k.n
+  row = i / k.row_len
+  within = i - row * k.row_len
+  j = within - (within / 128) * 128
+  low = j < 64
+  other_index = if low then (i + 64) else (i - 64)
+  own = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at other_index)) : Float)
+  turned = if low then j else (j - 64)
+  exponent = (0.0 - (int2float turned)) / 64.0
+  scale = exp (exponent * (ln (1000000.0)))
+  position = (compute.read ((compute.Read _)(.from k.in.pos, .at row)) : Float)
+  angle = position * scale
+  cosine = cos angle
+  sine = sin angle
+  signed = if low then (0.0 - 1.0) else 1.0
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((own * cosine) + ((signed * other) * sine)))))))
+}
+rope_rows = compute.parallel rope_rows_raw "gpu" Out
+GArg = struct{.n Int, .row_len Int, .in RowsIn}
+step = (s : GArg) => {
+  (compute.plrun rope_rows ((RopeRowsArg)(.n s.n, .row_len s.row_len, .I RowsIn(.x s.in.x, .pos s.in.pos))) : Out)
+}
+built = compute.graph step
+built
+"#;
 
 /// SwiGLU's product: `silu(gate) · up`, which is the elementwise half of the feed-forward.
 ///

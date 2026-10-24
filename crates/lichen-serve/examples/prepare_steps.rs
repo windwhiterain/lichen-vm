@@ -2,7 +2,8 @@
 
 use lichen_serve::{
     ATTEND_CACHE_STEP, ATTEND_STEP, BLOCK, DECODE_STEP, LAYER_STEP, MATVEC_BATCH_STEP,
-    MATVEC_ROW_STEP, MATVEC_STEP, PREFILL_STEP, RMS_NORM_STEP, ROPE_STEP, SAMPLE_STEP, SWIGLU_STEP,
+    MATVEC_ROW_STEP, MATVEC_STEP, PREFILL_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP, ROPE_STEP,
+    SAMPLE_STEP, SWIGLU_STEP,
 };
 
 fn main() {
@@ -13,12 +14,13 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let steps: [(&str, &str); 13] = [
+    let steps: [(&str, &str); 14] = [
         ("RMS_NORM_STEP", RMS_NORM_STEP),
         ("MATVEC_STEP", MATVEC_STEP),
         ("MATVEC_BATCH_STEP", MATVEC_BATCH_STEP),
         ("MATVEC_ROW_STEP", MATVEC_ROW_STEP),
         ("ROPE_STEP", ROPE_STEP),
+        ("ROPE_ROWS_STEP", ROPE_ROWS_STEP),
         ("ATTEND_STEP", ATTEND_STEP),
         ("ATTEND_CACHE_STEP", ATTEND_CACHE_STEP),
         ("SWIGLU_STEP", SWIGLU_STEP),

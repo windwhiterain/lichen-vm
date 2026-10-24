@@ -7,8 +7,8 @@ use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 
 use crate::{
-    ATTEND_CACHE_STEP, HIDDEN, MATVEC_BATCH_STEP, RMS_NORM_STEP, ROPE_STEP, SWIGLU_STEP,
-    ServeRefusal, Session,
+    ATTEND_CACHE_STEP, HIDDEN, MATVEC_BATCH_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP, ROPE_STEP,
+    SWIGLU_STEP, ServeRefusal, Session,
 };
 
 /// The model's shape, and the flat file's order — the contract with `scripts/dump_bf16.py`.
@@ -450,6 +450,8 @@ struct Steps<'session> {
     /// The head's projection, which reads a weight stored by row.
     head: crate::Prepared<'session>,
     rotation: crate::Prepared<'session>,
+    /// The rotation over a whole batch's rows, its positions in a buffer.
+    rotation_rows: crate::Prepared<'session>,
     attention: crate::Prepared<'session>,
     product: crate::Prepared<'session>,
     /// The width every payload this step hands over is stored at.
@@ -487,6 +489,7 @@ impl<'session> Steps<'session> {
                 Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
             },
             rotation: prepared(ROPE_STEP)?,
+            rotation_rows: prepared(ROPE_ROWS_STEP)?,
             attention: prepared(ATTEND_CACHE_STEP)?,
             product: prepared(SWIGLU_STEP)?,
             width,
@@ -637,6 +640,32 @@ impl<'session> Steps<'session> {
                 RunArgument::Count(values.len() as i64),
                 RunArgument::Count(position),
                 self.payload(values),
+            ])
+            .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
+        answered(session, &stepped)
+    }
+
+    /// The rotation of every row in `values`, its `positions` one a row.
+    ///
+    /// # Invariant
+    /// `row_len` is the values a row turns; both buffers ride as floats because a dispatch reads
+    /// its buffers at one class, and a position has to be exact.
+    fn rotated_rows(
+        &self,
+        session: &Session,
+        values: &[f32],
+        positions: &[f32],
+        row_len: i64,
+    ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
+        let stepped = self
+            .rotation_rows
+            .step(vec![
+                RunArgument::Count(values.len() as i64),
+                RunArgument::Count(row_len),
+                floats(values),
+                floats(positions),
             ])
             .map_err(QwenRefusal::Step)?;
         self.add_stage(started);
@@ -1228,13 +1257,8 @@ impl<'session> Qwen<'session> {
             HEAD,
         )?;
         let key = fetched(session, key)?;
-        let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (KEY_HEADS * HEAD) as usize);
-        for sequence in 0..caches.len() {
-            let span = sequence * (KEY_HEADS * HEAD) as usize
-                ..(sequence + 1) * (KEY_HEADS * HEAD) as usize;
-            rotated.extend(steps.rotated(session, &key[span], positions[sequence])?);
-        }
-        let key = rotated;
+        let positions: Vec<f32> = positions.iter().map(|position| *position as f32).collect();
+        let key = steps.rotated_rows(session, &key, &positions, (KEY_HEADS * HEAD) as i64)?;
         let value = steps.projected_from(
             session,
             RunArgument::Resident(normed),
@@ -1267,12 +1291,7 @@ impl<'session> Qwen<'session> {
             HEAD,
         )?;
         let query = fetched(session, query)?;
-        let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (HEADS * HEAD) as usize);
-        for sequence in 0..caches.len() {
-            let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
-            rotated.extend(steps.rotated(session, &query[span], positions[sequence])?);
-        }
-        let query = rotated;
+        let query = steps.rotated_rows(session, &query, &positions, (HEADS * HEAD) as i64)?;
         let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
         for (sequence, cache) in caches.iter().enumerate() {
             let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
