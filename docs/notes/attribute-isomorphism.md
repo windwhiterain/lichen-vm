@@ -275,6 +275,20 @@ The binding itself is **one node**, checked in the IR: `ExprKind::TypeFunction
 annotation's type expression and the value use read the same `state[e].term`. The
 "two nodes for `O = _`" hypothesis is therefore dead.
 
+Where the binder sits, read in the code: `ExprKind::TypeFunction` compiles its two
+sides with `check_type_element` → `type_denotation`, which returns the type
+expression's **term** (`state[expr].term`), so the signature's codomain slot holds
+`O`'s *expression*, not its type. The assert `f : I -> O` therefore unifies two
+expressions and descends into `O`'s **value** position — the pairing is already at the
+right level, and the assert is the binder. So option 2 (no binder in a type-only graph)
+is out, and the remaining question is narrower: why the assert's bind reaches the
+value graph's `O` but not the type graph's.
+
+The next probe is on that: does the type-side instantiation's `PendingAssert` ever get
+**evaluated** (`module.check_asserts` / the deep pass), and does its condition's class
+hold the `O` clone the type cell reads? `PendingAssert` is pushed with the instantiated
+condition and a static `template`, and `asserts` is a module-wide worklist — a probe
+that prints the assert's condition node and its `O` cell would settle it in one run.
 What that leaves is the design question, and it is why this needs a ruling: in a
 **type-only** graph (the check-time and eval-time type applies), what is supposed to
 bind a type expression's denotation? The value graph has the body's evaluation; the
