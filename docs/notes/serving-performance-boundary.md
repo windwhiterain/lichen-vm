@@ -115,6 +115,45 @@ So fusion is reachable: the claims can span a layer, and the remaining capabilit
 bridge — it needs a conditional or integer division, or the rotation's element function must be
 real-only (a precomputed cos/sin/sign table read at the lane's index).
 
+## How a region is derived, and where the abstraction is coarser than the dataflow
+
+The pipeline, in the order the code runs it:
+
+1. **Marks** — a kernel's function parameter carries `~ "claim:Interface(role,…)"`
+   (`compile_claim`), and the body's `~ "combine"` / `~ "element"` marks are published into the
+   fragment's marks. A kernel with no claim is in no row of the registry join.
+2. **Claim** — the compile stores the fragment and the claim together (`intern_kernel`), and the
+   passes read the registry, never the kernel value.
+3. **Regions** (`fusion_claim/schema.rs::region_positions`) — the graph is walked in evaluation
+   order; a claimed node joins the current **run**, and an unclaimed node **flushes** the run.
+   Each run is then split into weakly-connected components over the run's own values
+   (`components`): a node joins the component of a producer it reads, and an extent value counts
+   as a read.
+4. **Schema** (`derive_regions`) — each component becomes a `RegionSchema` (ports, roles) through
+   the claims, or a refusal.
+5. **Licence and merge** — a region needs a licence (a `fuse` pack naming its schema, or a
+   reduction chain the pass can prove), then the merge's legality checks, then `compose`.
+
+Two places are **coarser than the dataflow**:
+
+- **The run split severs cross-boundary dependencies.** A claimed node after an unclaimed one
+  cannot join a claimed producer before it, although the producer's value would simply be an
+  input of the merged kernel. In the pre-attention graph the rotation (node 5, unclaimed)
+  separates the norm's consumers: the key chain lands in region [0..4] and the value and query
+  projections in later regions, so the norm's fan-out — a legal `Shape::FanOut` — is never a
+  candidate.
+- **The shape set is fixed.** The classifier admits a pair, a chain, a fan-out or a fan-in; a
+  fan-out **of chains** (the norm feeding three projections, each followed by a norm) is none of
+  them, so even a region that crossed the boundary would be refused before its schema is asked.
+
+The claim itself is not the coarse part: membership through a claim is the right predicate (a
+body no claim describes has no algebra to read), and the merge's fan-out composition exists. The
+coarseness is the **derivation** — the run split treats a claim boundary as a dataflow barrier,
+and the shape classifier enumerates compositions instead of accepting the DAG the merge could
+compose. Both are implementation choices; the rotation's lane-dependent gather is the one limit
+that is genuinely in the language, because the bridge models a read as the value at the element's
+own position.
+
 ## The edges now## The edges now## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
