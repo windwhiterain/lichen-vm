@@ -78,14 +78,15 @@ where
     ///
     /// # Invariant
     /// An annotated value contributes none: its attribute is its own slot, so a
-    /// doc-only annotation reads as a leaf.
+    /// doc-only annotation reads as a leaf. A struct instance contributes its
+    /// fields, never its type expression: the type states a requirement of the
+    /// value, not a perspective the value provides (spec §3, "Every attribute is
+    /// handled like the type").
     fn persp_combine_children(&self, e: ExprId) -> Vec<ExprId> {
         match self.ir[e].kind {
             ExprKind::BinOp { left, right, .. } => vec![left, right],
             ExprKind::Apply { function, argument } => vec![function, argument],
-            ExprKind::Instantiate {
-                type_expr, value, ..
-            } => vec![type_expr, value],
+            ExprKind::Instantiate { value, .. } => vec![value],
             ExprKind::Record { value, .. } => vec![value],
             ExprKind::Index { array, index } => vec![array, index],
             ExprKind::Field { container, key } => vec![container, key],
