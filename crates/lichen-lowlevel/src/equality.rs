@@ -448,6 +448,26 @@ impl<P: Program> Module<P> {
         representative
     }
 
+    /// Whether an answer still holds an **open frozen position** — a static ref whose
+    /// frozen node holds nothing.
+    ///
+    /// # Invariant
+    /// A frozen position is the template's own cell, so no unify can bind it: a class
+    /// that took such an answer would hold something nothing can complete, and the
+    /// caller's own inference would be displaced by the template's skeleton. A
+    /// template's statement therefore binds nothing while it is open, at every
+    /// position alike (`docs/notes/kernel-parameter-class.md`).
+    fn frozen_answer_is_open(&self, value: P::Value) -> bool {
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return false;
+        };
+        // SAFETY: the payload belongs to a live value this unify reached.
+        unsafe { array.items() }.iter().any(|item| match item.node {
+            AnyNodeId::Static(sref) => self.static_read(sref).is_none(),
+            AnyNodeId::Dynamic(_) => false,
+        })
+    }
+
     /// [`Self::unify`] over the module's own recursion buffers.
     fn unify_borrowed(
         &mut self,
@@ -850,6 +870,9 @@ impl<P: Program> Module<P> {
                     if va.is_none()
                         && let Some(value) = vb
                     {
+                        if self.frozen_answer_is_open(value) {
+                            return true;
+                        }
                         self.write_node_value(node, Some(value));
                         return true;
                     }
@@ -858,6 +881,9 @@ impl<P: Program> Module<P> {
                     if vb.is_none()
                         && let Some(value) = va
                     {
+                        if self.frozen_answer_is_open(value) {
+                            return true;
+                        }
                         self.write_node_value(node, Some(value));
                         return true;
                     }
