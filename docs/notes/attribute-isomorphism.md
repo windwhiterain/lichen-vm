@@ -1,10 +1,10 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `9a5406c0`, working tree clean, not merged. The rule is landed in the language
-> spec and the attribute-specific record machinery is gone; **five tests stay red**
+> `619a2606`, working tree clean, not merged. The rule is landed in the language
+> spec and the attribute-specific record machinery is gone; **three tests stay red**
 > and their two mechanisms are analysed below — the first is closed, the second is
-> pinned to the commit that opened it and needs a ruling.
+> half closed and its remainder needs a ruling.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -51,6 +51,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `017f3db5` | a per-call cell enters the signature remap, so the mirror rule resolves a reference to this call's clone — **and `a_write_returns...` passes** |
 | `0ae17d02` | `shape`'s low-type readers cross the frozen boundary (`static_read`) |
 | `9a5406c0` | a struct instance's provided perspective is the meet of its **fields**; its type expression states a requirement, not a perspective — **and `a_read_takes...` passes** |
+| `619a2606` | `unify`'s fill refuses an answer that still holds an **open frozen position**, so a template's skeleton binds nothing — **and both `jit_inline` tests pass** |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -58,12 +59,10 @@ decides relaxation. `@any` states nothing, at any position.
 |---|---|
 | `lichen-highlevel --test highlevel` | **136 passed; 0 failed** |
 | `lichen-language --test language` | **274 passed; 1 failed** |
-| `lichen-compute --test lichen_compute` | **233 passed; 4 failed; 1 ignored** |
+| `lichen-compute --test lichen_compute` | **235 passed; 2 failed; 1 ignored** |
 
 Red:
 
-- `compute::jit_inline_lichen_function`
-- `compute::jit_inline_nested_function`
 - `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches`
 - `compute::a_jit_kernel_crosses_the_two_classes_both_ways`
 - `language::field_read_kinds::a_named_read_of_a_deferred_struct_is_accepted`
@@ -132,30 +131,61 @@ Measured, in order:
   cells that nothing can bind. Before `5d585047` the caller's type cell stayed
   free and the body's own inference (`helper x`) bound it to `Int`.
 
-The ruling needed, because restoring `slot == 1` is forbidden (the type is
-handled like every attribute):
+**What landed: B, at the fill.** `619a2606` gives `unify`'s node-less fill a
+`frozen_answer_is_open` guard: an answer that still holds a static ref whose
+frozen node holds nothing is not an answer, so it fills nothing. Measured: both
+`jit_inline` tests pass, compute 233/4 → 235/2, highlevel 136/0 and language 274/1
+unchanged. Candidate A (a skip in the non-reporting binding) was not needed: the
+rule is position-agnostic, so the type is not special-cased.
 
-- **A. A frozen statement binds nothing.** In the non-reporting binding, a
-  position whose signature side is a frozen value binds nothing and is left to
-  the reporting side. Position-agnostic, but it *is* a skip.
-- **B. An open answer does not fill a class.** `unify` refuses a fill whose answer
-  still has open positions, so the two sides stay separate and the body's
-  inference is not displaced. General, but `answer_elements_are_undecided` is
-  explicitly one level deep and governs `runned`, not class filling, so extending
-  it here needs care.
-- **C. The signature clone does not carry an open answer's value.**
-  `clone_static_signature_node` copies `Some(copied)` unconditionally; refusing an
-  open `copied` is the same reading as B, at the clone site. Cheapest to try, and
-  the pinned renderings (`(raw Kernel, Int, ...)`) would show whether it costs the
-  signature's stated answers.
-- **D. One owner for the call's type binding.** The check-time apply already
-  bound the type position; the eval-time (non-reporting) one re-binds it before
-  the body's inference completes. Making the eval-time side reuse the check-time
-  materialization would make the second bind idempotent instead of destructive.
+Measured and **rejected**: broadening the guard to *dynamic* open items as well
+(the same 235/2, so the two remaining failures are not a fill). Candidate C (the
+signature clone refusing an open value) was not tried in that form: the open
+positions are the *attribute* ones while the denotation is decided, so dropping
+the whole value would drop the signature's answer. Candidate D (the eval-time
+materialization reusing the check-time one) was tried with
+`!self.applied_exprs.contains_key(&node)` and changed nothing — measured,
+**every** `apply_function_type` in both remaining tests is `report=false`, so
+`materialize_static_return_apply` is the only static type apply there is; there is
+no second owner to defer to.
 
-Next probe (whichever ruling comes): print, at the `unify_inner` fill, the
-*static* side's module key and index, and the receiving node's class root, to name
-the exact frozen node the skeleton comes from.
+## The two still red — a kernel's **codomain** stays open
+
+`a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
+`a_jit_kernel_crosses...` fails on `type_is_float`/`type_is_int` over its five
+cases. Both read the launch's result type, which is `k.O` — the kernel struct's
+codomain field.
+
+Measured (`type_head` on the root type node): the result type is a **five-position
+type expression** whose slots 1–4 are decided and whose slot 0 — the denotation —
+is a free dynamic cell. Its class root is the cell itself, holding nothing, so
+nothing was written and no class holds the answer either: the codomain was simply
+never bound.
+
+Both tests pass at `aeac9efe`, so the codomain binding is the *second* casualty of
+`5d585047`: the non-reporting binding is the only place these programs unify the
+type position, and with the open frozen fill refused (`619a2606`) the frozen
+codomain skeleton no longer fills anything — nor does the unified pair *connect*
+the frozen codomain's cell to the argument's, because the node-less arm returns
+before descending.
+
+So the remaining work is the other half of the same rule: an open frozen answer
+must not fill a class, but the unify still has to **pair its items with the
+argument's**, so the per-call cell the template leaves open is bound by the
+caller's inference. Candidates, for a ruling:
+
+- **E. Descend through the open answer.** At the node-less fill, when the answer
+  is open, unify the answer's items against the receiver's counterpart positions
+  instead of writing. Needs the receiver's structure — the receiver is a free
+  cell, so the descend has to build it (`expr_of`) or be deferred.
+- **F. The per-call cell must not be frozen at all.** `017f3db5`'s rule ("a
+  per-call cell enters the signature remap") applied to *every* open node the
+  signature clone meets, so the codomain cell the unify sees is this call's own
+  clone and the caller's inference binds it through the ordinary unify.
+- **G. The codomain is read through the applied clone.** The checker reads `k.O`
+  as a field type; if the field's type cell is the template's, the read should go
+  through the applied clone, the way `applied_attribute_slot` reads an applied
+  attribute (spec §3).
 
 ## Traps (each cost time this session)
 
