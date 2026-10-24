@@ -127,18 +127,22 @@ The pipeline, in the order the code runs it:
 5. **Licence and merge** — a region needs a licence (a `fuse` pack naming its schema, or a
    reduction chain the pass can prove), then the merge's legality checks, then `compose`.
 
-Two places were **coarser than the dataflow**; the first is fixed, the second is fixed too:
+Two places were **coarser than the dataflow**; the first is fixed, the second is rewritten and
+pinned for the shallow shapes, but the DAG case is not measured yet:
 
 - **The run split (fixed).** It used to sever a claimed consumer from a claimed producer across an
   unclaimed node. `region_positions` no longer flushes at an unclaimed node, so the pre-attention
   graph now derives **one region** (nodes 0–4 and 6–9) with the rotation outside it, and
   `merge_probe` shows the other side: an all-unclaimed chain still derives no region.
-- **The shape set (fixed).** The classifier admitted a pair, a chain, a fan-out or a fan-in —
-  shallow shapes, depth at most two — and the composition had one `compose` per shape. The merge
-  now **folds over the region's DAG**: a node reading the body before it is a chain step, a node
-  reading several producers is a fan-in over the branch's own bodies, and a node several consumers
-  read is a fan-out over the branches it splits the region into. A fan-out **of chains** (the norm
-  feeding three projections, each followed by a norm) is one of those folds.
+- **The shape set (in code; the DAG path is not measured).** The classifier admitted a pair, a
+  chain, a fan-out or a fan-in — shallow shapes, depth at most two — and the composition had one
+  `compose` per shape. The merge now **folds over the region's DAG**: a node reading the body
+  before it is a chain step, a node reading several producers is a fan-in over the branch's own
+  bodies, and a node several consumers read is a fan-out over the branches it splits the region
+  into. The three shallow shapes are pinned by `chain_merge`/`fan_out_merge`/`fan_in_merge`; a
+  fan-out **of chains** (the norm feeding three projections, each followed by a norm) is what the
+  fold is written for, but the composite refuses at `ShapesDiffer` before a body is composed, so
+  that path has not been measured on a device.
 
 The claim itself is not the coarse part: membership through a claim is the right predicate (a body
 no claim describes has no algebra to read), and the merge's fan-out composition exists. What
