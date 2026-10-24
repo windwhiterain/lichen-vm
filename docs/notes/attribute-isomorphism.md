@@ -269,6 +269,20 @@ codomain instead of re-instantiating). Compute stays 235/2 and two tests break
 `checker::a_direct_call_result_annotation_is_checked_against_the_return_type`), because
 each **evaluation** needs its own cells — the second type apply is legitimate.
 
+The binding itself is **one node**, checked in the IR: `ExprKind::TypeFunction
+{ parameter, return_type }` holds the two **binding** `ExprId`s, and a name is one
+`ExprId` (`ExprKind::Parameter`, "a function parameter, or a `let`-bound name"), so the
+annotation's type expression and the value use read the same `state[e].term`. The
+"two nodes for `O = _`" hypothesis is therefore dead.
+
+What that leaves is the design question, and it is why this needs a ruling: in a
+**type-only** graph (the check-time and eval-time type applies), what is supposed to
+bind a type expression's denotation? The value graph has the body's evaluation; the
+type graphs have only asserts, and running them (`ParameterCheck::Type`, measured
+above) moves nothing. Either the assert's unification pairs `O`'s **type** where the
+type expression needs its **value**, or a type-only graph has no binder at all and the
+type cell must be bound by the value graph's codomain — which is what the static path
+does and what the dynamic path would have to state explicitly.
 What that leaves: the three clones each carry their **own** copy of the codomain's
 denotation cell, and the assert that decides it (`f : I -> O` inside `jit`) fills only
 one of them. 975 is never written by anything, which is why the fill log never named
