@@ -1,11 +1,11 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `c36cdce4`, working tree clean, not merged. The rule is landed in the language
+> `d6722af6`, working tree clean, not merged. The rule is landed in the language
 > spec and the attribute-specific record machinery is gone. Three reds remain: the
-> kernel codomain (mechanism 2b carries the verdict and the measured origin of its
-> open cell), and two language-server tests that read the same at this session's
-> start commit.
+> kernel codomain (mechanism 2b carries the verdict, the measurements and the one open
+> link), and two language-server tests that read the same at this session's start
+> commit.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -159,164 +159,69 @@ materialization reusing the check-time one) was tried with
 `materialize_static_return_apply` is the only static type apply there is; there is
 no second owner to defer to.
 
-## Mechanism 2b — a kernel's codomain stays open (the verdict that governs it)
+## Mechanism 2b — a kernel's codomain stays open (the state of the hunt)
 
 `a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
 `a_jit_kernel_crosses...` fails on `type_is_float`/`type_is_int` over its five cases.
-Both read the launch's result type, which is `k.O` — the kernel struct's codomain
-field.
-
-Both tests pass at `aeac9efe`, so this is the second casualty of `5d585047`: before it,
-the non-reporting binding skipped the type position (`slot == 1`) and the caller's own
-inference decided it; the commit made the type position ride the same rule as every
-other, which is correct — the isomorphism — and exposed a clone that nothing binds.
+Both tests pass at `aeac9efe`, so `5d585047` opened them: it made the type position ride
+the same rule as every other (the isomorphism), and the clone that rule installs is one
+nothing binds.
 
 ### The verdict: a static node is read directly
 
 A frozen position is **read in its own module**, exactly as a dynamic one, and never
 copied into a dynamic node in order to be read. The rule sits at both readers
-(`Module::node_value`, `shape::node_value`) as their `# Invariant`. A copy gives the
+(`Module::node_value`, `shape::node_value`) as their `# Invariant`; a copy gives the
 position a fresh class, so one value reads as several.
 
-This was learned by trying the opposite (`a524e578`, `f0f8f668`): a copy walk that
-materialized every open frozen position into a fresh cell. It made the codomain read
-(compute 237/0, the two pinned renderings back to `(raw Kernel, Int, Int)`) and it was
-still wrong: the copy is what had to go, not the read. `484e9fa2` reverts it, and
-`02d31d8f` restores the two pins to `raw none`, which is what a direct read sees while
-the codomain is open.
+Tried the opposite first (`a524e578`, `f0f8f668`: a copy walk that materialized every
+open frozen position). It made the codomain read (compute 237/0, the two pinned
+renderings back to `(raw Kernel, Int, Int)`), and it was still wrong — the copy is what
+has to go, not the read. `484e9fa2` reverts it; `02d31d8f` restores the two pins to
+`raw none`, which is what a direct read sees while the codomain is open.
 
-### What the open cell actually is, measured
+### What the open cell is
 
-A probe in `type_head` (`lichen-language/src/testing.rs`) prints, for
-`a_jit_kernel_crosses...`: `node=NodeId(487) items=5 item0=Dynamic(NodeId(975))
-value=false`. The call's type cell holds a five-position **expression** whose value
-position is a **dynamic** cell with no value — nothing frozen at the failure, so the
-"a cross-module open ref is kept frozen" reading is wrong.
+- A probe in `type_head` prints, for the failing program, `node=NodeId(487) items=5
+  item0=Dynamic(NodeId(975)) value=false`: the read node is a five-position
+  **expression** whose value position is an empty cell. Nothing is frozen there.
+- A probe in `Module::add_node` catches 975's creation: `Module::node_apply` →
+  `function::value_apply`. And a clone probe prints its instantiation as
+  `value=false asserts=0` — a **type-side** instantiation of an assert-free function.
+- A probe in `check_app` lists the main program's calls binding cells `66` and `368`, so
+  `487` is **not a call's cell**. The static value side does bind (measured:
+  `cell=368 codomain=708 decided=[true, true, true, true, true]`), so the open read is
+  the type `k.O` carries **at check time**, before any value apply runs.
+- The binding itself is one node: `ExprKind::TypeFunction` holds the two binding
+  `ExprId`s and a name is one `ExprId`, so the annotation and the value use share
+  `state[e].term`. And the assert is the binder, at the right level:
+  `check_type_element` → `type_denotation` returns the type expression's **term**, so
+  `I -> O` descends into `O`'s **value** position.
 
-A second probe in `Module::add_node` catches 975's creation, and its backtrace names
-`Module::node_apply` → `function::value_apply`, the **dynamic clone walk**. So 975 is a
-per-call clone made for the value side, and the cell the type position reads belongs to
-a **different clone** of the same expression: the body's evaluation fills its own copy,
-the type cell's copy stays open, and no unify ever reaches it (which is why the fill
-log never named it).
+### Measured and rejected (each on its own build)
 
-So the remaining defect is **duplication of the clone**, not a frozen read: one
-expression gets one clone for the body and another for the type position. The rule to
-land is `6521974a`'s "one materialization per call", extended across the dynamic clone
-walk (`node_apply`) and the type-side copy — one call, one clone, whichever side reads
-it.
-
-Measured and rejected in the same round, each on its own build:
-
-- `register_static_type_asserts` from `materialize_static_return_apply`, so the type
-  side's own remap re-checks the asserts: no change (235/2).
 - A **shared remap** between the two sides of one call (`call_clones`, keyed by the
-  call's value-side node and consumed by the other side): **nine tests break**
-  (compute's fold/plan/tiling group, `language::cyclic_type_cut` and
-  `gc_block::a_gc_block_calls_a_curried_binding_per_element`,
-  `checker::a_direct_call_result_annotation_is_checked_against_the_return_type`),
-  because a call *site* is instantiated many times and the second evaluation would
-  reuse the first one's cells. So sharing a whole remap per site is wrong; the
-  sharing has to be per *application*.
-- Deferring the dynamic type-side cell bind to the value side (the rule the static
-  path already uses, `function.rs`'s `apply_function_type`): two tests break
-  (`language::cyclic_type_cut`, `highlevel::table::a_table_flows_through_a_function`)
-  and the codomain stays open.
-- Running the type side's asserts on its own clones (`ParameterCheck::Type` instead
-  of `Skip` for `report == false`): **nothing moves** — compute 235/2, language
-  275/0, highlevel 136/0.
-- A probe on the bind (`apply_type_with`) prints the cells the type side binds:
-  `286`, `554`, `786`, `919`, with codomains `346`, `415`, `614`, `681`, `810`, `979`.
-  **None of them is the node the test reads (`487`)**, so no codomain bind touches it;
-  487 arrives as a *type expression* the clone walk produced, and its value position
-  is an open template cell.
+  value-side node, consumed by the other side): **nine tests break** — a call *site* is
+  instantiated many times, and the second evaluation must not reuse the first's cells.
+- Deferring the dynamic type-side bind to the value side: two tests break and the
+  codomain stays open.
+- Running the type side's asserts on its own clones (`ParameterCheck::Type` instead of
+  `Skip`): nothing moves (235/2, language 275/0, highlevel 136/0).
+- Reusing the check-time instantiation at eval (`apply_value_applies` reverse pairing):
+  two tests break; every evaluation needs its own cells.
+- Binding the call's cell inside `materialize_static_return_apply`: **175 compute tests
+  fail** — the type side would bind before the value side. The static path's rule ("the
+  value side owns the bind when nothing reports") stands.
+- Disabling the `619a2606` fill guard: no change; the two `jit_inline` tests stay green.
+- A probe on `apply_type_with` prints the cells the type side binds (`286`, `554`, `786`,
+  `919`) — none of them is the failing node, so no codomain bind touches it.
 
-What the clone probes then settled: 975 is a clone made in a **type-side**
-instantiation (`value=false`) of a function with **no asserts** (`asserts=0`), while the
-same function's **value side** does instantiate and bind its own type item
-(`PROBE f3 value=true applied=… type_item=…` then `f3-value-bind … is_fn=false`). Both
-bind the same cell, so the two type items land in one class — yet the node the test
-reads is not among the cells any bind names (the bind probe listed `286`, `554`, `786`,
-`919`; the read is `487`). The failing node is therefore a type **expression** the
-clone walk built for the *type* side, and nothing binds it.
+### Next
 
-A probe on both cell binds then shows the shape of the duplication, and it is worse
-than two sides: `PROBE side=type cell=NodeId(286) codomain=NodeId(346)` is followed by
-`PROBE side=type cell=NodeId(286) codomain=NodeId(415)` — the **type side alone
-instantiates twice** for one call — and only then
-`PROBE side=value cell=NodeId(286) codomain=Dynamic(NodeId(482))`. So one call binds
-one cell with *three* clones (346, 415, 482), and the two type-side ones front-load the
-cell with open template cells before the evaluated clone arrives. The merge of three
-clones then leaves the hole open, which is the state the test reads.
-
-Measured and rejected in the same round: disabling the fill guard of `619a2606`
-(`LICHEN_GUARD_OFF`-style edit, reverted) changes nothing for the codomain — the two
-`jit_inline` tests stay green and compute stays 235/2 — so the guard is not what blocks
-the merge.
-
-Where the two type-side binds come from, measured: `check_app` runs **once** per call
-(a probe prints one line per expression: `PROBE check_app expr=ExprId(63)
-type_apply=NodeId(291) cell=NodeId(286) report=false`), and the second bind is the
-**eval-time** type apply — `evaluation.rs`'s `apply_callee_type` → `Module::apply_type`
-(the "apply the type where the value is not concrete yet" path). So a call is
-type-applied at check and again at eval, and value-applied once: three instantiations,
-three clone generations, one cell.
-
-Tried and rejected: reusing the check-time instantiation at eval
-(`apply_value_applies` reverse pairing, then binding the recorded `applied_exprs`
-codomain instead of re-instantiating). Compute stays 235/2 and two tests break
-(`language::gc_block::a_gc_block_calls_a_curried_binding_per_element`,
-`checker::a_direct_call_result_annotation_is_checked_against_the_return_type`), because
-each **evaluation** needs its own cells — the second type apply is legitimate.
-
-The binding itself is **one node**, checked in the IR: `ExprKind::TypeFunction
-{ parameter, return_type }` holds the two **binding** `ExprId`s, and a name is one
-`ExprId` (`ExprKind::Parameter`, "a function parameter, or a `let`-bound name"), so the
-annotation's type expression and the value use read the same `state[e].term`. The
-"two nodes for `O = _`" hypothesis is therefore dead.
-
-Where the binder sits, read in the code: `ExprKind::TypeFunction` compiles its two
-sides with `check_type_element` → `type_denotation`, which returns the type
-expression's **term** (`state[expr].term`), so the signature's codomain slot holds
-`O`'s *expression*, not its type. The assert `f : I -> O` therefore unifies two
-expressions and descends into `O`'s **value** position — the pairing is already at the
-right level, and the assert is the binder. So option 2 (no binder in a type-only graph)
-is out, and the remaining question is narrower: why the assert's bind reaches the
-value graph's `O` but not the type graph's.
-
-The next probe is on that: does the type-side instantiation's `PendingAssert` ever get
-**evaluated** (`module.check_asserts` / the deep pass), and does its condition's class
-hold the `O` clone the type cell reads? `PendingAssert` is pushed with the instantiated
-condition and a static `template`, and `asserts` is a module-wide worklist — a probe
-that prints the assert's condition node and its `O` cell would settle it in one run.
-What that leaves is the design question, and it is why this needs a ruling: in a
-**type-only** graph (the check-time and eval-time type applies), what is supposed to
-bind a type expression's denotation? The value graph has the body's evaluation; the
-type graphs have only asserts, and running them (`ParameterCheck::Type`, measured
-above) moves nothing. Either the assert's unification pairs `O`'s **type** where the
-type expression needs its **value**, or a type-only graph has no binder at all and the
-type cell must be bound by the value graph's codomain — which is what the static path
-does and what the dynamic path would have to state explicitly.
-What that leaves: the three clones each carry their **own** copy of the codomain's
-denotation cell, and the assert that decides it (`f : I -> O` inside `jit`) fills only
-one of them. 975 is never written by anything, which is why the fill log never named
-it. The next check is therefore on the **checker**: does the binding `O = _` contribute
-**one** node to both the annotation `f : I -> O` and the value use `.O O`, or two? If
-two, that is the sharing to fix, and it is a binding-level invariant, not an apply one.
-
-### The two language-server reds are older than this session
-
-`lichen-language-server --test language_server` carries two failures, and **both read
-the same at `359b18c4`**, the commit this session started from:
-
-- `statement_values::a_lazy_binding_reports_type_but_no_value` aborts with
-  `memory allocation of 38654705664 bytes failed`: the paradox program's type walks a
-  chain the printer never stops building. Measured with the copy walk present and
-  removed alike, so no clone-at-read is involved.
-- `statement_values::compute_wrapper_functions_hover_with_named_type_variables` counts
-  **198** type variables where it pins **24** — also 198 at `359b18c4`, so this is not
-  the copy walk either: it is the attribute-widened expression the checker builds, whose
-  every position is a cell of its own.
+The last link is the **field type cell of `k.O`** in the check-time graph: it is what
+`compile_fragment` reads, and the probe says no apply binds it. Next: instrument the
+checker's field-type read (`structs.rs`) to see which cell `k.O` gets and whether
+anything ever unifies it.
 ## Traps (each cost time this session)
 
 - **Do not special-case an attribute against the type.** A `slot == 1` skip in
