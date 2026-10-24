@@ -41,8 +41,13 @@ fn program() -> String {
 
 /// `source` compiled and checked, never run.
 fn compile(source: &str) -> Report<LangProgram> {
+    compile_at(source, None)
+}
+
+/// [`compile`] with `base` naming the project the source's imports resolve in.
+fn compile_at(source: &str, base: Option<&std::path::Path>) -> Report<LangProgram> {
     let mut store = new_store(None).expect("the embedded compute package registers");
-    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, base, &mut store);
     assert!(diags.is_empty(), "the program's imports resolve: {diags:?}");
     lichen_language::compile_with_imports_at::<LangProgram>(
         preprocessed.code,
@@ -74,6 +79,114 @@ fn a_lane_varying_buffer_is_refused() {
             .iter()
             .any(|message| message.contains("expected 32, found 1")),
         "{messages:?}"
+    );
+}
+
+/// An imported module's requirement judges exactly like an inline one.
+///
+/// # Invariant
+/// The **frozen** boundary is not a different judgement: `gauge.lichen` states
+/// `(Int # 32)` in a frozen artifact, so a lane-varying argument is refused there for the
+/// same reason an inline `(Int # 32)` refuses it. One silently passing would mean the
+/// requirement was lost crossing the boundary.
+#[test]
+fn an_imported_requirement_judges_like_an_inline_one() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("lichen_compute")
+        .join("fixtures");
+    let base = directory.join("gauge.lichen");
+    let inline = compile(
+        "Gauge = _x => struct{.v Int # 32}
+strict = (g : (Gauge _)) => g.v
+strict ((Gauge _)(.v (5 # 1)))
+",
+    );
+    let imported = compile_at(
+        "---
+  gauge = import \"gauge.lichen\"
+---
+gauge.strict ((gauge.Gauge _)(.v (5 # 1)))
+",
+        Some(&base),
+    );
+    let inline_messages: Vec<String> = inline
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    let imported_messages: Vec<String> = imported
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        !inline.ok()
+            && inline_messages
+                .iter()
+                .any(|m| m.contains("expected 32, found 1")),
+        "the inline requirement must refuse the argument: {inline_messages:?}"
+    );
+    assert!(
+        !imported.ok()
+            && imported_messages
+                .iter()
+                .any(|m| m.contains("expected 32, found 1")),
+        "the imported requirement must refuse it the same way: {imported_messages:?}"
+    );
+}
+
+/// An imported requirement the **call** decides judges like an inline one.
+///
+/// # Invariant
+/// `Choose _p` states its field's perspective as a **type variable**, so the artifact
+/// holds an open cell and the call binds it (`Choose 32`). The frozen boundary must not
+/// lose that binding: inline and imported both refuse a value whose perspective is 1 where
+/// the application demanded 32.
+#[test]
+fn an_imported_open_requirement_is_bound_at_the_call() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("lichen_compute")
+        .join("fixtures");
+    let base = directory.join("gauge.lichen");
+    let inline = compile(
+        "Choose = _p => struct{.v Int # _p}
+pick = (g : (Choose _)) => g.v
+pick ((Choose 32)(.v (5 # 1)))
+",
+    );
+    let imported = compile_at(
+        "---
+  gauge = import \"gauge.lichen\"
+---
+gauge.pick ((gauge.Choose 32)(.v (5 # 1)))
+",
+        Some(&base),
+    );
+    let inline_messages: Vec<String> = inline
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    let imported_messages: Vec<String> = imported
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        !inline.ok()
+            && inline_messages
+                .iter()
+                .any(|message| message.contains("expected 32, found 1")),
+        "the inline open requirement must refuse the value: {inline_messages:?}"
+    );
+    assert!(
+        !imported.ok()
+            && imported_messages
+                .iter()
+                .any(|message| message.contains("expected 32, found 1")),
+        "the imported open requirement must refuse it too: {imported_messages:?}"
     );
 }
 
