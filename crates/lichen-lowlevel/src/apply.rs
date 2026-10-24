@@ -38,6 +38,8 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
     ) {
+        // The reporting side owns the failure; this binding only needs the classes.
+        let recorded = self.unify_errors.len();
         let lengths = (
             unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
             unsafe { self.array_items(argument) }.map(|items| items.len()),
@@ -52,12 +54,6 @@ impl<P: Program> Module<P> {
                     .map_or(0, |items| items.len())
                     .max(supplieds.map_or(0, |items| items.len()));
                 for slot in 0..width {
-                    // The type position is the reporting side's: binding it here makes
-                    // the signature's codomain the argument's type, which is not this
-                    // side's to decide.
-                    if slot == 1 {
-                        continue;
-                    }
                     let (Some(parameters), Some(supplieds)) = (parameters, supplieds) else {
                         break;
                     };
@@ -74,6 +70,7 @@ impl<P: Program> Module<P> {
                 self.unify(cloned_param, argument);
             }
         }
+        self.unify_errors.truncate(recorded);
     }
 
     /// The post-clone parameter check shared by both apply paths; `true` when it failed.
