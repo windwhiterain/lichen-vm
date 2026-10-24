@@ -1,25 +1,11 @@
 # The attribute isomorphism — handoff
 
-> Status: **the codomain is closed**. Branch `spec-literals` (base `dev`), working
-> tree clean, not merged. The rule is landed in the language spec, the attribute-specific
-> record machinery is gone, and mechanism 2b is closed: `unify` consumes a frozen
+> Status: **landed on `dev` at `7e9921df`**, and the branch is deleted. The rule is in the
+> spec, the record machinery is gone, and mechanism 2b is closed: `unify` consumes a frozen
 > signature by its **own refs** instead of a materialized copy. Compute is 237/0, and the
-> two language-server reds the hunt started with now pass as a consequence. One red
-> remains and it is **pre-existing**: `lichen-language`'s lib test
-> `sort_op_sorts_a_usize_array` fails at the unmodified tree too (measured by reverting
-> the slice and re-running it).
->
-> What this note is: the state a successor resumes from — what the rule is, what
-> landed, the exact readings, the two mechanisms with the probes that found them,
-> and the traps that cost this session its time.
->
-> Points at: `docs/language-spec.md` §1 and §3, `lichen-highlevel`
-> (`checker`, `checker/annotations`, `checker/lambda`, `shape`), `lichen-lowlevel`
-> (`apply`, `static_module`, `static_module/apply`), `lichen-compute`
-> (`compute.rs` `compile_fragment`), and the notes
-> [array-attribute-view](array-attribute-view.md),
-> [kernel-parameter-class](kernel-parameter-class.md),
-> [apply-type-side-check](apply-type-side-check.md).
+> two language-server reds the hunt started with pass as a consequence. One red remains and
+> it is **pre-existing**: `lichen-language`'s lib test `sort_op_sorts_a_usize_array` fails at
+> the unmodified tree too (measured by reverting the slice and re-running it).
 
 ## The rule
 
@@ -390,10 +376,10 @@ what made the frozen `.O` cell reachable — closing the codomain at `unify` was
 (or the extension API) is the next slice if the census is worth it; it is a refactor, not a
 fix, and the tests are green with the current line.
 
-Then the landing: squash, `git diff dev...HEAD --name-only` must name only this slice's
-files, merge to `dev`, delete the branch. The `sort_op` red is outside this branch's files
-and predates it (its `default_attributes()?` requirement came in `dd4cd0e1`, an ancestor of
-`dev`), so it belongs to its own slice.
+Landed: the branch merged to `dev` at `7e9921df` (a fast-forward after merging `dev` in, so
+the commits this note cites by hash stay valid), and the branch was deleted. The `sort_op`
+red is outside this branch's files and predates it (its `default_attributes()?` requirement
+came in `dd4cd0e1`, an ancestor of `dev`), so it belongs to its own slice.
 
 ## Traps (each cost time this session)
 
