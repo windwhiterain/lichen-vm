@@ -193,17 +193,7 @@ impl<P: Program> Module<P> {
             }
             let node = match item.node {
                 AnyNodeId::Static(sref) if sref.module == ctx.module.key => {
-                    // The return copy rides the signature's remap, so a reference to the
-                    // parameter names the clone the apply bound the argument to
-                    // (spec §3, "Every attribute is handled like the type").
-                    let module = ctx.module.clone();
-                    let target = ctx.target;
-                    AnyNodeId::Dynamic(self.clone_static_signature_node(
-                        &module,
-                        sref.index,
-                        target,
-                        &mut ctx.remap,
-                    ))
+                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
                 }
                 other => other,
             };
@@ -389,10 +379,14 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            // Every item rides the signature's remap, so a reference to
-                            // the parameter names the clone the apply binds
-                            // (spec §3, "Every attribute is handled like the type").
-                            Dyn(self.clone_static_signature_node(module, sref.index, block, remap))
+                            // A node with no value is an operation: it keeps its frozen
+                            // reference, which the reader resolves in that module.
+                            if module.read(sref.index).is_some() {
+                                Dyn(self
+                                    .clone_static_signature_node(module, sref.index, block, remap))
+                            } else {
+                                item.node
+                            }
                         }
                         node => node,
                     };
