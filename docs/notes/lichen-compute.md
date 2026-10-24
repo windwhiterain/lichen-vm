@@ -240,7 +240,7 @@ many buffers it reads, because the
 buffers are bound as storage buffers and reached through a read's position. How
 many buffers a *dispatch* supplies is a separate fact, read at apply time from the
 call site's parameter struct — see
-[compute-graph-jit.md](compute-graph-jit.md#how-many-buffers-a-fragment-reads-is-not-in-its-shape-and-the-check-that-asked-was-wrong).
+[compute-graph-jit.md](compute-graph-jit.md#how-many-buffers-a-fragment-reads-is-not-in-its-shape).
 
 That IR lives in **`lichen-kernel-ir`**, a dependency-free crate, not in this one.
 The split is by stage: **lowering** a checked graph to a fragment needs the lowlevel

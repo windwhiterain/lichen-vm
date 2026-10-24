@@ -510,7 +510,7 @@ The last row is also the **scope** of the analysis: a barrier is needed for
 *shared* memory because one workgroup's lanes see each other, and a `grid[1]`
 buffer's disjointness means a global write needs no barrier at all — cross-dispatch
 ordering is the graph's job and the trailing `SHADER_WRITE → SHADER_READ |
-TRANSFER_READ` barrier's ([lichen-compute-gpu](lichen-compute-gpu.md#invariants-a-graph-must-not-break)),
+TRANSFER_READ` barrier's ([lichen-compute-gpu](lichen-compute-gpu.md#why-these-graph-rules-are-silent-wrong-answer-rules)),
 not a kernel's.
 
 ### What the scan settled
@@ -1104,7 +1104,7 @@ unrelated reason is exactly what a convergent barrier needs. What remains is the
 divergence case above, which is a refusal and not a padding question. Without
 staging the guard does mask a surplus lane, and that is what now keeps it from
 writing into a real slot — see
-[lichen-compute-gpu](lichen-compute-gpu.md#a-computed-write-address-is-not-protected-by-the-padding-and-the-clobber-is-a-race).
+[lichen-compute-gpu](lichen-compute-gpu.md#a-computed-write-address-is-not-protected-by-the-padding-and-the-clobber-was-a-race).
 
 **The section this replaces claimed more than that, and the surplus lane's *write*
 is what it missed.** Its second half read "a slice ... is written before it is
