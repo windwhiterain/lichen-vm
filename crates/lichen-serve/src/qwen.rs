@@ -1291,8 +1291,8 @@ impl<'session> Qwen<'session> {
             HEAD,
         )?;
         let key = fetched(session, key)?;
-        let positions: Vec<f32> = positions.iter().map(|position| *position as f32).collect();
-        let key = steps.rotated_rows(session, &key, &positions, (KEY_HEADS * HEAD) as i64)?;
+        let angles: Vec<f32> = positions.iter().map(|position| *position as f32).collect();
+        let key = steps.rotated_rows(session, &key, &angles, (KEY_HEADS * HEAD) as i64)?;
         let value = steps.projected_from(
             session,
             RunArgument::Resident(normed),
@@ -1325,33 +1325,55 @@ impl<'session> Qwen<'session> {
             HEAD,
         )?;
         let query = fetched(session, query)?;
-        let query = steps.rotated_rows(session, &query, &positions, (HEADS * HEAD) as i64)?;
-        let shared = caches.len() > 1 && positions.windows(2).all(|pair| pair[0] == pair[1]);
-        let attended: Vec<f32> = if shared {
-            let keys: Vec<f32> = caches
-                .iter()
-                .flat_map(|cache| cache.keys.iter().copied())
-                .collect();
-            let values: Vec<f32> = caches
-                .iter()
-                .flat_map(|cache| cache.values.iter().copied())
-                .collect();
-            let p = (keys.len() / (caches.len() * (KEY_HEADS * HEAD) as usize)) as i64;
-            steps.attended_rows(session, &query, &keys, &values, p, n)?
-        } else {
-            let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
-            for (sequence, cache) in caches.iter().enumerate() {
+        let query = steps.rotated_rows(session, &query, &angles, (HEADS * HEAD) as i64)?;
+        // Rows at one position have one cache length: each group is one packed step.
+        let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
+        for (sequence, position) in positions.iter().enumerate() {
+            match groups.iter_mut().find(|(seen, _)| seen == position) {
+                Some((_, indices)) => indices.push(sequence),
+                None => groups.push((*position, vec![sequence])),
+            }
+        }
+        let mut attended: Vec<f32> = vec![0.0; caches.len() * HIDDEN_SIZE];
+        for (_, indices) in &groups {
+            let answer = if indices.len() == 1 {
+                let sequence = indices[0];
                 let span =
                     sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
-                attended.extend(steps.attended(
+                steps.attended(
                     session,
                     &query[span],
-                    &cache.keys,
-                    &cache.values,
-                )?);
+                    &caches[sequence].keys,
+                    &caches[sequence].values,
+                )?
+            } else {
+                let keys: Vec<f32> = indices
+                    .iter()
+                    .flat_map(|sequence| caches[*sequence].keys.iter().copied())
+                    .collect();
+                let values: Vec<f32> = indices
+                    .iter()
+                    .flat_map(|sequence| caches[*sequence].values.iter().copied())
+                    .collect();
+                let queries: Vec<f32> = indices
+                    .iter()
+                    .flat_map(|sequence| {
+                        let span = sequence * (HEADS * HEAD) as usize
+                            ..(sequence + 1) * (HEADS * HEAD) as usize;
+                        query[span].iter().copied()
+                    })
+                    .collect();
+                let p = (keys.len() / (indices.len() * (KEY_HEADS * HEAD) as usize)) as i64;
+                steps.attended_rows(session, &queries, &keys, &values, p, indices.len() as i64)?
+            };
+            for (at, sequence) in indices.iter().enumerate() {
+                let span =
+                    sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
+                attended[span].copy_from_slice(
+                    &answer[at * (HEADS * HEAD) as usize..(at + 1) * (HEADS * HEAD) as usize],
+                );
             }
-            attended
-        };
+        }
         let out = steps.projected(
             session,
             &attended,
