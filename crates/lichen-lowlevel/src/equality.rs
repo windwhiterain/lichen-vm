@@ -527,9 +527,14 @@ impl<P: Program> Module<P> {
     /// [`Self::is_function_type`] for a ref: a frozen function type is read in its own
     /// module.
     pub fn is_function_type_ref(&self, id: AnyNodeId) -> bool {
+        self.function_type_function_ref(id).is_some()
+    }
+
+    /// [`Self::function_type_function`] over a ref.
+    pub fn function_type_function_ref(&self, id: AnyNodeId) -> Option<AnyFunctionId> {
         match id {
-            Dyn(node) => self.is_function_type(node),
-            AnyNodeId::Static(sref) => self.static_function_type_function(sref).is_some(),
+            Dyn(node) => self.function_type_function(node),
+            AnyNodeId::Static(sref) => self.static_function_type_function(sref),
         }
     }
     pub fn is_self_referential(&self, id: AnyNodeId) -> bool {

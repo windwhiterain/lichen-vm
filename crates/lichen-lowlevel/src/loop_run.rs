@@ -4,8 +4,8 @@
 use lichen_utils::extend::AsEnum;
 
 use crate::{
-    AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LoopArm, LoopConversion,
-    LowValue, Module, NodeId, Program,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LoopArm,
+    LoopConversion, LowValue, Module, NodeId, Program,
 };
 
 /// What one iteration decided.
@@ -35,10 +35,10 @@ impl<P: Program> Module<P> {
         &mut self,
         conversion: &LoopConversion,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         self.loop_body(conversion, function, argument, block, node, cell)
     }
@@ -48,10 +48,10 @@ impl<P: Program> Module<P> {
         &mut self,
         conversion: &LoopConversion,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         let mut argument = argument;
         loop {
@@ -59,7 +59,8 @@ impl<P: Program> Module<P> {
                 Iteration::Step(next) => {
                     // The state crosses the backedge **lazily**, through the
                     // unify the unroll uses: nothing is computed until asked.
-                    argument = self.loop_argument(conversion, function, &next, argument, block);
+                    argument =
+                        Dyn(self.loop_argument(conversion, function, &next, argument, block));
                 }
                 Iteration::Exit { value, r#type } => {
                     // **The result is built, not read off the return**: that
@@ -80,7 +81,7 @@ impl<P: Program> Module<P> {
                         // The return type is resolved before the cell binds, as
                         // the unroll's tail does.
                         let _ = self.evaluate_node(Dyn(r#type), Some(block));
-                        self.unify(cell, r#type);
+                        self.unify_ref(cell, Dyn(r#type));
                     }
                     return Some(result);
                 }
@@ -100,7 +101,7 @@ impl<P: Program> Module<P> {
         &mut self,
         conversion: &LoopConversion,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
     ) -> Iteration {
@@ -171,7 +172,7 @@ impl<P: Program> Module<P> {
         conversion: &LoopConversion,
         function: FunctionId,
         next: &[NodeId],
-        entering: NodeId,
+        entering: AnyNodeId,
         block: BlockId,
     ) -> NodeId {
         let scalar = conversion.state.len() == 1 && conversion.state[0].is_empty();
@@ -192,11 +193,14 @@ impl<P: Program> Module<P> {
         {
             return value;
         }
-        let r#type = self.expr_type_half(entering).unwrap_or_else(|| {
-            // No entering type to re-state: a fresh cell leaves the shape
-            // unchecked rather than pinning the template's own cell.
-            self.add_node(block, None, None)
-        });
+        // SAFETY: the entering ref is live; the read only touches its expr.
+        let r#type = unsafe { self.expr_type_item_ref(entering) }
+            .and_then(|r#type| r#type.dynamic())
+            .unwrap_or_else(|| {
+                // No entering type to re-state: a fresh cell leaves the shape
+                // unchecked rather than pinning the template's own cell.
+                self.add_node(block, None, None)
+            });
         self.slot_expr(value, r#type, block)
     }
 

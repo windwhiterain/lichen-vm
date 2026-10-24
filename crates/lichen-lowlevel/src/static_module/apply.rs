@@ -9,10 +9,10 @@ impl<P: Program> Module<P> {
     pub fn static_function_apply(
         &mut self,
         function: StaticFunctionRef,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         // The nesting guard: the apply node's own depth, which a materialization
         // deepens by one.
@@ -88,7 +88,7 @@ impl<P: Program> Module<P> {
                 // A decided codomain stays the frozen ref the clone walk carried; the
                 // bind consumes it as a ref.
                 self.evaluate_node(codomain, Some(block));
-                self.unify_ref(Dyn(cell), codomain);
+                self.unify_ref(cell, codomain);
             }
             self.wire_apply_result(node, result, applied, block)
         };
@@ -101,10 +101,10 @@ impl<P: Program> Module<P> {
     pub(crate) fn static_function_type_apply(
         &mut self,
         function: StaticFunctionRef,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
         check: ParameterCheck,
     ) -> bool {
         if self.depth_exhausted(node) {
@@ -164,7 +164,7 @@ impl<P: Program> Module<P> {
             return true;
         };
         self.evaluate_node(Dyn(codomain), Some(block));
-        self.unify(cell, codomain);
+        self.unify_ref(cell, Dyn(codomain));
         true
     }
 
@@ -216,7 +216,7 @@ impl<P: Program> Module<P> {
     pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
     ) {

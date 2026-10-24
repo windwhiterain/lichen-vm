@@ -32,19 +32,21 @@ impl<P: Program> Module<P> {
     /// Every position is unified, the attribute positions included: the parameter's
     /// positions and the argument's are the same expression's slots
     /// (spec §3, "Every attribute is handled like the type").
-    pub(super) fn unify_parameter_slots(&mut self, cloned_param: NodeId, argument: NodeId) {
+    pub(super) fn unify_parameter_slots(&mut self, cloned_param: NodeId, argument: AnyNodeId) {
         // The reporting side owns the failure; this binding only needs the classes.
         let recorded = self.unify_errors.len();
         let lengths = (
             unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
-            unsafe { self.array_items(argument) }.map(|items| items.len()),
+            // SAFETY: the argument ref is live; the compare only reads it.
+            unsafe { self.array_items_ref(argument) }.map(|items| items.len()),
         );
         match lengths {
             (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
                 // SAFETY: both nodes are live members of this module; the unify only
                 // reads them.
                 let parameters = unsafe { self.array_items(cloned_param) };
-                let supplieds = unsafe { self.array_items(argument) };
+                // SAFETY: the argument ref is live; the compare only reads it.
+                let supplieds = unsafe { self.array_items_ref(argument) };
                 let width = parameters
                     .map_or(0, |items| items.len())
                     .max(supplieds.map_or(0, |items| items.len()));
@@ -60,7 +62,7 @@ impl<P: Program> Module<P> {
                 }
             }
             _ => {
-                self.unify(cloned_param, argument);
+                self.unify_ref(AnyNodeId::Dynamic(cloned_param), argument);
             }
         }
         self.unify_errors.truncate(recorded);
@@ -77,7 +79,7 @@ impl<P: Program> Module<P> {
     pub(super) fn apply_parameter_check(
         &mut self,
         cloned_param: NodeId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
         function: AnyFunctionId,
@@ -91,14 +93,14 @@ impl<P: Program> Module<P> {
         // (`declared | value`) is decided only after the compare.
         let lengths = (
             unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
-            unsafe { self.array_items(argument) }.map(|items| items.len()),
+            unsafe { self.array_items_ref(argument) }.map(|items| items.len()),
         );
         match lengths {
             (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
                 // SAFETY: both nodes are live members of this module; the unify
                 // below only reads them.
                 let parameters = unsafe { self.array_items(cloned_param) };
-                let supplieds = unsafe { self.array_items(argument) };
+                let supplieds = unsafe { self.array_items_ref(argument) };
                 let width = parameters
                     .map_or(0, |items| items.len())
                     .max(supplieds.map_or(0, |items| items.len()));
@@ -116,7 +118,7 @@ impl<P: Program> Module<P> {
                 }
             }
             _ => {
-                self.unify(cloned_param, argument);
+                self.unify_ref(AnyNodeId::Dynamic(cloned_param), argument);
             }
         };
         if self.unify_errors.len() == pre_unify_errors {
@@ -131,17 +133,22 @@ impl<P: Program> Module<P> {
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(parameter_type_source);
-        // SAFETY: `argument` is a live node of this module.
-        let argument_type = unsafe { self.array_items(argument) }
+        // The diagnostics name a node: a frozen argument is crossed here, after the
+        // check failed, so nothing can be bound by the copy.
+        let argument_node = argument
+            .dynamic()
+            .unwrap_or_else(|| self.as_dynamic(argument, block));
+        // SAFETY: `argument_node` is a live node of this module.
+        let argument_type = unsafe { self.array_items(argument_node) }
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
-            .unwrap_or(argument);
+            .unwrap_or(argument_node);
         if self.apply_error_nodes.insert(node) {
             self.apply_errors.push(ApplyError {
                 function,
                 parameter_type,
                 argument_type,
-                argument,
+                argument: argument_node,
                 apply_node: node,
                 error_index: pre_unify_errors,
             });

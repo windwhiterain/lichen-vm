@@ -338,27 +338,19 @@ impl<P: Program> Module<P> {
                         };
                         match callee.as_enum() {
                             Some(LowValue::Function(function)) => {
-                                // Element 2 is the checker-wired result cell; a static ref is materialized into a leaf
-                                // first.
-                                let argument = self.as_dynamic(operands[1].node, block);
-                                let cell = operands
-                                    .get(2)
-                                    .map(|item| self.as_dynamic(item.node, block));
+                                // Both argument and cell cross as **refs**: the apply's
+                                // unify reads a frozen side by value, so nothing is
+                                // materialized to be consumed.
+                                let argument = operands[1].node;
+                                let cell = operands.get(2).map(|item| item.node);
                                 // Both slots are applied: the type's, then the value's.
                                 self.apply_callee_type(operands, block, node);
                                 match function {
                                     AnyFunctionId::Dynamic(function) => {
                                         self.function_apply(function, argument, block, node, cell)
                                     }
-                                    AnyFunctionId::Static(sref) => {
-                                        // Element 2 is the checker-wired result cell.
-                                        let cell = operands
-                                            .get(2)
-                                            .map(|item| self.as_dynamic(item.node, block));
-                                        self.static_function_apply(
-                                            sref, argument, block, node, cell,
-                                        )
-                                    }
+                                    AnyFunctionId::Static(sref) => self
+                                        .static_function_apply(sref, argument, block, node, cell),
                                 }
                             }
                             // A scalar, string, table or unit value can never be callable: the apply is refused and
@@ -525,19 +517,15 @@ impl<P: Program> Module<P> {
     /// non-function one applies nothing. [`Module::apply_type`] clones the
     /// signature per application, so this never monomorphises the template.
     fn apply_callee_type(&mut self, operands: &[crate::ArrayItem], block: BlockId, node: NodeId) {
-        let Some(type_node) = operands
-            .get(3)
-            .map(|item| self.as_dynamic(item.node, block))
+        let Some(type_node) = operands.get(3).map(|item| item.node) else {
+            return;
+        };
+        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function_ref(type_node)
         else {
             return;
         };
-        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function(type_node) else {
-            return;
-        };
-        let argument = self.as_dynamic(operands[1].node, block);
-        let cell = operands
-            .get(2)
-            .map(|item| self.as_dynamic(item.node, block));
+        let argument = operands[1].node;
+        let cell = operands.get(2).map(|item| item.node);
         self.apply_type(function, argument, block, node, cell);
     }
 

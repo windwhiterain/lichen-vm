@@ -127,10 +127,10 @@ impl<P: Program> Module<P> {
     pub(super) fn function_apply(
         &mut self,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         // The nesting guard, first: `node`'s depth bounds the expansion, so a loop never nests.
         if self.depth_exhausted(node) {
@@ -158,7 +158,7 @@ impl<P: Program> Module<P> {
             self.evaluate_node(codomain, Some(block));
             if !self.is_function_type_ref(codomain) {
                 let before = self.unify_errors.len();
-                self.unify_ref(Dyn(cell), codomain);
+                self.unify_ref(cell, codomain);
                 self.unify_errors.truncate(before);
             }
         }
@@ -176,10 +176,10 @@ impl<P: Program> Module<P> {
     pub(super) fn apply_type(
         &mut self,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
     ) -> bool {
         self.apply_type_with(function, argument, block, node, cell, ParameterCheck::Type)
     }
@@ -188,10 +188,10 @@ impl<P: Program> Module<P> {
     fn apply_type_with(
         &mut self,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
+        cell: Option<AnyNodeId>,
         check: ParameterCheck,
     ) -> bool {
         let Some(instantiation) = self.instantiate(function, argument, block, node, check) else {
@@ -217,7 +217,7 @@ impl<P: Program> Module<P> {
         // A decided codomain stays the frozen ref the clone walk carried; the bind
         // consumes it as a ref, so nothing is materialized to hold its value.
         if let Some(cell) = cell {
-            self.unify_ref(Dyn(cell), codomain);
+            self.unify_ref(cell, codomain);
         }
         true
     }
@@ -234,10 +234,10 @@ impl<P: Program> Module<P> {
     pub fn apply_function_type(
         &mut self,
         type_node: NodeId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
-        cell: NodeId,
+        cell: AnyNodeId,
         report: bool,
     ) -> bool {
         let Some(function) = self.function_type_function(type_node) else {
@@ -277,7 +277,7 @@ impl<P: Program> Module<P> {
     pub(super) fn instantiate(
         &mut self,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
         check: ParameterCheck,
@@ -293,7 +293,7 @@ impl<P: Program> Module<P> {
     fn instantiate_stamped(
         &mut self,
         function: FunctionId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
         check: ParameterCheck,
@@ -401,13 +401,13 @@ impl<P: Program> Module<P> {
     pub(crate) fn evaluate_pattern_argument(
         &mut self,
         pattern: NodeId,
-        argument: NodeId,
+        argument: AnyNodeId,
         block: BlockId,
     ) {
         // The visited set is the module's, so a nested check pops its own.
         let mut seen = self.pattern_seen.pop().unwrap_or_default();
         seen.clear();
-        self.evaluate_pattern_argument_inner(Dyn(pattern), Dyn(argument), block, &mut seen);
+        self.evaluate_pattern_argument_inner(Dyn(pattern), argument, block, &mut seen);
         seen.clear();
         self.pattern_seen.push(seen);
     }

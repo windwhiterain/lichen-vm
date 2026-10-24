@@ -456,6 +456,39 @@ impl<P: Program> Module<P> {
         Some(items[1].node)
     }
 
+    /// The **array items** of a ref: a dynamic node's payload, or a frozen node's, read
+    /// in its own module — the registry pins it for the artifact's lifetime.
+    ///
+    /// # Invariant
+    /// A consumer names the ref it holds. A frozen payload is read where it lives; a
+    /// leaf copy would hand its open positions refs nothing can write.
+    ///
+    /// # Safety
+    /// As [`Self::array_items_of`]: the dynamic node must be live.
+    pub unsafe fn array_items_ref(&self, node: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        match node {
+            AnyNodeId::Dynamic(node) => unsafe { self.array_items(node) },
+            AnyNodeId::Static(sref) => {
+                let value = self.static_read(sref)?;
+                let LowValue::Array(array) = value.as_enum()? else {
+                    return None;
+                };
+                // SAFETY: the payload lives in the registered static module's arena.
+                Some(unsafe { array.items() })
+            }
+        }
+    }
+
+    /// [`Self::expr_type_item`] over a ref.
+    ///
+    /// # Safety
+    /// As [`Self::array_items_ref`]: a dynamic ref must be live.
+    pub unsafe fn expr_type_item_ref(&self, node: AnyNodeId) -> Option<AnyNodeId> {
+        // SAFETY: the caller's obligation.
+        let items = unsafe { self.array_items_ref(node) }?;
+        items.get(1).map(|item| item.node)
+    }
+
     /// The value an element slot states: its first position, or the node itself.
     pub fn element_value_node(&self, node: AnyNodeId) -> Option<AnyNodeId> {
         let Some(value) = self.node_value(node) else {

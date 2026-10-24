@@ -589,10 +589,10 @@ where
                 };
                 let applied = self.module.apply_function_type(
                     function_ty,
-                    type_slot_argument,
+                    AnyNodeId::Dynamic(type_slot_argument),
                     self.current_block,
                     type_apply,
-                    c,
+                    AnyNodeId::Dynamic(c),
                     report,
                 );
                 // A Check failure settles its node: the shallow pass walks it again.
