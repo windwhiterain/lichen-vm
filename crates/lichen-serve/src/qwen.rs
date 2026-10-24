@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 
 use crate::{
@@ -518,6 +519,19 @@ impl<'session> Steps<'session> {
         rows: i64,
         width: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let resident = self.normalised_from(session, self.payload(values), gain, rows, width)?;
+        fetched(session, resident)
+    }
+
+    /// The same, from an argument a previous step left on the device, answering with its resident.
+    fn normalised_from(
+        &self,
+        session: &Session,
+        input: RunArgument,
+        gain: RunArgument,
+        rows: i64,
+        width: i64,
+    ) -> Result<ResidentBuffer, QwenRefusal> {
         let started = std::time::Instant::now();
         let stepped = self
             .norm
@@ -525,12 +539,12 @@ impl<'session> Steps<'session> {
                 RunArgument::Count(width * rows),
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
-                self.payload(values),
+                input,
                 gain,
             ])
             .map_err(QwenRefusal::Step)?;
         self.add_stage(started);
-        answered(session, &stepped)
+        resident(&stepped)
     }
 
     /// The projection of one or more input rows, `per` outputs a row.
@@ -549,21 +563,38 @@ impl<'session> Steps<'session> {
         width: i64,
         per: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let resident =
+            self.projected_from(session, self.payload(values), weight, rows, width, per)?;
+        fetched(session, resident)
+    }
+
+    /// The same, from an argument a previous step left on the device, answering with its resident.
+    fn projected_from(
+        &self,
+        session: &Session,
+        input: RunArgument,
+        weight: RunArgument,
+        rows: i64,
+        width: i64,
+        per: i64,
+    ) -> Result<ResidentBuffer, QwenRefusal> {
         let projection = if self.held.get() {
             &self.projection
         } else {
             &self.streamed
         };
+        let started = std::time::Instant::now();
         let stepped = projection
             .step(vec![
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
                 RunArgument::Count(per),
-                self.payload(values),
+                input,
                 weight,
             ])
             .map_err(QwenRefusal::Step)?;
-        answered(session, &stepped)
+        self.add_stage(started);
+        resident(&stepped)
     }
 
     /// The head's projection over `count` rows of values, read from a weight stored by row.
@@ -619,17 +650,25 @@ impl<'session> Steps<'session> {
         up: &[f32],
         count: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let resident = self.mixed_from(session, self.payload(gate), self.payload(up), count)?;
+        fetched(session, resident)
+    }
+
+    /// The same, from arguments a previous step left on the device, answering with its resident.
+    fn mixed_from(
+        &self,
+        session: &Session,
+        gate: RunArgument,
+        up: RunArgument,
+        count: i64,
+    ) -> Result<ResidentBuffer, QwenRefusal> {
         let started = std::time::Instant::now();
         let stepped = self
             .product
-            .step(vec![
-                RunArgument::Count(count),
-                self.payload(gate),
-                self.payload(up),
-            ])
+            .step(vec![RunArgument::Count(count), gate, up])
             .map_err(QwenRefusal::Step)?;
         self.add_stage(started);
-        answered(session, &stepped)
+        resident(&stepped)
     }
 
     /// The attention over the whole cache, whose length is the positions the keys hold.
@@ -673,21 +712,31 @@ fn floats(values: &[f32]) -> RunArgument {
     }
 }
 
-/// The one resident a step answered with, read and released.
-fn answered(session: &Session, stepped: &crate::Stepped) -> Result<Vec<f32>, QwenRefusal> {
+/// The one resident a step answered with, left where the device wrote it.
+fn resident(stepped: &crate::Stepped) -> Result<ResidentBuffer, QwenRefusal> {
     let [RunResult::Resident(resident)] = &stepped.results[..] else {
         return Err(QwenRefusal::Weights(
             "a step answered with something other than one buffer".to_string(),
         ));
     };
-    let values = session.fetch(*resident).map_err(QwenRefusal::Step)?;
-    session.release(*resident);
+    Ok(*resident)
+}
+
+/// A resident read as floats and handed back, which is the one readback a stage costs.
+fn fetched(session: &Session, resident: ResidentBuffer) -> Result<Vec<f32>, QwenRefusal> {
+    let values = session.fetch(resident).map_err(QwenRefusal::Step)?;
+    session.release(resident);
     match values {
         lichen_kernel_ir::ScalarData::Float(values) => Ok(values),
         other => Err(QwenRefusal::Weights(format!(
             "a step answered {other:?} where one float buffer was expected"
         ))),
     }
+}
+
+/// The one resident a step answered with, read and released.
+fn answered(session: &Session, stepped: &crate::Stepped) -> Result<Vec<f32>, QwenRefusal> {
+    fetched(session, resident(stepped)?)
 }
 
 /// The model, ready to generate from a session.
@@ -1156,28 +1205,29 @@ impl<'session> Qwen<'session> {
         };
         let session = self.session;
         let steps = &self.steps;
-        let normed = steps.normalised(
+        let normed = steps.normalised_from(
             session,
-            &hidden,
+            steps.payload(&hidden),
             self.weight(layer, &tensors, 0, GAIN, HIDDEN_SIZE),
             n,
             HIDDEN as i64,
         )?;
-        let key = steps.projected(
+        let key = steps.projected_from(
             session,
-            &normed,
+            RunArgument::Resident(normed),
             self.weight(layer, &tensors, 2, K, 1024 * 2048),
             rows(n, KEY_HEADS * HEAD),
             HIDDEN as i64,
             KEY_HEADS * HEAD,
         )?;
-        let key = steps.normalised(
+        let key = steps.normalised_from(
             session,
-            &key,
+            RunArgument::Resident(key),
             self.weight(layer, &tensors, 5, K_NORM, 128),
             rows(n, KEY_HEADS),
             HEAD,
         )?;
+        let key = fetched(session, key)?;
         let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (KEY_HEADS * HEAD) as usize);
         for sequence in 0..caches.len() {
             let span = sequence * (KEY_HEADS * HEAD) as usize
@@ -1185,35 +1235,38 @@ impl<'session> Qwen<'session> {
             rotated.extend(steps.rotated(session, &key[span], positions[sequence])?);
         }
         let key = rotated;
-        let value = steps.projected(
+        let value = steps.projected_from(
             session,
-            &normed,
+            RunArgument::Resident(normed),
             self.weight(layer, &tensors, 3, V, 1024 * 2048),
             rows(n, KEY_HEADS * HEAD),
             HIDDEN as i64,
             KEY_HEADS * HEAD,
         )?;
+        let value = fetched(session, value)?;
         for (sequence, cache) in caches.iter_mut().enumerate() {
             let span = sequence * (KEY_HEADS * HEAD) as usize
                 ..(sequence + 1) * (KEY_HEADS * HEAD) as usize;
             cache.keys.extend_from_slice(&key[span.clone()]);
             cache.values.extend_from_slice(&value[span]);
         }
-        let query = steps.projected(
+        let query = steps.projected_from(
             session,
-            &normed,
+            RunArgument::Resident(normed),
             self.weight(layer, &tensors, 1, Q, 2048 * 2048),
             rows(n, HEADS * HEAD),
             HIDDEN as i64,
             HEADS * HEAD,
         )?;
-        let query = steps.normalised(
+        session.release(normed);
+        let query = steps.normalised_from(
             session,
-            &query,
+            RunArgument::Resident(query),
             self.weight(layer, &tensors, 4, Q_NORM, 128),
             rows(n, HEADS),
             HEAD,
         )?;
+        let query = fetched(session, query)?;
         let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (HEADS * HEAD) as usize);
         for sequence in 0..caches.len() {
             let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
@@ -1238,38 +1291,48 @@ impl<'session> Qwen<'session> {
             .zip(&out)
             .map(|(left, right)| left + right)
             .collect();
-        let prepared = steps.normalised(
+        let prepared = steps.normalised_from(
             session,
-            &hidden,
+            steps.payload(&hidden),
             self.weight(layer, &tensors, 7, POST, HIDDEN_SIZE),
             n,
             HIDDEN as i64,
         )?;
-        let gate = steps.projected(
+        let gate = steps.projected_from(
             session,
-            &prepared,
+            RunArgument::Resident(prepared),
             self.weight(layer, &tensors, 8, GATE, 6144 * 2048),
             rows(n, INTERMEDIATE),
             HIDDEN as i64,
             INTERMEDIATE,
         )?;
-        let up = steps.projected(
+        let up = steps.projected_from(
             session,
-            &prepared,
+            RunArgument::Resident(prepared),
             self.weight(layer, &tensors, 9, UP, 6144 * 2048),
             rows(n, INTERMEDIATE),
             HIDDEN as i64,
             INTERMEDIATE,
         )?;
-        let mixed = steps.mixed(session, &gate, &up, rows(n, INTERMEDIATE))?;
-        let down = steps.projected(
+        session.release(prepared);
+        let mixed = steps.mixed_from(
             session,
-            &mixed,
+            RunArgument::Resident(gate),
+            RunArgument::Resident(up),
+            rows(n, INTERMEDIATE),
+        )?;
+        session.release(gate);
+        session.release(up);
+        let down = steps.projected_from(
+            session,
+            RunArgument::Resident(mixed),
             self.weight(layer, &tensors, 10, DOWN, 2048 * 6144),
             rows(n, HIDDEN as i64),
             INTERMEDIATE,
             HIDDEN as i64,
         )?;
+        session.release(mixed);
+        let down = fetched(session, down)?;
         Ok(hidden
             .iter()
             .zip(&down)

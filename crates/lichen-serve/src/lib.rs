@@ -355,6 +355,14 @@ impl Session {
         })
     }
 
+    /// This session's cumulative device work: submissions handed to the queue, fences waited.
+    ///
+    /// # Invariant
+    /// A cumulative reading: a caller that wants one step's work takes a difference around it.
+    pub fn work(&self) -> (u64, u64) {
+        (self.context.submissions(), self.context.fence_waits())
+    }
+
     /// Read a resident the device wrote, so a caller fetches only what it asks for.
     pub fn fetch(&self, resident: ResidentBuffer) -> Result<ScalarData, ServeRefusal> {
         self.context
