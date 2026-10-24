@@ -62,6 +62,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `64af5927` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
 | `db153f72` | `unify_ref` is the ref-native entry: a static side is compared by value and written into an open cell; the codomain binds, the parameter-slot compares and the result deep-eval all name their refs |
 | `aed0737e` | the apply chain (evaluator arm, `function_apply`, `apply_type`, `instantiate`, the parameter check, the loop, both static apply entries) takes `argument`/`cell` as **refs**; `array_items_ref`/`expr_type_item_ref` read a frozen payload in place |
+| `e4890a24` | the checker's field-attribute unify reads its shape, slot and declared attribute by ref (`slot_attribute` and `evaluate_node_deep_ref` take refs); its leaf copies drop 23636 → 1345 per compute run |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -365,22 +366,28 @@ One red remains and it is **pre-existing**: `lichen-language`'s lib test
 (measured: patch saved, the two files checked out, the test re-run, the patch applied
 back). It sits on `SortOp::run`, untouched by this branch.
 
-### Next — the checker's handle sites, then the landing
+### Next — the checker's handle census, then the landing
 
-The **lowlevel** consumers are ref-native: evaluation's apply arm, `function_apply`,
-`apply_type`, `instantiate`, the parameter check, the loop and both static apply entries
-read a frozen payload in place (`array_items_ref`, `expr_type_item_ref`) and unify with
-`unify_ref`, so a decided frozen argument keeps one class instead of getting a leaf per
-call. The one remaining copy on that path is the **failed-check diagnostic**: `ApplyError`
-names a `NodeId`, so a frozen argument is crossed there after the check already failed,
-when nothing can be bound by the copy.
+A probe in `as_dynamic` (removed after the measurement) counted every check-time handle
+the compute suite builds, by consumer frame:
 
-What is left is the **checker's** `as_dynamic` sites (`checker/structs`, `checker/indexing`,
-`checker/lambda`, `checker/tuples`, `checker.rs`). Those are a different question from a
-consumer clone: a check-time handle is built once per read site, not per call, and the
-checker's own graph is dynamic by construction — the frozen side only reaches it through
-`shape`'s readers. Whether each of those sites can name a ref instead is the next question
-to measure, not assume.
+| site | before | after `e4890a24` |
+|---|---|---|
+| `unify_value_field_attributes` | 23636 | **1345** |
+| `structs::slot_read`'s resolved arm | 9122 | 9123 |
+| `check_term` closure | 2292 | 2290 |
+| `slot_types_of` | 1624 | 1624 |
+| `instantiation_field_types` | 1623 | 1624 |
+| `attribute_value` | 677 | 677 |
+
+What is left is **not** laziness: the checker's own state is `NodeId`
+(`state[e].ty`, `deferred_requirements`, the extension API's `unify_slots`/`is_subtype`),
+so a position the state must name is a node. `slot_read` is the codomain seam: it
+materializes the field type into `state[e].ty` and into the element expr, and that leaf is
+what made the frozen `.O` cell reachable — closing the codomain at `unify` was enough
+*because nothing binds that leaf any more*. Widening the checker's state to `AnyNodeId`
+(or the extension API) is the next slice if the census is worth it; it is a refactor, not a
+fix, and the tests are green with the current line.
 
 Then the landing: squash, `git diff dev...HEAD --name-only` must name only this slice's
 files, merge to `dev`, delete the branch. The `sort_op` red is outside this branch's files
