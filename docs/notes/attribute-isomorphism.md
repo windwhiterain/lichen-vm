@@ -206,10 +206,35 @@ land is `6521974a`'s "one materialization per call", extended across the dynamic
 walk (`node_apply`) and the type-side copy — one call, one clone, whichever side reads
 it.
 
-Measured and rejected in the same round: calling `register_static_type_asserts` from
-`materialize_static_return_apply`, so the type side's own remap re-checks the asserts
-(no change: compute stays 235/2 — the asserts never reach the type cell's clone); and
-materializing at the unify slot sites only (no effect); and candidate F (235/2).
+Measured and rejected in the same round, each on its own build:
+
+- `register_static_type_asserts` from `materialize_static_return_apply`, so the type
+  side's own remap re-checks the asserts: no change (235/2).
+- A **shared remap** between the two sides of one call (`call_clones`, keyed by the
+  call's value-side node and consumed by the other side): **nine tests break**
+  (compute's fold/plan/tiling group, `language::cyclic_type_cut` and
+  `gc_block::a_gc_block_calls_a_curried_binding_per_element`,
+  `checker::a_direct_call_result_annotation_is_checked_against_the_return_type`),
+  because a call *site* is instantiated many times and the second evaluation would
+  reuse the first one's cells. So sharing a whole remap per site is wrong; the
+  sharing has to be per *application*.
+- Deferring the dynamic type-side cell bind to the value side (the rule the static
+  path already uses, `function.rs`'s `apply_function_type`): two tests break
+  (`language::cyclic_type_cut`, `highlevel::table::a_table_flows_through_a_function`)
+  and the codomain stays open.
+- Running the type side's asserts on its own clones (`ParameterCheck::Type` instead
+  of `Skip` for `report == false`): **nothing moves** — compute 235/2, language
+  275/0, highlevel 136/0.
+- A probe on the bind (`apply_type_with`) prints the cells the type side binds:
+  `286`, `554`, `786`, `919`, with codomains `346`, `415`, `614`, `681`, `810`, `979`.
+  **None of them is the node the test reads (`487`)**, so no codomain bind touches it;
+  487 arrives as a *type expression* the clone walk produced, and its value position
+  is an open template cell.
+
+The next hypothesis to check, and the cheapest: whether the assert's clone of the
+codomain's own cell is the **same node** as that expression's value position. If it
+is not, the sharing needed is between the assert's instantiation and the return
+expression's, inside one application — not between the call's two sides.
 
 ### The two language-server reds are older than this session
 
