@@ -63,15 +63,22 @@ Float — three returns of 1024, 1024 and 2048 elements.
 
 Wired into the model, the composite answers the same five tokens at **396 submissions a token**
 against 648, and is **still slower**: 0.155–0.168 s a warm token against 0.136–0.152 s. The classes
-are not the cause — the wildcard run, with bf16 activations, cost the same 0.155 s — so what a
-composed step pays is **its eleven dispatches serialized behind one fence**, while the staged path's
-smaller steps each carry one dispatch. The submission count was never the unit: **the dispatch and
-its barrier are.**
+are not the cause — the wildcard run, with bf16 activations, cost the same 0.155 s — and neither is
+the submission count. `dispatch_probe` prices the difference:
 
-The next capability is therefore not more granularity in the pack; it is **fewer dispatches**: a
-fused kernel that performs a stage group in one launch (the tiling/plan machinery exists for a
-literal extent) or a dependency model where independent nodes overlap. Until then the staged
-resident path — 648 submissions, 0.136–0.152 s — is the floor.
+| eight dispatches | one step | eight steps |
+|---|---|---|
+| separate nodes | **0.066 ms** | 0.062 ms each |
+| chained nodes | **1.428 ms** | — |
+
+A dependency **inside** a step costs about **0.19 ms** — the barrier the graph runner inserts between
+the producer and its reader — while a submission's fence costs a fraction of that. A composed layer
+is a chain of eleven, so it pays ten of those; the staged path pays fences instead and wins.
+
+The next capability is not more granularity in the pack and not fewer submissions; it is **cheaper
+synchronization inside a step**: a barrier scoped to the buffer that needs it, or a fused kernel
+that removes the dependency altogether (the tiling/plan path exists for a literal extent). Until
+then the staged resident path — 648 submissions, 0.136–0.152 s — is the floor.
 
 ## The edges now## The edges now## The edges now
 
@@ -103,7 +110,7 @@ resident path — 648 submissions, 0.136–0.152 s — is the floor.
 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
-| 1 | a fused dispatch, or a barrier-free dependency model | the composed step's eleven dispatches | 396 submissions but 0.155 s |
+| 1 | a cheaper intra-step barrier, or a fused kernel | the 0.19 ms a dependency costs | chained 8: 1.428 ms vs 0.066 ms |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |
