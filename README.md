@@ -1,10 +1,10 @@
 # LichenVM
 
-*A lazy, unification-based infrastructure for type-checker — where a type is just a value.*
+*A lazy, unification-based type-checking infrastructure — where a type is just a value.*
 
 ## [Highlevel](crates/lichen-highlevel/)
 
-Build type system over untyped lowlevel from IR (intermediate representation).
+Builds a type system over the untyped lowlevel, from an IR.
 
 ### Features:
 
@@ -19,13 +19,13 @@ Build type system over untyped lowlevel from IR (intermediate representation).
 
 ## [Lowlevel](crates/lichen-lowlevel/)
 
-Interpreter that has no type.
+An interpreter that has no type.
 
 ### Features:
 
 - Lazy Evaluation.
 - Block Level Garbage Collection.
-- Lmbda Calculas: first class function, higher order function, closure.
+- Lambda Calculus: first class function, higher order function, closure.
 - Recursive Function Apply.
 - Function Normalization.
 - Unification.
@@ -35,7 +35,8 @@ Interpreter that has no type.
 
 - Minimal Memory Usage.
 - Minimal Allocation.
-- High Speed For Trivial Program (complex one will be JIT compiled in the future).
+- High Speed For Trivial Program; a compute kernel is JIT-compiled instead
+  ([lichen-compute](docs/notes/lichen-compute.md)).
 
 ## [Language](crates/lichen-language/)
 
@@ -46,16 +47,21 @@ A minimal language built over highlevel.
   taught from scratch, Rust-book style; every program in it was run against
   this compiler, and the sources live in [docs/book](docs/book/)
 
-## How To Use
+## How to use it
 
-- Compile your program to lichen program with:
-    - Computatal operator replaced by fake operator.
-    - Complex value replaced by fake value. 
-- Then run lichen program
+A lichen program is compiled and run by one command: the compiler takes a `.lichen`
+file (or a directory of them), and prints what the program answers. There is no
+separate build step and no separate run step — `lichen-compiler build` prints the
+program's exported type instead of running it, if that is what you want.
 
-Since lichen-highlevel preserve the consistancy of `value : type` expr, as long as input `value : type` exprs are consistant, any evaluated `value : type` expr are.
+Since `lichen-highlevel` preserves the consistency of `value : type` exprs, as
+long as the input `value : type` exprs are consistent, so are the evaluated ones.
 
-Warning: lichen has no subtyping, and a compound type is typed by its kind rather than by `Type` (`array{Int, 3} : Type` does not check), so what `Type : Type` buys is that types are ordinary values and a recursive type is an ordinary cyclic one — the cost is that the decidability of a lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
+Note: lichen has no subtyping, and a compound type is typed by its kind rather
+than by `Type` (`array{Int, 3} : Type` does not check), so what `Type : Type` buys
+is that types are ordinary values and a recursive type is an ordinary cyclic one —
+the cost is that the decidability of a lichen program is your integration's
+responsibility, e.g. encode your type-system's universes into lichen.
 
 ## Quick start
 
@@ -75,8 +81,8 @@ cargo run -p lichen-compiler -- examples
 Run a single program:
 
 ```bash
-cargo run -p lichen-compiler -- examples/bindings.lichen
-# 1
+cargo run -p lichen-compiler -- examples/tuple.lichen
+# (1, Int): tuple{Int, Type}
 ```
 
 Install the compiler (a binary named `lichen-compiler`, formerly `lichen`):
@@ -89,8 +95,8 @@ cargo install --git git@github.com:windwhiterain/lichen-vm.git lichen-compiler
 then run it directly:
 
 ```bash
-lichen-compiler examples/bindings.lichen
-# 1
+lichen-compiler examples/tuple.lichen
+# (1, Int): tuple{Int, Type}
 ```
 
 The package manager (a binary named `lichen`, in `crates/lichen-package`)
