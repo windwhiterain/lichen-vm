@@ -340,14 +340,26 @@ impl<P: Program> Module<P> {
         Some((parameter, codomain, remap))
     }
 
-    /// Whether a frozen node is still **open**: it holds nothing, or a position its
-    /// value names does.
+    /// Whether a frozen node is the template's own **hole**: it holds nothing and
+    /// computes nothing.
     ///
     /// # Invariant
-    /// An open frozen position is the template's own cell, so no unify can bind it. A
-    /// value copied into this module must not name one: the copy would hand the caller
-    /// a cell nothing can decide (`docs/notes/kernel-parameter-class.md`). A cycle is
-    /// not open by itself — the universe `K = [Type, ↺]` names only itself.
+    /// A hole is the template's cell, so no unify can bind it, and a value copied into
+    /// this module must not name one (`docs/notes/kernel-parameter-class.md`).
+    fn frozen_ref_is_hole(&self, sref: StaticNodeId) -> bool {
+        let module = self.static_module(sref.module);
+        let node = &module.nodes[sref.index.index];
+        node.value.is_none() && node.operation.is_none()
+    }
+
+    /// Whether a frozen node still names a **template hole**: the node itself is one, or
+    /// an **expression** it holds is.
+    ///
+    /// # Invariant
+    /// A hole is the template's cell, and a value copied into this module must not name
+    /// one (`docs/notes/kernel-parameter-class.md`). The descent stops at a plain
+    /// array: only an expression's positions are cells of their own, while a shape's
+    /// items are resolved in place.
     fn frozen_ref_is_open(&self, sref: StaticNodeId) -> bool {
         let mut seen = std::collections::HashSet::new();
         self.frozen_ref_is_open_with(sref, &mut seen)
@@ -364,13 +376,14 @@ impl<P: Program> Module<P> {
         let module = self.static_module(sref.module);
         let node = &module.nodes[sref.index.index];
         let Some(value) = node.value else {
-            // A cell with neither a value nor an operation is the template's own hole;
-            // a residual operation keeps its frozen reference, which its reader resolves.
             return node.operation.is_none();
         };
         let Some(LowValue::Array(array)) = value.as_enum() else {
             return false;
         };
+        if array.layout() == 0 {
+            return false;
+        }
         // SAFETY: the payload lives in the frozen arena, pinned by the `Arc`.
         let items = unsafe { array.items() };
         items.iter().any(|item| match item.node {
@@ -379,10 +392,33 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Copy a frozen value so that every **open** position it names is this call's own
-    /// cell; a decided ref stays the artifact's, which every reader resolves in place.
+    /// A frozen ref copied as **this call's own cells** so a unify can pair it position
+    /// by position: a decided node keeps its value (and its frozen identity), and an
+    /// open position becomes a fresh cell the caller's inference binds.
     #[stacksafe]
-    pub(crate) fn copy_frozen_value(
+    pub(crate) fn materialize_referenced(
+        &mut self,
+        sref: StaticNodeId,
+        block: BlockId,
+        remap: &mut HashMap<StaticNodeId, NodeId>,
+    ) -> NodeId {
+        if let Some(&clone) = remap.get(&sref) {
+            return clone;
+        }
+        let clone = self.add_node(block, None, None);
+        remap.insert(sref, clone);
+        let module = self.static_module(sref.module);
+        let copied = module
+            .read(sref.index)
+            .map(|value| self.copy_referenced_value(value, block, remap));
+        self.write_node_value(clone, copied);
+        clone
+    }
+
+    /// [`Self::materialize_referenced`] one level down: an open ref is materialized, a
+    /// decided one stays the artifact's.
+    #[stacksafe]
+    pub(crate) fn copy_referenced_value(
         &mut self,
         value: P::Value,
         block: BlockId,
@@ -399,7 +435,7 @@ impl<P: Program> Module<P> {
             let node = match item.node {
                 AnyNodeId::Static(sref) if self.frozen_ref_is_open(sref) => {
                     changed = true;
-                    Dyn(self.materialize_open_ref(sref, block, remap))
+                    Dyn(self.materialize_referenced(sref, block, remap))
                 }
                 node => node,
             };
@@ -414,45 +450,15 @@ impl<P: Program> Module<P> {
         )))
     }
 
-    /// This call's cell for an **open** frozen node: a decided value is copied, an open
-    /// position becomes a fresh cell the caller's inference binds.
-    #[stacksafe]
-    pub(crate) fn materialize_open_ref(
-        &mut self,
-        sref: StaticNodeId,
-        block: BlockId,
-        remap: &mut HashMap<StaticNodeId, NodeId>,
-    ) -> NodeId {
-        if let Some(&clone) = remap.get(&sref) {
-            return clone;
-        }
-        let clone = self.add_node(block, None, None);
-        remap.insert(sref, clone);
-        let module = self.static_module(sref.module);
-        // A frozen operation is copied with it: a value-only copy loses what it computes.
-        if let Some(operation) = module.nodes[sref.index.index].operation {
-            let operand = operation.operand.map(|operand| {
-                self.materialize_open_ref(
-                    StaticNodeId {
-                        module: sref.module,
-                        index: operand,
-                    },
-                    block,
-                    remap,
-                )
-            });
-            self.nodes[clone].operation = Some(Operation {
-                operator: operation.operator,
-                operand,
-            });
-        }
-        let copied = module
-            .read(sref.index)
-            .map(|value| self.copy_frozen_value(value, block, remap));
-        self.write_node_value(clone, copied);
-        clone
+    /// The value behind a frozen ref, copied so that every open position it names is
+    /// this call's own cell.
+    pub fn frozen_value_as_dynamic(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
+        let mut remap = std::collections::HashMap::new();
+        let value = self
+            .static_read(sref)
+            .map(|value| self.copy_referenced_value(value, block, &mut remap));
+        self.add_node(block, None, value)
     }
-
     /// One node of the frozen signature, copied; an array's items are copied with it.
     #[stacksafe]
     fn clone_static_signature_node(
