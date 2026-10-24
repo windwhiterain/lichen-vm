@@ -59,7 +59,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `484e9fa2` | a static node is **read directly**, never copied into a dynamic node to be read — the invariant now sits at `Module::node_value` and `shape::node_value`; the copy walk of `a524e578`/`f0f8f668` is gone |
 | `02d31d8f` | the two pinned renderings follow: a direct read of an open codomain is `raw none` |
 | `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
-| `f13e8a02` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
+| `64af5927` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
 
 ## Readings (the tool's own `test result:` lines)
 
