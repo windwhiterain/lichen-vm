@@ -1,9 +1,10 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `4c0f1b50`, working tree clean, not merged. The rule is landed in the language
-> spec and the attribute-specific record machinery is gone; **one language-server
-> test stays red**, and it is a per-call *sharing* question rather than a mechanism.
+> `02d31d8f`, working tree clean, not merged. The rule is landed in the language
+> spec and the attribute-specific record machinery is gone. Three reds remain: the
+> kernel codomain (mechanism 2b, with the verdict that governs it), and two
+> language-server tests that read the same at this session's start commit.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -51,8 +52,9 @@ decides relaxation. `@any` states nothing, at any position.
 | `0ae17d02` | `shape`'s low-type readers cross the frozen boundary (`static_read`) |
 | `9a5406c0` | a struct instance's provided perspective is the meet of its **fields**; its type expression states a requirement, not a perspective — **and `a_read_takes...` passes** |
 | `619a2606` | `unify`'s fill refuses an answer that still holds an **open frozen position**, so a template's skeleton binds nothing — **and both `jit_inline` tests pass** |
-| `f0f8f668` | a frozen **hole** is materialized as this call's cell when a value is copied (`materialize_leaf`), while a signature cell the unify compares by identity is copied verbatim (`materialize_leaf_verbatim`) — **and both codomain tests pass, the two pinned renderings return to their decided form** |
 | `fc834b67`, `c0802cab`, `bdde4d8d` | the comment budget: every section the branch added fits its 120-character preamble limit |
+| `484e9fa2` | a static node is **read directly**, never copied into a dynamic node to be read — the invariant now sits at `Module::node_value` and `shape::node_value`; the copy walk of `a524e578`/`f0f8f668` is gone |
+| `02d31d8f` | the two pinned renderings follow: a direct read of an open codomain is `raw none` |
 | `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
 
 ## Readings (the tool's own `test result:` lines)
@@ -61,15 +63,18 @@ decides relaxation. `@any` states nothing, at any position.
 |---|---|
 | `lichen-highlevel --test highlevel` | **136 passed; 0 failed** |
 | `lichen-language --test language` | **275 passed; 0 failed** |
-| `lichen-compute --test lichen_compute` | **237 passed; 0 failed; 1 ignored** |
+| `lichen-compute --test lichen_compute` | **235 passed; 2 failed; 1 ignored** |
 | `lichen-lowlevel` | **164 passed; 0 failed; 1 ignored** |
 
 Red:
 
-- `language_server::statement_values::compute_wrapper_functions_hover_with_named_type_variables`
-  — the hover counts **198** type variables where it pins **24**, because a per-call
-  materialization mints a fresh remap per `Module::as_dynamic` read (see mechanism
-  2b's cost below). This is the one thing between the branch and a merge.
+- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` and
+  `compute::a_jit_kernel_crosses_the_two_classes_both_ways` — the kernel codomain;
+  mechanism 2b carries the measurements and the verdict that governs the next attempt.
+- `language_server::statement_values::a_lazy_binding_reports_type_but_no_value` and
+  `language_server::statement_values::compute_wrapper_functions_hover_with_named_type_variables`
+  — both read the same at `359b18c4`, the commit this session started from, so neither
+  is this work's regression (measured in mechanism 2b).
 
 ## Closed mechanism 1 — a read's lane-varying index stays warp-uniform
 
@@ -153,59 +158,59 @@ materialization reusing the check-time one) was tried with
 `materialize_static_return_apply` is the only static type apply there is; there is
 no second owner to defer to.
 
-## Closed mechanism 2b — a kernel's codomain stays open
+## Mechanism 2b — a kernel's codomain stays open (the verdict that governs it)
 
-`a_float_domain_...` failed on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
-`a_jit_kernel_crosses...` failed on `type_is_float`/`type_is_int` over its five
-cases. Both read the launch's result type, which is `k.O` — the kernel struct's
-codomain field.
+`a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
+`a_jit_kernel_crosses...` fails on `type_is_float`/`type_is_int` over its five cases.
+Both read the launch's result type, which is `k.O` — the kernel struct's codomain
+field.
 
-Measured (`type_head` on the root type node): the result type is a five-position
-type expression whose slots 1–4 are decided and whose slot 0 — the denotation — is a
-free dynamic cell. Its class root is the cell itself, holding nothing; a fill log
-over the whole program never named it, so nothing ever unified it — neither a fill
-nor a merge.
-
-Both tests pass at `aeac9efe`, so this was the second casualty of `5d585047`: the
+Measured (`type_head` on the root type node): the result type is a five-position type
+expression whose slots 1–4 are decided and whose slot 0 — the denotation — is a free
+cell; a fill log over the whole program never named it, so nothing ever unified it.
+Both tests pass at `aeac9efe`, so this is the second casualty of `5d585047`: the
 non-reporting binding now unifies the type position, and the frozen signature's
-return expression it meets names a template hole in its value position. With
+return expression it meets names a **template hole** in its value position. With
 `619a2606` that skeleton no longer fills anything, but the pair is never made either
 (the node-less arm returns before descending), so the codomain stays open.
 
-What landed, `f0f8f668`: the rule is the per-call cell, applied at the copy site.
+### The verdict: a static node is read directly
 
-- `frozen_ref_is_open` — a frozen node still names a hole when it holds nothing and
-  computes nothing, or when an expression it holds does. The descent stops at a
-  plain array (`layout() == 0`): only an expression's positions are cells of their
-  own, and copying a shape would also lose the identity of the shapes the checker
-  registered (the arrow set).
-- `materialize_referenced` / `copy_referenced_value` — a copied value keeps the
-  artifact's decided positions and gives every open one a fresh cell of this call.
-- `materialize_leaf` copies through that walk; `materialize_leaf_verbatim` does not,
-  and `materialize_static_signature` uses it: a signature cell a unify compares by
-  identity must stay the artifact's, or the same function stops being one value.
-- The checker's imported-export read (`ExprKind::Static`) reads a materialized leaf,
-  so an imported top-level kernel's open positions are the importer's cells.
+A frozen position is **read in its own module**, exactly as a dynamic one, and never
+copied into a dynamic node in order to be read. The rule now sits at both readers
+(`Module::node_value`, `shape::node_value`) as their `# Invariant`. A copy gives the
+position a fresh class, so one value reads as several.
 
-Measured: both codomain tests pass, compute 237/0, and the two pinned renderings
-return to `(raw Kernel, Int, Int)` / `.O Type` — the form `5d585047` had rewritten.
-Measured and rejected on the way: a non-recursive hole predicate (the pinned
-renderings regress to `raw Int`), a broad fill guard covering dynamic items (235/2),
-candidate D (no second owner to defer to), candidate F (cloning every `undecided()`
-ref: 235/2), and materializing at the unify slot sites only (no effect: the hole is
-nested inside a value the slot already holds).
+This was learned by trying the opposite (`a524e578`, `f0f8f668`): a copy walk that
+materialized every open frozen position into a fresh cell. It made the codomain read
+(`compute` 237/0, the two pinned renderings back to `(raw Kernel, Int, Int)`), and it
+was still wrong — the copy is what has to go, not the read. Both commits are reverted
+by `484e9fa2`, and `02d31d8f` restores the two pins to `raw none`, which is what a
+direct read sees while the codomain is open.
 
-**The cost it left: `lichen-language-server`'s hover stops being stable.**
-`statement_values::compute_wrapper_functions_hover_with_named_type_variables` pins
-`cells.len() == 24` ("jit names twelve cells twice") and now counts **198**: every
-`Module::as_dynamic` read mints a fresh remap, so one frozen position read through
-several checker paths becomes several classes, and the printer names each. The
-shapes also render `raw[…]` where they used to read as arrows; registering the copy
-of an arrow did not change the count. So the materialization needs **one materialization
-per read pass** (a per-block memo of `sref → clone`) before this can be green, or the
-reads must stay verbatim and the codomain tests go back to red. That is the next
-step, and it is a decision: sharing changes what "per call" means for a read that is
-not a call.
+So the codomain closes **where the type side installs its cells**, not where a reader
+reads: the return type a call binds has to be this call's clone — a fresh cell from
+the apply's own remap — so a plain direct read of it is decided. The measurements
+that bound that work: `report=false` for every `apply_function_type` in these
+programs, so `materialize_static_return_apply` is the only static type apply there is
+(candidate D has no second owner to defer to), and cloning every `undecided()` ref in
+`clone_static_signature_node` changes nothing (candidate F).
+
+### The two language-server reds are older than this session
+
+`lichen-language-server --test language_server` carries two failures, and **both read
+the same at `359b18c4`**, the commit this session started from:
+
+- `statement_values::a_lazy_binding_reports_type_but_no_value` aborts with
+  `memory allocation of 38654705664 bytes failed`: the paradox program's type walks a
+  chain the printer never stops building. Measured with the copy walk present and
+  removed alike, so no clone-at-read is involved.
+- `statement_values::compute_wrapper_functions_hover_with_named_type_variables` counts
+  **198** type variables where it pins **24** — also 198 at `359b18c4`, so this is not
+  the copy walk either: it is the attribute-widened expression the checker builds, 
+  whose every position is a cell of its own.
+
+Both need their own investigation, and neither re-opens the verdict above.
 
 ## Traps (each cost time this session)
 
@@ -219,11 +224,12 @@ not a call.
 - **A static apply mirrors the dynamic one.** `kernel-parameter-class.md`'s
   load-bearing statement; the signature clone carries every per-call cell into
   the remap, and residual operations keep their frozen reference.
-- **A materialized copy must not re-create a registered shape.** Deep-copying a
-  shape the checker registered (a function type's `[in, out]`, the arrow set) gives
-  a node the renderer cannot place and a unify cannot pair: it renders `raw[...]`
-  and breaks `function_cells`' identity. That is why the open descent stops at a
-  plain array, and why a signature cell compared by identity stays verbatim.
+- **A frozen position is read, not copied.** A static node is read in its own module
+  exactly as a dynamic one; copying it into a dynamic node first gives every position
+  a fresh class, so one value reads as several. The rule sits at
+  `Module::node_value` and `shape::node_value`, and the copy walk that broke it
+  (`a524e578`, `f0f8f668`) is reverted. The codomain fix has to happen in the
+  **type-side apply**, where a per-call clone is the natural product, not in a reader.
 - **The doc/code pair moves together.** This branch is **not mergeable** while any
   test is red, because the spec on this branch states the rule the code keeps.
 - **Bisect before theorising.** Mechanism 2 cost this session hours of reading
