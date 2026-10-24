@@ -380,6 +380,14 @@ graph. `slot_read` is the codomain seam, and it materialized the field type into
 `state[e].ty`; the codomain closed at `unify` anyway because nothing binds that leaf any
 more.
 
+The boundary was tested rather than argued: `compute`'s perspective suite now carries a
+**differential** pair — the same definition inline and imported must judge the same
+argument the same way. `an_imported_requirement_judges_like_an_inline_one` covers a decided
+`(Int # 32)`; `an_imported_open_requirement_is_bound_at_the_call` covers a requirement stated
+as a **type variable** (`Int # _p`, bound by `Choose 32`), which is the open-cell shape a
+copy could lose. Both refuse `(5 # 1)` with `expected 32, found 1` on both sides — the
+storage materialization loses neither the requirement nor its per-call binding.
+
 Widening the checker's state to `AnyNodeId` (with `Ctx::check_unify*` and `AttrExt`'s
 `unify_slots`/`is_subtype`) would remove those copies, but it is a **design change to the
 checker's core type**, not pending cleanup, and nothing currently misbehaves because of it.
