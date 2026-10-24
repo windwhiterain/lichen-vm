@@ -423,18 +423,20 @@ dispatches a layer came out: **20 nodes a layer, 560 a token** (was 30/840), the
 `[9707, 25, 358, 2776, 4460]` are unchanged, and the warm token is **0.53 s against 0.55 s** — ~3%,
 which prices a node at ~0.05 ms and a step at ~1.2 ms. **The step count is what is left.**
 
-### S2 — a row's rotation in one dispatch, and the batch's attention in one dispatch
+### S2 — a row's rotation in one dispatch (landed), and the batch's attention in one (open)
 
-`layer_batch` loops the rotation over sequences (because the rotation names one position) and the
-attention over sequences (because each cache is its own). A positions buffer and a
-`sequence × cache` stride would make each one dispatch for the whole batch. At eight rows this
-removes roughly seven of eight rotation calls and seven of eight attention calls a layer; the
-rotation is three dispatches and the attention four, so the saving is on the order of 50 dispatches
-a layer, 1 400 a token — more than the whole step's floor today.
+The rotation half is built: `ROPE_ROWS_STEP` takes a positions buffer and a `row_len`, so a batch's
+rows turn in one dispatch. On eight rows and four tokens it removed **784 of the 1 824 submissions a
+token (−43%)** and the token fell from **0.839 s to 0.745 s (−11%)**, with all eight rows answering
+`[9707, 25, 358, 2776, 4460]`. The class cost one detour: a dispatch reads its buffers at one class,
+so a float positions buffer beside narrowed values was read as bf16 and the rows alternated between
+a turned and an unturned key; both now ride as floats, which is also the exactness a position
+needs. That the fence count fell 43% and the clock 11% is the same reading as S1's: a step's fence
+is not the whole step, and the device's own work at eight rows is the rest.
 
-**Prerequisite.** `ROPE_STEP` reads a position per row (a one-line kernel change: a `positions`
-buffer indexed by the row), and `ATTEND_CACHE_STEP` takes a per-row length and stride. Both are
-buffer-map shapes the surface already has.
+The attention half is open for the same reason as before: each sequence's cache is its own, so
+batching it needs a per-row length and stride, which `ATTEND_CACHE_STEP` does not read. Its saving
+is the other 392 submissions a token at eight rows.
 
 ### S3 — a tiled projection, with a runtime extent
 

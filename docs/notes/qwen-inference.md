@@ -852,3 +852,25 @@ That is **~3%** for 280 nodes, and it prices the two terms: a node inside a step
 step is ~1.2 ms, because a step pays a recording and a fence. So the node count is the smaller term
 and **the step count is the lever that is left** — the fifteen stage calls a layer, and the
 per-sequence rotation and attention calls, are what a composed graph would remove.
+
+## S2a: a batch's rotation is one dispatch
+
+`layer_batch` called the rotation once a sequence, because a single-row step names one position. A
+positions buffer — one float a row — and a `row_len` make it one dispatch for the whole batch, the
+position read off the lane's row. On eight rows and four tokens:
+
+| | per-sequence rotations | one rotation a batch |
+|---|---|---|
+| submissions a token | 1 824 | **1 040 (−43%)** |
+| eight rows' tokens | `[9707, 25, 358, 2776, 4460]` | same, all eight |
+| a token | 0.839 s | **0.745 s (−11%)** |
+
+The first attempt answered wrongly, and the reason is worth keeping: the rows alternated between a
+turned and an unturned key. A dispatch reads its input buffers at **one class**, and the values
+buffer was bf16 (the narrowed width's payload) while the positions buffer was float; the float
+positions were read as bf16, so the odd rows read a position of zero. Both buffers now go as floats —
+the position has to be exact, and this is the one place the narrowed width stops. The 43% fewer
+fences buying 11% of the clock is S1's reading again: what remains is the device's own work at eight
+rows, which the rotation shares but does not remove. The attention is still one dispatch a
+sequence; its cache is per sequence and batching it needs a per-row length and stride
+([serving-frontier](serving-frontier.md) S2).
