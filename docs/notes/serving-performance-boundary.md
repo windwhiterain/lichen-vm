@@ -52,30 +52,28 @@ resident, a relabel, a held model); the path to it was dead.** A boundary measur
 would have said the projection is 69% and the answer is a tiled kernel. Measured on the working
 path, the projection is 43% and the answer is **fewer steps**.
 
-## The class constraint is decoupled, and composition still did not pay
+## The class granularity is landed; composition does not pay, and the reason is the dispatch
 
-The wall was the pack machinery: a class requirement could only travel with a staging plan and a
-per-kernel claim, so a composed graph (which the claim join refuses) could not be narrowed. That is
-now split along the granularity line it should have been:
+The class requirement is now independent of plans and claims, and it is selectable **per node and
+per input**: a pack names the node positions it applies to and the input slots with their classes
+(`nodes` and `classes` in `requires`), and the fragment rewrites exactly those reads
+(`states_input_class`). `narrowed_composed` builds such a pack, and `composed_probe` prepares the
+eleven-node pre-attention graph with its three projection weights at bf16 and every activation at
+Float — three returns of 1024, 1024 and 2048 elements.
 
-- a pack that states **only a class** needs no plan (`placement_pack`);
-- the pass applies a **schema-less class pack to every kernel node without a claim**
-  (`classed_plain`), so a composed graph can be prepared at the narrowed width;
-- `narrowed` falls back to that wildcard pack when a preparation lists no node schema.
+Wired into the model, the composite answers the same five tokens at **396 submissions a token**
+against 648, and is **still slower**: 0.155–0.168 s a warm token against 0.136–0.152 s. The classes
+are not the cause — the wildcard run, with bf16 activations, cost the same 0.155 s — so what a
+composed step pays is **its eleven dispatches serialized behind one fence**, while the staged path's
+smaller steps each carry one dispatch. The submission count was never the unit: **the dispatch and
+its barrier are.**
 
-The capability is in the tree: `composed_probe` prepares the eleven-node pre-attention graph
-([PRE_STEP](../../crates/lichen-serve/src/model.rs)) at bf16 and runs it — three returns of 1024,
-1024 and 2048 elements. Wired into the model, it answered the same five tokens at **396 submissions
-a token instead of 648 (−39%)** — and was **slower**: 0.155–0.169 s a warm token against
-0.136–0.152 s.
+The next capability is therefore not more granularity in the pack; it is **fewer dispatches**: a
+fused kernel that performs a stage group in one launch (the tiling/plan machinery exists for a
+literal extent) or a dependency model where independent nodes overlap. Until then the staged
+resident path — 648 submissions, 0.136–0.152 s — is the floor.
 
-The reason is the coarse class, not the composition: the wildcard states **one** class for the whole
-graph, so the norms and rotations that ran in Float now run in bf16, and the eleven dispatches
-serialize behind one fence. The fine-grained fix is the next capability: **per-node classes**
-(the weight projections bf16, the norm and rotation nodes Float) with **typed edges** — a conversion
-where a bf16 output feeds a Float input, which the graph does not insert today.
-
-## The edges now## The edges now
+## The edges now## The edges now## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
    fetches) at **~0.2 ms each**. A one-node step's floor measures **0.366 ms** with a 4 KB buffer,
@@ -105,11 +103,12 @@ where a bf16 output feeds a Float input, which the graph does not insert today.
 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
-| 1 | **per-node classes with typed edge conversions** | composition that pays | 396 submissions but 0.155 s |
+| 1 | a fused dispatch, or a barrier-free dependency model | the composed step's eleven dispatches | 396 submissions but 0.155 s |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |
-| 5 | a composed layer step (serving side) — after #1 | 648 submissions a token | 648 × ~0.2 ms |
+
+The class granularity and the per-node pack are **landed**; they are no longer an edge.
 
 ## Already at its floor
 
