@@ -840,7 +840,10 @@ step **records** at this tip (the old "two answers met on one node" refusal is g
 
 That is the argument-table conflation [inference-service](inference-service.md) §8 item 6 files: a
 kernel's parameter cell is not a graph input slot, and the recording hands one to the graph as the
-other. The copy dispatch is the workaround, so the 280 nodes are gated on that defect and not on the
+other. The refusal is `GraphRefusal::NotBufferData`, raised from `compute.rs`'s input collection
+when a dispatch's buffer input is placed through `graph::place` as the step parameter's slot: a
+one-node graph's value table then holds a count where the node's input expects a buffer. The fix
+belongs to that placement, not to the model, and it is a compute-side slice of its own. The copy dispatch is the workaround, so the 280 nodes are gated on that defect and not on the
 kernel surface. **The next slice is fewer nodes** — the copy's 280 first if the argument table is
 fixed, the tiled projection after it — and composing a layer's fifteen steps into one recorded graph
 is the other half of the same ledger, because that removes fences rather than nodes.
