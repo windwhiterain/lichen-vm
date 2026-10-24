@@ -15,10 +15,10 @@
 > `crates/lichen-runtime/src/device.rs` (`DeviceFacts::check`),
 > `crates/lichen-runtime/src/fused/schema.rs` (`Target`, `FORMAT_VERSION`),
 > `crates/lichen-runtime/src/placement_pack.rs` (the pack text).
-> Companion, and the state of the art for everything *above* this: [two-dimensional-launch](
-> two-dimensional-launch.md) — its §1 is a 12-and-25 list this note re-derives and corrects,
-> and its §8–§10 have landed. Related, not restated: [shared-memory-and-barriers](
-> shared-memory-and-barriers.md) §8 (the tail-lane obligation), [graph-fusion](graph-fusion.md)
+> Companion, and the state of the art for everything *above* this:
+> [two-dimensional-launch](two-dimensional-launch.md) — its §1 is a 12-and-25 list this note re-derives and corrects,
+> and its §8–§10 have landed. Related, not restated:
+> [shared-memory-and-barriers](shared-memory-and-barriers.md) §8 (the tail-lane obligation), [graph-fusion](graph-fusion.md)
 > §5 (the plan and the pack), [code-audit](code-audit.md) (the decision record — `wontfix:D<n>`
 > is a contract), [artifact-cache](artifact-cache.md) (the version precedent),
 > [taking-a-kernel-to-a-server](taking-a-kernel-to-a-server.md) (the load gates),

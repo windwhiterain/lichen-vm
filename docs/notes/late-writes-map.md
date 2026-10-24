@@ -33,7 +33,7 @@
 > file, this one.
 >
 > **Where the decision itself lives.** This map is the measurement the decision in
-> [incremental-evaluation](docs/notes/incremental-evaluation.md) §7 already records —
+> [incremental-evaluation](incremental-evaluation.md) §7 already records —
 > that commit (`557a8265`, on `dev` after this branch was cut) names "the three
 > lowlevel epoch tests and the four compute late-write tests … as the first map of
 > those defects". This file is that map, with the per-test traces; it deliberately
@@ -49,7 +49,7 @@ The payoff wanted: `evaluate` / `evaluate_deep` gate purely on their stamps —
 `evaluated` = the value-epoch stamp, `evaluated_deep.is_some()` — so **a node is
 evaluated and decided exactly once, never re-decided**.
 
-The `settled` bit of [incremental-evaluation](docs/notes/incremental-evaluation.md)
+The `settled` bit of [incremental-evaluation](incremental-evaluation.md)
 §4 was **rejected** ("加了 `settled` 等于没重构"). So the late writes are defects to
 eliminate at their source, not state to be tolerated.
 
@@ -62,7 +62,7 @@ no second bit, no new state.
 Inserted in `crates/lichen-lowlevel/src/evaluation.rs`,
 `evaluate_node_deep_inner`, after the static-leaf and cycle-cut arms and before
 `deep_depth` is charged (the position
-[incremental-evaluation](docs/notes/incremental-evaluation.md) §4.4 names):
+[incremental-evaluation](incremental-evaluation.md) §4.4 names):
 
 ```rust
 // SCRATCH: the plain deep gate.
@@ -79,7 +79,7 @@ verdict, the deep walk never re-enters it, so no verdict is ever revised.
 Every value-slot write in the module goes through one function,
 `Module::set_node_value` (`crates/lichen-lowlevel/src/equality.rs:287-290`), which
 bumps the value epoch and then assigns `Node::value`. Its callers, by
-[stalled-rerun-epoch](docs/notes/stalled-rerun-epoch.md) §4, are exactly:
+[stalled-rerun-epoch](stalled-rerun-epoch.md) §4, are exactly:
 
 | caller | `file:line` | what it is |
 |---|---|---|
@@ -139,7 +139,7 @@ table::gc_compaction_moves_table_payloads_and_entries
 ```
 
 (That set is the GC trigger disabled — see
-[gc-trigger-disabled](docs/notes/gc-trigger-disabled.md) — and is the same set on
+[gc-trigger-disabled](gc-trigger-disabled.md) — and is the same set on
 every later run in this slice, so every delta below is measured against it.)
 
 The compute baseline's 14 failures, by name:
@@ -431,7 +431,7 @@ Two things the maintainer should know before deciding:
    half (`:419-426`, stall → stamp → no re-descent) is the **run** gate and survives
    both plain gates; only its second half (`:427-436`) is the re-decision. Retiring
    the whole test retires the run-gate pin too, which is a separate, still-current
-   design ([stalled-rerun-epoch](docs/notes/stalled-rerun-epoch.md), status
+   design ([stalled-rerun-epoch](stalled-rerun-epoch.md), status
    **current**).
 2. The concrete-only reading is **not** the rejected `settled` bit — it adds no
    state and computes nothing extra. It is weaker than the refactor's goal (an

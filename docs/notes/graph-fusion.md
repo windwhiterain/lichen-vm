@@ -11,7 +11,7 @@
 >
 > The graph JIT this sits on is current
 > ([compute-graph-jit](compute-graph-jit.md)); the fusion mathematics is the
-> worked example in [reduction fusion](../reference/reduction%20fusion.typ)
+> worked example in [reduction fusion](../reference/auto%20reduction%20fusion.typ)
 > (Neptune, PLDI'26); the mark primitive that carries an interface claim is
 > current (`~`; `crates/lichen-highlevel/src/marks.rs`), and the attribute
 > machinery it deliberately bypasses is current
@@ -1045,7 +1045,7 @@ staging (§9), and the perspective work they ride on is
 ## 6. The engine: reduction fusion by repair function
 
 The mathematics is worked through in
-[reduction fusion](../reference/reduction%20fusion.typ); this section is what
+[reduction fusion](../reference/auto%20reduction%20fusion.typ); this section is what
 that mathematics *is* inside the system — the engine's one transform, stated
 as the obligations it checks and the kernel it emits. Where the paper has
 "the producer reduction's operator", the engine has the `Reduction`
@@ -1455,7 +1455,7 @@ Still open, cheapest to settle before the interface syntax is written:
   capabilities the fused kernel body needs.
 - [loop-conversion.md](loop-conversion.md) — the dynamic loop, landed, that a
   fused reduction body lowers through.
-- [reduction fusion](../reference/reduction%20fusion.typ) — the mathematics
+- [reduction fusion](../reference/auto%20reduction%20fusion.typ) — the mathematics
   §6 operationalizes.
 - [artifact-cache.md](artifact-cache.md) — the content-addressed store schema
   artifacts and pack bindings ride on.

@@ -12,10 +12,10 @@
 > `crates/lichen-runtime` (`graph_pass.rs`, `automatic_tiling.rs`), `crates/lichen-fusion-bridge`
 > (`tiled.rs`), `crates/lichen-compute/src/compute/body.rs` (`lower_index_function`).
 > Related, not restated: [graph-fusion](graph-fusion.md) (the plan/pack schema),
-> [code-audit](code-audit.md) (the decision record), [shared-memory-and-barriers](
-> shared-memory-and-barriers.md) (the `Shared`/`Barrier` story and the tail-lane obligation),
-> [compute-graph-jit](compute-graph-jit.md) (`Count::Device`), [compute-runtime-scalars](
-> compute-runtime-scalars.md) (the leaf ABI a second extent would ride on).
+> [code-audit](code-audit.md) (the decision record),
+> [shared-memory-and-barriers](shared-memory-and-barriers.md) (the `Shared`/`Barrier` story and the tail-lane obligation),
+> [compute-graph-jit](compute-graph-jit.md) (`Count::Device`),
+> [compute-runtime-scalars](compute-runtime-scalars.md) (the leaf ABI a second extent would ride on).
 
 **What is measured, what is inferred, what is unknown**, stated first because the separation
 decides the size of the change:

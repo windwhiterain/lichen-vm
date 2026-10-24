@@ -182,7 +182,7 @@ an unused asset, not a half-built one, and it is the static half of a GPU execut
 model: the certificate for which expressions are uniform across an aligned lane group.
 
 **And the certificate's sources are stated, and a call site reads them.** The compute
-sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
+sub-language's wrapper ([compute.lichen](../../crates/lichen-compute/src/compute.lichen))
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
 the lattice's bottom: the value is uniform over exactly its own thread. A frozen
 callee's parameter requirement is the **parameter expr's** stated attribute at its
@@ -269,7 +269,7 @@ provider uniform over 32-groups (`32 | 0`, `32 | 64`) and refuses a lane-varying
 | `f (0 # 1)` | ✗ — `expected 32, found 1` |
 | `f (0 # 6)` | ✗ — `expected 32, found 6` (divisibility, not order) |
 
-**The shipping vocabulary names the width**: [compute.lichen](../crates/lichen-compute/src/compute.lichen)
+**The shipping vocabulary names the width**: [compute.lichen](../../crates/lichen-compute/src/compute.lichen)
 binds `warp = 32` (the backend's `SUBGROUP_WIDTH`), so a GPU program writes
 `f = (x : Int # compute.warp) => x` and gets the same four readings under `Mode::Check`
 — `f 7` ✓, `f (0 # 64)` ✓, `f (0 # 1)` → `expected 32, found 1`, `f (0 # 6)` →

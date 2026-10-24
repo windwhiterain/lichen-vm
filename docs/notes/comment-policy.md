@@ -5,7 +5,7 @@
 A comment earns its place by stating something the code cannot: an invariant
 that must hold, or the condition that makes an `unsafe` block sound. An
 implementation invariant belongs at the code it governs, not only in a note: the
-comment states the rule, and [`docs/notes`](README.md) carries the argument, the
+comment states the rule, and [`docs/notes`](../README.md) carries the argument, the
 measurement and the history the comment links to. An agent changing the code
 reads the comment, not the note, so a note is never the only home of a rule.
 

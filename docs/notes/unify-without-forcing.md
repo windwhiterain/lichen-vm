@@ -34,7 +34,7 @@ second.
 
 ### 2.1 The binding fast path refuses by construction
 
-[`unify_inner`](../crates/lichen-lowlevel/src/equality.rs) binds at exactly one
+[`unify_inner`](../../crates/lichen-lowlevel/src/equality.rs) binds at exactly one
 site, gated on `class_is_pure_cell`: *"A class with an unevaluated operation is
 not bindable — it is a pending computation, and a concrete value bound over it
 would erase the computation."*  A node is either value-carrying or

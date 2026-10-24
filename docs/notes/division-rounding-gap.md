@@ -172,7 +172,7 @@ count predicted by two different `r` for one divisor.
 [operator-reverification](operator-reverification.md) §3 measured something else.** The probe reads
 each printed token back to an `f32` and asks whether re-printing that `f32` with the printer's own
 spelling — `f32`'s positional `Display` with a forced `.`, which is
-[`float_literal` in `lichen-render`](../crates/lichen-render/src/render.rs)'s whole body —
+[`float_literal` in `lichen-render`](../../crates/lichen-render/src/render.rs)'s whole body —
 reproduces the token:
 
 | grid | tokens that round-trip |

@@ -820,7 +820,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   **The port landed**, on `feature/spirv-loop-emitter-ssa` (`0a1c9f4`), and it is
   smaller than the branch in the three ways below — the branch was cut on the
   **pre-SSA** IR, so its `Walk` is a `Vec<Slot>` operand stack over
-  `Flow`/`Terminator`, the two mechanisms [`af6f6f2`](../af6f6f2) deleted:
+  `Flow`/`Terminator`, the two mechanisms `af6f6f2` deleted:
 
   | branch          | `dev` since `af6f6f2`         |
   |-----------------|-------------------------------|
