@@ -10,7 +10,7 @@ use crate::{
     ServeRefusal, Session,
 };
 
-/// The model's shape, and the flat file's order — the contract with `.model/dump_layers.py`.
+/// The model's shape, and the flat file's order — the contract with `scripts/dump_bf16.py`.
 const LAYERS: usize = 28;
 const HEADS: i64 = 16;
 const KEY_HEADS: i64 = 8;

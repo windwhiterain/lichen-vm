@@ -14,7 +14,7 @@ The checkpoint's tensors, converted once, and the tokenizer:
 | `norm_weight_bf16.bin` | the final norm |
 | `layer00_bf16.bin` … `layer27_bf16.bin` | one layer a file, 96 MB each |
 
-`.model/` in this repository holds them; `.model/dump_bf16.py` writes them from the safetensors checkpoint.
+`.model/` in this repository holds them; `scripts/dump_bf16.py` writes them from the safetensors checkpoint.
 A `Width::Wide` model reads f32 files of the same names instead, which is 6.6 GB and only for checking an
 answer against the half-width one.
 
@@ -59,7 +59,7 @@ leaves room to spare, and 6 GB is enough. What to check on the target, in order:
 1. `nvidia-smi --query-gpu=memory.used,memory.total --format=csv` — the model needs the free memory, not the
    total, so check what is **free** before starting it beside anything else.
 2. The half-width files, not the f32 dumps: `.model/` holds the ones `qwen_serve` reads and
-   `.model/dump_bf16.py` writes them.
+   `scripts/dump_bf16.py` writes them.
 3. Its own tokenizer: `LICHEN_MODEL_DIR` must point at a directory holding `tokenizer.json` **and** the
    tensors; they do not have to come from the same download.
 
