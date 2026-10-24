@@ -177,6 +177,12 @@ impl<P: Program> Module<P> {
     }
 
     /// The raw value behind `id` — no evaluation. A released dynamic node reads `None`.
+    ///
+    /// # Invariant
+    /// A static ref is read **in its own module**, directly, exactly as a dynamic node
+    /// is: no reader copies it into a dynamic node first. A copy would give each frozen
+    /// position a fresh class, so one value would read as several
+    /// (`docs/notes/kernel-parameter-class.md`).
     pub fn node_value(&self, id: AnyNodeId) -> Option<P::Value> {
         match id {
             Dyn(node) => self.nodes.get(node).and_then(|node| node.value),
@@ -215,20 +221,12 @@ impl<P: Program> Module<P> {
 
     /// The dynamic node behind `id`: a static ref becomes a fresh leaf in
     /// `block`, so `NodeId` machinery binds it.
-    ///
-    /// # Invariant
-    /// An **open** frozen position is this call's own cell, never the artifact's, so
-    /// the leaf copies the value with those positions materialized
-    /// ([`Self::copy_referenced_value`]). See `docs/notes/kernel-parameter-class.md`.
     pub fn materialize_leaf(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
-        let mut remap = std::collections::HashMap::new();
-        let value = self
-            .static_read(sref)
-            .map(|value| self.copy_referenced_value(value, block, &mut remap));
+        let value = self.static_read(sref);
         self.add_node(block, None, value)
     }
 
-    /// [`AnyNodeId::Dynamic`] as-is, or a static ref as this call's leaf.
+    /// [`AnyNodeId::Dynamic`] as-is, or a static ref materialized into a leaf.
     pub fn as_dynamic(&mut self, id: AnyNodeId, block: BlockId) -> NodeId {
         match id {
             Dyn(node) => node,

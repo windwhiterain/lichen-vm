@@ -1228,8 +1228,13 @@ fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
     }
 }
 
-/// The value a dynamic node or a frozen ref answers: a static ref is read
-/// in its own module.
+/// The value a dynamic node or a frozen ref answers: a static ref is read in its own
+/// module.
+///
+/// # Invariant
+/// A static node is read **directly**, exactly as a dynamic one: a reader never copies
+/// it into a dynamic node first. A copy would give each frozen position a fresh class,
+/// so one value would read as several (`docs/notes/kernel-parameter-class.md`).
 pub(crate) fn node_value<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<P::Value> {
     match id {
         AnyNodeId::Dynamic(_) => module.node_value(id),
