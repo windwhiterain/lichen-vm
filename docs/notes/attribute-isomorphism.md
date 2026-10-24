@@ -60,6 +60,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `02d31d8f` | the two pinned renderings follow: a direct read of an open codomain is `raw none` |
 | `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
 | `64af5927` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
+| `db153f72` | `unify_ref` is the ref-native entry: a static side is compared by value and written into an open cell; the codomain binds, the parameter-slot compares and the result deep-eval all name their refs |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -363,12 +364,22 @@ One red remains and it is **pre-existing**: `lichen-language`'s lib test
 (measured: patch saved, the two files checked out, the test re-run, the patch applied
 back). It sits on `SortOp::run`, untouched by this branch.
 
-### Next
+### Next — the remaining consumer materializations
 
-The codomain hunt is closed. What remains is the landing: squash the slice, check
-`git diff dev...HEAD --name-only` names only this slice's files, then merge to `dev` and
-delete the branch. The `sort_op` red is outside this branch's files and predates it; it
-belongs to its own slice.
+The apply chain still forces an argument to a `NodeId` before consuming it
+(`evaluation.rs`'s apply arm, `function_apply`, `apply_type`/`apply_type_with`,
+`instantiate`/`instantiate_stamped`, `apply_parameter_check`, `evaluate_pattern_argument`,
+`apply_loop`, `static_function_apply`). A **decided frozen argument** therefore gets a fresh
+class per call, which is the one-value-reads-as-several shape the read-directly verdict
+warns about. Widening that chain to `AnyNodeId` (with `array_items_of` and `unify_ref`,
+which already exist) is the next slice. The checker's `as_dynamic` handle sites are the
+other group; a check-time handle is a different question (it is built once per read site,
+not per call).
+
+After that: the landing — squash, check `git diff dev...HEAD --name-only` names only this
+slice's files, merge to `dev`, delete the branch. The `sort_op` red is outside this
+branch's files and predates it (its `default_attributes()?` requirement came in
+`dd4cd0e1`, an ancestor of `dev`), so it belongs to its own slice.
 
 Instruments that answered the question, for the next session: a per-module log
 (`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
