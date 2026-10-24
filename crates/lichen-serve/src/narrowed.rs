@@ -27,6 +27,35 @@ pub fn wildcard_pack_text() -> String {
     .to_string()
 }
 
+/// Prepare `source` with one class per listed node and input slot, and nothing else.
+///
+/// # Invariant
+/// `nodes` are graph positions and `classes` are `(input slot, class)` pairs: a composed graph
+/// has no schema to name, so its positions are the contract between this call and the program.
+pub fn narrowed_composed<'session>(
+    session: &'session Session,
+    source: &str,
+    nodes: &[usize],
+    classes: &[(usize, &str)],
+) -> Result<Prepared<'session>, QwenRefusal> {
+    let listed: Vec<String> = classes
+        .iter()
+        .map(|(at, class)| format!(r#"{{"at":{at},"class":"{class}"}}"#))
+        .collect();
+    let positions: Vec<String> = nodes.iter().map(|node| node.to_string()).collect();
+    let text = format!(
+        r#"{{"name":"narrow","requires":{{"class":null,"nodes":[{}],"classes":[{}]}},"plan":{{"staging":[]}}}}"#,
+        positions.join(","),
+        listed.join(",")
+    );
+    clear_graph_pass();
+    let pack = read_placement_pack(&text)
+        .map_err(|refusal| QwenRefusal::Weights(format!("the composed pack: {refusal}")))?;
+    session
+        .prepare_with_packs(source, &[pack])
+        .map_err(QwenRefusal::Step)
+}
+
 /// The `sha256:<hex>` a node's line prints.
 pub fn reported_schema(lines: &[String]) -> Option<String> {
     let line = lines.iter().find(|line| line.contains("sha256:"))?;

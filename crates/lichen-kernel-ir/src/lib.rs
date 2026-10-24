@@ -190,6 +190,47 @@ impl KernelFragment {
             }
         }
     }
+
+    /// State `class` for the input at `slot` and every read of it, by its position constant.
+    pub fn states_input_class(&mut self, slot: usize, class: ScalarClass) {
+        if !class.is_real() {
+            return;
+        }
+        if let Some(held) = self.input_classes.get_mut(slot)
+            && held.is_real()
+        {
+            *held = class;
+        }
+        let constants: Vec<Option<i64>> = self
+            .body
+            .values
+            .iter()
+            .map(|value| match value {
+                ValueDef::Instr {
+                    op: KernelInstr::Const(_, number),
+                    ..
+                } => Some(*number),
+                _ => None,
+            })
+            .collect();
+        for value in &mut self.body.values {
+            let ValueDef::Instr { op, args, .. } = value else {
+                continue;
+            };
+            let KernelInstr::BufferReadCall(held) = op else {
+                continue;
+            };
+            if !held.is_real() {
+                continue;
+            }
+            let at = args
+                .first()
+                .and_then(|arg| constants.get(arg.0 as usize).copied().flatten());
+            if at == Some(slot as i64) {
+                *held = class;
+            }
+        }
+    }
 }
 
 /// A backend's own name for a buffer it is holding.

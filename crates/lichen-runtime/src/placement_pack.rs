@@ -77,10 +77,14 @@ impl Fuse {
 /// # Invariant
 /// Stated by the pack and read off the fragment, never derived: a constraint is the one fact a
 /// schema hash cannot carry, so a mismatch makes the pack inert rather than wrong.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Constraints {
     /// The element class the node's first input buffer must be, or `None`.
     class: Option<ScalarClass>,
+    /// The node positions the class constraints apply to; empty is every node.
+    nodes: Vec<usize>,
+    /// The input slots and the class each takes, which narrows one buffer of a node.
+    classes: Vec<(usize, ScalarClass)>,
 }
 
 impl Constraints {
@@ -131,6 +135,16 @@ impl PlacementPack {
     /// states one is compiled for it, which is what makes `Buf T` the payload's shape alone.
     pub fn class(&self) -> Option<ScalarClass> {
         self.requires.class
+    }
+
+    /// The node positions this pack's class constraints apply to; empty is every node.
+    pub fn nodes(&self) -> &[usize] {
+        &self.requires.nodes
+    }
+
+    /// The input slots this pack narrows, each with the class it takes.
+    pub fn classes(&self) -> &[(usize, ScalarClass)] {
+        &self.requires.classes
     }
 
     /// The plan this pack hands over.
@@ -308,15 +322,27 @@ pub fn read_placement_pack(text: &str) -> Result<PlacementPack, PackRefusal> {
         .transpose()?;
     let plan: Plan = pack.plan.into();
     let class = pack.requires.class.map(ScalarClass::from);
-    // A class constraint is not a staging: a pack that only states a class needs no plan.
-    if plan.staging.is_empty() && fuse.as_ref().and_then(Fuse::region).is_none() && class.is_none()
-    {
+    let nodes = pack.requires.nodes.unwrap_or_default();
+    let classes: Vec<(usize, ScalarClass)> = pack
+        .requires
+        .classes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (entry.at, ScalarClass::from(entry.class)))
+        .collect();
+    // A class constraint is not a staging: a pack that only states classes needs no plan.
+    let constraint = class.is_some() || !classes.is_empty();
+    if plan.staging.is_empty() && fuse.as_ref().and_then(Fuse::region).is_none() && !constraint {
         return Err(PackRefusal::EmptyPlan { name: pack.name });
     }
     Ok(PlacementPack {
         schema,
         name: pack.name,
-        requires: Constraints { class },
+        requires: Constraints {
+            class,
+            nodes,
+            classes,
+        },
         fuse,
         plan,
     })
@@ -371,12 +397,27 @@ mod artifact {
     }
 
     /// The fragment facts a pack states.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+    #[derive(Debug, Clone, PartialEq, Eq, Facet)]
     #[repr(C)]
     #[facet(deny_unknown_fields)]
     pub struct Constraints {
         /// The element class the node's first input buffer must be, or `null`.
         pub class: Option<ScalarClass>,
+        /// The input slots and the class each takes, or `null` for the whole node.
+        pub classes: Option<Vec<ClassAt>>,
+        /// The node positions these class constraints apply to, or `null` for every node.
+        pub nodes: Option<Vec<usize>>,
+    }
+
+    /// One input slot and the class a pack states for it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+    #[repr(C)]
+    #[facet(deny_unknown_fields)]
+    pub struct ClassAt {
+        /// The fragment's input slot, in its own order.
+        pub at: usize,
+        /// The class the slot takes.
+        pub class: ScalarClass,
     }
 
     /// A placement pack, as the text spells it.

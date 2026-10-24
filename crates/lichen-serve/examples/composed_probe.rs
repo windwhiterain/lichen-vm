@@ -1,7 +1,7 @@
 //! A composed graph prepared at the narrowed width: the class pack that needs no plan or claim.
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
-use lichen_serve::{PRE_STEP, Session, narrowed};
+use lichen_serve::{PRE_STEP, Session, narrowed_composed};
 
 fn bf16(values: &[f32]) -> RunArgument {
     RunArgument::Buffer {
@@ -21,7 +21,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let prepared = match narrowed(&session, PRE_STEP) {
+    let prepared = match narrowed_composed(&session, PRE_STEP, &[2, 6, 7], &[(1, "bfloat16")]) {
         Ok(prepared) => prepared,
         Err(refusal) => {
             eprintln!("{refusal}");

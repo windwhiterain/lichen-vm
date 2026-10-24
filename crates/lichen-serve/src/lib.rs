@@ -29,7 +29,7 @@ pub use model::{
 
 mod upload;
 
-pub use narrowed::{narrowed, narrowed_projection};
+pub use narrowed::{narrowed, narrowed_composed, narrowed_projection};
 pub use qwen::{Batched, Generated, Qwen, QwenRefusal, Width};
 pub use sampling::{Chosen, Sampling, choose, choose_with, randomness};
 pub use service::{Served, Service, Slots};
