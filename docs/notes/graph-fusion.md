@@ -1426,6 +1426,26 @@ Still open, cheapest to settle before the interface syntax is written:
   first.
 - **Pack trust beyond correctness** — signing/provenance of installed packs
   is the package manager's roadmap item, deliberately not this design's.
+- **The strategy space and the fusion file (the superior's directive).** Automatic fusion is to
+  be a **heuristic strategy space, not an optimizer**: no strategy claims optimality, and the
+  point of the space is to **narrow the search a human or an agent does by hand**. A **fusion
+  file** — a manifest the runner installs and the agent may edit — names the strategies and their
+  budgets, and overrides the choice for a region or a set of nodes. The heuristic picks a first
+  plan; the file moves it. The space, in the order the runner applies it:
+  1. **Membership** — which nodes a region may hold: claimed nodes, and a claimed consumer may
+     join a claimed producer across an unclaimed boundary.
+  2. **Shape** — a **topological fold over the region's DAG**: each node is composed into the
+     fragment its absorbed inputs already built, in evaluation order. Chain, fan-out and fan-in
+     become what a fold of one or two steps produces, not separate code paths.
+  3. **Priority and budget** — which regions are attempted first and how large: bytes the merge
+     would save, the number of readers a boundary value has, a node count, a depth, a staging
+     budget. A bounded greedy pass: never optimal, always cheaper than a search.
+  4. **Licence** — a region the pass cannot prove needs a pack's `fuse`; the file is where that
+     pack comes from, which is also the manual override.
+
+  The open questions are the run split, the closed shape set, the licence policy, and the
+  rotation's gather — the one limit that is the language's rather than the derivation's. The
+  order of work: research the heuristics, implement the derivation and the fold, review.
 
 ## 11. Non-goals
 
