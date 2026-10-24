@@ -379,9 +379,14 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            // A node with no value is an operation: it keeps its frozen
-                            // reference, which the reader resolves in that module.
-                            if module.read(sref.index).is_some() {
+                            // A value is copied. A cell with no value and no operation is
+                            // per call — the parameter's own positions — and is copied
+                            // too, so the signature's identity reaches the return copy.
+                            // A residual operation keeps its frozen reference, which the
+                            // reader resolves in that module.
+                            if module.read(sref.index).is_some()
+                                || module.nodes[sref.index.index].operation.is_none()
+                            {
                                 Dyn(self
                                     .clone_static_signature_node(module, sref.index, block, remap))
                             } else {
