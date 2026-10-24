@@ -28,14 +28,15 @@ const RECORDED: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
-Rows = struct{.y (compute.Buf Float)}
-Par  = struct{.n Int, .dim Int, .in In, .out Rows}
+In   = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Rows = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Par  = struct{.n Int, .dim Int, .in In}
 Arg  = struct{.n Int, .dim Int, .I In}
 inner = (k : Par) => {
   row = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Rows)(.y (compute.write ((compute.Write _)(.to b_y, .at row, .value (fold (k.dim, 0.0 ~ "identity")))))))
 }
 kernel = compute.parallel (inner ~ "claim:Reduction(combine,identity)") "gpu" Rows
 step = (s : Par) => {

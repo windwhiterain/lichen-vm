@@ -370,16 +370,21 @@ Both are wanted, and the one measured without any new language surface is the 0.
 
 One dispatch with a row, so that nothing but the dispatch itself is being measured: **0.329 ms**, and the
 same **0.33 ms** at 4096 rows. `Prepared::step` under `Policy::Batch` records every node into one submission
-and waits once, so a stage is one submission and a step's 281 stages are 281 of them — which puts the floor
-at **93 ms** for a step, against the **576 ms** a step actually takes with the layers resident. The six times
+and waits once, so a stage is one submission and a step's stages are one each — 281 in the shape this
+paragraph measured, which puts its floor at **93 ms** against the **576 ms** that step took with the layers
+resident. (The shipped layer prepares **30 nodes, 840 a token**; at the same floor that is ~336 ms of the
+0.58 s warm token in the migration section at the end.) The six times
 between them are not in a kernel: the projection reaches 85 GB/s when its reads are many, and the floor
 does not move when they are few. They are in what the model does around each stage, and that is the one
 thing this file has not yet measured from inside.
 
 ## The dispatch count, and what fusing it would take
 
-A step makes **281 dispatches** — a layer is ten: three norm, four projection, two rope, one attention — and
-the measured floor for one dispatch is about 0.4 ms, so the count alone is roughly 126 ms of a 576 ms step.
+A step made **281 dispatches** in the shape this section measured — a layer is ten: three norm, four
+projection, two rope, one attention — and the measured floor for one dispatch is about 0.4 ms, so the count
+alone is roughly 126 ms of a 576 ms step. **The shipped layer is fifteen stage calls and 30 nodes** (the
+three norms are two dispatches each, as are the seven projections and the two rotations), so a token is 840
+dispatches and ~336 ms at that floor; the fusion argument below is unchanged and stronger.
 The user's direction for that is **kernel fusion, a mega kernel**: one dispatch a layer rather than ten,
 which needs the stages to see each other's writes, which needs a barrier, which is the capability
 [shared-memory-and-barriers](shared-memory-and-barriers.md) calls the largest single item in its axis and
@@ -795,8 +800,10 @@ RTX 3060 Ti this workspace runs on, the model then answers the checkpoint's own 
 Those are held in host memory, not placed (the binary under `hold_in_memory`), and the times are
 this machine's, not the 6 GB laptop's the earlier tables came from. The **warm token's 0.58 s is the
 number to attack**, and [serving-frontier](serving-frontier.md) §2 breaks it into the measured parts:
-281 dispatches at `~0.4 ms` are 93–136 ms, and the measured share around the stages was 0.25 s of a
-0.708 s step. The next slice is the one the roadmap names **S1**: one fetch a token instead of one a
+the prepared steps hold **30 nodes a layer** (three norms ×2, seven projections ×2, two rotations
+×2, attention 4, the product 2), so a token is **840 dispatches**, and at `~0.4 ms` that is
+**~336 ms** of the 0.58 s; the measured share around the stages was 0.25 s of a 0.708 s step. The
+281 this note recorded earlier is an earlier layer shape's count. The next slice is the one the roadmap names **S1**: one fetch a token instead of one a
 stage.
 
 The reading is one command, and it is the one to re-run after a surface change:

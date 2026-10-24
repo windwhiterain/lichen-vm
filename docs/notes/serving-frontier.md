@@ -61,8 +61,8 @@ roadmap is allowed to argue against.
 | reading | value | the note |
 |---|---|---|
 | a dispatch's floor, input resident | **~0.33–0.4 ms** | [qwen-inference](qwen-inference.md), [inference-service](inference-service.md) |
-| dispatches in one decode step | **281** (10 a layer, 28 layers) | [qwen-inference](qwen-inference.md) |
-| the dispatch-count floor of that step | **~93–136 ms** | same |
+| nodes in one layer's steps | **30** at one sequence (three norms ×2, seven projections ×2, two rotations ×2, attention 4, the product 2) | `prepare_steps` at this tip |
+| a token's dispatch floor | **840 × ~0.4 ms ≈ 336 ms** of the 0.58 s warm token | the probe, and §10's token |
 | one step, one request, with the stages timed | **0.708 s**, of which **0.250 s** is around them | same |
 | one step, eight sequences, warm | **0.86 s** | same |
 | one step, one sequence, resident | **0.576 s** | same |
@@ -76,10 +76,13 @@ roadmap is allowed to argue against.
 
 Three conclusions follow directly, and they are the frame for everything below.
 
-- **The step is not dispatch-bound.** 281 dispatches at the floor are 93–136 ms of a 576–860 ms
-  step. The other 440–720 ms is the work *around* the dispatches: the fetches, the uploads, the
-  host arithmetic between stages, and the per-sequence loops. A fusion that halves the dispatches
-  and leaves the surroundings alone therefore has a ceiling of about one fifth of the step.
+- **The step is not dispatch-bound.** 840 dispatches at the floor are **~336 ms of the 0.58 s warm
+  token**; the other ~240 ms is the work *around* the dispatches: the fetches, the uploads, the host
+  arithmetic between stages, and the per-sequence loops. A fusion that halves the dispatches and
+  leaves the surroundings alone therefore has a ceiling of about three fifths of the step.
+  ([qwen-inference](qwen-inference.md)'s 281 dispatches is an earlier layer shape's count; the
+  prepared node counts are the current reading, and the shipped layer has fifteen stage calls, not
+  ten.)
 - **The batch is not the lever.** Sixteen sequences cost one sequence's submission and fence, and
   throughput is flat past eight clients because the step rate is the bound. Widening the batch buys
   latency, not tokens. **The per-step clock is the throughput.**

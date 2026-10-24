@@ -1,8 +1,4 @@
-//! Which of the serving programs prepare, and why the others do not.
-//!
-//! The model's steps are prepared once at load, so a program the surface refuses stops the
-//! service before its first token. This prints one line a step: the node count when it prepares,
-//! the refusal when it does not.
+//! One line a serving step: its node count, or the refusal that stopped it.
 
 use lichen_serve::{
     ATTEND_CACHE_STEP, ATTEND_STEP, BLOCK, DECODE_STEP, LAYER_STEP, MATVEC_BATCH_STEP,
