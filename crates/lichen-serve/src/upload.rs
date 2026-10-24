@@ -14,18 +14,20 @@ use crate::{ServeRefusal, Session};
 /// lives, which is the whole point of an upload.
 const UPLOAD: &str = r#"
 --- compute = import "compute.lichen" ---
-In = struct{.d (compute.Buf Float)}
-Out = struct{.e (compute.Buf Float)}
-Par = struct{.n Int, .in In, .out Out}
+In  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Out = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
+Par = struct{.n Int, .in In}
+Arg = struct{.n Int, .I In}
 copy_raw = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float))))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
+  b_e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Out)(.e (compute.write ((compute.Write _)(.to b_e, .at i, .value value)))))
 }
 copy = compute.parallel copy_raw "gpu" Out
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun copy ((compute.A In)(.n s.n, .I In(.d s.in.d))) : Out)
-  compute.plrun copy ((compute.A In)(.n s.n, .I In(.d a.e)))
+  (compute.plrun copy ((Arg)(.n s.n, .I In(.d s.in.d))) : Out)
 }
 built = compute.graph step
 built
