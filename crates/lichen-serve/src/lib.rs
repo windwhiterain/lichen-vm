@@ -282,7 +282,8 @@ pub fn record(
         .map_err(|error| ServeRefusal::Device(error.to_string()))?;
     let build = lichen_language::testing::compile_at(source, None, &mut store);
     if !packs.is_empty() {
-        lichen_compute::automatic_tiling::install_tiling_with_packs(&build.module, packs);
+        // The floor is the region merge **then** the tiling pass: a merge leaves fewer nodes.
+        lichen_compute::floor::install_floor_with_packs(&build.module, packs);
     }
     let (module, value, _root) = lichen_language::testing::finish(build);
     // A pass is asked while the graph is recorded, which is here: its lines are taken below.

@@ -80,6 +80,24 @@ synchronization inside a step**: a barrier scoped to the buffer that needs it, o
 that removes the dependency altogether (the tiling/plan path exists for a literal extent). Until
 then the staged resident path — 648 submissions, 0.136–0.152 s — is the floor.
 
+## The fusion path is installed, and it refuses these regions
+
+The serve's `record` installed only the automatic tiling pass; the **region merge** — the pass that
+fuses a producer and its consumer into one kernel — had never run in this path. It is installed now
+(the floor is the merge, then the tiling). What it does here:
+
+- a plain `copy -> copy` chain is **not a region**: the merge derives regions only from fragments
+  with a claim, and these have none (`merge_probe`);
+- the pre-attention composite has claimed fragments, so the merge derives regions (nodes 2, 3) and
+  (7, 8) — a projection and the norm that reads it — and **refuses both** with
+  `ProducedValueIsReadElsewhere`: a value the merge would delete is read at the consumer, and the
+  reader check does not accept that edge. Single-node regions are refused as `RegionIsNotAPair`.
+
+So fusion is reachable but does not fire on this graph yet. The next question is narrow: whether
+that `ProducedValueIsReadElsewhere` on a producer-consumer pair is the merge's legality rule or a
+defect in its reader accounting, and after it, whether a **fan-out** region (one norm feeding three
+projections) can be merged at all.
+
 ## The edges now## The edges now## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
@@ -111,6 +129,7 @@ then the staged resident path — 648 submissions, 0.136–0.152 s — is the fl
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
 | 1 | a cheaper intra-step barrier, or a fused kernel | the 0.19 ms a dependency costs | chained 8: 1.428 ms vs 0.066 ms |
+| 1a | the region merge must accept a producer-consumer pair (and a fan-out) | fusion that fires | `ProducedValueIsReadElsewhere` |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |

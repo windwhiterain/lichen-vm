@@ -28,6 +28,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    for line in prepared.report() {
+        println!("{line}");
+    }
     let hidden: Vec<f32> = (0..2048).map(|at| (at % 11) as f32 * 0.001).collect();
     let gain: Vec<f32> = (0..2048).map(|at| (at % 7) as f32 * 0.001).collect();
     let k: Vec<f32> = (0..1024 * 2048).map(|at| (at % 5) as f32 * 0.001).collect();
