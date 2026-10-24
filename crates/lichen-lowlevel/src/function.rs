@@ -214,8 +214,8 @@ impl<P: Program> Module<P> {
             return false;
         };
         self.evaluate_node(codomain, Some(block));
-        // A decided codomain stays the frozen ref the clone walk carried; the bind
-        // consumes it as a ref, so nothing is materialized to hold its value.
+        // A decided codomain stays the ref the clone walk carried; the bind
+        // consumes it as a ref.
         if let Some(cell) = cell {
             self.unify_ref(cell, codomain);
         }

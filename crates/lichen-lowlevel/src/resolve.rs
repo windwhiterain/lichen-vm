@@ -456,12 +456,11 @@ impl<P: Program> Module<P> {
         Some(items[1].node)
     }
 
-    /// The **array items** of a ref: a dynamic node's payload, or a frozen node's, read
-    /// in its own module — the registry pins it for the artifact's lifetime.
+    /// The **array items** of a ref: a dynamic node's payload, or a frozen node's.
     ///
     /// # Invariant
-    /// A consumer names the ref it holds. A frozen payload is read where it lives; a
-    /// leaf copy would hand its open positions refs nothing can write.
+    /// A frozen payload is read where it lives; a leaf copy would hand its open
+    /// positions refs nothing can write.
     ///
     /// # Safety
     /// As [`Self::array_items_of`]: the dynamic node must be live.

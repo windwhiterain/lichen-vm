@@ -851,8 +851,7 @@ where
         let Some(shape) = expr_items.first().map(|item| item.node) else {
             return;
         };
-        // SAFETY: the type expr's shape is live; the read only touches it. A frozen
-        // shape is read where it lives, never copied to be walked.
+        // SAFETY: the shape is live, and a frozen one is read where it lives.
         let Some(field_items) = (unsafe { self.module.array_items_ref(shape) }) else {
             return;
         };

@@ -338,9 +338,8 @@ impl<P: Program> Module<P> {
                         };
                         match callee.as_enum() {
                             Some(LowValue::Function(function)) => {
-                                // Both argument and cell cross as **refs**: the apply's
-                                // unify reads a frozen side by value, so nothing is
-                                // materialized to be consumed.
+                                // Both cross as **refs**: unify reads a frozen side
+                                // by value, so nothing is materialized.
                                 let argument = operands[1].node;
                                 let cell = operands.get(2).map(|item| item.node);
                                 // Both slots are applied: the type's, then the value's.
@@ -544,8 +543,7 @@ impl<P: Program> Module<P> {
         self.evaluate_node_deep_ref(Dyn(node), current)
     }
 
-    /// [`Self::evaluate_node_deep`] over a ref: a frozen position is read where it
-    /// lives, never copied into a leaf to be walked.
+    /// [`Self::evaluate_node_deep`] over a ref: a frozen position is read in place.
     #[stacksafe]
     pub fn evaluate_node_deep_ref(
         &mut self,

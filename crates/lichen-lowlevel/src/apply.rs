@@ -133,8 +133,7 @@ impl<P: Program> Module<P> {
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(parameter_type_source);
-        // The diagnostics name a node: a frozen argument is crossed here, after the
-        // check failed, so nothing can be bound by the copy.
+        // A failed check's diagnostics name a node; the copy binds nothing.
         let argument_node = argument
             .dynamic()
             .unwrap_or_else(|| self.as_dynamic(argument, block));
