@@ -202,7 +202,8 @@ So the remaining choice is structural, and it is the owner's:
   application's type to a fresh cell bound by the type apply; the value apply's expr —
   the node's own value — is already decided. A lazy `Index(value_apply, 1)` would read
   it. Risk: a *chained* apply's callee type (`(f x) y`) becomes a read rather than a
-  decided cell, which touches the force path P1-49's refusal relies on.
+  decided cell, which touches the force path the undetermined-callee refusal
+  relies on.
 - **B. The type apply binds the value apply's codomain** (checker/runtime channel
   needed: `apply_type` does not know the value apply's `applied` expr).
 - **C. Accept the annotation as the contract** for struct-state folds and say so in the

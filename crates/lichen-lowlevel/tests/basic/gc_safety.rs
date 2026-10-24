@@ -249,7 +249,7 @@ fn a_table_entry_naming_a_scope_node_moves_with_the_collect() {
 
 /// A hand-built module may break the block boundary; the engine does not validate it.
 #[test]
-#[ignore = "P1-52: a parent-block payload may name a non-root scope node"]
+#[ignore = "a parent-block payload may name a non-root scope node"]
 fn a_parent_block_array_naming_a_scope_node_keeps_it() {
     let mut m = Module::new();
     let root = m.add_block(None);

@@ -1304,7 +1304,7 @@ fn a_struct_type_application_is_an_instance() {
 
 #[test]
 fn an_instantiation_through_an_undetermined_callee_is_refused() {
-    // Determined at normalize, not at the apply (P1-49).
+    // Determined at normalize, not at the apply.
     let d = diags("g = c => c(.a 1)");
     assert_eq!(d.len(), 1);
     assert!(
@@ -1316,7 +1316,7 @@ fn an_instantiation_through_an_undetermined_callee_is_refused() {
 
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
-    // arity: one field, two values — the excess is its own diagnostic (P4-11)
+    // arity: one field, two values — the excess is its own diagnostic
     let d = diags("struct{.f Int}(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");

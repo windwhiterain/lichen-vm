@@ -162,7 +162,7 @@ template's scope may be collected (`2.b`) — and the trigger is **on**:
 | the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided`, `basic::gc_safety` (the safety battery), `gc_block::a_closure_*_is_still_callable` |
 
 Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **163 / 0**
-plus one ignored repro (`P1-52`), `lichen-highlevel` **136 / 0**, `lichen-compute`'s
+plus one ignored repro, `lichen-highlevel` **136 / 0**, `lichen-compute`'s
 `examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
 under the old trigger). The corpus' two collects released 23 and 8 nodes, and no live node
 named a released one through its operand, array or table edge; after the function-template
@@ -176,7 +176,7 @@ alive for the module's lifetime to serve calls that may never come.
 
 ## 8. The collector items around the release
 
-**Fixed — a surviving function's template list named released nodes** (`P1-51`). Measured
+**Fixed — a surviving function's template list named released nodes.** Measured
 before the fix on the example corpus: `FunctionId(3v1)`, homed in block `4v1`, listed **23
 nodes of the released block `5v1`**. The cause is that a function's home and its nodes
 diverge (a per-call closure is homed at the call site while its nodes land in the call's
@@ -186,7 +186,7 @@ walks the block subtree and re-walks those nodes, which moves them into the targ
 fix the corpus' two collects leave **no** dangling function node, and the closure-escape
 programs are unit tests (`gc_block::a_closure_released_from_a_scope_is_still_callable`).
 
-**Fixed — the language layer holds the block boundary** (`P1-52`, decided `D21`). The
+**Fixed — the language layer holds the block boundary** (decided `D21`). The
 collector may release only what no surviving structure names; the contract is that a referrer
 may name its own block, an ancestor, a parentless block, or a child scope's declared root.
 The front end holds it by construction: `check_gc` gives the parent `Index(expr, 0)` and

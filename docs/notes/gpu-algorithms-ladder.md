@@ -267,20 +267,20 @@ interpreter.
 
 ## A fourth thing this found, and it was already filed
 The probe was also asked whether **a `loop` operator** could serve as the unroll's
-surface, and the answer turned out to be **P1-33**, which
-[code-audit](code-audit.md) already carries as *todo*:
+surface, and the answer turned out to be a defect the audit already carried — **a
+self-recursive call in a conditional's branch is refused as
+`expected Int, found Int`**:
 
 ```lichen
 loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 -- expected Int -> Int, found Int -> Int
 ```
 
-P1-33 is *"A self-recursive call in a conditional's branch is refused as
-`expected Int, found Int`"*, and its own narrowing table identifies the shape
-precisely — one-argument self-recursion in a branch **runs**, a self-reference
-with no conditional **runs**, a non-recursive two-argument callee in the branch
-**runs**; a self-referential two-argument one is the trigger. And it records the
-escape, which is the whole difference:
+Its narrowing table identifies the shape precisely — one-argument self-recursion
+in a branch **runs**, a self-reference with no conditional **runs**, a
+non-recursive two-argument callee in the branch **runs**; a self-referential
+two-argument one is the trigger. And it records the escape, which is the whole
+difference:
 
 ```lichen
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
@@ -294,8 +294,8 @@ interpreter. In a *kernel* it is still refused, and that is the same missing
 **apply** as everything else here rather than a loop problem. The measured
 ceilings for the expanded form are in the proposal's §4.1.
 
-**The first explanation of the type error here was wrong**, and P1-33 corrected
-it: it is not a function argument threaded through a partial application
+**The first explanation of the type error here was wrong**, and the audit's
+narrowing corrected it: it is not a function argument threaded through a partial application
 comparing two function *kinds*. It is a VM **apply-time parameter check** whose
 two sides hold the call's argument *values* — so the message is comparing
 values and calling them types, which is why both sides render `Int`.

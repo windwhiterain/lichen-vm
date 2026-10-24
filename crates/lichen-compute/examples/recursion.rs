@@ -358,7 +358,8 @@ fn host_reduction(marked: bool, count: usize) -> String {
     )
 }
 
-/// The proposed operator **with its type written out** — the escape P1-33 names.
+/// The proposed operator **with its type written out** — the escape a
+/// self-referential call in a branch needs.
 const LOOP_ANNOTATED: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int

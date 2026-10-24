@@ -28,8 +28,8 @@ budget counts it — which is why the ruling is that the program owns this, rath
 ## What is still promised
 
 `WorkBudget` still refuses a **terminating** expansion that outgrows its nesting bound
-(`apply_depth_limit`, see `loop-conversion.md`, `heavy-value-cache.md` §8 and `code-audit.md`'s
-`P1-40`), and the definition pass still reports the
+(`apply_depth_limit`, see `loop-conversion.md` and `heavy-value-cache.md` §8), and the
+definition pass still reports the
 `NonTerminating` diagnostic when that counter does trip. **There is no cumulative bound** — it was
 removed by that decision, so only an expanded recursion is bounded and a converted loop is not. Only
 the promise to catch a genuine infinite recursion is withdrawn.

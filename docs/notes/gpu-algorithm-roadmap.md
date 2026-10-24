@@ -183,17 +183,17 @@ decides the whole thing**, and the two are not variants of one feature:
 | run-time `n` | **refused** — nothing to expand | **a real loop in the backend IR** |
 | code size | O(n) | O(1) |
 | the two ceilings of an expanded loop | present | **absent by construction** |
-| surface cost | a type annotation, per `P1-33` | none |
+| surface cost | a type annotation | none |
 
 **So the builtin is not a refinement — it is the feature**, and a library function
 is the fallback it already has. This corrects what an earlier draft of this
 section concluded ("recommended: nothing here"): a library `loop` buys ergonomics
 at a ceiling, and the thing a GPU kernel needs is the *unbounded* count. The two
 ceilings are the argument rather than a side note, and they are
-[`P1-40`](code-audit.md) with the measurement: **1024** is a matmul's inner loop
+the apply budget with the measurement: **1024** is a matmul's inner loop
 and **2²⁰** is a scan, and both are past the 2000-apply budget and the
-512-level emitter budget — which is itself a named refusal rather than a crash,
-since `P1-40`'s second half. A dynamic loop removes both by construction — which
+512-level emitter budget — which is itself a named refusal rather than a crash.
+A dynamic loop removes both by construction — which
 is the strongest single reason to make it a builtin rather than a function.
 
 > **Since this section: the surface argument held and the surface changed.** The
@@ -208,8 +208,8 @@ is the strongest single reason to make it a builtin rather than a function.
 > runs at. The IR work this section predicts is unchanged and is staged as
 > [§8](loop-conversion.md).
 
-**And it is not free of `P1-33` on the host side.** The operator's own *declaration*
-is the annotated one above, and that annotation is P1-33's escape, so a builtin
+**And it is not free on the host side.** The operator's own *declaration*
+is the annotated one above, and that annotation is the escape, so a builtin
 fixes the surface and leaves the underlying closure-instantiation defect for
 whatever else hits it.
 
@@ -291,14 +291,14 @@ because a threshold that changes between a debug and a release build is not one
 a program can be written against; the stack is handled on the other side of the
 same change by the annotation. What a dynamic loop removes is both rows at once:
 a loop reads its trip count from a register, so neither the apply budget nor the
-walk's depth depends on it. See [code-audit `P1-40`](code-audit.md).
+walk's depth depends on it.
 
-The first is [`P1-40`](code-audit.md) and its message is wrong in a way worth
-fixing on its own: it reports a **terminating** loop as non-terminating, which
-sends the reader to look for a fault that is not there. The second was the same
-defect class one level out — a depth limit that crashes is the same thing as the
-`NodeId` message — and is now the named refusal where the first is still a named
-verdict.
+The first is the apply budget, and its message now names the budget it stopped
+on rather than reporting a **terminating** loop as non-terminating (*"the checker
+stopped on its apply-depth budget: nested applications exceeded 500 levels. The
+program may still terminate when run."*). The second was the same defect class
+one level out — a depth limit that crashes is the same thing as the `NodeId`
+message — and is the named refusal.
 
 ### 4.2 Axis C: lane width, and the consumer `Perspective` has been waiting for
 

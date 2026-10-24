@@ -106,8 +106,8 @@ rulings below are why it has this shape; they are not a second statement of it.
    lazy-resolution route is retired, not extended. Ruling 1 says the types are
    determined at normalize; this ruling says the *check* is, and a check that would
    need the apply is a construct the checker must not accept. The measured defects
-   the lazy route carries (a silently short value, an unchecked pin and perspective,
-   `P1-46`/`P1-44`) are the reason: a deferred check is absent, not late.
+   the lazy route carries (a silently short value, an unchecked pin and perspective)
+   are the reason: a deferred check is absent, not late.
 
    What this does **not** retire, so a reader does not over-generalize: a **read** is
    not a check. `f = x => x.a` is legal and answers at the read (measured: `f 5` is

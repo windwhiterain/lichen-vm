@@ -84,8 +84,8 @@
 > `loop`-operator argument, the two measured ceilings), its §7 (the fork this
 > answers), [compute-jit-low-types](compute-jit-low-types.md) (kernels compile
 > from a template, before any apply), [compute-graph-jit](compute-graph-jit.md)
-> (the recursion probe), [code-audit](code-audit.md) `P1-33` and `P1-40`,
-> [lowlevel-low-types](lowlevel-low-types.md) (`LowShape`).
+> (the recursion probe), the VM's apply budget and the emitter's own depth
+> limit, [lowlevel-low-types](lowlevel-low-types.md) (`LowShape`).
 
 ## 1. The problem, as one fact
 
@@ -104,8 +104,8 @@ The existing half of the answer is **static expansion**: the deep pass reduces a
 same-module call and unifies the substituted parameter with the argument before
 the emitter walks the body, so `steps 4` and `square (i + 1)` already work
 ([gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md)). Static expansion has
-two measured ceilings — the VM's 2000-apply budget, which reports a *terminating*
-loop as non-terminating ([`P1-40`](code-audit.md)), and the emitter's own
+two measured ceilings — the VM's 2000-apply budget, whose refusal names the
+budget it stopped on, and the emitter's own
 `emit_node` walk, which used to be a **hard stack overflow** between 400 and
 1000 levels and is now a **named refusal** at
 [`MAX_KERNEL_BODY_DEPTH`](../../crates/lichen-compute/src/compute.rs) = 512
@@ -131,8 +131,8 @@ unreadable), ~160 expanded copies at the ~29 µs per iteration above — so what
 refused was going to cost milliseconds anyway — and bounded in stack (~512 ×
 6 KB of measured debug frames ≈ 3 MiB, two `stacksafe` segments). It is a
 constant because a threshold that changes between debug and release is not a
-number a program can be written against, which is the bar `code-audit.md`'s
-`P1-40` sets; it is not configurable because the emitter has no other knob and
+number a program can be written against; it is not configurable because the
+emitter has no other knob and
 the tree's other budgets (`Module::MAX_APPLY_DEPTH`, `Module::MAX_APPLY_TOTAL`)
 are constants too.
 
@@ -508,7 +508,7 @@ the *surface*, and for three reasons:
    `is_even`/`is_odd` expr is a two-node cycle with no count parameter, and the
    general case the roadmap wants — a natural recursive formulation — is not of
    the form `T -> T` repeated `n` times. Each such site would also need the
-   type annotation [`P1-33`](code-audit.md) names.
+   type annotation a self-referential two-argument call in a branch needs.
 3. A **value-level** operator needs a type of its own, and a loop has none that
    fits the language: it is not a value, it is a fact about the call graph. A
    marker says that; an operator has to pretend otherwise.

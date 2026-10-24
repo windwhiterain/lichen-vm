@@ -8,18 +8,17 @@
 > **refused**; the lazy reorder that resolves at the apply is retired, not extended.
 > So the designs below (§4) are moot, the questions (§5) are answered by the ruling,
 > and the measured matrix (§0–§3) is kept as the reason: every defect this note
-> records exists because a deferred check is absent, not late. The refusal itself is
-> filed as `P1-49` in [code-audit](code-audit.md).
+> records exists because a deferred check is absent, not late.
 
 ## 0. The two spellings at a glance
 
 | fact the written form checks | written | deferred (a parameter callee) |
 |---|---|---|
-| arity (`too many fields` / `missing field`) | yes | **no** — the reorder iterates the arguments, so a short value is built (`P1-46`) |
-| field type | yes | yes, as the lookup key's miss (`P1-45`) |
+| arity (`too many fields` / `missing field`) | yes | **no** — the reorder iterates the arguments, so a short value is built |
+| field type | yes | yes, as the lookup key's miss |
 | pin (`5 : Int`) | yes | **no** — the instance carries the argument's value (`6`) |
 | perspective (`# n`) | yes (relaxed, `declared ⊑ value`) | **no** |
-| unknown argument name | yes (`no field named z`) | the miss's sentence names the arguments (`P1-47`, fixed) |
+| unknown argument name | yes (`no field named z`) | the miss's sentence names the arguments |
 
 The one fact the deferred form does check is the **field type**, and it checks it as
 a *key*: the supply table is keyed by `[name|rank, argument type]`, so a type no
@@ -44,10 +43,10 @@ g S                      -- accepted: the `# 2` is never compared
 g = c => c(.a 1, .b 2)
 g S                      -- accepted, and `S`'s fields are two: correct
 g = c => c(.a 1)
-g S                      -- accepted with a one-element instance (P1-46)
+g S                      -- accepted with a one-element instance
 g = c => c(.z 1)
 g S                      -- the miss names the arguments (`no argument is named a —
-                         -- the arguments are named z`), which is P1-47's fix
+                         -- the arguments are named z`)
 ```
 
 The **pin** (`S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S`) is accepted the
@@ -63,15 +62,15 @@ path.
   apply binds it.
 - A **check-time unify against an undecided read is vacuous** — it binds the read
   instead of refusing. This was measured twice: a per-field type unify before the
-  list unify changed nothing (P4-12's first attempt), and it needed the read **forced**
-  (`evaluate_node_deep`) before the unify could refuse (P4-12's fix). At a deferred
+  list unify changed nothing, and it needed the read **forced**
+  (`evaluate_node_deep`) before the unify could refuse. At a deferred
   callee the read cannot be forced: nothing decides it until the apply runs.
 - So the check must happen **where the field is decided** — at the apply, per clone —
   which is the engine's `apply_parameter_check`, or a node the engine re-evaluates
   per call. The assert channel is that node: an assert registered on the template is
   re-instantiated per clone (`function.rs`) and re-evaluated, and an undecided
   condition is left pending rather than failed. But it fires **only if the value's
-  evaluation reaches it**: P1-47's first route (a membership assert over the field
+  evaluation reaches it**: the first route (a membership assert over the field
   names) never fired, because the reorder's lookup miss aborts the instance's value
   first.
 
@@ -101,7 +100,7 @@ is **refused there**. That makes the two designs this note had carried moot:
 
 The work left is the refusal: the checker must diagnose an instantiation whose
 callee struct type is undetermined at its normalize, and `lazy_named_instantiate`
-(and the lazy reads it builds) must be retired. `P1-49` carries it.
+(and the lazy reads it builds) must be retired.
 
 ## 5. What this note asked, and the ruling's answer
 
@@ -114,7 +113,7 @@ callee struct type is undetermined at its normalize, and `lazy_named_instantiate
 
 ## 6. What this note changes
 
-Nothing in code; it records the design and now the ruling. The three items keep their
-own sections in [code-audit](code-audit.md): `P1-44` and `P1-46` are subsumed by
-`P1-49` (the refusal removes the silent acceptances), `P1-45` and `P1-47`'s sentence
-side are fixed, and the ruling itself is `P1-49`.
+Nothing in code; it records the design and now the ruling. The audited items are
+gone with it: the silent acceptances the deferral carried are removed by the
+refusal, the miss's sentence side was fixed, and the ruling itself is the
+maintainer's, recorded in [function-normalization](function-normalization.md) §3.7.

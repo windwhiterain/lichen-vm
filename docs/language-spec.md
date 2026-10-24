@@ -821,10 +821,7 @@ maps every span back to the original file.
   callee the checker never saw at the source spells no field requirement, and an
   instantiation whose callee is not determined at normalize is **refused** (next
   bullet, [function-normalization](notes/function-normalization.md) §3.7) — so this
-  is not a silent gap.  The tree still accepts the undetermined form with a lazy
-  reorder and compares nothing there: `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ;
-  `g S` is accepted with `6` (measured; `P1-44`, retired with the reorder by
-  `P1-49`).  A placeholder callee is decided by the expected type where the
+  is not a silent gap.  A placeholder callee is decided by the expected type where the
   context states one, and refused by name where it states none.
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct{…}` definition
@@ -856,10 +853,7 @@ maps every span back to the original file.
   check ([function-normalization](notes/function-normalization.md) §3.7).  `f = c => c(.y
   Int, .x 1)` is a diagnostic, and so is `f (_(.x 1, .y 2))`; a spelling that works
   names the struct type where the instantiation is written, or binds it to a name the
-  checker can resolve.  The tree still accepts the undetermined form through a **lazy
-  reorder resolved at the apply** — a measured defect, `P1-49` — and that route is
-  being retired: it silently accepts a short value and an unchecked pin and
-  perspective (`P1-46`, `P1-44`).  This is a **check**, not a **read**: `f = x => x.a`
+  checker can resolve.  This is a **check**, not a **read**: `f = x => x.a`
   stays legal and answers at the read (`f 5` is `this value is not a container`), while
   only a container the checker has already decided wrong is refused there.  A
   **duplicate** name is refused at check time: one name supplying two positions is a
