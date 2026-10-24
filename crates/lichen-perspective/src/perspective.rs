@@ -146,7 +146,7 @@ where
     }
 
     /// A constant literal is the same on every lane, so its perspective is `0`,
-    /// the top (spec §1, "Literals are expressions").
+    /// the top (spec §1 "Literals are expressions").
     fn literal_value(&self) -> Option<LowValue> {
         Some(LowValue::USize(0))
     }
