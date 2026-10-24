@@ -97,15 +97,23 @@ The refusal is **correct**: the pair (2, 3) deletes the key projection's output,
 k-norm's scale — reads that value too. Node 4 carries no claim, so it is a region boundary and the
 component is only [2, 3]. The merge would drop a read.
 
-The root cause is the claims, not the merge: the composite's scale and rotation kernels carry no
-fusion claim, so every norm and rotation is a boundary and the regions never span a chain.
-Annotating the scale `claim:Elementwise(element)` did not register one (the node still reports
-`NotClaimed`), and annotating the rotation the same way is refused — *the kernel claims Elementwise
-and its body carries no mark for its `element` role*. Until those two kernels claim an interface the
-registry holds, fusion cannot span a layer.
+The root cause was the claims: the composite's scale and rotation kernels carried no fusion claim,
+so every norm and rotation was a boundary and the regions never spanned a chain. Declaring
+`claim:Elementwise(element)` on the scale (with `~ "element"` on the written value), giving the
+matvec's claim its `element` role too, and claiming the rotation the same way **works**: the whole
+pre-attention graph becomes **one region** (nodes 0–10).
 
-So fusion is reachable but does not fire on this graph yet. The next question is narrow: why the
-elementwise claim does not register for the scale, and what mark the rotation's body is missing.
+What stops it then is the bridge, and the two refusals name the language it needs:
+
+- `ProjectionNotBridged`: *the projection selects between two values, and the symbolic language has
+  no conditional* — the rotation's `if low then … else …`;
+- rewritten branch-free (integer half = j / 64, sign = 2h − 1), the same refusal moves to
+  *it computes ValueId(19) in the machine-integer class, and the symbolic language is over real
+  numbers: `Int` wraps and `f64` does not hold every value* — the **integer division**.
+
+So fusion is reachable: the claims can span a layer, and the remaining capability is the symbolic
+bridge — it needs a conditional or integer division, or the rotation's element function must be
+real-only (a precomputed cos/sin/sign table read at the lane's index).
 
 ## The edges now## The edges now## The edges now
 
@@ -138,7 +146,7 @@ elementwise claim does not register for the scale, and what mark the rotation's 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
 | 1 | a cheaper intra-step barrier, or a fused kernel | the 0.19 ms a dependency costs | chained 8: 1.428 ms vs 0.066 ms |
-| 1a | the region merge must accept a producer-consumer pair (and a fan-out) | fusion that fires | `ProducedValueIsReadElsewhere` |
+| 1a | the symbolic bridge needs a conditional or integer division (or a real-only rotation) | fusion that fires | one region, `ProjectionNotBridged` |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |
