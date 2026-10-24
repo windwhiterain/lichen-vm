@@ -1,7 +1,7 @@
 //! The attribute extension point: `AttrExt`'s behaviour and the set's
 //! canonical order. See `docs/notes/attributes.md`.
 
-use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId, ValueExt};
 
 use crate::ir::Loc;
 use crate::program::{Ctx, HighProgram, ValueType};
@@ -123,6 +123,33 @@ where
     /// (spec §1, "Literals are expressions").
     fn literal_value(&self) -> Option<LowValue> {
         None
+    }
+
+    /// Whether the slot holds **this attribute's default**: what an absent
+    /// occurrence reads.
+    ///
+    /// # Invariant
+    /// The default is [`Self::missing_value`]: a position holding it was never
+    /// spelled, so it reads back as absent, and a render leaves it out. A slot is
+    /// an expression, so its **value position** is what the default compares with.
+    fn holds_default(&self, module: &Module<P>, slot: NodeId) -> bool {
+        let Some(default) = self.missing_value() else {
+            return false;
+        };
+        let Some(value) = self.slot_value(module, slot) else {
+            return false;
+        };
+        let value = match value {
+            LowValue::Array(items) => {
+                // SAFETY: the payload is the slot's own value, alive for this read.
+                let Some(item) = unsafe { items.items() }.first().map(|item| item.node) else {
+                    return false;
+                };
+                module.node_value(item).and_then(|v| v.as_enum())
+            }
+            value => Some(value),
+        };
+        value.is_some_and(|value| P::Value::from(default).value_eq(&P::Value::from(value)))
     }
 
     /// Unify two attribute slots: `a` is the found side, `b` the expected one,

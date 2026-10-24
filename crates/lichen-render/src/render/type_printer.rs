@@ -499,7 +499,8 @@ where
     /// Position `i` of the slot holds `P::Attr::ORDER`'s `i`-th extension's own
     /// value, and [`AttrExt::render`] answers `None` for a position the source
     /// left unspelled — the wildcard included — so an element reads back as it
-    /// was written.
+    /// was written. A position holding the attribute's **default** reads as
+    /// unspelled too ([`AttrExt::holds_default`]).
     fn slot_attributes(&mut self, slot: AnyNodeId) -> Vec<String> {
         let Some(attrs) = self.attrs else {
             return Vec::new();
@@ -519,7 +520,11 @@ where
             let AnyNodeId::Dynamic(node) = item.node else {
                 continue;
             };
-            if let Some(spelling) = attrs(marker).render(self.module, node, attrs) {
+            let ext = attrs(marker);
+            if ext.holds_default(self.module, node) {
+                continue;
+            }
+            if let Some(spelling) = ext.render(self.module, node, attrs) {
                 out.push(spelling);
             }
         }

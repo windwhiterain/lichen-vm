@@ -95,7 +95,9 @@ where
 ///
 /// Empty when the expression carries no attribute, and otherwise one spelling
 /// per *present* attribute: an un-annotated expression renders as before, and
-/// only attributes that are genuinely there appear.
+/// only attributes that are genuinely there appear. A position holding the
+/// attribute's **default** is one an absent occurrence reads, so it was never
+/// spelled and does not appear either ([`AttrExt::holds_default`]).
 pub fn render_attributes<P: HighProgram>(
     module: &Module<P>,
     expr: NodeId,
@@ -121,7 +123,11 @@ where
         else {
             continue;
         };
-        if let Some(spelling) = attr_ext(marker).render(module, slot, attr_ext) {
+        let ext = attr_ext(marker);
+        if ext.holds_default(module, slot) {
+            continue;
+        }
+        if let Some(spelling) = ext.render(module, slot, attr_ext) {
             parts.push(spelling);
         }
     }
