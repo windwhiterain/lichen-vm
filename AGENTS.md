@@ -130,12 +130,9 @@ A branch lands **in the checkout that owns the branch**: `git -C <checkout> merg
   looks wrong. A subagent caught it only by re-reading the source paths it had
   printed. Pass an explicit `workdir`, and confirm every `Compiling` line names
   your worktree.
-- **Keep your own build parallelism low while other sessions share the target**:
-  `cargo test -j 1` and `CARGO_INCREMENTAL=0`. A full-crate run at default jobs
-  filled the disk and failed every compile in flight (os error 112), and the
-  whole-crate sweep left the target several GB heavier. When the disk has room,
-  `-j 3` is the better trade — it stays under the deployment's "limit the
-  parallelism lower than 4" — and `-j 1` is what makes a verification take minutes.
+- **A full-crate run at default jobs has filled the disk here** (os error 112, and
+  every compile in flight failed with it), and a whole-crate sweep left the target
+  several GB heavier: check free space before one.
 - **A test run here costs more to build than to run, but attribute the cost
   correctly**: a source touch in `lichen-compute-gpu` recompiles the crate and
   relinks its binaries in **~3.5 s** when the build lock is free, and the 24 s /
