@@ -112,11 +112,10 @@ struct Recording {
     /// Which argument slots some dispatch read, one entry per slot up to the highest.
     ///
     /// # Invariant
-    /// **Occupancy, not a value number.** The numbers are assigned once in [`finish`],
-    /// in slot order, because a slot is reached when the recording reaches it and a
-    /// parameter's extents are not at slots a body visits in order — numbering as they
-    /// are reached would give slot 1 a higher number than slot 2. The width, the
-    /// numbering and the edges are then three readings of this one list.
+    /// **Occupancy, not a value number.** The width is the highest slot some dispatch read,
+    /// and a slot's value number is the slot itself: the caller passes its arguments
+    /// positionally, so dense ranks would shift every buffer past a leading cell the
+    /// parameter leaves unread. The width and the edges are the two readings of this list.
     inputs: Vec<bool>,
     /// Which values the source function returns, in the recording's own numbering.
     ///
@@ -278,16 +277,8 @@ pub fn finish() -> Result<(Graph, Backend), String> {
             .rposition(|occupied| *occupied)
             .map_or(0, |highest| highest + 1);
         let mut graph = Graph::with_inputs(width);
-        // One resolution for edges and counts alike, **dense over the read slots in
-        // slot order** — see [`Recording::inputs`].
-        let mut numbers: Vec<ValueId> = vec![0; read.len()];
-        let mut next = 0;
-        for (slot, occupied) in read.iter().enumerate() {
-            if *occupied {
-                numbers[slot] = next;
-                next += 1;
-            }
-        }
+        // A slot's number is the slot: the caller passes its arguments positionally.
+        let numbers: Vec<ValueId> = (0..read.len()).collect();
         let resolve = |edge: &Edge| match edge {
             Edge::Input(slot) => numbers[*slot],
             Edge::Produced(id) => width + id,
