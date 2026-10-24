@@ -243,7 +243,7 @@ development tool for this crate rather than a runtime hope. `tests/compute_gpu/s
 words to `spirv-val --target-env vulkan1.1 -`, and asserts the module validates.
 That check needs no device, and it **skips loudly** (rather than passing quietly)
 when the tool is not on `PATH` — with the caveat that the fragment in the test is
-a copy of the one in `examples/emit-spv.rs`, so a change to the example must be
+a copy of the one in `crates/lichen-compute-gpu/examples/emit-spv.rs`, so a change to the example must be
 mirrored there.
 
 Three module shapes are validated beside it, each because it is a shape the module
@@ -1045,7 +1045,7 @@ section is why each one is a silent-wrong-answer rule rather than a slow one:
 
 ## Recovered measurements
 
-**`examples/bench.rs` measures the whole program, and that is a different question
+**`crates/lichen-compute/examples/bench.rs` measures the whole program, and that is a different question
 from this note's tables.** The number it reports is everything a lichen program
 pays — building the input, the kernels and the read-back — while the tables above
 measure a dispatch and a fetch separately. The two do not contradict each other: a

@@ -154,7 +154,7 @@ its position operand names, and it travels back from the recording, so a read an
 disagree; a position no read reached takes the class its declaring role states, and a position that
 neither a read nor a role states a class for keeps the ABI's integer default — the open element cell's
 own answer rather than a gap, since the parameter declares no class there to be wrong about. The four
-hashes `examples/fusion_schema.rs` prints did **not** move: each of those chains either declares one
+hashes `crates/lichen-compute/examples/fusion_schema.rs` prints did **not** move: each of those chains either declares one
 input or reads all of them at one class, which is exactly why the misordering stayed latent.
 
 A **decided** leaf's class is its parameter field's: `scalar_leaf_classes` reads

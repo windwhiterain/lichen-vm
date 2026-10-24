@@ -143,10 +143,11 @@ and a `BlockTarget`'s `args` — no `OpPhi` to place and no locals to allocate b
 
 ### 5.1 The spike, and what it proved
 
-A spike (`crates/lichen-compute/src/waffle_spike.rs`) built the countdown loop as a
-CFG — `entry(n) → head(c) → {done(c) | body(c)}, body(c) → head(c-1)` — with the
-carried value as `head`'s blockparam, compiled it, and ran it through `wasmi`. It
-passes for `n ∈ {0, 1, 4, 64, 1000}`, and `waffle` emitted:
+A spike (`crates/lichen-compute/src/waffle_spike.rs`, since deleted — the wasm emitter
+moved to `lichen-runtime`) built the countdown loop as a CFG — `entry(n) → head(c) →
+{done(c) | body(c)}, body(c) → head(c-1)` — with the carried value as `head`'s
+blockparam, compiled it, and ran it through `wasmi`. It passes for `n ∈ {0, 1, 4, 64,
+1000}`, and `waffle` emitted:
 
 ```wat
 (func $countdown (param i64) (result i64)

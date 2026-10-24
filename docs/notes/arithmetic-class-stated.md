@@ -291,7 +291,7 @@ records that spelling as closed-landed, and the gap is the static-template arm o
 `diagnostic.rs`, not `arithmetic_class`.
 
 **No production change.** The probe — a `crates/lichen-highlevel/src/probe.rs` module
-plus six `eprintln!` call sites in `checker/operators.rs`, `checker/indexing.rs`,
+(never committed, and so not in the tree) plus six `eprintln!` call sites in `checker/operators.rs`, `checker/indexing.rs`,
 `checker/lambda.rs`, `checker/tuples.rs`, `checker.rs`, `crates/lichen-highlevel/src/lib.rs`,
 `crates/lichen-language/src/lib.rs` and `crates/lichen-language/src/run.rs` — and D1's
 two lines in `arithmetic_class` were both reverted with `git checkout` before this note

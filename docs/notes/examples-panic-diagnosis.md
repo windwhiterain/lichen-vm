@@ -217,7 +217,7 @@ narrowing to one of them is a bisect, which this slice did not run. **Unknown.**
 Two probe test files, both printing and asserting nothing, left in the tree while
 the investigation is open:
 
-- `crates/lichen-compute/tests/lichen_compute/zz_examples_panic_probe.rs` — the per-example
+- `crates/lichen-tools/tests/tools/zz_examples_panic_probe.rs` — the per-example
   survey: names the culprit and collects the drift verdicts. Honours
   `PROBE_EXAMPLE=<name>` to run one example alone.
 - `crates/lichen-compute/tests/lichen_compute/zz_gc_panic_probe.rs` — the setup discriminator

@@ -39,7 +39,7 @@ only one expensive to link.
 
 The seam whiting already offers is short enough to quote: install the graphics
 schemas, register the scene schema, `insert_definition` a scene `Definition`,
-`reload` it, `render` the graphics. That is the flow in
+`reload` it, `render` the graphics. That is the flow in whiting's own
 `crates/device/src/lib.rs`, and **this integration stops at the first of those
 five steps**.
 

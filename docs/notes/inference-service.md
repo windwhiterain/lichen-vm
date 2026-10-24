@@ -45,7 +45,7 @@ of each per node; and one submission holds **at most 64 dispatches**
 
 So the cost model a service is held to is: **per step, one submission and one fence for
 the dispatches, plus one of each for every crossing.** Measured on the device through
-`crates/lichen-serve/tests/step_cost.rs`, where every count is a delta read from the
+`crates/lichen-serve/examples/step_warmth.rs`, where every count is a delta read from the
 installed context and every program answers a hand-derived number:
 
 | the program | submissions | fence waits |
@@ -68,7 +68,7 @@ about whether a step can be built to hit that.
 **And the submissions are most of what the clock is made of at this size.** One recorded graph
 of 16 dispatches, prepared once and stepped 200 times, run under two schedules — same graph,
 same kernel, same extent, no compilation inside the clock
-(`crates/lichen-serve/tests/step_cost.rs`):
+(`crates/lichen-serve/examples/step_warmth.rs`):
 
 | schedule | submissions per step | fences per step | per step |
 |---|---|---|---|
@@ -83,7 +83,7 @@ submitted — so the two schedules are not comparable by submission count alone.
 
 **Batching is what that per-step cost is for.** One prepared step serves any batch size, because
 the batch is the extent **argument** and not a graph constant — so a single `Prepared` ran 1, 4 and
-16 sequences through the same graph (`crates/lichen-serve/tests/step_cost.rs`):
+16 sequences through the same graph (`crates/lichen-serve/examples/step_warmth.rs`):
 
 | sequences in one step | the batched step | as separate steps | saved |
 |---|---|---|---|
@@ -104,7 +104,7 @@ of the data buffer, read at `n + sequence`, instead of in a second buffer.
 
 **And the cache has to stay on the device, or every step is a memory transfer.** A 4 MiB cache
 (1,048,576 `Float` lanes), same graph and same extent, one step per iteration
-(`crates/lichen-serve/tests/step_cost.rs`):
+(`crates/lichen-serve/examples/step_warmth.rs`):
 
 | the cache handed over as | per step |
 |---|---|
@@ -128,13 +128,13 @@ among a later step's arguments. Both answers were hand-derived and matched (`[63
 **And the step that runs is the real one.** `examples/generate.lichen`'s three kernels — the score
 GEMV, the greedy sampler and the cache append — recorded as one graph and prepared once, run twice
 through `Prepared` at **one submission each**, with the key and the value cache handed from step to
-step as **residents** (`crates/lichen-serve/tests/decode_step.rs`). Both answers are that file's own
+step as **residents** (`crates/lichen-serve/examples/serve.rs`). Both answers are that file's own
 hand derivation: step zero samples `2` and leaves the key cache `[1, 2, 2, -1, -1]`, and step one
 samples `0` and leaves it `[1, 2, 2, 0, -1]`. So the cost model above is not a model of a trivial
 kernel: it is the decode step's, and the cache never comes back to the host between tokens.
 
 **And a step holds at most 64 dispatches, after which it refuses rather than splitting.** Measured on
-a chain of one kernel (`crates/lichen-serve/tests/step_cost.rs`):
+a chain of one kernel (`crates/lichen-serve/examples/step_warmth.rs`):
 
 | dispatches in the step | submissions | per step |
 |---|---|---|
@@ -155,7 +155,7 @@ is for, and the fusion floor currently refuses both real shapes by name (`llm-op
 
 **The 64-dispatch cap is a bookkeeping cost, not a throughput one.** A token whose dispatches exceed
 one submission runs as **scoped steps**: forty dispatches, then forty more, with the state crossing
-as a **resident** and no host data between them (`crates/lichen-serve/tests/step_cost.rs` — eighty
+as a **resident** and no host data between them (`crates/lichen-serve/examples/step_warmth.rs` — eighty
 doublings of `1, 2, 3` over two submissions, answering `2^80`, `2^81` and `3 × 2^80` exactly).
 Measured: **64 dispatches in one submission 5.07 ms, 80 over two 6.07 ms**, so the second submission
 and its sixteen extra dispatches cost **1.00 ms**. A model of `D` dispatches per token therefore runs
@@ -177,7 +177,7 @@ that in its own module doc.
 **A layer of three kernels with three different argument shapes runs as one submission.** Scale,
 summarise and add — a normalisation's two passes — over two sequences, with each dispatch taking **its
 own** input struct (two buffers, one, then two again) while the graph's parameter holds two
-(`crates/lichen-serve/tests/layer_step.rs`): `1..6` scaled by `2, 1, 1` gives `2, 2, 3` and `8, 5, 6`,
+(`crates/lichen-serve/examples/serve.rs`): `1..6` scaled by `2, 1, 1` gives `2, 2, 3` and `8, 5, 6`,
 their sums are `7` and `19`, and adding each sum back to its own row is `9, 9, 10` and `27, 24, 25`.
 So **a two-buffer graph parameter with per-dispatch structs records and runs**, which is what round
 2's grey area left open; the warning recorded there still stands for the **one-buffer** case, which
@@ -186,7 +186,7 @@ nothing has re-tested. A layer is therefore expressible — what it costs is its
 **An attention score reads the resident cache inside a recorded step.** Two sequences of three
 positions of two columns, each query dotted with its own sequence's three slots — `1, 1, 2` for the
 first and `2, 0, 1` for the second — at **one submission**, with the cache handed in as the resident
-`upload` produced (`crates/lichen-serve/tests/attend_step.rs`). It is two kernels: one weighs every
+`upload` produced (`crates/lichen-serve/examples/serve.rs`). It is two kernels: one weighs every
 cache word by its sequence's query, one lane per word, and the second folds over a slot's columns and
 sums it, so every fold reads a single buffer. **Softmax and the value mix are not here**, and the
 reason is structural rather than a gap in the language: each needs a **per-sequence reduction** that is
@@ -195,7 +195,7 @@ mix — where this is two.
 
 **Softmax attention runs as seven kernels in one submission.** Weigh, sum, peak, exponentiate,
 total, scale, sum again — over two sequences of three slots of two columns, with both caches handed in
-as residents (`crates/lichen-serve/tests/softmax_step.rs`). Measured: the step answered
+as residents (`crates/lichen-serve/examples/serve.rs`). Measured: the step answered
 `3.7283485, 4.7283487, 1.1546986, 0.5794886` against the host's own softmax
 `3.7283504, 4.7283506, 1.1546978, 0.5794875`, agreement to six significant digits at an `1e-4`
 tolerance because `exp` is an approximation on both sides. The count is not free: **a fold's body
@@ -205,7 +205,7 @@ earlier two-kernel and one-kernel attempts fail.
 
 **A transformer block is one step: twelve kernels, one submission.** Attention over the resident cache,
 then a residual, a reduce-and-broadcast, and a projection — over two sequences of two units
-(`crates/lichen-serve/tests/block_step.rs`). Measured: the step answered
+(`crates/lichen-serve/examples/serve.rs`). Measured: the step answered
 `42.555138, 56.740185, 12.516237, 15.980333` against an **independently written** host block's
 `42.555157, 56.740208, 12.51623, 15.980322` — agreement to six significant digits, from two
 implementations that share no code. Twelve dispatches is near the low end of the 13 to 18 a real layer
@@ -215,7 +215,7 @@ the scoped-step plan**: at five blocks the count reaches sixty, and the sixth cr
 **A stack of blocks is a scoped-step loop, and the fit predicts it.** Six blocks — seventy-two
 dispatches, which is more than one submission holds — ran as **six submissions**, each block reading
 the previous one's answer as its residual, and the stack matched the host block iterated six times
-(`crates/lichen-serve/tests/block_step.rs`). Measured: **7.88 ms a token, 1.31 ms a block**. The fit
+(`crates/lichen-serve/examples/serve.rs`). Measured: **7.88 ms a token, 1.31 ms a block**. The fit
 `0.23 × submissions + 0.08 × dispatches` predicts 7.1 ms for that token, so **it is within ten per
 cent**, and at a real depth of thirty-two blocks it predicts **38 ms a token** (about 26 tokens a
 second) — which is where the 32 to 46 ms estimate above comes from, now with a measurement at each end
@@ -225,7 +225,7 @@ of it.
 `dim` as one of the six counts its host passes, and the same program answers at width two — exactly
 the `42.555138, 56.740185, 12.516237, 15.980333` it answered before the move — and at width five,
 checked against the host's own block rather than against hand-picked numbers
-(`crates/lichen-serve/tests/block_step.rs`). Nothing in the program names a width, which is what lets
+(`crates/lichen-serve/examples/serve.rs`). Nothing in the program names a width, which is what lets
 one block serve the demo's five-column decode step and a narrower test alike.
 
 **The demo serves a model of blocks, and a token is three submissions.** Two blocks and the decode
@@ -247,7 +247,7 @@ the demo shows the path and its cost, and the layer difference is the block resp
 **The attention masks the slots a sequence has not reached, and the mask is a dispatch.** A `length` per
 sequence rides in an `Int` buffer as the positions do, and a `mask` kernel between the score and the
 peak writes `-inf` past it, so the peak, the exponent and the softmax all follow
-(`crates/lichen-serve/tests/block_step.rs`): a cache of three positions with a length of one answers
+(`crates/lichen-serve/examples/serve.rs`): a cache of three positions with a length of one answers
 `18.0, 24.0, 9.0, 12.0` where the same block over all three answers `42.555138, …`, and the masked
 answer is what the host computes over the first position alone. A block that attended the unwritten
 slots would average them in — the values past the length are far from the first one's. The block is
@@ -258,7 +258,7 @@ peak of an all-masked row is `-inf`, and its exponent is not a number.
 score, peak, the exponent at the host's temperature, total, shares, pick, append — and the pick walks the
 rows from the highest down, keeping the lowest index whose cumulative probability still exceeds a
 threshold made from `sin` of the seed and the sequence. Measured
-(`crates/lichen-serve/tests/sample_step.rs`): at temperature `0.01` it answers **the same token greedy
+(`crates/lichen-serve/examples/serve.rs`): at temperature `0.01` it answers **the same token greedy
 does** (`3.0, 3.0`), which is the collapse check, and eight seeds at temperature `4` draw
 `0, 3, 0, 2, 1, 1, 1, 3`. `Service::open_sample` serves it and `set_sampler` moves the temperature and
 the seed for the next step, so no random number reaches the host and the demo now samples rather than
@@ -274,7 +274,7 @@ reading one from the enclosing body is what is not allowed.
 **A prompt is one submission, not one per token.** `PREFILL_STEP` appends a **run**: a lane takes the new
 word when its position falls in `[first, first + count)`, reading that word from the run at
 `(sequence × count + offset) × dim + column`. A count of one is the decode append; a count of the prompt
-fills the whole prompt. Measured (`crates/lichen-serve/tests/prefill_step.rs`): two positions of two
+fills the whole prompt. Measured (`crates/lichen-serve/examples/serve.rs`): two positions of two
 sequences reach their own slots and the positions past them are untouched, at **one submission**.
 
 **`(FillArg)(…)` and `(compute.A FillArg)(…)` are not interchangeable.** A step whose first dispatch was
@@ -292,7 +292,7 @@ serving path, prefill included.
 **A length belongs to one sequence, not to the batch.** With one cache and lengths `[1, 3]` the block
 answers `18.0, 24.0, 265.32782, 368.69687`: the first sequence's half is exactly what `[1, 1]` answers
 for it, the second's exactly what `[3, 3]` answers for it, and neither shared length can produce the mix
-(`crates/lichen-serve/tests/block_step.rs`). So the mask is per sequence — the property continuous
+(`crates/lichen-serve/examples/serve.rs`). So the mask is per sequence — the property continuous
 batching rests on, two sequences in one step at two different points.
 
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
@@ -309,7 +309,7 @@ measured, and gated by the fusion floor refusing both real shapes).
 A sequence owns `capacity × dim` slots of one flat resident, so a lane is one slot: its sequence is
 `lane / (capacity × dim)`, its position the next division, and its column the remainder. One dispatch
 then writes every sequence's cache without the host naming any of them, and the whole cache stays
-resident (`crates/lichen-serve/tests/batch_step.rs`): three sequences of four positions of two
+resident (`crates/lichen-serve/examples/serve.rs`): three sequences of four positions of two
 columns appended one token each at **one submission per step**, with each sequence's slots untouched
 by the others and the positions no sequence reached still what they were. **A page table would change
 the address arithmetic inside the kernel and nothing else** — the step would still take one extent
@@ -319,7 +319,7 @@ ABI rather than redesigning it.
 **Per-sequence positions ride in one `Int` buffer, and an `Int` element is eight bytes.** A batch
 whose sequences are at different points runs in one dispatch: a lane's position is the sequence's
 word in the positions buffer, so three sequences at positions `2`, `0` and `1` append at three
-different slots in one submission (`crates/lichen-serve/tests/positioned_step.rs`), and the next step
+different slots in one submission (`crates/lichen-serve/examples/serve.rs`), and the next step
 advances each of them independently. The landmine is the width — `ScalarClass::Int` is **8** bytes
 while `Float` is 4 — so a positions buffer packed from `i32` words declares a third of the elements
 it holds and **every read past the first answers `0`**. That reads as a kernel defect because
@@ -330,7 +330,7 @@ position `0` is a plausible answer: pack an `Int` buffer from `i64`.
 slot retired; `admit` hands out a free slot at position zero; `retire` sets its position to
 `capacity`, a value no position inside the cache equals, so its lanes copy themselves and its memory
 waits where it is; and `step(keys, values)` advances every live sequence one position at **one
-submission** (`crates/lichen-serve/tests/service_step.rs` — three slots, one retired and then reused,
+submission** (`crates/lichen-serve/tests/serve/service_step.rs` — three slots, one retired and then reused,
 with the resident sequence still advancing from a cache it never uploaded). Two of its invariants are
 the ones a reader must not break: a reused slot keeps the previous sequence's words past position
 zero, which is safe only because a reader reads positions before its own; and `capacity` and `dim`
@@ -340,7 +340,7 @@ expr addresses the wrong slots and no run can detect it.
 **A batched decode step runs, and a sequence's answer does not depend on its batch.** The whole step —
 the score GEMV, the greedy sampler and the cache append — over three sequences at once, in **one
 submission**, returning its tokens and both caches as a three-tuple
-(`crates/lichen-serve/tests/batched_decode.rs`). The assertion is a differential rather than a hand
+(`crates/lichen-serve/examples/serve.rs`). The assertion is a differential rather than a hand
 derivation: the first sequence's token and its whole twenty-word cache slot are **identical** to the
 ones it got running alone through the same prepared graph, and its neighbours have distinct keys, so
 a slot that read another sequence's work would have scored differently. Two mechanics made it fit:
@@ -356,7 +356,7 @@ the step takes three counts and the host passes all three.
 resident it answers is the weights' — after which the per-token path never uploads them, which the
 residency measurement above says would otherwise be 99% of a step. The compile is paid per upload
 rather than per token, which is what makes the shape right for a weight load, and
-`crates/lichen-serve/tests/upload_step.rs` round-trips eight words through it.
+`crates/lichen-serve/examples/serve.rs` round-trips eight words through it.
 
 **The service serves the decode step, with the weights resident and the tokens as its answer.**
 `Service::open_decode(session, source, sequences, capacity, dim, rows, weights)` prepares the batched
@@ -365,7 +365,7 @@ submission**, answering with its tokens (`tokens()`) beside its key and value ca
 residents, so a caller fetches only what it asks for. The two step shapes are told apart by an enum
 rather than a flag, because their argument lists differ in arity and order: the append step is
 `count, k, v, keys, values, positions`, while the decode step is three counts, then the weights, then
-the caches. Measured (`crates/lichen-serve/tests/service_decode.rs`): two sequences in one step at
+the caches. Measured (`crates/lichen-serve/examples/serve.rs`): two sequences in one step at
 `(1, 1)`, the first one's token identical to the one it samples alone, and its neighbour's different
 because the two keys are.
 

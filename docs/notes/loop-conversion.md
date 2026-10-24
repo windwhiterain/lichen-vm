@@ -574,7 +574,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   checker's real templates by `loop_marker.rs` (a scalar state and a two-element
   tuple state both convert; a non-tail call and a mutual expr name their rules)
   and by hand-built shapes in `tests/basic/loop_conversion.rs`. The probe
-  `examples/recursion.rs` prints one verdict per shape.
+  `crates/lichen-compute/examples/recursion.rs` prints one verdict per shape.
 - **The state read's path is read from the value side, and a frozen position
   answers** — `Module::parameter_value_path` walks the chain from the value side,
   alternating element positions with the slot's value position (`0`), so the expr

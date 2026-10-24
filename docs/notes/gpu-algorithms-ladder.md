@@ -7,8 +7,8 @@
 > against these facts.
 >
 > The ladder is `crates/lichen-compute/examples/algorithms.rs` (run it with
-> `-- cpu gpu`); the timings are `examples/bench.rs`; the cross-backend defect is
-> `examples/crossbackend.rs`.
+> `-- cpu gpu`); the timings are `crates/lichen-compute/examples/bench.rs`; the cross-backend defect is
+> `crates/lichen-compute/examples/crossbackend.rs`.
 >
 > **What to do about any of this is
 > [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md)**, which reads this note as

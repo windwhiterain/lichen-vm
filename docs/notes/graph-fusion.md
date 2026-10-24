@@ -272,7 +272,7 @@ Every recorded value that moved was **wrong before**: `fusion_numbers`' literal-
 datum `d` — to the `Bin(Int, Mul)` it computes, which the bridge then refuses **by name**
 (`MachineInteger`, the class refusal this note already records for that kernel), so that example's
 "5 of 5 projections bridge" is now **4 of 5**: the count fell because it got honest.
-`examples/fusion_schema.rs` is byte-identical — all four schema hashes and fragment digests unchanged —
+`crates/lichen-compute/examples/fusion_schema.rs` is byte-identical — all four schema hashes and fragment digests unchanged —
 because its marks sit in loops the *emitter* converts rather than in expanded prelude clones. No test
 pinned a moved value. The regression test
 (`crates/lichen-compute/tests/lichen_compute/mark_anchor.rs`) compares canonical `Expr` trees and **fails on the
@@ -426,7 +426,7 @@ a decision:
   function *as the logic wrote it*: taken canonical, `exp(d - r)` is
   `exp(d) * exp(-r)` and the outermost producer-free subexpression is `d`, not
   the datum a `g` of `r` is written over — the two instances in
-  `examples/fusion_schema.rs` derive only from `expression`. §4's stability is a
+  `crates/lichen-compute/examples/fusion_schema.rs` derive only from `expression`. §4's stability is a
   property of the canonical form, so `canonical` is `expression` normalized once
   at derivation and the engine reads `expression`.
 - **`LawSet` is not a field, because nothing proves one yet.** The schema records
@@ -464,7 +464,7 @@ fragments between instances**, and of nothing else:
   lanes synchronise is *how* the region is implemented, so two packs with one
   hash and different plans are two implementations of it rather than two
   schemas. The exclusions are what make two spellings one schema — the
-  re-spelled chain in `examples/fusion_schema.rs` changes both kernels' fragment
+  re-spelled chain in `crates/lichen-compute/examples/fusion_schema.rs` changes both kernels' fragment
   digests and derives the same hash.
 - **Canonicalisation is `lichen_fusion::normalize`**, applied to every projection
   exactly once at derivation: commutative operand order, constant folding
@@ -490,7 +490,7 @@ no `element` role is `NoElementRole`; and the element must read
 algebra the engine fuses (`ElementWithoutProducer`). A claimed role with no mark
 (`RoleNotMarked`) and a projection that does not bridge (`ProjectionNotBridged`)
 are refusals too. A region is never silently skipped, and
-`examples/fusion_schema.rs` prints each schema, its canonical form and its hash.
+`crates/lichen-compute/examples/fusion_schema.rs` prints each schema, its canonical form and its hash.
 
 **One anchoring fact the example measures.** A projection prints the computation
 its mark rides — a `combine` prints as the add or max it marks, an `identity` as
@@ -657,7 +657,7 @@ that sentence and the tree, and both are `missing` rather than merely unimplemen
 
 **Measured, and the first gap is wider than it reads** (at `ebae69bc`): *nothing* in `crates/` fuses
 two kernels today. `fusion_claim::derive_regions` has no caller outside
-`examples/fusion_schema.rs`; `lichen_fusion::derive`/`derive_with_repair` derive `Expr`-level
+`crates/lichen-compute/examples/fusion_schema.rs`; `lichen_fusion::derive`/`derive_with_repair` derive `Expr`-level
 assignments and **no emitter turns them into a `KernelBody`**; and the only transform reachable from
 production is the intra-kernel tiling of one reduction (`automatic_tiling.rs`). So the first gap is not
 "it cannot fuse on request yet" — there is no fusion *to* request.
@@ -689,7 +689,7 @@ region engine that does not run, add a field to `Pack`, and force the node-schem
 into the matcher.
 
 **That measurement has been taken, and the plan survives with two corrections.** The splice is
-expressible: a hand-composed fragment of `examples/fusion_schema.rs`'s chain passes
+expressible: a hand-composed fragment of `crates/lichen-compute/examples/fusion_schema.rs`'s chain passes
 `KernelBody::validate` and `KernelFragment::validate`, and once the value table is **compacted** and the
 consumer's **entry block** is inlined into the producer's return block, the merged body **runs on a
 device** and answers the two-pass reference element for element (8, 100 and 1024 elements, each against
@@ -730,7 +730,7 @@ caller's decision: the producer's **store** goes (its outputs are not the merged
 that survives is a write the program never made — benign on the measured chain only because both writes
 land on the same lane index), its **marks** go (they name roles of an interface that no longer exists,
 so the merged fragment speaks the consumer's), and `roles` is **empty** (a merged fragment has no single
-parameter struct for a path to name). Measured on `examples/fusion_schema.rs`'s chain: 38 values, 9
+parameter struct for a path to name). Measured on `crates/lichen-compute/examples/fusion_schema.rs`'s chain: 38 values, 9
 blocks, one write, **two** inputs — the union lists the one buffer the two bodies both name twice, which
 is what `composed_chain` prints as `2 input(s) [Float, Float]` — three marks, and the three-way agreement
 — merged, the two-pass reference
@@ -756,7 +756,7 @@ would drop an unread `SliceWriteCall`'s version is unreached, because two slice 
 graph pass that **derives the regions** (`derive_regions`, its first production caller), checks what it
 may merge, composes, and **rebuilds the graph** — the region becomes one node at the region's last
 position, the absorbed node is gone, later values are renumbered and `returns()` repointed. Measured on
-`examples/fusion_schema.rs`'s chain: two nodes, four values and `returns [3]` become one node, three
+`crates/lichen-compute/examples/fusion_schema.rs`'s chain: two nodes, four values and `returns [3]` become one node, three
 values and `returns [2]`; the answer is element for element the answer the same program gives without
 the pass; and a **counterfactual** closes the question the equal answer cannot — swapping the operands
 inside the composed body moves the answer from `−28` to `35`, so the composed node is what the device
@@ -1141,11 +1141,11 @@ a region the engine refuses is precisely a region where a pack is the answer.
 over expression trees of its own, with `FusionRefusal` naming the causes the
 table lists — `NotInvertible { at, cause }` and `NotDistributive { repair,
 combine }`, plus the budget that canonicalization is held to — and
-`examples/softmax.rs` deriving §7's online softmax through a per-element bias,
+`crates/lichen-fusion/examples/softmax.rs` deriving §7's online softmax through a per-element bias,
 through a rectified square, and from a hand-written `h`, checking each against
 the two-pass form over random inputs. The bridge is in
 (`crates/lichen-fusion-bridge`), and §4's schema now feeds this function its
-three arguments directly: `examples/fusion_schema.rs` reads a producer's
+three arguments directly: `crates/lichen-compute/examples/fusion_schema.rs` reads a producer's
 `combine`/`identity` and a consumer's `element` out of a derived schema and
 prints the rolling update — §7's `g = exp(d - r)` between a max and a sum comes
 out as `r' = max(d, r)`, `t' = t * exp(r - r') + exp(d - r')`, the online softmax,

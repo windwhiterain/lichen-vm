@@ -795,7 +795,7 @@ is a runtime call in the assembled module rather than an inline, expansion is no
 only about expressibility: a hand-written chain is the *non-expanded* version of
 what expansion would do automatically, so timing it measures what expansion saves.
 (c) *Does the GPU refuse it?* `SpirvRefusal::CrossKernelCall` says so on paper; the
-probe confirms it from the program side (`examples/recursion.rs`).
+probe confirms it from the program side (`crates/lichen-compute/examples/recursion.rs`).
 
 **A `loop` combinator as one line of lichen.**
 

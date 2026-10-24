@@ -345,7 +345,7 @@ The change surfaced a real bug in the reuse path: `register_embedded` returned a
 already-registered wrapper without filing it in the store's own `native` map, which is what
 `import "compute.lichen"` resolves against. The first store of a run always compiled the
 wrapper and filed it; every later store took the reuse path and then failed to find it,
-falling through to a file read of `examples/compute.lichen`. The reused handle is now filed
+falling through to a file read of `crates/lichen-compute/src/compute.lichen`. The reused handle is now filed
 the same way, which is where the "outputs identical" reading came from — the first version
 of this change failed on every compute-importing example after the first.
 

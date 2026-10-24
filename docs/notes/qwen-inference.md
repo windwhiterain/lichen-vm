@@ -462,7 +462,7 @@ passes `per` — the outputs one input row produces — and a launch of `rows = 
 sees `row / per = 0` for every row.
 
 At two starts the second row was exactly zero, and it was **not** the kernel, the emitter's addressing, or
-the scalar argument's arrival. A probe (`crates/lichen-serve/tests/probe_batch_row.rs`) runs
+the scalar argument's arrival. A probe (`crates/lichen-serve/examples/probe_batch_row.rs`) runs
 `MATVEC_BATCH_STEP` at `rows = 6`, `dim = 2`, `per = 3` and answers `[1, 2, 2, 3, 4, 6]` — through
 `compute.plrun` and through `compute.graphrun` under the `BFloat16` pack alike — so `per` is read at the
 value the host passed, and `MATVEC_STEP` over the same launch of six answers all six rows.
@@ -601,7 +601,7 @@ Two changes: `encode` now takes an added token wherever it starts, and the templ
 opening with the empty think block the checkpoint's own template states for a plain answer — the earlier
 opening left the model thinking, so its reasoning arrived as the reply. After both, two turns answer
 `'Hello! I'm glad to meet you, Ada. You asked, "What…'` and one turn answers `'Hello! How can I assist you
-today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
+today? 😊'`, and `crates/lichen-serve/tests/serve/chat_mark.rs` encodes a marker inside a template rather than
 alone.
 
 ### Is the cap of eight the right number?
@@ -698,7 +698,7 @@ admitted requests, finished requests, tokens, steps, buckets and bytes, and **ne
 measurement that does not read what the server said is not a verification of the server; it is a
 verification of its plumbing.
 
-The test that closes it is `crates/lichen-serve/tests/held_answers.rs`: it answers a prompt on both layouts
+The test that closes it is `crates/lichen-serve/examples/serve.rs`: it answers a prompt on both layouts
 and compares the tokens, which is what the serving path needed and never had. The fix is in `reside`, which
 now places the layout the chosen program reads.
 
