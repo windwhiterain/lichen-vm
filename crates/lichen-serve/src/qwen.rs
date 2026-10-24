@@ -7,8 +7,8 @@ use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 
 use crate::{
-    ATTEND_CACHE_STEP, HIDDEN, MATVEC_BATCH_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP, ROPE_STEP,
-    SWIGLU_STEP, ServeRefusal, Session,
+    ATTEND_CACHE_STEP, ATTEND_ROWS_STEP, HIDDEN, MATVEC_BATCH_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP,
+    ROPE_STEP, SWIGLU_STEP, ServeRefusal, Session,
 };
 
 /// The model's shape, and the flat file's order — the contract with `scripts/dump_bf16.py`.
@@ -452,6 +452,8 @@ struct Steps<'session> {
     rotation: crate::Prepared<'session>,
     /// The rotation over a whole batch's rows, its positions in a buffer.
     rotation_rows: crate::Prepared<'session>,
+    /// The attention over a batch whose rows share a position, the caches packed.
+    attention_rows: crate::Prepared<'session>,
     attention: crate::Prepared<'session>,
     product: crate::Prepared<'session>,
     /// The width every payload this step hands over is stored at.
@@ -490,6 +492,7 @@ impl<'session> Steps<'session> {
             },
             rotation: prepared(ROPE_STEP)?,
             rotation_rows: prepared(ROPE_ROWS_STEP)?,
+            attention_rows: prepared(ATTEND_ROWS_STEP)?,
             attention: prepared(ATTEND_CACHE_STEP)?,
             product: prepared(SWIGLU_STEP)?,
             width,
@@ -698,6 +701,37 @@ impl<'session> Steps<'session> {
             .map_err(QwenRefusal::Step)?;
         self.add_stage(started);
         resident(&stepped)
+    }
+
+    /// The attention over `rows` rows that share `p` positions, the caches packed row after row.
+    ///
+    /// # Invariant
+    /// Every row holds `p` positions, so the packed key and value blocks are `p * 1024` elements
+    /// and the query's rows are `2048`; a batch whose rows differ takes the per-sequence path.
+    fn attended_rows(
+        &self,
+        session: &Session,
+        query: &[f32],
+        keys: &[f32],
+        values: &[f32],
+        p: i64,
+        rows: i64,
+    ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
+        let stepped = self
+            .attention_rows
+            .step(vec![
+                RunArgument::Count(rows * p * HEADS),
+                RunArgument::Count(rows * HEADS),
+                RunArgument::Count(rows * HEADS * HEAD),
+                RunArgument::Count(p),
+                self.payload(query),
+                self.payload(keys),
+                self.payload(values),
+            ])
+            .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
+        answered(session, &stepped)
     }
 
     /// The attention over the whole cache, whose length is the positions the keys hold.
@@ -1292,11 +1326,32 @@ impl<'session> Qwen<'session> {
         )?;
         let query = fetched(session, query)?;
         let query = steps.rotated_rows(session, &query, &positions, (HEADS * HEAD) as i64)?;
-        let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
-        for (sequence, cache) in caches.iter().enumerate() {
-            let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
-            attended.extend(steps.attended(session, &query[span], &cache.keys, &cache.values)?);
-        }
+        let shared = caches.len() > 1 && positions.windows(2).all(|pair| pair[0] == pair[1]);
+        let attended: Vec<f32> = if shared {
+            let keys: Vec<f32> = caches
+                .iter()
+                .flat_map(|cache| cache.keys.iter().copied())
+                .collect();
+            let values: Vec<f32> = caches
+                .iter()
+                .flat_map(|cache| cache.values.iter().copied())
+                .collect();
+            let p = (keys.len() / (caches.len() * (KEY_HEADS * HEAD) as usize)) as i64;
+            steps.attended_rows(session, &query, &keys, &values, p, n)?
+        } else {
+            let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
+            for (sequence, cache) in caches.iter().enumerate() {
+                let span =
+                    sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
+                attended.extend(steps.attended(
+                    session,
+                    &query[span],
+                    &cache.keys,
+                    &cache.values,
+                )?);
+            }
+            attended
+        };
         let out = steps.projected(
             session,
             &attended,

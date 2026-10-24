@@ -1,9 +1,9 @@
 //! One line a serving step: its node count, or the refusal that stopped it.
 
 use lichen_serve::{
-    ATTEND_CACHE_STEP, ATTEND_STEP, BLOCK, DECODE_STEP, LAYER_STEP, MATVEC_BATCH_STEP,
-    MATVEC_ROW_STEP, MATVEC_STEP, PREFILL_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP, ROPE_STEP,
-    SAMPLE_STEP, SWIGLU_STEP,
+    ATTEND_CACHE_STEP, ATTEND_ROWS_STEP, ATTEND_STEP, BLOCK, DECODE_STEP, LAYER_STEP,
+    MATVEC_BATCH_STEP, MATVEC_ROW_STEP, MATVEC_STEP, PREFILL_STEP, RMS_NORM_STEP, ROPE_ROWS_STEP,
+    ROPE_STEP, SAMPLE_STEP, SWIGLU_STEP,
 };
 
 fn main() {
@@ -14,7 +14,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let steps: [(&str, &str); 14] = [
+    let steps: [(&str, &str); 15] = [
         ("RMS_NORM_STEP", RMS_NORM_STEP),
         ("MATVEC_STEP", MATVEC_STEP),
         ("MATVEC_BATCH_STEP", MATVEC_BATCH_STEP),
@@ -23,6 +23,7 @@ fn main() {
         ("ROPE_ROWS_STEP", ROPE_ROWS_STEP),
         ("ATTEND_STEP", ATTEND_STEP),
         ("ATTEND_CACHE_STEP", ATTEND_CACHE_STEP),
+        ("ATTEND_ROWS_STEP", ATTEND_ROWS_STEP),
         ("SWIGLU_STEP", SWIGLU_STEP),
         ("DECODE_STEP", DECODE_STEP),
         ("PREFILL_STEP", PREFILL_STEP),
