@@ -80,7 +80,7 @@ synchronization inside a step**: a barrier scoped to the buffer that needs it, o
 that removes the dependency altogether (the tiling/plan path exists for a literal extent). Until
 then the staged resident path — 648 submissions, 0.136–0.152 s — is the floor.
 
-## The fusion path is installed, and it refuses these regions
+## The fusion path is installed, and it divides the graph the way the claims do
 
 The serve's `record` installed only the automatic tiling pass; the **region merge** — the pass that
 fuses a producer and its consumer into one kernel — had never run in this path. It is installed now
@@ -88,32 +88,22 @@ fuses a producer and its consumer into one kernel — had never run in this path
 
 - a plain `copy -> copy` chain is **not a region**: the merge derives regions only from fragments
   with a claim, and these have none (`merge_probe`);
-- the pre-attention composite has claimed fragments, so the merge derives regions (nodes 2, 3) and
-  (7, 8) — a projection and the norm that reads it — and **refuses both** with
-  `ProducedValueIsReadElsewhere`: a value the merge would delete is read at the consumer, and the
-  reader check does not accept that edge. Single-node regions are refused as `RegionIsNotAPair`.
+- with the scale of the pre-attention composite claimed (`claim:Elementwise(element)` plus the
+  `~ "element"` mark), the derivation joins the claimed nodes **across** the unclaimed rotation, and
+  the composite derives **one region** (nodes 0–4 and 6–9). The merge refuses it with
+  `NoElementRole`: the matvec (region-local node 2) reads the scale (node 1) and its claim,
+  `Reduction(combine,identity)`, declares no `element` role, so the code between them is no
+  projection of either. The tiling pass, separately, refuses the Elementwise kernels by name
+  (`UnknownInterface`).
 
-The refusal is **correct**: the pair (2, 3) deletes the key projection's output, and node 4 — the
-k-norm's scale — reads that value too. Node 4 carries no claim, so it is a region boundary and the
-component is only [2, 3]. The merge would drop a read.
-
-The root cause was the claims: the composite's scale and rotation kernels carried no fusion claim,
-so every norm and rotation was a boundary and the regions never spanned a chain. Declaring
-`claim:Elementwise(element)` on the scale (with `~ "element"` on the written value), giving the
-matvec's claim its `element` role too, and claiming the rotation the same way **works**: the whole
-pre-attention graph becomes **one region** (nodes 0–10).
-
-What stops it then is the bridge, and the two refusals name the language it needs:
-
-- `ProjectionNotBridged`: *the projection selects between two values, and the symbolic language has
-  no conditional* — the rotation's `if low then … else …`;
-- rewritten branch-free (integer half = j / 64, sign = 2h − 1), the same refusal moves to
-  *it computes ValueId(19) in the machine-integer class, and the symbolic language is over real
-  numbers: `Int` wraps and `f64` does not hold every value* — the **integer division**.
-
-So fusion is reachable: the claims can span a layer, and the remaining capability is the symbolic
-bridge — it needs a conditional or integer division, or the rotation's element function must be
-real-only (a precomputed cos/sin/sign table read at the lane's index).
+The bridge is the limit behind the rotation: claiming it made the whole graph one region (nodes
+0–10) and the schema derivation then refused at the rotation's element function —
+`ProjectionNotBridged`: *selects between two values, and the symbolic language has no conditional*;
+rewritten branch-free (half = j/64, sign = 2h − 1), the refusal moved to *it computes ValueId(19)
+in the machine-integer class … `Int` wraps and `f64` does not hold every value* — the **integer
+division**. The rotation's gather (`x[i ± 64]`) is the deeper reason: the bridge models a read as
+the value at the element's own position, so a lane-dependent read has no port. That is the one
+limit that is the language's rather than the derivation's.
 
 ## How a region is derived, and where the abstraction is coarser than the dataflow
 
@@ -125,38 +115,35 @@ The pipeline, in the order the code runs it:
 2. **Claim** — the compile stores the fragment and the claim together (`intern_kernel`), and the
    passes read the registry, never the kernel value.
 3. **Regions** (`fusion_claim/schema.rs::region_positions`) — the graph is walked in evaluation
-   order; a claimed node joins the current **run**, and an unclaimed node **flushes** the run.
-   Each run is then split into weakly-connected components over the run's own values
-   (`components`): a node joins the component of a producer it reads, and an extent value counts
-   as a read.
+   order; the claimed nodes form the run and an unclaimed node belongs to no region and is **not**
+   a separator. The run is split into weakly-connected components over the producer/consumer
+   relation (`components`): a node joins the component of a producer it reads, and an extent value
+   counts as a read. A claimed consumer therefore joins a claimed producer across an unclaimed
+   node.
 4. **Schema** (`derive_regions`) — each component becomes a `RegionSchema` (ports, roles) through
    the claims, or a refusal.
 5. **Licence and merge** — a region needs a licence (a `fuse` pack naming its schema, or a
    reduction chain the pass can prove), then the merge's legality checks, then `compose`.
 
-Two places are **coarser than the dataflow**:
+Two places were **coarser than the dataflow**; the first is fixed, the second is open:
 
-- **The run split severs cross-boundary dependencies.** A claimed node after an unclaimed one
-  cannot join a claimed producer before it, although the producer's value would simply be an
-  input of the merged kernel. In the pre-attention graph the rotation (node 5, unclaimed)
-  separates the norm's consumers: the key chain lands in region [0..4] and the value and query
-  projections in later regions, so the norm's fan-out — a legal `Shape::FanOut` — is never a
-  candidate.
-- **The shape set is fixed.** The classifier admits a pair, a chain, a fan-out or a fan-in —
-  shallow shapes, depth at most two — and the composition has one `compose` per shape. A fan-out
-  **of chains** (the norm feeding three projections, each followed by a norm) is none of them, so
-  even a region that crossed the boundary would be refused before its schema is asked: fusion
+- **The run split (fixed).** It used to sever a claimed consumer from a claimed producer across an
+  unclaimed node. `region_positions` no longer flushes at an unclaimed node, so the pre-attention
+  graph now derives **one region** (nodes 0–4 and 6–9) with the rotation outside it, and
+  `merge_probe` shows the other side: an all-unclaimed chain still derives no region.
+- **The shape set (open).** The classifier admits a pair, a chain, a fan-out or a fan-in — shallow
+  shapes, depth at most two — and the composition has one `compose` per shape. A fan-out **of
+  chains** (the norm feeding three projections, each followed by a norm) is none of them: fusion
   composes chains, stars and fan-ins, **not a fold over a DAG**.
 
-The claim itself is not the coarse part: membership through a claim is the right predicate (a
-body no claim describes has no algebra to read), and the merge's fan-out composition exists. The
-coarseness is the **derivation** — the run split treats a claim boundary as a dataflow barrier,
-and the shape classifier enumerates compositions instead of accepting the DAG the merge could
-compose. Both are implementation choices; the rotation's lane-dependent gather is the one limit
-that is genuinely in the language, because the bridge models a read as the value at the element's
-own position.
+The claim itself is not the coarse part: membership through a claim is the right predicate (a body
+no claim describes has no algebra to read), and the merge's fan-out composition exists. What
+remains is the **shape set** (a fold over the DAG replacing the three shallow shapes, the next
+slice) and the licence policy; the rotation's lane-dependent gather is the one limit that is
+genuinely in the language, because the bridge models a read as the value at the element's own
+position.
 
-## The edges now## The edges now## The edges now
+## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
    fetches) at **~0.2 ms each**. A one-node step's floor measures **0.366 ms** with a 4 KB buffer,

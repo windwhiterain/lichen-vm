@@ -461,7 +461,8 @@ fn a_pack_that_is_not_one_is_refused_by_name() {
     );
 
     let empty = pack_text(schema, "x", "float", "shared", 64)
-        .replace(&format!("\"staging\": [ {{ \"name\": \"{STAGING}\", \"space\": \"shared\", \"group_width\": 64 }} ]"), "\"staging\": []");
+        .replace(&format!("\"staging\": [ {{ \"name\": \"{STAGING}\", \"space\": \"shared\", \"group_width\": 64 }} ]"), "\"staging\": []")
+        .replace("\"class\": \"float\"", "\"class\": null");
     let refusal =
         read_placement_pack(&empty).expect_err("a plan that stages nothing steers nothing");
     assert!(

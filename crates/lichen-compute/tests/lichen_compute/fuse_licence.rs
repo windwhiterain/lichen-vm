@@ -755,10 +755,14 @@ fn the_fuse_directive_is_read_as_the_format_spells_it() {
         Some(&schema.hash),
         "it names the region's hash, and only that"
     );
-    let nameless = read_placement_pack(&text.replace(
-        &format!("\"region\": \"{}\"", schema.hash),
-        "\"region\": null",
-    ))
+    let nameless = read_placement_pack(
+        &text
+            .replace(
+                &format!("\"region\": \"{}\"", schema.hash),
+                "\"region\": null",
+            )
+            .replace("\"class\": \"float\"", "\"class\": null"),
+    )
     .expect_err("a pack that places nothing and names no region steers nothing");
     assert!(
         matches!(nameless, PackRefusal::EmptyPlan { .. }),
