@@ -76,13 +76,12 @@ roadmap is allowed to argue against.
 
 Three conclusions follow directly, and they are the frame for everything below.
 
-- **The step is not dispatch-bound.** 840 dispatches at the floor are **~336 ms of the 0.58 s warm
-  token**; the other ~240 ms is the work *around* the dispatches: the fetches, the uploads, the host
-  arithmetic between stages, and the per-sequence loops. A fusion that halves the dispatches and
-  leaves the surroundings alone therefore has a ceiling of about three fifths of the step.
-  ([qwen-inference](qwen-inference.md)'s 281 dispatches is an earlier layer shape's count; the
-  prepared node counts are the current reading, and the shipped layer has fifteen stage calls, not
-  ten.)
+- **The step is dispatch- and fence-bound.** 840 dispatches at ~0.4 ms are ~336 ms, and 420 steps
+  at ~0.5 ms of fence are ~210 ms of the 0.55 s warm token; the work *around* the steps — the
+  fetches, the uploads, the host arithmetic — measured **0.080 s of 2.445 s (3%)** over four tokens
+  once every stage was timed. A chain that removed 23% of the submissions moved the clock not at
+  all ([qwen-inference](qwen-inference.md), "The resident chain"). The levers are the node count
+  and the step count, and the fetch was never one.
 - **The batch is not the lever.** Sixteen sequences cost one sequence's submission and fence, and
   throughput is flat past eight clients because the step rate is the bound. Widening the batch buys
   latency, not tokens. **The per-step clock is the throughput.**
@@ -397,23 +396,31 @@ mechanism exists below the surface, **missing** means neither.
 Each slice names its prerequisite, the measurement that decides whether it paid, and the exit
 criterion. The order is by measured payoff per unit of new mechanism, not by frontier fashion.
 
-### S1 — one fetch a token, not one a stage (this round's build)
+### S1 — the resident chain (landed; the readbacks were not the clock)
 
-**What.** `Qwen::layer_batch` currently runs 15 stage calls a layer, and every one of them fetches
-its answer to the host, releases it, and uploads the result to the next stage. The intermediates are
-kilobytes; the round trip is a submission and a fence, and the measured share around the stages is
-**0.25 s of a 0.708 s step**. Pass each stage's `RunResult::Resident` to the next stage's
-`RunArgument::Resident` instead, release it when its last consumer has run, and fetch once — at the
-layer's end or, better, once a token.
+**What was built.** The layer's stages pass residents instead of host values: the norm's output
+feeds three projections, the key and query norms read their projections' residents, and the
+feed-forward half chains post-norm → gate/up → product → down. Each resident is released after its
+last consumer, and the probe (`token_cost`) times every stage — including the projections, which
+had no `add_stage` and are where this note's old "35% around the stages" came from.
 
-**Prerequisite.** None beyond the resident channel, which exists: `RunArgument::Resident`,
-`Session::fetch`, `Session::release`, and `Prepared::step` leaving the result resident.
+**Measured.** Submissions a token fall **844 → 648 (−23%)**, the tokens are identical
+(`[9707, 25, 358, 2776, 4460]` over four positions), and the warm token reads **0.55 s against
+0.573 s** — inside the machine's spread. With every stage timed, four tokens are **97% inside the
+steps and 3% around them** (2.365 s of 2.445 s; around 0.080 s). The readback is a fence the step
+had already paid, and a step's clock is its dispatches plus its fence: 840 at ~0.4 ms plus 420 at
+~0.5 ms is the warm token, and removing 196 submissions touches neither term.
 
-**Measurement.** The same prompt's tokens must be identical, and the step's wall time and submission
-count must fall. The control is the same binary with the chaining off.
+**Why it stays.** It removes work and keeps the token chain, and it makes the next measurement
+possible; it is not a throughput win, and this note records it as a negative on the hypothesis that
+opened it. **The levers it names are the node count and the step count.**
 
-**Exit.** Tokens unchanged; submissions per step down by the number of stages that no longer fetch;
-step time reduced; the model still answers the checkpoint's own tokens.
+**S1b, the copy nodes: blocked on the argument table, not on a kernel surface.** Every projection,
+rotation and product carries a second copy dispatch (ten a layer, 280 a token) so that its step has
+two nodes. A one-node step now **records**, but a **run refuses** it — *"node 0 was given value 2 as
+a buffer, and that value is a number"* — the argument-table conflation
+[inference-service](inference-service.md) §8 item 6 files. The copies come out when that defect
+does, and they are the cheapest 280 nodes in the tree.
 
 ### S2 — a row's rotation in one dispatch, and the batch's attention in one dispatch
 
@@ -564,7 +571,10 @@ same allocation the old parameter group's `.out` field named. What it restores i
 measure, and the model answers the checkpoint's own tokens again (recorded in
 [qwen-inference](qwen-inference.md)).
 
-**S1 is the next build**, because it is the largest measured share that needs no new surface, and
-its verification is the model's own tokens. The checkpoint is restored by `scripts/dump_bf16.py`,
-which flattens the public safetensors shards into the loader's layout — the layout is the
-`SHAPES` contract in `qwen.rs`, and the two must move together.
+**S1 was built and measured**, and its result re-ranks the roadmap: the readbacks removed were
+**3%** of a token, so S1b (the copy nodes, gated on the argument table), S2 (the per-sequence
+rotations and attention) and S3 (the tiled projection) are the slices that remove **nodes and
+steps**. The checkpoint is restored by `scripts/dump_bf16.py`, which flattens the public
+safetensors shards into the loader's layout — the layout is the `SHAPES` contract in `qwen.rs`, and
+the two must move together. The S1 measurement is in [qwen-inference](qwen-inference.md)'s "The
+resident chain, and the 35% that was not there".

@@ -810,3 +810,37 @@ The reading is one command, and it is the one to re-run after a surface change:
 `cargo run --release -p lichen-serve --example prepare_steps` prints one line a step — the node
 count when it prepares, the refusal when it does not — and every program in `model.rs` is in its
 list. That probe is how the staleness above was found, and it costs no checkpoint.
+
+## The resident chain, and the 35% that was not there
+
+S1 kept the layer's intermediates on the device: the norm's output feeds three projections as a
+resident, the key and query norms read their projections' residents, and the feed-forward half
+chains post-norm → gate/up → product → down without a readback. Each resident is released after its
+last consumer. Measured with `token_cost` (two tokens, same start):
+
+| | before | resident chain |
+|---|---|---|
+| submissions a token | **844** | **648** |
+| tokens | `[9707, 25, 358]` | `[9707, 25, 358]` |
+| warm token | 0.573 s | 0.55–0.56 s |
+| four tokens | — | `[9707, 25, 358, 2776, 4460]` |
+
+**The readback was not the clock.** The probe now times the projections too — they were the one
+stage without `add_stage`, which is where the old "35% around the stages" came from. With every
+stage timed, four tokens read **stages 2.365 s of 2.445 s (97%), around 0.080 s (3%)**. The warm
+token is spent *inside* the steps, and a step is its dispatches plus its fence: 840 dispatches at
+~0.4 ms is ~336 ms, 420 steps at ~0.5 ms of fence is ~210 ms, and the sum is the 0.55 s. Removing
+196 of the 648 submissions per token moved neither term, and the numbers say why.
+
+So the lever this measurement names is the **node count**, not the readbacks. The first candidate is
+the copy node every projection, rotation and product carries — ten a layer, 280 a token. A one-node
+step **records** at this tip (the old "two answers met on one node" refusal is gone at `eeee34d4`), but a **run refuses** it:
+
+    this graph could not be run: node 0 was given value 2 as a buffer, and that value is a number
+
+That is the argument-table conflation [inference-service](inference-service.md) §8 item 6 files: a
+kernel's parameter cell is not a graph input slot, and the recording hands one to the graph as the
+other. The copy dispatch is the workaround, so the 280 nodes are gated on that defect and not on the
+kernel surface. **The next slice is fewer nodes** — the copy's 280 first if the argument table is
+fixed, the tiled projection after it — and composing a layer's fifteen steps into one recorded graph
+is the other half of the same ledger, because that removes fences rather than nodes.
