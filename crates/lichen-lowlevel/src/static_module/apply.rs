@@ -392,9 +392,8 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// A frozen ref copied as **this call's own cells** so a unify can pair it position
-    /// by position: a decided node keeps its value (and its frozen identity), and an
-    /// open position becomes a fresh cell the caller's inference binds.
+    /// A frozen ref as this call's cells: decided positions keep their answers, open
+    /// ones are fresh cells.
     #[stacksafe]
     pub(crate) fn materialize_referenced(
         &mut self,

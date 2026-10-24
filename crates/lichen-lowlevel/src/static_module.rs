@@ -228,13 +228,7 @@ impl<P: Program> Module<P> {
         self.add_node(block, None, value)
     }
 
-    /// [`AnyNodeId::Dynamic`] as-is, or a static ref materialized into a leaf whose
-    /// **open** positions are this call's own cells.
-    ///
-    /// # Invariant
-    /// A leaf a **unify** meets may not name a template cell: its open positions
-    /// would be cells nothing can bind, so they are materialized here
-    /// ([`Self::copy_referenced_value`]).
+    /// [`AnyNodeId::Dynamic`] as-is, or a static ref as this call's leaf.
     pub fn as_dynamic(&mut self, id: AnyNodeId, block: BlockId) -> NodeId {
         match id {
             Dyn(node) => node,
