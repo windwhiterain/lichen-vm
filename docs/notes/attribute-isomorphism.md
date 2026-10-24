@@ -61,6 +61,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
 | `64af5927` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
 | `db153f72` | `unify_ref` is the ref-native entry: a static side is compared by value and written into an open cell; the codomain binds, the parameter-slot compares and the result deep-eval all name their refs |
+| `aed0737e` | the apply chain (evaluator arm, `function_apply`, `apply_type`, `instantiate`, the parameter check, the loop, both static apply entries) takes `argument`/`cell` as **refs**; `array_items_ref`/`expr_type_item_ref` read a frozen payload in place |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -364,28 +365,27 @@ One red remains and it is **pre-existing**: `lichen-language`'s lib test
 (measured: patch saved, the two files checked out, the test re-run, the patch applied
 back). It sits on `SortOp::run`, untouched by this branch.
 
-### Next — the remaining consumer materializations
+### Next — the checker's handle sites, then the landing
 
-The apply chain still forces an argument to a `NodeId` before consuming it
-(`evaluation.rs`'s apply arm, `function_apply`, `apply_type`/`apply_type_with`,
-`instantiate`/`instantiate_stamped`, `apply_parameter_check`, `evaluate_pattern_argument`,
-`apply_loop`, `static_function_apply`). A **decided frozen argument** therefore gets a fresh
-class per call, which is the one-value-reads-as-several shape the read-directly verdict
-warns about. Widening that chain to `AnyNodeId` (with `array_items_of` and `unify_ref`,
-which already exist) is the next slice. The checker's `as_dynamic` handle sites are the
-other group; a check-time handle is a different question (it is built once per read site,
-not per call).
+The **lowlevel** consumers are ref-native: evaluation's apply arm, `function_apply`,
+`apply_type`, `instantiate`, the parameter check, the loop and both static apply entries
+read a frozen payload in place (`array_items_ref`, `expr_type_item_ref`) and unify with
+`unify_ref`, so a decided frozen argument keeps one class instead of getting a leaf per
+call. The one remaining copy on that path is the **failed-check diagnostic**: `ApplyError`
+names a `NodeId`, so a frozen argument is crossed there after the check already failed,
+when nothing can be bound by the copy.
 
-After that: the landing — squash, check `git diff dev...HEAD --name-only` names only this
-slice's files, merge to `dev`, delete the branch. The `sort_op` red is outside this
-branch's files and predates it (its `default_attributes()?` requirement came in
-`dd4cd0e1`, an ancestor of `dev`), so it belongs to its own slice.
+What is left is the **checker's** `as_dynamic` sites (`checker/structs`, `checker/indexing`,
+`checker/lambda`, `checker/tuples`, `checker.rs`). Those are a different question from a
+consumer clone: a check-time handle is built once per read site, not per call, and the
+checker's own graph is dynamic by construction — the frozen side only reaches it through
+`shape`'s readers. Whether each of those sites can name a ref instead is the next question
+to measure, not assume.
 
-Instruments that answered the question, for the next session: a per-module log
-(`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
-a thread-local log silently mixed the prelude's and the program's entries for three builds;
-the raw readers above, so a print never answers the question it is asked; and a keep-site
-probe keyed on the ref's index, which is what proved the ref is *not* cloned.
+Then the landing: squash, `git diff dev...HEAD --name-only` must name only this slice's
+files, merge to `dev`, delete the branch. The `sort_op` red is outside this branch's files
+and predates it (its `default_attributes()?` requirement came in `dd4cd0e1`, an ancestor of
+`dev`), so it belongs to its own slice.
 
 ## Traps (each cost time this session)
 
