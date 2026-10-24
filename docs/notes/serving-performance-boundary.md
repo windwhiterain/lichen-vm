@@ -52,30 +52,30 @@ resident, a relabel, a held model); the path to it was dead.** A boundary measur
 would have said the projection is 69% and the answer is a tiled kernel. Measured on the working
 path, the projection is 43% and the answer is **fewer steps**.
 
-## The wall this round hit: a composed step cannot be prepared at the narrowed width
+## The class constraint is decoupled, and composition still did not pay
 
-The next optimization was a **pre-attention composite**: one graph per layer's norm, q/k/v
-projections, both norms and both rotations — eleven dispatches, one step. It **records** (the
-unpacked probe prepares it, eleven nodes). Preparing it the way the model's projections are
-prepared — through the narrowed helper — is refused by the placement report:
+The wall was the pack machinery: a class requirement could only travel with a staging plan and a
+per-kernel claim, so a composed graph (which the claim join refuses) could not be narrowed. That is
+now split along the granularity line it should have been:
 
-    a preparation names its nodes' schemas: node 1: refused: no claim is registered for the
-    fragment at 1, so it is in no row of the digest join and no algebra can be derived for it;
-    a composed fragment is exactly this, because composition registers neither body it joins
+- a pack that states **only a class** needs no plan (`placement_pack`);
+- the pass applies a **schema-less class pack to every kernel node without a claim**
+  (`classed_plain`), so a composed graph can be prepared at the narrowed width;
+- `narrowed` falls back to that wildcard pack when a preparation lists no node schema.
 
-The report is per kernel; a graph of kernels has no row. The two escapes are closed: the language
-cannot spell the narrowed class (`unresolved name 'BFloat16'`), and preparing the graph unpacked
-would read the bf16 weights as Float, because a **resident is bound as-is** — the per-buffer
-conversion landed earlier covers host inputs, not device values.
+The capability is in the tree: `composed_probe` prepares the eleven-node pre-attention graph
+([PRE_STEP](../../crates/lichen-serve/src/model.rs)) at bf16 and runs it — three returns of 1024,
+1024 and 2048 elements. Wired into the model, it answered the same five tokens at **396 submissions
+a token instead of 648 (−39%)** — and was **slower**: 0.155–0.169 s a warm token against
+0.136–0.152 s.
 
-So the composed step needs the framework to type a graph's nodes: **per-node classes in the pack**
-(a matcher that names a node rather than a program) or **a class conversion for resident values**
-(a resident at one class feeding a kernel that declares another). The prize is measured by
-submission count: the pre-attention composite removes 7 submissions a layer (196 a token) and the
-feed-forward half another 8 (224 a token), taking 648 to about 230, a **65% cut** — the largest
-remaining lever on this machine.
+The reason is the coarse class, not the composition: the wildcard states **one** class for the whole
+graph, so the norms and rotations that ran in Float now run in bf16, and the eleven dispatches
+serialize behind one fence. The fine-grained fix is the next capability: **per-node classes**
+(the weight projections bf16, the norm and rotation nodes Float) with **typed edges** — a conversion
+where a bf16 output feeds a Float input, which the graph does not insert today.
 
-## The edges now
+## The edges now## The edges now
 
 1. **Submissions are the floor.** A resident token is 648 submissions (420 stage steps, the rest
    fetches) at **~0.2 ms each**. A one-node step's floor measures **0.366 ms** with a 4 KB buffer,
@@ -105,7 +105,7 @@ remaining lever on this machine.
 
 | # | capability | edge it moves | measured now |
 |---|---|---|---|
-| 1 | **per-node packs or a resident class conversion** — the gate | the composed step (the wall above) | 648 → ~230 submissions |
+| 1 | **per-node classes with typed edge conversions** | composition that pays | 396 submissions but 0.155 s |
 | 2 | a layer pass over a prompt block + causal attention | prefill | 0.47 s a position |
 | 3 | a resident or paged KV cache | long context | 0.593 → 1.389 ms at 64 → 256 |
 | 4 | a prepare cache | load time | 309 compiles a model |
