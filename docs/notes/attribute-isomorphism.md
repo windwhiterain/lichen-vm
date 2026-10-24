@@ -162,30 +162,39 @@ is a free dynamic cell. Its class root is the cell itself, holding nothing, so
 nothing was written and no class holds the answer either: the codomain was simply
 never bound.
 
-Both tests pass at `aeac9efe`, so the codomain binding is the *second* casualty of
-`5d585047`: the non-reporting binding is the only place these programs unify the
-type position, and with the open frozen fill refused (`619a2606`) the frozen
-codomain skeleton no longer fills anything — nor does the unified pair *connect*
-the frozen codomain's cell to the argument's, because the node-less arm returns
-before descending.
+Measured further: a fill log over the whole program (`unify_inner`'s two node-less
+arms) **never names that cell**, and it is still its own class root at the end, so
+nothing ever unified it — neither a fill nor a merge. Candidate **F was measured
+and does not close it** (`clone_static_signature_node` cloning every `undecided()`
+ref instead of only a valueless operation: compute stays 235/2).
+
+Both tests pass at `aeac9efe`, so this is the *second* casualty of `5d585047`: on
+that commit the kernel value's own pinned rendering moved from `.O Type` to
+`.O raw[?c, ?d]` — the codomain type expression lost its decided kind and
+denotation at the same moment the non-reporting binding started unifying the type
+position. On `aeac9efe` the call's type was `Int` (the lambda's codomain); now it
+is the frozen signature's open return type expression.
 
 So the remaining work is the other half of the same rule: an open frozen answer
-must not fill a class, but the unify still has to **pair its items with the
-argument's**, so the per-call cell the template leaves open is bound by the
-caller's inference. Candidates, for a ruling:
+must not fill a class (`619a2606`), but the unify still has to **connect the
+template's per-call cell to the caller's expression**, so the caller's own
+inference decides it. Candidates, for a ruling:
 
 - **E. Descend through the open answer.** At the node-less fill, when the answer
-  is open, unify the answer's items against the receiver's counterpart positions
-  instead of writing. Needs the receiver's structure — the receiver is a free
-  cell, so the descend has to build it (`expr_of`) or be deferred.
-- **F. The per-call cell must not be frozen at all.** `017f3db5`'s rule ("a
-  per-call cell enters the signature remap") applied to *every* open node the
-  signature clone meets, so the codomain cell the unify sees is this call's own
-  clone and the caller's inference binds it through the ordinary unify.
+  is open, unify its items against the receiver's counterpart positions instead of
+  writing. The receiver is a free cell, so the descend has to build it or defer.
 - **G. The codomain is read through the applied clone.** The checker reads `k.O`
   as a field type; if the field's type cell is the template's, the read should go
   through the applied clone, the way `applied_attribute_slot` reads an applied
-  attribute (spec §3).
+  attribute (spec §3). This is the narrowest, but it treats the type read
+  differently from the value read unless the same rule is stated for both.
+- **H. The applied return type is not the signature's expression.** The type the
+  call binds is the *lambda's* codomain, decided by the body; the signature's
+  return expression is a shape to pair with, not an answer to install. This is
+  the reading the old pinned renderings state (`(raw Kernel, Int, Int)`), and it
+  is the one question this session could not settle by measurement: whether
+  installing the signature's return *expression* as the call's type is ever
+  right, at any position.
 
 ## Traps (each cost time this session)
 
