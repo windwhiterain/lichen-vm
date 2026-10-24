@@ -535,9 +535,10 @@ written against the **superseded `.out`-as-a-parameter-group** kernel I/O surfac
 ([kernel-buffer-declarations](kernel-buffer-declarations.md) supersedes it). Its buffer fields were
 spelled `compute.Buf Float`, and its kernels declared `.out` in the parameter struct and wrote
 through `k.out.<field>`. At this tip (a641ff3e) neither spelling compiles: every one of the
-thirteen model programs refused to prepare — the whole serving path stopped before its first token,
-and nothing in the tree noticed because the serving tests that need the checkpoint are not run by
-default.
+thirteen model programs refused to prepare — the whole serving path stopped before its first token.
+The crate's own suite exercises the same programs, so it was red for the same reason; what the tree
+had no gate for is the **checkpoint's own tokens**, which is the reading
+[qwen-inference](qwen-inference.md) now records beside the 11/11 suite.
 
 The migration landed with this note, and it is the round's prerequisite rather than its goal:
 
