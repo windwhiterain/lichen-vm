@@ -192,9 +192,9 @@ where
     /// The node that holds the `[value, type]` expr an attribute value answers with.
     ///
     /// # Invariant
-    /// A call's node holds no value of its own — its class does — so the walk is forced
-    /// and the class's **representative** is the slot, because that is the node the
-    /// merge wrote the expr onto. Every other expression's own term already is its expr.
+    /// A class's members are the same expression, so the expression's own node is the
+    /// slot: no representative is selected. A call's node is forced first, because the
+    /// walk is what writes the expr it answers with.
     fn annotation_value_slot(&mut self, pe: ExprId) -> NodeId {
         let term = self.state[pe]
             .term
@@ -204,7 +204,6 @@ where
         }
         if self.module.node_operation(term).is_some() {
             self.module.evaluate_node_deep(term, None);
-            return self.module.equality_representative(term);
         }
         term
     }
