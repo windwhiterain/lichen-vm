@@ -1,11 +1,11 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `d6722af6`, working tree clean, not merged. The rule is landed in the language
-> spec and the attribute-specific record machinery is gone. Three reds remain: the
-> kernel codomain (mechanism 2b carries the verdict, the measurements and the one open
-> link), and two language-server tests that read the same at this session's start
-> commit.
+> `404e3331` plus this note's own commit, working tree clean, not merged. The rule is
+> landed in the language spec and the attribute-specific record machinery is gone. Three
+> reds remain: the kernel codomain (mechanism 2b now carries the measured cause: a
+> **frozen empty cell** the type-side instantiation references in place), and two
+> language-server tests that read the same at this session's start commit.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -216,12 +216,51 @@ has to go, not the read. `484e9fa2` reverts it; `02d31d8f` restores the two pins
 - A probe on `apply_type_with` prints the cells the type side binds (`286`, `554`, `786`,
   `919`) — none of them is the failing node, so no codomain bind touches it.
 
+### The read, measured (this is the last link)
+
+The failing read is the root's **type expression**, and instrumentation printed its whole
+neighbourhood without evaluating anything before the read (every print used the raw
+readers: `node_value`, `node_operation`, `node_origin`, `equality_representative`):
+
+- The root type is a five-position expression `[value, type, attribute…]` built by
+  `Checker::check_app`'s `fresh_cell` — the stack reaches `run_at` through
+  `build_in_attr_native`, so it is the program's own cell.
+- Its **value position is a lazy `Index(target, 0)`**, where `target` is the `.O` slot of
+  the read `k.O`. The target holds five positions: `[value, type, attribute…]`.
+- On the failing attempt, that target's position 0 is **`AnyNodeId::Static`** — a ref into
+  the prelude module (`ModuleKey(1)`, `LocalNodeId(1264)`). On a later attempt the same
+  position reports a *dynamic* marker, which the class machinery then binds.
+- `StaticModule::read(1264)` answers `value = false, operation = false`: the frozen node is
+  a **bare empty cell** — not a residual operation, not a decided marker, and no operation
+  for anything to run. It can never be filled: a frozen module is immutable.
+- The reader is therefore right to answer undecided, and undecided for ever. Evaluating the
+  Index by hand (stamp cleared, target and subscript both decided) still answers nothing,
+  because the class short circuit reads the representative's slot, which the frozen ref
+  never fills.
+
+So the codomain is not left open by a *reader*: the prelude's `(K _)` annotation froze the
+`.O` position as an empty cell, and the type-side instantiation **referenced that frozen ref
+in place** — [`Instantiation::node_of`]'s documented rule — so no per-call binding can
+reach it. The value side has dynamic clones to bind; the type side has a static ref.
+
+This is a different act from the copy walk that was rejected: the walk copied a frozen
+position *in order to read it*; the gap here is that the instantiation must materialize a
+ref *in order to bind it* per call. Both must be measured before either is kept — the
+rejected one made the two codomain tests pass and was still wrong.
+
 ### Next
 
-The last link is the **field type cell of `k.O`** in the check-time graph: it is what
-`compile_fragment` reads, and the probe says no apply binds it. Next: instrument the
-checker's field-type read (`structs.rs`) to see which cell `k.O` gets and whether
-anything ever unifies it.
+Materialize, **in the instantiation only**, the frozen refs an apply binds (the type
+position's `.O` included), and measure the two codomain tests plus the nine tests the
+shared-remap attempt broke. If that reads as the rejected copy walk, the alternative is to
+refuse a frozen artifact that carries a hole with no operation — the freeze invariant says
+a solved module holds an answer or a residual, and an empty cell is neither.
+
+Instruments that answered the question, for the next session: a per-module log
+(`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
+a thread-local log silently mixed the prelude's and the program's entries for three builds;
+and the raw readers above, so a print never answers the question it is asked.
+
 ## Traps (each cost time this session)
 
 - **Do not special-case an attribute against the type.** A `slot == 1` skip in
