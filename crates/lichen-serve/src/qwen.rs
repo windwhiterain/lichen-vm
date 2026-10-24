@@ -437,10 +437,36 @@ fn flat(name: &str) -> Result<Vec<f32>, QwenRefusal> {
         .collect())
 }
 
+/// The kind of a stage, so the clock can be read per kind rather than as one sum.
+#[derive(Clone, Copy)]
+enum Stage {
+    Norm,
+    Projection,
+    Rotation,
+    Attention,
+    Product,
+    Head,
+}
+
+impl Stage {
+    fn at(self) -> usize {
+        match self {
+            Stage::Norm => 0,
+            Stage::Projection => 1,
+            Stage::Rotation => 2,
+            Stage::Attention => 3,
+            Stage::Product => 4,
+            Stage::Head => 5,
+        }
+    }
+}
+
 /// The steps a forward uses, prepared once per session.
 struct Steps<'session> {
     /// Nanoseconds spent inside the stages, which is what the device was asked for.
     stage_nanos: std::cell::Cell<u64>,
+    /// The same clock, split by kind.
+    stage_costs: [std::cell::Cell<u64>; 6],
     norm: crate::Prepared<'session>,
     projection: crate::Prepared<'session>,
     /// The projection for a layer read from the file, whose weight is still stored by row.
@@ -462,9 +488,11 @@ struct Steps<'session> {
 
 impl<'session> Steps<'session> {
     /// Add the time a stage took, so a caller can tell the device's work from the work around it.
-    fn add_stage(&self, started: std::time::Instant) {
-        self.stage_nanos
-            .set(self.stage_nanos.get() + started.elapsed().as_nanos() as u64);
+    fn add_stage(&self, kind: Stage, started: std::time::Instant) {
+        let nanos = started.elapsed().as_nanos() as u64;
+        self.stage_nanos.set(self.stage_nanos.get() + nanos);
+        let cell = &self.stage_costs[kind.at()];
+        cell.set(cell.get() + nanos);
     }
 
     /// How long the stages have held the device, which a caller resets by noting it before a step.
@@ -472,9 +500,16 @@ impl<'session> Steps<'session> {
         self.stage_nanos.get()
     }
 
+    /// The same clock split into norm, projection, rotation, attention, product and head.
+    pub fn stage_costs(&self) -> [u64; 6] {
+        std::array::from_fn(|at| self.stage_costs[at].get())
+    }
+
     fn prepare(session: &'session Session, width: Width) -> Result<Self, QwenRefusal> {
         let prepared = |source: &str| session.prepare(source).map_err(QwenRefusal::Step);
         Ok(Self {
+            stage_nanos: std::cell::Cell::new(0),
+            stage_costs: std::array::from_fn(|_| std::cell::Cell::new(0)),
             norm: prepared(RMS_NORM_STEP)?,
             projection: match width {
                 Width::Wide => prepared(MATVEC_BATCH_STEP)?,
@@ -485,7 +520,6 @@ impl<'session> Steps<'session> {
                 Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
             },
             held: std::cell::Cell::new(false),
-            stage_nanos: std::cell::Cell::new(0),
             head: match width {
                 Width::Wide => prepared(crate::model::MATVEC_ROW_STEP)?,
                 Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
@@ -549,7 +583,7 @@ impl<'session> Steps<'session> {
                 gain,
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Norm, started);
         resident(&stepped)
     }
 
@@ -599,7 +633,7 @@ impl<'session> Steps<'session> {
                 weight,
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Projection, started);
         resident(&stepped)
     }
 
@@ -626,7 +660,7 @@ impl<'session> Steps<'session> {
                 weight,
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Head, started);
         answered(session, &stepped)
     }
 
@@ -645,7 +679,7 @@ impl<'session> Steps<'session> {
                 self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Rotation, started);
         answered(session, &stepped)
     }
 
@@ -671,7 +705,7 @@ impl<'session> Steps<'session> {
                 floats(positions),
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Rotation, started);
         answered(session, &stepped)
     }
 
@@ -699,7 +733,7 @@ impl<'session> Steps<'session> {
             .product
             .step(vec![RunArgument::Count(count), gate, up])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Product, started);
         resident(&stepped)
     }
 
@@ -730,7 +764,7 @@ impl<'session> Steps<'session> {
                 self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Attention, started);
         answered(session, &stepped)
     }
 
@@ -759,7 +793,7 @@ impl<'session> Steps<'session> {
                 self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
-        self.add_stage(started);
+        self.add_stage(Stage::Attention, started);
         answered(session, &stepped)
     }
 }
@@ -1173,6 +1207,11 @@ impl<'session> Qwen<'session> {
     /// How long this model's stages have held the device, in nanoseconds.
     pub fn stage_nanos(&self) -> u64 {
         self.steps.stage_nanos()
+    }
+
+    /// The same clock split into norm, projection, rotation, attention, product and head.
+    pub fn stage_costs(&self) -> [u64; 6] {
+        self.steps.stage_costs()
     }
 
     /// The vocabulary head's weight, which is the embedding's own tensor.

@@ -30,6 +30,7 @@ fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);
     let (before_work, before_stage) = (session.work(), model.stage_nanos());
+    let before_kinds = model.stage_costs();
     let generated = match model.generate(start, count) {
         Ok(generated) => generated,
         Err(refusal) => {
@@ -38,6 +39,7 @@ fn main() {
         }
     };
     let (after_work, after_stage) = (session.work(), model.stage_nanos());
+    let after_kinds = model.stage_costs();
     let wall: f64 = generated
         .per_token
         .iter()
@@ -60,4 +62,16 @@ fn main() {
         wall - stage,
         100.0 * (wall - stage) / wall
     );
+    let names = [
+        "norm",
+        "projection",
+        "rotation",
+        "attention",
+        "product",
+        "head",
+    ];
+    for (at, name) in names.iter().enumerate() {
+        let nanos = after_kinds[at] - before_kinds[at];
+        println!("  {name}: {:.3} s", nanos as f64 / 1e9);
+    }
 }

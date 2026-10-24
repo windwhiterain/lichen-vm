@@ -30,7 +30,11 @@ fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);
     let starts = vec![9707; rows];
-    let (before_work, started) = (session.work(), std::time::Instant::now());
+    let (before_work, before_kinds, started) = (
+        session.work(),
+        model.stage_costs(),
+        std::time::Instant::now(),
+    );
     let tokens = match model.generate_batch(&starts, count) {
         Ok(tokens) => tokens,
         Err(refusal) => {
@@ -40,6 +44,7 @@ fn main() {
     };
     let elapsed = started.elapsed();
     let after_work = session.work();
+    let after_kinds = model.stage_costs();
     println!("rows {rows}, {} tokens a row", count);
     for (row, tokens) in tokens.iter().enumerate() {
         println!("  row {row}: {tokens:?}");
@@ -51,4 +56,16 @@ fn main() {
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() / count as f64
     );
+    let names = [
+        "norm",
+        "projection",
+        "rotation",
+        "attention",
+        "product",
+        "head",
+    ];
+    for (at, name) in names.iter().enumerate() {
+        let nanos = after_kinds[at] - before_kinds[at];
+        println!("  {name}: {:.3} s", nanos as f64 / 1e9);
+    }
 }
