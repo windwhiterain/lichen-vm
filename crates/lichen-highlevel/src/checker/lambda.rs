@@ -375,17 +375,18 @@ where
     /// A slot is `[value, type]` and a call holds the applied return expr, so the chain
     /// is followed until a value that is not an expr; an undecided position is a hole.
     fn attribute_value(&mut self, slot: NodeId) -> Option<P::Value> {
-        let mut node = slot;
+        let mut node = AnyNodeId::Dynamic(slot);
         for _ in 0..8 {
-            self.module.evaluate_node_deep(node, None);
-            let value = self.node_value(node)?;
+            // The walk reads each position where it lives; a frozen one is not copied.
+            self.module.evaluate_node_deep_ref(node, None);
+            let value = self.module.node_value(node)?;
             if let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
                 && array.layout() != 0
             {
                 // SAFETY: the node's own payload, alive for this read.
                 let next = unsafe { array.items() }.first().map(|item| item.node);
                 if let Some(next) = next {
-                    node = self.module.as_dynamic(next, self.current_block);
+                    node = next;
                     continue;
                 }
             }
