@@ -93,10 +93,19 @@ fuses a producer and its consumer into one kernel — had never run in this path
   `ProducedValueIsReadElsewhere`: a value the merge would delete is read at the consumer, and the
   reader check does not accept that edge. Single-node regions are refused as `RegionIsNotAPair`.
 
-So fusion is reachable but does not fire on this graph yet. The next question is narrow: whether
-that `ProducedValueIsReadElsewhere` on a producer-consumer pair is the merge's legality rule or a
-defect in its reader accounting, and after it, whether a **fan-out** region (one norm feeding three
-projections) can be merged at all.
+The refusal is **correct**: the pair (2, 3) deletes the key projection's output, and node 4 — the
+k-norm's scale — reads that value too. Node 4 carries no claim, so it is a region boundary and the
+component is only [2, 3]. The merge would drop a read.
+
+The root cause is the claims, not the merge: the composite's scale and rotation kernels carry no
+fusion claim, so every norm and rotation is a boundary and the regions never span a chain.
+Annotating the scale `claim:Elementwise(element)` did not register one (the node still reports
+`NotClaimed`), and annotating the rotation the same way is refused — *the kernel claims Elementwise
+and its body carries no mark for its `element` role*. Until those two kernels claim an interface the
+registry holds, fusion cannot span a layer.
+
+So fusion is reachable but does not fire on this graph yet. The next question is narrow: why the
+elementwise claim does not register for the scale, and what mark the rotation's body is missing.
 
 ## The edges now## The edges now## The edges now
 
