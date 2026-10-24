@@ -279,7 +279,7 @@ where
         (expr, func_node)
     }
 
-    /// The argument's field a computed certificate names: an `Index` of the bound
+    /// The argument's field a certificate names: an `Index` of the bound
     /// parameter clone carries the field position.
     ///
     /// # Invariant
@@ -502,10 +502,8 @@ where
             ),
             _ => self.slot_expr(self.current_block, argument_value, argument_type),
         };
-        // The type side's argument is the value side's expr: the type check reads the
-        // same slots, the value's included, so a return attribute that names a field
-        // of the parameter resolves through that expr (spec §3, "Every attribute is
-        // handled like the type").
+        // The type side's argument is the value side's expr: a return attribute
+        // naming a parameter field resolves through it.
         let type_argument_expr = value_argument_expr;
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return expr.
@@ -619,7 +617,7 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
-        // A body that returns its parameter hands the call the argument itself: the
+        // A body that returns its parameter hands the call the argument: the
         // parameter's attribute slot is the caller's own.
         let returns_parameter = match callee {
             Some(AnyFunctionId::Dynamic(fid)) => {
@@ -630,9 +628,8 @@ where
             }
             None => false,
         };
-        // The applied clone's return expr states the call's attribute — the same expr
-        // whose type slot states its type (spec §3, "Every attribute is handled like
-        // the type").
+        // The applied clone's return expr states the call's attribute — the same
+        // expr whose type slot states its type.
         let certificate = match returns_parameter {
             true => None,
             false => self

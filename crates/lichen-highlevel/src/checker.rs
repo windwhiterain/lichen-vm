@@ -148,9 +148,8 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
-    /// The enclosing lambdas' parameters, innermost last: an attribute that names
-    /// one of their fields is a **reference** (spec §3, "Every attribute is handled
-    /// like the type").
+    /// The enclosing lambdas' parameters, innermost last: an attribute naming
+    /// one of their fields is a **reference**.
     current_parameters: Vec<ExprId>,
     /// The `@gc` expressions this build compiled.
     ///
@@ -1538,10 +1537,8 @@ where
                 //
                 // Invariant: a type-constant literal builds the universe.
                 let built = lit.build(self);
-                // A value literal decides its own attribute positions: each is the
-                // `[value, type]` expr its attribute's extension supplies, or the
-                // wildcard when the literal states nothing (spec §1, "Literals are
-                // expressions").
+                // A value literal decides its own attributes: each is its extension's
+                // `[value, type]` expr, else the wildcard.
                 let expr = if lit.decides_attributes() {
                     let mut items = vec![built.value, built.ty];
                     for marker in P::Attr::ORDER {
@@ -1654,7 +1651,7 @@ where
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 // `_` is undecided in every attribute: each attribute slot is a hole of
-                // its own, not the wildcard (spec §1, "Literals and their attributes").
+                // its own, not the wildcard (spec §1).
                 let block = self.current_block;
                 let mut items = vec![val, ty_cell];
                 for _ in 0..P::Attr::ORDER.len() {

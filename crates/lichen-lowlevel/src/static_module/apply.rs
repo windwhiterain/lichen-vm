@@ -229,10 +229,8 @@ impl<P: Program> Module<P> {
         else {
             return;
         };
-        // One materialization for the whole call: the parameter clone and the return
-        // expression share one remap, so a reference inside the return names the same
-        // parameter clone the argument binds — the type side's shape
-        // (spec §3, "Every attribute is handled like the type").
+        // One materialization per call: the clone and the return share one remap; a
+        // reference names the argument-bound clone.
         let Some((parameter, _codomain, remap)) =
             self.materialize_static_signature_with_classes(function, block)
         else {
@@ -253,9 +251,8 @@ impl<P: Program> Module<P> {
         // (`docs/notes/apply-type-side-check.md`).
         let applied = self.static_return_type_apply(r#return, &mut ctx);
         self.applied_parameters.insert(node, parameter);
-        // The clone is bound to this call's argument, so a return attribute that
-        // names one of its fields reads the argument's field record
-        // (spec §3, "Every attribute is handled like the type").
+        // The clone is bound to the argument: a return attribute naming one of
+        // its fields reads the argument's field record.
         self.unify_parameter_slots(parameter, argument, block);
         self.applied_exprs.insert(node, applied);
     }
@@ -379,11 +376,11 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            // A value is copied. A cell with no value and no operation is
-                            // per call — the parameter's own positions — and is copied
-                            // too, so the signature's identity reaches the return copy.
-                            // A residual operation keeps its frozen reference, which the
-                            // reader resolves in that module.
+                            // A value is copied; so is a per-call cell with no value and no
+                            // operation — the parameter's own positions.
+
+                            // A residual operation keeps its frozen reference, which the reader
+                            // resolves in that module.
                             if module.read(sref.index).is_some()
                                 || module.nodes[sref.index.index].operation.is_none()
                             {

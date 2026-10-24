@@ -26,7 +26,7 @@ impl<P: Program> Module<P> {
     }
 
     /// Unify the parameter's positions with the argument's, **without recording**
-    /// anything: the binding an apply needs when another side owns the failure.
+    /// anything.
     ///
     /// # Invariant
     /// Every position is unified, the attribute positions included: the parameter's
@@ -94,9 +94,8 @@ impl<P: Program> Module<P> {
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
-        // Every position is compared, the attribute positions included: the checker
-        // only decides the order (`declared | value`) after the compare
-        // (spec §3, "Every attribute is handled like the type").
+        // Every position is compared, attributes included: the order
+        // (`declared | value`) is decided only after the compare.
         let lengths = (
             unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
             unsafe { self.array_items(argument) }.map(|items| items.len()),

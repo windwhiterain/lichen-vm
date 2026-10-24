@@ -227,9 +227,8 @@ pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
     /// Build this literal's value and type nodes (and their expr).
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild;
 
-    /// Whether the expr is a value expression of this occurrence (a value
-    /// literal), so the literal decides its attribute positions itself; a type
-    /// constant is a shared type value and answers `false`.
+    /// Whether the expr is a value literal: the literal decides its own
+    /// attributes; a type constant answers `false`.
     fn decides_attributes(&self) -> bool {
         true
     }
@@ -463,8 +462,8 @@ where
         }
     }
 
-    /// A value literal decides its own attributes; a type constant is a shared
-    /// type value, and the wildcard constrains nothing, so neither does.
+    /// A value literal decides its own attributes; a type constant and the
+    /// wildcard decide nothing.
     fn decides_attributes(&self) -> bool {
         matches!(
             self,

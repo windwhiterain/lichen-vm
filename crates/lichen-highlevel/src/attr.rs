@@ -42,9 +42,8 @@ pub fn order_is_canonical<A: AttrSet>() -> bool {
         .all(|(position, attr)| attr.order_index() == position)
 }
 
-/// The highlevel's default attribute: its `AttrExt` is inert — only the literal
-/// hook is read (it answers `None`), so no schema carries the attribute and the
-/// checker's machinery stays inert.
+/// The highlevel's default attribute: `AttrExt` is inert — only the literal
+/// hook answers `None`; no schema carries it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NoAttr;
 impl AttrSpec for NoAttr {}
@@ -59,9 +58,8 @@ impl AttrSet for NoAttr {
     }
 }
 
-/// The inert extension answers only the literal hook (with `None`, so a literal
-/// keeps the wildcard); every other entry point is unreachable because no schema
-/// carries the inert attribute.
+/// The inert extension answers only the literal hook (with `None`); every
+/// other entry point is unreachable.
 impl<P> AttrExt<P> for NoAttr
 where
     P: HighProgram,

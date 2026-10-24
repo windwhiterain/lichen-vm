@@ -209,9 +209,8 @@ where
         term
     }
 
-    /// A reference's slot: a call over one of the enclosing parameter's fields names
-    /// the field's own attribute position in the field read's record
-    /// (spec §3, "Every attribute is handled like the type").
+    /// A call over an enclosing parameter's field names the field's own
+    /// attribute slot in the field's record (spec §3).
     fn reference_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
             return None;
@@ -227,9 +226,8 @@ where
         }
     }
 
-    /// The call's applied return slot for `marker`: the same expr whose type slot is
-    /// the call's type, so a reference's attribute is read where the type is
-    /// (spec §3, "Every attribute is handled like the type").
+    /// The call's applied return slot for `marker`: the same expr whose type slot
+    /// is the call's type (spec §3).
     fn applied_attribute_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let apply = self.type_applies.get(&pe)?;
         let expr = self.module.applied_exprs.get(apply).copied()?;
@@ -249,8 +247,8 @@ where
         if let Some(slot) = self.state[e].attr {
             return slot;
         }
-        // `_` is undecided in every attribute: its expr carries a hole per position,
-        // not the missing value (spec §1, "Literals and their attributes").
+        // `_` is undecided in every attribute: its expr carries a hole per
+        // position, not the missing value (spec §1).
         if let ExprKind::Placeholder = self.ir[e].kind
             && let Some(expr) = self.state[e].term
             && let Some(slot) = self.slot_attribute(expr, marker.order_index() as u32)
@@ -642,9 +640,8 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
-                // A reference names the field's own slot; otherwise the slot is the
-                // call's applied return slot, else the expression's own record
-                // (spec §3, "Every attribute is handled like the type").
+                // A reference names the field's own slot; else the applied return slot,
+                // else the expression's own record (spec §3).
                 let slot = self
                     .reference_slot(pe, marker)
                     .or_else(|| self.applied_attribute_slot(pe, marker))
@@ -707,9 +704,8 @@ where
                 slots.push(node);
             }
         }
-        // The expr is **full width**: settled slots canonically, wildcards elsewhere
-        // (`docs/notes/array-attribute-view.md`); a `_` value's positions are its own
-        // holes (spec §1, "Literals and their attributes").
+        // The expr is **full width**: settled slots canonically, wildcards
+        // elsewhere; a `_`'s positions are its own holes.
         let any = self.any();
         let placeholder = matches!(self.ir[value].kind, ExprKind::Placeholder);
         let mut width: Vec<NodeId> = (0..P::Attr::ORDER.len())

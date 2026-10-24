@@ -1228,8 +1228,8 @@ fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
     }
 }
 
-/// The value a dynamic node or a frozen ref answers: a static ref is read in its
-/// own module, which is the frozen boundary the class write crosses.
+/// The value a dynamic node or a frozen ref answers: a static ref is read
+/// in its own module.
 pub(crate) fn node_value<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<P::Value> {
     match id {
         AnyNodeId::Dynamic(_) => module.node_value(id),
