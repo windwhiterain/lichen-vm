@@ -240,6 +240,23 @@ reads is not among the cells any bind names (the bind probe listed `286`, `554`,
 `919`; the read is `487`). The failing node is therefore a type **expression** the
 clone walk built for the *type* side, and nothing binds it.
 
+A probe on both cell binds then shows the shape of the duplication, and it is worse
+than two sides: `PROBE side=type cell=NodeId(286) codomain=NodeId(346)` is followed by
+`PROBE side=type cell=NodeId(286) codomain=NodeId(415)` — the **type side alone
+instantiates twice** for one call — and only then
+`PROBE side=value cell=NodeId(286) codomain=Dynamic(NodeId(482))`. So one call binds
+one cell with *three* clones (346, 415, 482), and the two type-side ones front-load the
+cell with open template cells before the evaluated clone arrives. The merge of three
+clones then leaves the hole open, which is the state the test reads.
+
+Measured and rejected in the same round: disabling the fill guard of `619a2606`
+(`LICHEN_GUARD_OFF`-style edit, reverted) changes nothing for the codomain — the two
+`jit_inline` tests stay green and compute stays 235/2 — so the guard is not what blocks
+the merge.
+
+So the next step is the ordering and the count, not the sharing: why the type side
+instantiates twice for one call, and whether a call whose type the value side binds
+should defer the cell to it (the static path already does).
 So the next question is a checker one, not an apply one: which path stores that
 type-side expression as the program's `root_ty`, and whether it should store the
 value side's (evaluated) type item instead. That is where the next attempt starts.
