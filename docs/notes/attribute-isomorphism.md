@@ -288,15 +288,68 @@ Measured and neutral this round (each build reverted, tree clean):
   (`function::value_apply`): no change — the site is not on this path;
 - a **dependency's** open ref becomes this call's cell (`static_remap_value`): no change.
 
+### The verdict: undecided cells live only inside functions
+
+The maintainer's verdict, which supersedes both candidates above: a frozen module **may**
+hold undecided cells, but only **inside functions** — because the only way another module
+reaches them is to instantiate the function, and the clone unfreezes every undecided node
+into that call's own cells, so unify proceeds normally.
+
+That is the freeze-side half of one boundary theorem; the consumer-side half is its dual:
+
+- **Freeze side**: an undecided cell is legal only inside a function; the module-level
+  export surface is decided.
+- **Crossing side**: the frozen→dynamic crossing *is* instantiation and nothing else: every
+  undecided position unfreezes into a cell of the crossing context (per call, in the
+  remap); decided positions cross as refs — read directly, immutable, shared. A verbatim
+  payload copy is legal **only** for a payload that is decided everywhere.
+
+Why this is the SPEC-faithful reading:
+
+- The spec has no frozen modules; freezing is an implementation artefact whose one demand is
+  that importing a library means the same as inlining it. Inline, every call owns its own
+  cell for every undecided position of the template — that is what an apply *is*. An open
+  position crossed as a dead ref is a position no caller can ever write: not undecided but
+  undecidable, which changes the semantics.
+- The theorem turns `static_remap_value`'s existing comment ("a dependency's ref — concrete
+  by construction") from an assumption into a consequence: open cells live only inside
+  functions, functions are only crossed by clones, so a raw cross-module ref is decided and
+  keeping it is safe.
+- It composes with every standing verdict: *read directly* governs **reads** (`node_value`
+  of a static ref reads in its own module, no copy); this theorem governs **crossings** (a
+  bindable handle the dynamic world must own). The rejected copy-walk turned a read into a
+  copy; this never touches reads.
+- It is the attribute isomorphism at the boundary: value, type and every attribute position
+  cross by one rule. The codomain bug is one position (`.O`'s value) crossing by another —
+  a verbatim copy.
+
+Consequences for the two candidates: fix 2 was this theorem stated too strongly — open
+cells inside bodies and signatures are the everyday `_` and parameter cells, and refusing
+to freeze them refuses the language; what is illegal is an open cell *outside* a function.
+Fix 1 is a patch on the messenger: under the theorem, a leaf that can meet an open position
+proves an upstream instantiation leaked (copied where it had to clone); fix the leaking
+door and the patch is dead code. The theorem also names the smell: four crossing doors with
+slightly different item rules (`node_apply`/`value_apply`, `static_node_apply`/
+`static_remap_value`, `clone_static_signature_node`, `materialize_leaf`) — one rule, one
+helper, no drift.
+
 ### Next
 
-Decide between the two fixes above before writing code, because they disagree about *which*
-rule owns the seam, and the branch's verdicts point both ways. The measurement to settle it
-first: does the leaf's `.O` ever get bound by an apply at this site (a probe on
-`materialize_leaf`'s call from `slot_read` printing whether any later unify reaches its
-node)? If it does, fix 1 is the isomorphism and the sharing question is `slot_read`'s
-(build the leaf per evaluation, not per site). If nothing ever unifies it, fix 2 is right and
-the artifact is what changed.
+1. **Name the leaking door.** The smuggle probe was written but **never ran**: this round's
+   command executor broke (every command, `echo hello` included, routed to WSL with no
+   distribution installed), so nothing could build, test or commit. Recipe: in `add_node`
+   and `set_node_value`, when the written value is an array whose items carry
+   `Static(index 1264)` (env `LICHEN_PROBE_SMUGGLE`), print `Backtrace::force_capture()`;
+   run the failing jit test. The stack names the door that copied the frozen payload
+   verbatim. Suspects: `materialize_leaf` via `as_dynamic`; an eval answer caching a frozen
+   payload into a dynamic slot; a unify writing a decided-top-level array with an open
+   item — check whether `frozen_answer_is_open` recurses into items.
+2. **Implement the crossing side at that door**: open position → a fresh cell of the
+   context (plus a remap entry where an apply ctx exists); decided → keep the ref. Factor
+   the item walk into one helper shared by every payload copy.
+3. **Measure**: the two codomain tests; compute full; the nine the shared remap broke
+   (fold/plan/tiling group, `language::cyclic_type_cut`, the gc_block curried binding, the
+   checker's direct-call-result annotation); language/highlevel/lowlevel.
 
 Instruments that answered the question, for the next session: a per-module log
 (`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
