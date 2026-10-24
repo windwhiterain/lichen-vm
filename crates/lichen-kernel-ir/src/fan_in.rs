@@ -596,7 +596,7 @@ impl Forwarded {
 }
 
 /// The block a body returns from, refused unless it returns from exactly one.
-fn returns_of(fragment: &KernelFragment) -> Result<usize, ComposeRefusal> {
+pub(crate) fn returns_of(fragment: &KernelFragment) -> Result<usize, ComposeRefusal> {
     let returns: Vec<usize> = fragment
         .body
         .blocks

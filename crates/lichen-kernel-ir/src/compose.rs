@@ -630,6 +630,33 @@ pub enum ComposeRefusal {
     /// carries a distinct fact: that one is the composition's consumer list, this one the fan-in's
     /// body list — a caller that built a chain asked the other question and gets the other name.
     NoProducerToInline,
+    /// The sibling set names no branch, so there is nothing to inline into a merged fragment.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::NoProducerToInline`] because it is a distinct question: that
+    /// one is the fan-in's body list and this one is the sibling set's branch list.
+    NoBranchToInline,
+    /// A sibling set of one branch is not a sibling set: nothing stands beside it.
+    ///
+    /// # Invariant
+    /// Refused rather than answered with the branch itself, because the name a report prints is
+    /// the check that fired and "the composition is a sibling set of one" is not what a caller
+    /// meant.
+    OneBranchIsNotASiblingSet {
+        /// How many branches the list holds.
+        branches: usize,
+    },
+    /// A branch of a sibling set returns values, and the merged body keeps one return.
+    ///
+    /// # Invariant
+    /// The merged body holds the branches' bodies in one control flow, and only the last
+    /// branch's return survives it, so a branch that returned values would lose them.
+    BranchReturnsValues {
+        /// Which branch, in the order the composition named them.
+        branch: usize,
+        /// How many values it returns.
+        values: usize,
+    },
     /// A fan-in of one body is not a fan-in: nothing absorbs from the only body.
     ///
     /// # Invariant
@@ -825,6 +852,9 @@ impl ComposeRefusal {
         match self {
             ComposeRefusal::NoConsumerToInline => "NoConsumerToInline",
             ComposeRefusal::NoProducerToInline => "NoProducerToInline",
+            ComposeRefusal::NoBranchToInline => "NoBranchToInline",
+            ComposeRefusal::OneBranchIsNotASiblingSet { .. } => "OneBranchIsNotASiblingSet",
+            ComposeRefusal::BranchReturnsValues { .. } => "BranchReturnsValues",
             ComposeRefusal::OneBodyIsNotAFanIn { .. } => "OneBodyIsNotAFanIn",
             ComposeRefusal::AbsorbedIsNotAnEarlierBody { .. } => "AbsorbedIsNotAnEarlierBody",
             ComposeRefusal::OneInputIsFilledTwice { .. } => "OneInputIsFilledTwice",
@@ -868,6 +898,20 @@ impl std::fmt::Display for ComposeRefusal {
             ComposeRefusal::NoProducerToInline => write!(
                 formatter,
                 "the fan-in names no body, so there is nothing to inline into one fragment"
+            ),
+            ComposeRefusal::NoBranchToInline => write!(
+                formatter,
+                "the sibling set names no branch, so there is nothing to inline into one fragment"
+            ),
+            ComposeRefusal::OneBranchIsNotASiblingSet { branches } => write!(
+                formatter,
+                "the sibling set names {branches} branch(es), and a sibling set is two or more \
+                 independent bodies that read one shared input"
+            ),
+            ComposeRefusal::BranchReturnsValues { branch, values } => write!(
+                formatter,
+                "branch {branch} returns {values} value(s), and the merged body keeps one return, \
+                 so the values it returned would be lost"
             ),
             ComposeRefusal::OneBodyIsNotAFanIn { bodies } => write!(
                 formatter,
@@ -1317,15 +1361,25 @@ pub(crate) fn shifted_past(
                     .count(),
         )
         .unwrap_or(i64::MAX);
-        let constant = ValueId(merged.values.len() as u32);
-        merged.values.push(ValueDef::Instr {
-            op: KernelInstr::Const(ScalarClass::Int, at),
-            args: Vec::new(),
-            classes: vec![ScalarClass::Int],
-        });
-        shifted.insert(read, constant);
+        shifted.insert(read, position_constant(merged, at));
     }
     shifted
+}
+
+/// A fresh constant naming a buffer position, as a read's position is one.
+///
+/// # Invariant
+/// **A position is a value, not an offset**: a read names its buffer through a constant, so a
+/// read that moves to another port needs a constant of its own — the old one would still name the
+/// port it read before.
+pub(crate) fn position_constant(merged: &mut KernelBody, at: i64) -> ValueId {
+    let id = ValueId(merged.values.len() as u32);
+    merged.values.push(ValueDef::Instr {
+        op: KernelInstr::Const(ScalarClass::Int, at),
+        args: Vec::new(),
+        classes: vec![ScalarClass::Int],
+    });
+    id
 }
 
 /// The position constant each write of a consumer takes in the merged body.
@@ -1353,13 +1407,7 @@ pub(crate) fn shifted_write_positions(
         if at == value as usize {
             continue;
         }
-        let constant = ValueId(merged.values.len() as u32);
-        merged.values.push(ValueDef::Instr {
-            op: KernelInstr::Const(ScalarClass::Int, i64::try_from(at).unwrap_or(i64::MAX)),
-            args: Vec::new(),
-            classes: vec![ScalarClass::Int],
-        });
-        shifted.insert(write, constant);
+        shifted.insert(write, position_constant(merged, i64::try_from(at).unwrap_or(i64::MAX)));
     }
     shifted
 }

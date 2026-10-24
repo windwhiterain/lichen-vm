@@ -17,6 +17,7 @@ mod compose;
 mod fan_in;
 mod marks;
 mod plan;
+mod siblings;
 mod unary;
 
 pub use body::{
@@ -28,6 +29,7 @@ pub use compose::{ComposeRefusal, compose, compose_fan_out};
 pub use fan_in::{Producer, compose_fan_in};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
+pub use siblings::{Sibling, compose_siblings};
 pub use unary::{
     TRANSCENDENTALS, cos_body, cos_value, exp_body, exp_value, floor_body, floor_value,
     inlined_cos_operand, inlined_exp_operand, inlined_ln_operand, inlined_sin_operand,
