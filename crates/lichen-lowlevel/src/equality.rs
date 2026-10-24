@@ -4,8 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue,
-    EXPR_ATTR_BASE, FunctionIdentity, LowShape, LowValue, Module, Node, NodeId, Program,
-    StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
+    EXPR_ATTR_BASE, FunctionIdentity, LocalNodeId, LowShape, LowValue, Module, Node, NodeId,
+    Program, StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -602,10 +602,11 @@ impl<P: Program> Module<P> {
     /// when the template states neither.
     ///
     /// # Invariant
-    /// These are the template's own cells, so only a **clone** may descend them:
-    /// a caller that descended the template would decide its signature by the
-    /// first reader.
-    fn function_cells(&mut self, function: AnyFunctionId) -> Option<(NodeId, NodeId)> {
+    /// These are the template's own cells, so only a **clone** may decide them: a
+    /// caller that descended the template would decide its signature by the first
+    /// reader. A frozen template answers with its **own refs**, never a materialized
+    /// leaf, whose payload's open positions would be dead refs.
+    fn function_cells(&self, function: AnyFunctionId) -> Option<(AnyNodeId, AnyNodeId)> {
         match function {
             AnyFunctionId::Dynamic(function) => {
                 let (parameter, return_type) = {
@@ -616,10 +617,19 @@ impl<P: Program> Module<P> {
                 // `return_type` unset, so its signature is not readable.
                 self.nodes
                     .contains_key(return_type)
-                    .then_some((parameter, return_type))
+                    .then_some((Dyn(parameter), Dyn(return_type)))
             }
-            // A frozen template is immutable, so its signature is copied into fresh leaves.
-            AnyFunctionId::Static(sref) => self.materialize_static_signature(sref),
+            AnyFunctionId::Static(sref) => {
+                let module = self.static_module(sref.module);
+                let function = module.functions.get(sref.index.0)?;
+                let ref_of = |local: LocalNodeId| {
+                    AnyNodeId::Static(StaticNodeId {
+                        module: sref.module,
+                        index: local,
+                    })
+                };
+                Some((ref_of(function.parameter), ref_of(function.return_type)))
+            }
         }
     }
 
@@ -972,12 +982,12 @@ impl<P: Program> Module<P> {
                         {
                             steps.push(UnifyStep {
                                 index: i,
-                                a: na,
-                                b: nb,
+                                a: node_or_default(na),
+                                b: node_or_default(nb),
                             });
                             let child_ok = self.unify_inner(
-                                Side::of(Dyn(na), self.node_value(Dyn(na))),
-                                Side::of(Dyn(nb), self.node_value(Dyn(nb))),
+                                Side::of(na, self.node_value(na)),
+                                Side::of(nb, self.node_value(nb)),
                                 path,
                                 depth + 1,
                                 steps,

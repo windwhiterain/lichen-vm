@@ -267,44 +267,7 @@ impl<P: Program> Module<P> {
             }),
         ))
     }
-
-    /// The materialized `(parameter, return type)` of a static signature, as
-    /// fresh leaves for the unify arm to descend.
-    ///
-    /// # Invariant
-    ///
-    /// The parameter *expr* is materialized, not just its type slot: the unify arm
-    /// treats a signature like any other `[value, type, attrs…]` expr, which gives a
-    /// frozen signature the attribute reach a dynamic one has. The leaves are copies —
-    /// a static signature is immutable, so the frozen original never binds.
-    pub fn materialize_static_signature(
-        &mut self,
-        sref: StaticFunctionRef,
-    ) -> Option<(NodeId, NodeId)> {
-        let (param_expr, return_type) = {
-            let module = self.static_module(sref.module);
-            let function = module.functions.get(sref.index.0)?;
-            (function.parameter, function.return_type)
-        };
-        let block = self.blocks.iter().next().map(|(block, _)| block)?;
-        let parameter = self.materialize_leaf(
-            StaticNodeId {
-                module: sref.module,
-                index: param_expr,
-            },
-            block,
-        );
-        let codomain = self.materialize_leaf(
-            StaticNodeId {
-                module: sref.module,
-                index: return_type,
-            },
-            block,
-        );
-        Some((parameter, codomain))
-    }
 }
-
 /// The solved union-find representative of `key` — no path compression (the solved
 /// structure is immutable).
 pub(crate) fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNodeId {

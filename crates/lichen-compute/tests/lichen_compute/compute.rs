@@ -545,7 +545,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(raw Kernel, Int, raw none): struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}",
+        out, "(raw Kernel, Int, Int): struct{.native raw[?a, ?b], .I Type, .O Type}",
         "kernel value/type: {out:?}"
     );
 }
@@ -668,7 +668,7 @@ k
     );
     assert_eq!(
         out,
-        "(raw Kernel, tuple{Int, Int}, raw none): struct{.native raw[?a, ?b], .I TypeTuple, .O raw[?c, ?d]}",
+        "(raw Kernel, tuple{Int, Int}, Int): struct{.native raw[?a, ?b], .I TypeTuple, .O Type}",
         "tuple-domain kernel value/type: {out:?}"
     );
 }

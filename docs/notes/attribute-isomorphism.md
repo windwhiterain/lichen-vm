@@ -1,11 +1,13 @@
 # The attribute isomorphism — handoff
 
-> Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `404e3331` plus this note's own commit, working tree clean, not merged. The rule is
-> landed in the language spec and the attribute-specific record machinery is gone. Three
-> reds remain: the kernel codomain (mechanism 2b now carries the measured cause: a
-> **frozen empty cell** the type-side instantiation references in place), and two
-> language-server tests that read the same at this session's start commit.
+> Status: **the codomain is closed**. Branch `spec-literals` (base `dev`), working
+> tree clean, not merged. The rule is landed in the language spec, the attribute-specific
+> record machinery is gone, and mechanism 2b is closed: `unify` consumes a frozen
+> signature by its **own refs** instead of a materialized copy. Compute is 237/0, and the
+> two language-server reds the hunt started with now pass as a consequence. One red
+> remains and it is **pre-existing**: `lichen-language`'s lib test
+> `sort_op_sorts_a_usize_array` fails at the unmodified tree too (measured by reverting
+> the slice and re-running it).
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -57,6 +59,7 @@ decides relaxation. `@any` states nothing, at any position.
 | `484e9fa2` | a static node is **read directly**, never copied into a dynamic node to be read — the invariant now sits at `Module::node_value` and `shape::node_value`; the copy walk of `a524e578`/`f0f8f668` is gone |
 | `02d31d8f` | the two pinned renderings follow: a direct read of an open codomain is `raw none` |
 | `4c0f1b50` | an attribute holding its own **default** (`AttrExt::holds_default`, the value an absent occurrence reads) is left out of a render — **and the literal reads `1: Int` again** |
+| `f13e8a02` | `unify` consumes a frozen signature by its **own refs** (`function_cells` answers `AnyNodeId`s, `materialize_static_signature` deleted) — **and the kernel codomain closes: compute 237/0, both language-server reds pass** |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -64,18 +67,14 @@ decides relaxation. `@any` states nothing, at any position.
 |---|---|
 | `lichen-highlevel --test highlevel` | **136 passed; 0 failed** |
 | `lichen-language --test language` | **275 passed; 0 failed** |
-| `lichen-compute --test lichen_compute` | **235 passed; 2 failed; 1 ignored** |
+| `lichen-language --lib` | 69 passed; **1 failed** — pre-existing (`sort_op`) |
+| `lichen-compute --test lichen_compute` | **237 passed; 0 failed; 1 ignored** |
 | `lichen-lowlevel` | **164 passed; 0 failed; 1 ignored** |
+| `lichen-language-server` | **32 passed; 0 failed** |
 
-Red:
-
-- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` and
-  `compute::a_jit_kernel_crosses_the_two_classes_both_ways` — the kernel codomain;
-  mechanism 2b carries the measurements and the verdict that governs the next attempt.
-- `language_server::statement_values::a_lazy_binding_reports_type_but_no_value` and
-  `language_server::statement_values::compute_wrapper_functions_hover_with_named_type_variables`
-  — both read the same at `359b18c4`, the commit this session started from, so neither
-  is this work's regression (measured in mechanism 2b).
+The kernel codomain and both language-server reds are closed by mechanism 2b's fix; the
+only red left is the pre-existing `sort_op_sorts_a_usize_array`, which fails identically at
+the base tree (measured) and sits outside this branch's files.
 
 ## Closed mechanism 1 — a read's lane-varying index stays warp-uniform
 
@@ -333,23 +332,43 @@ slightly different item rules (`node_apply`/`value_apply`, `static_node_apply`/
 `static_remap_value`, `clone_static_signature_node`, `materialize_leaf`) — one rule, one
 helper, no drift.
 
+### Closed: `unify` consumes the frozen signature directly
+
+The maintainer's ruling: **every node consumer (unify, evaluation) supports static nodes
+and never clones.** The smuggle probe, re-run once the executor came back, named the door
+in one stack: `unify_inner`'s function arm (the `[parameter, return]` descent) →
+`function_cells` → `materialize_static_signature` → `materialize_leaf`. So it was unify
+itself that copied a frozen signature into a leaf, and the copy carried the open `.O` cell
+as a dead `Static` ref.
+
+The fix is the ruling applied at that door:
+
+- `function_cells` answers `(AnyNodeId, AnyNodeId)` and, for a frozen function, hands back
+  the signature's **own refs** — no copy;
+- the function arm descends with `Side::of(ref, node_value(ref))`, which compares a frozen
+  side by value and never writes it, and `UnifyStep` takes `node_or_default(ref)`;
+- `materialize_static_signature` is **deleted**, so that door no longer exists and nothing
+  can drift back to it.
+
+Readings (the tools' own lines): compute **237 passed; 0 failed; 1 ignored**, language
+**275/0** (integration), highlevel **136/0**, lowlevel **164/0; 1 ignored**,
+language-server **32/0** — including the two reds the hunt started with
+(`a_lazy_binding_reports_type_but_no_value`,
+`compute_wrapper_functions_hover_with_named_type_variables`), which the decided codomain
+fixed as a consequence. The two pinned renderings follow the closure: the kernel type
+renders `(raw Kernel, Int, Int)` / `(raw Kernel, tuple{Int, Int}, Int)`, not `raw none`.
+
+One red remains and it is **pre-existing**: `lichen-language`'s lib test
+`sort_op_sorts_a_usize_array` fails too when the slice is reverted to the base tree
+(measured: patch saved, the two files checked out, the test re-run, the patch applied
+back). It sits on `SortOp::run`, untouched by this branch.
+
 ### Next
 
-1. **Name the leaking door.** The smuggle probe was written but **never ran**: this round's
-   command executor broke (every command, `echo hello` included, routed to WSL with no
-   distribution installed), so nothing could build, test or commit. Recipe: in `add_node`
-   and `set_node_value`, when the written value is an array whose items carry
-   `Static(index 1264)` (env `LICHEN_PROBE_SMUGGLE`), print `Backtrace::force_capture()`;
-   run the failing jit test. The stack names the door that copied the frozen payload
-   verbatim. Suspects: `materialize_leaf` via `as_dynamic`; an eval answer caching a frozen
-   payload into a dynamic slot; a unify writing a decided-top-level array with an open
-   item — check whether `frozen_answer_is_open` recurses into items.
-2. **Implement the crossing side at that door**: open position → a fresh cell of the
-   context (plus a remap entry where an apply ctx exists); decided → keep the ref. Factor
-   the item walk into one helper shared by every payload copy.
-3. **Measure**: the two codomain tests; compute full; the nine the shared remap broke
-   (fold/plan/tiling group, `language::cyclic_type_cut`, the gc_block curried binding, the
-   checker's direct-call-result annotation); language/highlevel/lowlevel.
+The codomain hunt is closed. What remains is the landing: squash the slice, check
+`git diff dev...HEAD --name-only` names only this slice's files, then merge to `dev` and
+delete the branch. The `sort_op` red is outside this branch's files and predates it; it
+belongs to its own slice.
 
 Instruments that answered the question, for the next session: a per-module log
 (`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
