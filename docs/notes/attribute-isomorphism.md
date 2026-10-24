@@ -248,18 +248,61 @@ position *in order to read it*; the gap here is that the instantiation must mate
 ref *in order to bind it* per call. Both must be measured before either is kept — the
 rejected one made the two codomain tests pass and was still wrong.
 
+### The seam: no clone site ever sees the ref
+
+Three probes asked every clone site that could keep a ref, by index (`1264`, which also
+prints `same = <module equals the applied module>`):
+
+- `function::value_apply`'s array arm, the keep branch;
+- `static_module::apply::static_remap_value`'s `node => node` arm;
+- `clone_static_signature_node`'s residual keep.
+
+**None of them fires.** The open ref never passes through a clone or a remap at all: it
+reaches the read **inside a value `materialize_leaf` copied**. `checker::slot_read`'s
+`resolved` arm calls `shape::field_type` → `as_dynamic` → `materialize_leaf`, which is
+`add_node(block, None, static_read(sref))` — a verbatim copy of the frozen `.O` slot whose
+item 0 *is* `Static(1264)`. A ref in a copied array is never remapped, so the open cell
+travels into the read and stays dead.
+
+So the codomain sits on a **seam between two rules this branch keeps**:
+
+- `Module::node_value` (and `shape::node_value`): *a static node is read directly, never
+  copied into a dynamic node to be read*;
+- `checker::slot_read`: *a frozen field type is materialized as a leaf, so it is decided
+  the same way*.
+
+`materialize_leaf` is the one copy the branch licenses, and it copies **verbatim**, so an
+open position inside it is a dead ref. The two candidate fixes, both needing measurement:
+
+1. **The leaf's open positions become this call's cells.** Smallest change, but the leaf is
+   built once per read *site* at check time, so the cells would be shared by every
+   evaluation of that site — the aliasing the shared-remap attempt was rejected for.
+2. **The frozen artifact refuses an open exported position.** The freeze invariant says a
+   solved module holds an answer or a residual; a cell with *neither* an answer nor an
+   operation is a third state nothing can resolve. If the prelude's `(K _)` wildcard cell
+   must not be exported, the freeze (or the export) has to close it.
+
+Measured and neutral this round (each build reverted, tree clean):
+
+- an open frozen position inside a **cloned value** becomes this call's cell
+  (`function::value_apply`): no change — the site is not on this path;
+- a **dependency's** open ref becomes this call's cell (`static_remap_value`): no change.
+
 ### Next
 
-Materialize, **in the instantiation only**, the frozen refs an apply binds (the type
-position's `.O` included), and measure the two codomain tests plus the nine tests the
-shared-remap attempt broke. If that reads as the rejected copy walk, the alternative is to
-refuse a frozen artifact that carries a hole with no operation — the freeze invariant says
-a solved module holds an answer or a residual, and an empty cell is neither.
+Decide between the two fixes above before writing code, because they disagree about *which*
+rule owns the seam, and the branch's verdicts point both ways. The measurement to settle it
+first: does the leaf's `.O` ever get bound by an apply at this site (a probe on
+`materialize_leaf`'s call from `slot_read` printing whether any later unify reaches its
+node)? If it does, fix 1 is the isomorphism and the sharing question is `slot_read`'s
+(build the leaf per evaluation, not per site). If nothing ever unifies it, fix 2 is right and
+the artifact is what changed.
 
 Instruments that answered the question, for the next session: a per-module log
 (`Module::probe_log`) rather than a thread-local one — node ids repeat in every module, and
 a thread-local log silently mixed the prelude's and the program's entries for three builds;
-and the raw readers above, so a print never answers the question it is asked.
+the raw readers above, so a print never answers the question it is asked; and a keep-site
+probe keyed on the ref's index, which is what proved the ref is *not* cloned.
 
 ## Traps (each cost time this session)
 
