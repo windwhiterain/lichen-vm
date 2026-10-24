@@ -535,6 +535,11 @@ where
 
     /// The shared body of every entry point above: compile `ir` against
     /// `module`.
+    ///
+    /// # Invariant
+    /// Normalization is a function's birth: every lambda's value node is deep-evaluated
+    /// before the definition pass, so a new function's own cells settle once. A later
+    /// read sees decided cells or reports the open one; an apply is not a normalize.
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,

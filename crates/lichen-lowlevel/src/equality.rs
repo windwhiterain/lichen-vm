@@ -434,6 +434,11 @@ impl<P: Program> Module<P> {
     }
 
     /// Structurally unify the classes of `a` and `b`; returns `a`'s class representative.
+    ///
+    /// # Invariant
+    /// Three sites account for every dynamic unification of a function's cells: the
+    /// checker's initial unify, a function's birth normalize, and an apply's runtime
+    /// unify. A fourth ("normalize the type when it is cloned") is a design change.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = std::mem::take(&mut self.unify_path);
         let mut steps = std::mem::take(&mut self.unify_steps);

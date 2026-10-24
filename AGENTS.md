@@ -6,6 +6,35 @@ lichen code examples: examples/
 - new feature should whether go along with a memory or create new one in /docs/notes.
 - keep relative docs synced.
 - always avoid replication, if exists, merge or reference.
+- **Check the decision record before briefing a behaviour change.** `docs/notes/code-audit.md` carries numbered items with explicit decisions (`wontfix:D<n>`, each with the rejected alternatives written out). A brief that called a measured behaviour a "defect" was wrong: P1-42 was `verified` and decided `wontfix:D17`, whose sentence *is* the semantics, and both fixes the brief offered were alternatives D17 had already rejected. Grep that note for the behaviour before asking anyone to change it, and treat a "wontfix:D" line as a contract.
+
+## Invariants
+
+An **implementation invariant** — a rule the code must keep, not a description of
+what it currently does — lives at the code it governs, in the comment an editor
+reads before changing that code: a `# Invariant` rustdoc section, or a short `//`
+comment when the rule is local. The question is not "where is this explained?"
+but "what will the agent changing this line read?".
+
+- **The code comment states the rule itself, not a pointer to it.** `See
+  docs/notes/...` is background, not an invariant. If the line can be changed
+  wrongly without opening the note, the rule is not in the code yet.
+- **A note is never the only home of an invariant.** `docs/notes` carries the
+  rationale, the measurements, the rejected alternatives and the history; the
+  code comment carries what must hold. When a note states a rule, the code it
+  governs states it too, and the note links to the code rather than restating it.
+- **The budget splits the two.** `comments-test.toml` gives `# Invariant` 400
+  characters: enough for the rule, not for the argument. Put the rule in the
+  section and the argument in the note; do not drop the rule because the whole
+  argument no longer fits.
+- **The language contract is the exception, not the implementation's.** The
+  language spec and the book state what a program means and stay authoritative;
+  a code comment that implements one cites the section. Workflow rules (this
+  file, `comments-test.toml`) stay here.
+- **Moving an invariant does not change it.** Rewording one, or dropping a
+  condition from an `# Invariant` or `# Safety`, is a semantic change and needs
+  the maintainer's permission; restating an existing sentence at its code site
+  is a migration.
 
 ## Comments
 
@@ -111,6 +140,38 @@ A branch lands **in the checkout that owns the branch**: `git -C <checkout> merg
 - `git log --oneline <commit> -- <path>` names the commits that touched a path,
   across the whole history, so the stale-index commits are findable after the fact.
 
+## Build
+
+- **Never share one `CARGO_TARGET_DIR` across worktrees of different branches**: a
+  run can then fail on code that exists, or pass on code that is not yours. **The
+  mechanism, measured**: the fingerprints of different checkouts carry an identical
+  `path` hash, so all sessions write the *same*
+  `liblichen_lowlevel-<hash>.rlib` and overwrite each other — a probe hit `cannot
+  find … in lichen_lowlevel` four times on code that compiled minutes earlier.
+  Give a brief its own target under its worktree when the disk allows; if it must
+  share, require a touch of its own file plus a check that every `Compiling` line
+  names its worktree. `cargo clean -p <the workspace crates>` and rebuild before
+  you verify a merge.
+- **A `cargo` run can inherit the session's working directory while still using a
+  private `CARGO_TARGET_DIR`**, so it silently builds the **parent** checkout into
+  your target; the artifact hash is *identical* for the same commit, so nothing
+  looks wrong. A subagent caught it only by re-reading the source paths it had
+  printed. Pass an explicit `workdir`, and confirm every `Compiling` line names
+  your worktree.
+- **A full-crate run at default jobs has filled the disk here** (os error 112, and
+  every compile in flight failed with it), and a whole-crate sweep left the target
+  several GB heavier: check free space before one.
+- **A test run here costs more to build than to run, but attribute the cost
+  correctly**: a source touch in `lichen-compute-gpu` recompiles the crate and
+  relinks its binaries in **~3.5 s** when the build lock is free, and the 24 s /
+  92 s first measured were dominated by *other sessions holding the lock*
+  (`Blocking waiting for file lock` samples ran 13–46 s), not by linking. What
+  consolidation did buy, measured: relinked executables **9 → 2** and the full
+  run's median **9.96 s → 3.23 s**, because nine process launches each paid
+  Vulkan/driver DLL load and became one. So `cargo test --no-run` first, run only
+  the affected binaries, and do **not** `cargo clean -p` habitually — only when a
+  merge from a *different branch* could have contaminated the target.
+
 ## Verify
 
 - `cargo check` for compilation pass.
@@ -124,3 +185,32 @@ A branch lands **in the checkout that owns the branch**: `git -C <checkout> merg
   reported nine passes as failures. Both traps were measured twice each while the
   rounds in [graph-recording-rounds](docs/notes/graph-recording-rounds.md) were
   being verified; that note records the readings, this list records the rules.
+- **Run the merge checks on the merged tip, not just on the branch**:
+  `comments-check --config comments-test.toml . --max-violations 0` (the default
+  prints only the first violation) and `cargo fmt --all -- --check` (fmt writes
+  LF; restore CRLF after it).
+- **Gate the merge on the verification, not on the commit**: a script that
+  verifies, commits and merges in one breath must `exit` when the output does not
+  match what the artefact declares, because otherwise it merges the broken
+  artefact and says nothing — that is how a `.lichen` example whose `doc` string
+  had a straight `"` inside it (which terminates the literal, `error: expected
+  '='`) reached `dev`, printed as `match: False`, and was caught only on the next
+  run. In a `.lichen` `doc = "…"`, quote a word with backticks, never with `"`.
+- **Capture the exit code on the line immediately after the command**:
+  `$LASTEXITCODE` is overwritten by the *next* command, so a gate that reads it
+  after a `Pop-Location`, a `Select-Object` or a string assignment is reading the
+  wrong status — that is how a `comments-check` failure (`section-too-long`,
+  260 > 120) was treated as a pass and a merge went through anyway, twice in one
+  session with two different mistake shapes. Write `$code = $LASTEXITCODE` on the
+  very next statement and branch on `$code`.
+- **`spirv-val` IS installed here: `C:\VulkanSDK\1.3.296.0\Bin\spirv-val.exe`.**
+  A slice reported it missing, several briefs repeated that, and a later slice
+  found it by looking — and it turned a driver crash into a named emitter defect
+  in one step (`OpSelect` naming an id no instruction defined;
+  `crates/lichen-compute-gpu/src/spirv.rs`'s constant pool declared `one_integer`
+  for `ScalarClass::Float` but never `zero_integer`).
+  `crates/lichen-compute-gpu/tests/compute_gpu/spirv_validation.rs` *skips* when
+  the binary is absent, so a skip reads as an absence: **when a validator, a tool
+  or a backend "is not available", look for it before repeating it**, and prefer
+  running it over reasoning from a failure code. The Khronos validation layer's
+  message is the *same* reading, not a second one — it shells out to `spirv-val`.

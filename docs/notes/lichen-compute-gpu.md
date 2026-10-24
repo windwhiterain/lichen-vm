@@ -973,24 +973,26 @@ are private; the public entry point is `ParallelBackend::submit`, which returns 
 `Pending` rather than ids, so the backend's representation never leaks into a
 public signature.
 
-## Invariants a graph must not break
+## Why these graph rules are silent-wrong-answer rules
 
-Stated here because they are silent-wrong-answer rules rather than slow ones:
+The rules themselves are `# Invariant` sections at the sites that keep them —
+`dispatch.rs`'s `Slot`, `Slot::descriptor_pool`, `record_dispatch`, `Segment`,
+`Token` and `indirect_extent`, and `spirv.rs`'s `exchange_through_a_warp`. This
+section is why each one is a silent-wrong-answer rule rather than a slow one:
 
-- **One descriptor set per dispatch, and no pool reset under a running command
-  buffer.** A set is read when the submission *executes*, so one set cannot serve
-  two dispatches, and a reset frees every set — including ones an earlier
-  dispatch in the same command buffer is still bound to. A submission resets the
-  pool once, at its own start. `MAX_DESCRIPTOR_BINDINGS` is a *per-dispatch*
-  limit; the number of dispatches per submission is a second, separate limit.
-- **The trailing barrier names both possible readers.** It was
+- **A shared descriptor set, or a pool reset between dispatches.** A set is read
+  when the submission *executes*, so one set cannot serve two dispatches, and a
+  reset frees every set — including ones an earlier dispatch in the same command
+  buffer is still bound to. A submission resets the pool once, at its own start.
+  `MAX_DESCRIPTOR_BINDINGS` is a *per-dispatch* limit; the number of dispatches
+  per submission is a second, separate limit.
+- **A trailing barrier that names only one reader.** It was
   `SHADER_WRITE → TRANSFER_READ`, right only while every dispatch was followed by
   a `fetch` in another submission. A dispatch recorded after this one in the same
   command buffer reads those results as a *shader*, and a consumer outside the
-  destination scope reads undefined data. The scope is therefore
-  `SHADER_WRITE → SHADER_READ | TRANSFER_READ`. It over-covers the
-  single-dispatch case, which is a cost — measured as not measurable, but not
-  free.
+  destination scope reads undefined data; the scope is therefore
+  `SHADER_WRITE → SHADER_READ | TRANSFER_READ`. It over-covers the single-dispatch
+  case, which is a cost — measured as not measurable, but not free.
 
   A **third** case made the destination wide rather than naming a third reader: a
   chain that hands the same buffer round again — `run_chain` ping-pongs two
@@ -1007,36 +1009,39 @@ Stated here because they are silent-wrong-answer rules rather than slow ones:
   this barrier is needed is `spirv`'s write-reachability invariant: that says
   every invocation reaches its write, and nothing about ordering between
   dispatches.
-- **A slot is not released until its fence signals.** A recorded-but-unsubmitted
-  command buffer is clobbered by the next recording into it, and a command buffer
-  whose submission is still in flight cannot be recorded into at all. This is the
-  whole reason the pool exists.
-- **`BufferSlot::Host` inputs are staged by `memcpy` before recording.** Reserve
-  for the whole submission up front, and never share staging between slots: a
-  submission that grows staging after recording has begun is a use-after-write on
-  the mapping, and with several slots in flight a *different* slot growing or
-  writing staging is the same hazard across slots.
-- **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
-  memory lives until `GpuContext::drop`, the same rule as the deliberate
-  no-per-value-release decision above.
-- **An indirect dispatch's extent is *three* group counts, and a zero anywhere runs
-  nothing** (`427f768b`). `cmd_dispatch_indirect` reads a twelve-byte
-  `VkDispatchIndirectCommand { x, y, z }` from a buffer, so an `Int` element can never *be* the
-  command: the backend assembles a 16-byte block on the device (the count, then two ones) and hands
-  over an offset. A command with `y` or `z` zero is legal, validates, and dispatches no workgroups —
-  a silent zero, not a refusal.
-- **A device-held extent must be ordered `TRANSFER_WRITE → DRAW_INDIRECT |
-  INDIRECT_COMMAND_READ`.** The obvious `COMPUTE_SHADER / SHADER_READ` barrier compiles, passes
-  `spirv-val`, and dispatches **zero** workgroups: the write was made by a compute shader, but the
-  *reader* here is the command processor, not a shader.
-- **The shuffle exchange carries its scope as an operand** (`de60dec0`). `OpGroupNonUniformShuffle`
-  takes **five** operands — type, result, **scope**, value, id — and a module that declares the
-  parent `GroupNonUniform` (61) instead of the child `GroupNonUniformShuffle` (65) is refused by
-  `spirv-as`. Emitting four operands is the dangerous version: it validates as far as the device is
-  concerned and answers a **wrong number** (496 where 528 was due, before the scope operand was
-  added), which is why the warp tests run the module through `spirv-val` rather than trusting the
-  answer, and why a subgroup-scoped `OpControlBarrier` in the negative case is read back off the
-  constant ids instead of being trusted to differ.
+- **A slot released before its fence signals.** A recorded-but-unsubmitted command
+  buffer is clobbered by the next recording into it, and a command buffer whose
+  submission is still in flight cannot be recorded into at all. This is the whole
+  reason the pool exists.
+- **Staging grown or shared after recording begins.** A submission must reserve
+  for the whole batch up front, and staging cannot be shared between slots: growing
+  it after recording has begun is a use-after-write on the mapping, and with
+  several slots in flight a *different* slot growing or writing staging is the same
+  hazard across slots.
+- **A block-scoped `DeviceBuffer` released at drop.** Its memory lives until
+  `GpuContext::drop`, the same rule as the deliberate no-per-value-release
+  decision above.
+- **An indirect extent read as one count** (`427f768b`).
+  `cmd_dispatch_indirect` reads a twelve-byte
+  `VkDispatchIndirectCommand { x, y, z }` from a buffer, so an `Int` element can
+  never *be* the command: the backend assembles a 16-byte block on the device (the
+  count, then two ones) and hands over an offset. A command with `y` or `z` zero is
+  legal, validates, and dispatches no workgroups — a silent zero, not a refusal.
+- **A device-held extent ordered as `TRANSFER_WRITE → COMPUTE_SHADER`/`SHADER_READ`.**
+  The obvious barrier compiles, passes `spirv-val`, and dispatches **zero**
+  workgroups: the write was made by a compute shader, but the *reader* here is the
+  command processor, not a shader. The destination is `DRAW_INDIRECT |
+  INDIRECT_COMMAND_READ`.
+- **A shuffle emitted without its scope operand** (`de60dec0`).
+  `OpGroupNonUniformShuffle` takes **five** operands — type, result, **scope**,
+  value, id — and a module that declares the parent `GroupNonUniform` (61) instead
+  of the child `GroupNonUniformShuffle` (65) is refused by `spirv-as`. Emitting
+  four operands is the dangerous version: it validates as far as the device is
+  concerned and answers a **wrong number** (496 where 528 was due, before the scope
+  operand was added), which is why the warp tests run the module through
+  `spirv-val` rather than trusting the answer, and why a subgroup-scoped
+  `OpControlBarrier` in the negative case is read back off the constant ids instead
+  of being trusted to differ.
 
 ## Recovered measurements
 

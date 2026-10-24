@@ -3,9 +3,11 @@
 # The comment policy
 
 A comment earns its place by stating something the code cannot: an invariant
-that must hold, or the condition that makes an `unsafe` block sound. Anything
-longer belongs in [`docs/notes`](README.md), where it can be linked to instead
-of duplicated next to the code.
+that must hold, or the condition that makes an `unsafe` block sound. An
+implementation invariant belongs at the code it governs, not only in a note: the
+comment states the rule, and [`docs/notes`](README.md) carries the argument, the
+measurement and the history the comment links to. An agent changing the code
+reads the comment, not the note, so a note is never the only home of a rule.
 
 The rule is enforced by [`comments-check`](https://github.com/windwhiterain/comments-test),
 run from the `ci` workflow against [`comments-test.toml`](../../comments-test.toml).
@@ -24,14 +26,39 @@ Every comment kind is bound to a template, and each template admits two headings
 | Section            | Budget | What it is for                                    |
 | ------------------ | ------ | ------------------------------------------------- |
 | `path = ""`        | 120    | The prose before the first heading — and the whole comment when it has no heading at all. A summary line plus one pointer. |
-| `# Invariant`      | 400    | What must hold. The strongest statement a comment can make about code. |
+| `# Invariant`      | 400    | What must hold, stated at the code that must keep it. |
 | `# Safety`         | 400    | What makes calling into `unsafe` sound.           |
 
 Any other heading is a `heading-not-allowed` violation, at any depth. The two
 above are the only statements admitted that outrank prose; `# Contract` and
 `# Reference`, which the tool's own repository uses, are not accepted here
-because a contract belongs in the note this comment links to, and a reference is
-one pointer — which is what the root budget is sized for.
+because the contract is what `# Invariant` states, and a reference is one
+pointer — which is what the root budget is sized for.
+
+## Where an invariant lives
+
+The **code comment is the contract and the note is its argument**. A rule the
+code must keep is stated in a `# Invariant` section at the site that must keep
+it; the note records why it exists, what was measured, and what was rejected.
+The note links to the code section when it needs to name the rule, rather than
+restating it in different words — two statements of one rule drift apart, and
+the one an editor reads is the code's.
+
+- **A pointer is not a rule.** `See docs/notes/...` under a `# Invariant` heading
+  is background, not an invariant; the sentence that must hold has to be there.
+- **The budget is for the rule, not the argument.** 400 characters is enough for
+  what must hold. If the argument does not fit, it belongs in the note; the rule
+  does not shrink to make room for it.
+- **A local rule uses a `//` comment.** An inline comment is bounded at 120
+  characters, so it carries only the condition the next line relies on; the
+  argument goes to the note.
+- **The language contract is the exception.** `docs/language-spec.md` and the
+  book state what a program means; a code comment citing one is implementing it,
+  not restating it.
+- **This is not mechanically checked.** `comments-check` checks a comment's
+  shape; it cannot tell whether the sentence is true or whether a note is the
+  only place a rule is written. The rule above is review, and the code comment is
+  what the reviewer reads.
 
 Inline `//` comments get no heading to carry and are bounded at the root budget
 instead. They are still measured: a bare note is exactly what drifts into noise.
@@ -75,8 +102,9 @@ the per-file run is what actually reads the note.
 The gate covers the whole tree, which is the honest scope, and it passes: run at
 the CI step's own settings, `comments-check --config comments-test.toml` reports
 no violations. The remediation that brought it there is the body of work that
-also produced these notes — the prose a comment budget could not hold was moved
-here, where it can be read rather than skimmed.
+also produced these notes — the argument a comment budget could not hold was
+moved here, where it can be read rather than skimmed. The rule itself stayed at
+the code; only the argument moved.
 
 The check runs **first** in the `gate` job, above `Check formatting`. Nothing
 about a comment depends on the code compiling, and a comment that breaks the

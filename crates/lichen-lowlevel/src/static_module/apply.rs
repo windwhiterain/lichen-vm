@@ -5,6 +5,11 @@ use super::*;
 use crate::function::ParameterCheck;
 impl<P: Program> Module<P> {
     /// Apply a static function: materialize into clones in `block`, then run the apply tail.
+    ///
+    /// # Invariant
+    /// An apply is not a normalization: the callee's body is cloned into the caller and
+    /// the third sanctioned unify runs (the parameter check and the return wiring); no
+    /// new callee is minted and the callee's own cells are not settled.
     #[stacksafe]
     pub fn static_function_apply(
         &mut self,

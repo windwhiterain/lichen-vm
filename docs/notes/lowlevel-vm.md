@@ -211,6 +211,10 @@ time) and is not re-registered; a cloned one re-checks against the argument.
 
 ## Unification, and the write rules
 
+The rules are `equality.rs`'s `# Invariant` sections (`write_node_value`,
+`propagate_class_value`, `fill_class_holes`, `write_node_answer`); this section is
+why they take this shape.
+
 Identity in the VM is the union-find **class**: `unify(a, b)` merges the two
 classes, settles the value the merged class holds, and records the conflict — one
 recursion, not a comparison path beside a write path. There is no separate

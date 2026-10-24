@@ -5,6 +5,11 @@
 //! The frontend is total and never panics: lex errors accumulate, parse errors
 //! recover, and an unresolved name lowers to an inert error block, so one pass
 //! reports every problem it can find. See docs/language-spec.md.
+//!
+//! # Invariant
+//! This crate links no plugin: the language, checker and session run against the
+//! language alone, so a program importing `compute.lichen` is a host decision
+//! (`docs/notes/plugin-taxonomy.md`).
 
 // The lexer and parser live in their own crates; re-export them for old paths.
 pub use lichen_language_lex as lex;

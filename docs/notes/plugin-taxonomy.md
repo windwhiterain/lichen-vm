@@ -176,11 +176,12 @@ the vocabulary it composes. The pass channel a run reports travels with them:
 `package::Wiring` carries what a command line's `--pack` installs, so the CLI
 names no pass and the language names no diagnostic category.
 
-**The invariant this buys.** `lichen-language` links no plugin, so its own
-build, tests and examples run against the language alone — the frontend,
-checker, session and artifact cache with no compute vocabulary present at all.
-A program that imports `compute.lichen` is a *host* decision, and the boundary
-is one manifest line per plugin.
+**Why the boundary is a rule.** The rule itself is `lichen-language/src/lib.rs`'s
+`# Invariant`: the crate links no plugin, so its build, tests and examples run
+against the language alone — the frontend, checker, session and artifact cache
+with no compute vocabulary present at all. A program that imports
+`compute.lichen` is a *host* decision, and the boundary is one manifest line per
+plugin.
 
 ## Current state
 
