@@ -11,7 +11,7 @@
 > sits under.
 >
 > The `Check` mode itself (every expression's type slot decided, no body run)
-> lives on the colleague's `feature/check-mode` branch; this note records the
+> is on `dev` ([editor-check-mode](editor-check-mode.md)); this note records the
 > apply side it needs.
 
 ## 1. The problem

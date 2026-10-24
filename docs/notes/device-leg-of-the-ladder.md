@@ -1,7 +1,7 @@
 # The ladder's device leg, measured
 
-> Status: **current** — every verdict below is from an RTX 3060 Laptop GPU at `feature/dleg`, off
-> `dev@0ec49dbf`, except §5, which is from `feature/gdev` off `dev@74a46613` and corrects §1, §3
+> Status: **current** — every verdict below is from an RTX 3060 Laptop GPU off `dev@0ec49dbf`,
+> except §5, which is from `dev@74a46613` and corrects §1, §3
 > and §4 on three points, each marked where it is corrected. The operators themselves are
 > [llm-operators](llm-operators.md)'s and their arithmetic is [floating-point](floating-point.md)'s;
 > neither is restated here.
@@ -251,7 +251,7 @@ not a measured absence of capability, and it should be read that way. The `WorkB
 
 ## 5. The generation loop reaches a device after all
 
-**Measured on `feature/gdev`, off `dev@74a46613`, on the RTX 3060 Laptop GPU.** The one program
+**Measured off `dev@74a46613`, on the RTX 3060 Laptop GPU.** The one program
 this note called refused is now run on both backends, and the finding is not the one the refusal
 was read as.
 

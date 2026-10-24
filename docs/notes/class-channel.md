@@ -15,9 +15,8 @@
 > (`operator-polymorphism.md` §8.8) are its acceptance.  §4 then lands on top of
 > it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
 > that first reading got wrong.
-> The remaining halves are carried by the branches the body names:
-> `feature/unconditional-class-writes` (the §1.1 write rule, merged as `09b4640`) and
-> `feature/class-value-on-representative`.
+> The remaining halves are carried by the work the body names: the §1.1 write rule
+> (merged as `09b4640`) and the class value on the representative.
 > §5.1 (the class a lowering runs in) and §5.3 (the wrapper's `.I`/`.O` cells
 > carrying its signature) are landed.  The remaining half — §5.2's statement and
 > §5.4's carrier —
@@ -402,9 +401,7 @@ representative), so the class's representative records **which** member carries
 it and the scan became one field read (§1.1).  The write walk stays O(class size)
 per write, which is inherent to distributing a value over members.
 
-**Re-measured, and the conclusion above is superseded** (branch
-`feature/unconditional-class-writes`, worktree `.worktrees/unconditional-nodes`,
-merged as `09b4640`).  A third attempt was made on the §1.1 decision itself:
+**Re-measured, and the conclusion above is superseded** (merged as `09b4640`).  A third attempt was made on the §1.1 decision itself:
 `propagate_class_value` writes **every** member with no operation check, the
 class value is kept in the representative's own slot, and `class_carrier` — with
 `class_committed_node`, `commit_class_value`, `reselect_class_carrier`, and the
@@ -465,8 +462,7 @@ regressions.
 **What was measured.**  `((n => ([1, 2, 3] : array{Int, n})) 5)` must fail to
 compile: the annotation pins the parameter `n` to 3, and applying 5 clashes at
 the apply.  Green at `4be9180`, red from `03ed3e2` + `dde4011`.  One node dump at
-the apply and one `evaluate_node` trace per tree (worktree
-`.worktrees/green-4be9180`, instrumented identically):
+the apply and one `evaluate_node` trace per tree (instrumented identically):
 
 | what | green | red |
 |---|---|---|
@@ -774,8 +770,8 @@ the seed is the parameter's own type and nothing else.
 
 ### 5.1.1 The routing took the domain out of the caller — measured
 
-**Landed in `feature/operator-std` (§6.1 of
-[operator-polymorphism](operator-polymorphism.md)) and re-measured here**: the
+**Landed (§6.1 of [operator-polymorphism](operator-polymorphism.md)) and
+re-measured here**: the
 surface operators now lower to the prelude's bindings, so a kernel body's `y + y`
 *is* `Apply(Static(<core's add>), [y, y])`.  Two consequences for this pass, both
 measured on this tree:

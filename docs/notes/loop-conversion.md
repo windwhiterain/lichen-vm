@@ -28,13 +28,13 @@
 > **withdrawn**: serving a loop in wasm goes through **`waffle`**, which owns the
 > slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), and until its
 > control-flow step lands the backend refuses a loop **by name** rather than
-> mis-compiling one. `feature/waffle-spike` has lowered every non-looping kernel
+> mis-compiling one. The wasm backend has lowered every non-looping kernel
 > body through `waffle` already; what is missing is `If`/`Jump`/`While`
 > ([wasm-backend-handoff](wasm-backend-handoff.md) §3.2).
 > [§8.4](#84-unmerged-branches-and-what-each-still-needs) is what the two unmerged
 > branches needed, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
 > critical path to the acceptance case. **The SPIR-V loop emitter has since
-> landed on SSA** (`feature/spirv-loop-emitter-ssa`, `0a1c9f4`): the backend
+> landed on SSA** (`0a1c9f4`): the backend
 > emits every block of a body, with `OpBranch`, `OpSelectionMerge`, `OpLoopMerge`
 > and one `OpPhi` per block parameter, refuses a write in a loop body by name,
 > and is validated against a real `spirv-val`. §8.4 says what it does and refuses
@@ -758,14 +758,13 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
 
 ### 8.4 Unmerged branches, and what each still needs
 
-> **One of the two is merged.** `sync/dev-and-ssa` — which is
-> `feature/eval-loop-recording` rebased and merged, plus two measurement
-> commits — landed on `dev` at **`af6f6f2`**, and the SSA IR half of this
-> feature is with it. The other is still parked, and the reason it is
-> parked is now sharper than it was: its blocker is *bigger*, not smaller.
+> **One of the two is merged.** The loop-recording work, rebased and merged
+> plus two measurement commits, landed on `dev` at **`af6f6f2`**, and the SSA IR
+> half of this feature is with it. The other is still parked, and the reason it
+> is parked is now sharper than it was: its blocker is *bigger*, not smaller.
 
-- **`feature/eval-loop-recording` — MERGED, as `sync/dev-and-ssa`
-  (`af6f6f2`).** The SSA rewrite is `dev`'s: `LocalGet`, `Flow`, `BlockId`
+- **The loop-recording branch — MERGED (`af6f6f2`).** The SSA rewrite is
+  `dev`'s: `LocalGet`, `Flow`, `BlockId`
   and the `Vec<KernelInstr>` stack machine are gone, and a body is
   `ValueId`s, `BasicBlock`s with `params`, and `Br`/`CondBr`/`Return
   { values }` (§8.6's item 1c, answered).
@@ -810,14 +809,15 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
     reads is not a missing one*. `KernelBody::operands()` and
     `is_a_parameter` answer the same question the `LocalGet` scan asked.
 
-- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — the parked branch: a complete
+- **The SPIR-V loop emitter's branch** (`a0bfa2c`, no longer in this history) —
+  the parked branch: a complete
   SPIR-V emitter for `If` and `While`, validated with a real `spirv-val` (which
   rejected four genuine bugs during development), straight-line output
   byte-identical at 185 words *against its own base*, and the `single-OpLabel`
   invariant replaced with a stated structural one. It also refuses a write inside
   a loop body by name.
 
-  **The port landed**, on `feature/spirv-loop-emitter-ssa` (`0a1c9f4`), and it is
+  **The port landed** (`0a1c9f4`), and it is
   smaller than the branch in the three ways below — the branch was cut on the
   **pre-SSA** IR, so its `Walk` is a `Vec<Slot>` operand stack over
   `Flow`/`Terminator`, the two mechanisms `af6f6f2` deleted:
@@ -1015,7 +1015,7 @@ done** — the acceptance case at item 5 runs on both backends:
     waiting for a cycle to close, which turned the backedge from a shape verified
     by structure into one verified by a run.
     See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
-3. ~~**Port `feature/spirv-loop-emitter` onto the SSA body**~~ — **done**, at
+3. ~~**Port the SPIR-V loop emitter onto the SSA body**~~ — **done**, at
    `0a1c9f4`, exactly as §8.4 states it. The `Vec<Slot>` walk over
    `Flow`/`Terminator` became a `HashMap<ValueId, Slot>` walk over `BasicBlock`s;
    the emitter now writes `OpBranch`, `OpBranchConditional`, `OpSelectionMerge`,
@@ -1175,7 +1175,7 @@ what is left on this list is item 4's step and item 5.
 §8.5 has been under-stating it.** Reading the tree rather than the plan: the chain
 this feature is a chain of — *something turns a marked recursion into a control-flow
 graph → the JIT reads it → a backend emits it* — has **no first link**, and the gap
-is not in `feature/eval-loop-recording`. Four facts, each one a read of the code
+is not in the loop-recording work. Four facts, each one a read of the code
 rather than an inference:
 
 1. **Nothing in production builds a non-straight-line `KernelBody`.** —
@@ -1316,7 +1316,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    header that takes its state as block parameters, so "emit a nest" is no longer a
    new emitter feature but the same `BasicBlock` walk every straight-line body
    already does.
-5. ~~**Port `feature/spirv-loop-emitter`** onto the SSA body.~~ **Done**, at
+5. ~~**Port the SPIR-V loop emitter** onto the SSA body.~~ **Done**, at
    `0a1c9f4`. Its emitter walked an operand `Vec<Slot>` over `Flow`/`Terminator`,
    and both are gone: `Vec<Slot>` became a `HashMap<ValueId, Slot>`, and the
    control flow arrives as `BasicBlock`s with `params`. The single-`OpLabel`

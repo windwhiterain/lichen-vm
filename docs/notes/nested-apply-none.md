@@ -17,8 +17,8 @@
 > not derived from have held (§26). Read §26 for the cause, §25 for the first exact predicate, §13 for
 > what is ruled out, and §28 for how to reproduce any line.
 >
-> Status: **cause found**, branch `feature/named-capture-none`. This note is the branch's coordination
-> document for the second `none`: `mk = x => y => x; f = n => mk n 1; f 3` answers `none` where `dev`
+> Status: **cause found**. This note is the coordination document for the second
+> `none`: `mk = x => y => x; f = n => mk n 1; f 3` answers `none` where `dev`
 > refuses it. It is **not** the cause of [function-unify](function-unify.md): that one needed a clone to
 > meet its template in one class, and this program has no such merge — every merge of two decided
 > closures in it is clone against clone — and the repair that removed the capture loss leaves it

@@ -25,15 +25,15 @@
 > class vocabulary; [eval-before-unify.md](eval-before-unify.md) §2.2, the
 > positional read's own note.
 
-Everything in §1–§6 was measured on `dev` at `226bed1e`, in the worktree
-`.worktrees/idx` on `feature/idx`, through `cargo run -p lichen-compiler run` — the
+Everything in §1–§6 was measured on `dev` at `226bed1e`, through
+`cargo run -p lichen-compiler run` — the
 language front end, which [test-harness](test-harness.md) §"Verify" calls the
 faithful runner for a runtime value — and through
 `cargo test -p lichen-compute --test lichen_compute`. The probes are named in §6
 and were reverted with `git checkout` before this note was written. §7 was
-measured and landed on `dev` at `26f07fa1` in the worktree `.worktrees/shal` on
-`feature/shal`; its numbers are its own. The `dev` baseline was `26f07fa1`; the
-branch was rebased onto `9ddbbed5` at the end and **every number in §7.3 was
+measured and landed on `dev` at `26f07fa1`; its numbers are its own. The `dev`
+baseline was `26f07fa1`; the work was rebased onto `9ddbbed5` at the end and
+**every number in §7.3 was
 re-measured on that rebased tip** — the survey, the four counts, and all thirteen
 control programs, byte for byte as recorded above.
 
@@ -491,7 +491,7 @@ in, not the printer.  The printer's own limit is a nesting depth, not a cycle
 **What this section used to say, and why it was wrong.** The row above used to
 read "the alternating expr ends on the **undecided-field** `…`, not the cut" —
 it took the `…` in `tuple{?a, …}` to be a field list the check had not fixed.
-That is the **cut**: measured on `feature/trl`, the shape slot at the level
+That is the **cut**: measured on a measurement branch, the shape slot at the level
 this program prints as `tuple{?a, …}` (depth 3 of 3, after three
 `tuple{Float, …}`) **holds an array of two fields**, so the printer's
 undecided-field arm does not apply to it at all.  The two fields read as an

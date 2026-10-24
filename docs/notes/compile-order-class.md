@@ -7,7 +7,7 @@
 > `crates/lichen-highlevel/src/shape.rs` (the shape cells),
 > `crates/lichen-compute/tests/lichen_compute/buf_element_class_recorded.rs`.
 
-Worktree: `C:\resource\lichen-vm\.worktrees\classfill`, branch `feature/classfill`, base `dev` @ `fc0761c4`.
+Measured on `dev` at `fc0761c4`.
 
 The question the brief asks: **in the passing program, which write fills the element cell that
 `walk_role` reads?** Everything here is measured. The probe and the `#[track_caller]` recorder that

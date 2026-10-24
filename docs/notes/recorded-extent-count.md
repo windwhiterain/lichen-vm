@@ -1,7 +1,7 @@
 # The recorded leg's count: the rule is principled, its own sentence is nearly unreachable
 
 > Status: current — the measurement below is one slice at `dev@dd13f417`; the two diagnostic gaps it
-> found are worked in [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes) (`feature/rcd`), and
+> found are worked in [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes) (`dcdca031`), and
 > one part of that measurement corrected what this note had only inferred.
 > Points at: `crates/lichen-compute/src/compute.rs` (`record_launch` at `:4786`, its extent read at
 > `:4847-4896`, `build_graph`'s return-value refusal at `:5187-5196`),
@@ -145,8 +145,8 @@ re-record per value; B is the way out, and it is the spelling a loop wants anywa
 
 ## Fixed: both parts, measured on the thirteen shapes
 
-> Status: **one part fixed on the surface, one part fixed underneath it.** Measured at `feature/rcd`
-> (`dcdca031` + this slice) from the CLI on the thirteen shapes of the table above. Two probes beyond
+> Status: **one part fixed on the surface, one part fixed underneath it.** Measured at
+> `dcdca031` + this slice, from the CLI on the thirteen shapes of the table above. Two probes beyond
 > the thirteen, T1 and T3, hold the measurement the second part is about; they are named where they
 > are used and were deleted with the rest.
 
@@ -311,7 +311,7 @@ fifteen `dev` already had, `graph_jit` no longer among them.
 - **Measured, inside**, on `dev` behaviour: `record_launch` is **never entered** for the dispatch whose
   count D/E/F/L/M compute, so the count refusal is **never produced** for those shapes — the inference
   this note carried below, now a measurement. See [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes).
-- **Measured, from the CLI, `feature/rcd`**: the naming fix on G/H/I and the clause on G/H/I/K, quoted
+- **Measured, from the CLI, at `dcdca031`**: the naming fix on G/H/I and the clause on G/H/I/K, quoted
   per shape in [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes); and that closing the
   recording on the refusal path is a behaviour change of its own — probe T3.
 - **Measured, on the device**: the graph runner's run-time count, one test, one adapter, 4.09 s.

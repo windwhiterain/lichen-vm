@@ -19,8 +19,7 @@
 > the family the `?a` readings belong to; [compound-element-slots](compound-element-slots.md),
 > why `shape::field_type` needs a shape at all.
 
-Measured in the worktree `.worktrees/shd` on `feature/shd`, from `dev` at `4da09089`,
-through `lichen-compiler run` (the language front end, which [test-harness](test-harness.md)
+Measured from `dev` at `4da09089`, through `lichen-compiler run` (the language front end, which [test-harness](test-harness.md)
 §"Verify" calls the faithful runner for a runtime value) and the two test binaries named
 in each table.
 

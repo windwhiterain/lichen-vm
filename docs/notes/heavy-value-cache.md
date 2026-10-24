@@ -266,7 +266,7 @@ in one counter was the original defect. §13 records it as open.
 
 ## 9. Recovered measurements
 
-One process, wall clock, on `feature/heavy-value-cache`. §9.1 is a **debug** build, so its
+One process, wall clock, on a measurement branch. §9.1 is a **debug** build, so its
 absolute milliseconds are inflated and its ratios are the reading. §9.2 has **both** builds,
 because its headline is the one that had to survive a release compile.
 Probes: `crates/lichen-language/examples/{cache_timing,pipeline_edits}.rs` (temporary; delete

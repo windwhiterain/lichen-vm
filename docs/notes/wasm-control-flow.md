@@ -4,7 +4,7 @@
 > landed.** A loop emitter for the wasm backend was written, found to need four more
 > fixes before it would validate, and **withdrawn**. What replaced it is
 > **`waffle`** (§5), which owns the whole slot-first pipeline; a spike proved it end
-> to end, and `feature/waffle-spike` now lowers every kernel body through it with
+> to end, and the backend now lowers every kernel body through it with
 > no control flow (§6). **For anything actionable, read
 > [wasm-backend-handoff](wasm-backend-handoff.md) first**; this note is the analysis
 > behind it.
@@ -202,7 +202,7 @@ the hand-written emitter had to remember it.
 
 ## 6. What the migration has landed, and what §2 still says about it
 
-**On `feature/waffle-spike`, every kernel body lowers through `waffle`**: one block
+**Every kernel body now lowers through `waffle`**: one block
 per fragment, no control flow, a body whose transfer is not a `Return` refused by
 name. All 62 kernel-execution tests pass on it. The details are
 [wasm-backend-handoff](wasm-backend-handoff.md) §3.1; this is the one thing about it

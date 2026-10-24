@@ -12,9 +12,9 @@
 > assertion was strengthened from `.len() == 3` to the three numbers**, and no
 > production code was touched.
 >
-> Measured in the worktree `.worktrees/dmev` on `feature/dmev`, branched from
-> `feature/shx` at `b96cd332` (which is three commits ahead of `dev` at `7323cf6b`),
-> through `lichen-language`'s own `testing::evaluate` and `testing::array_values` —
+> Measured on a measurement branch at `b96cd332` (which is three commits ahead of
+> `dev` at `7323cf6b`), through `lichen-language`'s own `testing::evaluate` and
+> `testing::array_values` —
 > the faithful runner and the helper the held test itself uses, per
 > [test-harness](test-harness.md) §"Verify" — plus six `lichen-compiler` runs of the
 > two programs and three variants. **Every probe was reverted before this commit**
@@ -26,8 +26,8 @@
 > empty.
 >
 > **The rebase, and one thing it is not mine.** The branch was rebased onto `dev`
-> after the measurements, which had moved to `077a28fd`. Replaying `feature/shx`'s
-> `990094e1` onto it conflicted in `docs/language-spec.md`, **between two other
+> after the measurements, which had moved to `077a28fd`. Replaying `990094e1` onto
+> it conflicted in `docs/language-spec.md`, **between two other
 > sessions' prose**: `dev`'s `@shallow(0)` bound sentence against `990094e1`'s
 > bare/depth sentence. The two are compatible, so the resolution keeps **both,
 > verbatim** — the shared lead-in, then `990094e1`'s sentence, then `dev`'s bound
@@ -395,8 +395,7 @@ edited by this slice**, and both remain as they were.
 
 ## 7 Measured, inferred, unknown
 
-**Measured on `feature/dmev` at `b96cd332` (base `feature/shx`, three commits ahead
-of `dev` at `7323cf6b`).** Every number in §1, §2, §3 and §4 came from one of these
+**Measured at `b96cd332` (three commits ahead of `dev` at `7323cf6b`).** Every number in §1, §2, §3 and §4 came from one of these
 runs:
 
 1. `testing::evaluate` + `testing::array_values` on both programs, printing each

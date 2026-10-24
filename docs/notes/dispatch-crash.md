@@ -1,9 +1,9 @@
 # The sampler's crash, localised to one emitted id
 
-> Status: **the defect is fixed** — §7 records the repair, its branch (`feature/fcond`) and the
-> sampler's device result. Everything below §7 is the localisation, measured on an RTX 3060 Laptop
-> GPU and an Intel Iris Xe on this machine off `dev@8e6095b5`, on branch `feature/crash`, and is
-> kept as it was written: **that pass changed no production code and added no test.**
+> Status: **the defect is fixed** — §7 records the repair and the sampler's device result.
+> Everything below §7 is the localisation, measured on an RTX 3060 Laptop GPU and an Intel Iris Xe
+> on this machine off `dev@8e6095b5`, and is kept as it was written: **that pass changed no
+> production code and added no test.**
 
 [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1 left the greedy sampler as *"the
 emitter is not at fault, the crash is at dispatch"* and *"Unknown: why the driver dies"*, with
@@ -196,7 +196,7 @@ is the coverage gap, and closing it needs the user's permission like any other t
 
 ## 7. The fix, and the sampler's device result
 
-**Measured on `feature/fcond`, off `dev@b80c6cea`, on the RTX 3060 Laptop GPU.** The question §6
+**Measured off `dev@b80c6cea`, on the RTX 3060 Laptop GPU.** The question §6
 left open — *emit it, share one pool, or assert at the end* — is answered by the first two
 together, because the cause was not one missing line but **an asymmetry between two arms of one
 match**, and a third copy of the same width rule.

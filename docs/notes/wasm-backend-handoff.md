@@ -14,11 +14,11 @@
 | `Terminator::Jump`; a loop body that computes its state and reaches the backedge | `dev` | **done**, tested |
 | `passed_out` contract; `validate()` refuses `passed_out > carried` | `dev` | **done** |
 | Block types declared *before* the type section is serialized | `dev` | **done** — a latent bug nothing hit until a loop named a block type |
-| `wasm-encoder` 0.248 bump | `feature/waffle-spike` | **verified** — and §3.1 removed its only edit to our code, so it now rides with the new lowering |
-| The waffle spike | `feature/waffle-spike` | **passes** — a loop with a carried value, lowered and run through `wasmi` |
-| §3.1 the instruction map, on `waffle::Operator`, with §3.3's assembly and §3.4's deletion | `feature/waffle-spike` | **done** — all 62 kernel-execution tests green on the new lowering |
-| §3.2 structured control flow (`If`, `Jump`, `While`) | `feature/waffle-spike` | **done** — the three shapes lower, and the loop's own path has no test in the suite |
-| The real lowerer, for a loop | `feature/waffle-spike` | **landed in §3.2**, and verifiable only as far as the IR is: nothing in the repository builds a loop body |
+| `wasm-encoder` 0.248 bump | `dev` | **verified** — and §3.1 removed its only edit to our code, so it now rides with the new lowering |
+| The waffle spike | `dev` | **passes** — a loop with a carried value, lowered and run through `wasmi` |
+| §3.1 the instruction map, on `waffle::Operator`, with §3.3's assembly and §3.4's deletion | `dev` | **done** — all 62 kernel-execution tests green on the new lowering |
+| §3.2 structured control flow (`If`, `Jump`, `While`) | `dev` | **done** — the three shapes lower, and the loop's own path has no test in the suite |
+| The real lowerer, for a loop | `dev` | **landed in §3.2**, and verifiable only as far as the IR is: nothing in the repository builds a loop body |
 
 **§3.1, §3.3 and §3.4 were one commit, not three.** Replacing the emitter *is*
 deleting it: keeping the hand-written `Frame`/`lower_flow`/`WasmState` alive beside
@@ -56,7 +56,7 @@ Six things were in doubt at the start of this work and are not any more.
 attempt this handoff replaces: a single draft that tried the whole mapping at once
 carried two unresolved type questions and had to be thrown away.
 
-### 3.1 The instruction map — **done, on `feature/waffle-spike`**
+### 3.1 The instruction map — **done**
 
 Lower every body as **one block**, `KernelInstr` → `Operator`. What landed is
 `crates/lichen-runtime/src/wasm/`:
@@ -130,7 +130,7 @@ rather than by what the instruction meant. It is a plain `waffle::Type` and not 
 All 62 kernel-execution tests pass with this lowering in place of the old emitter,
 and *that* was the signal to continue.
 
-### 3.2 Structured control flow — **done, on `feature/waffle-spike`**
+### 3.2 Structured control flow — **done**
 
 The three transfers are `compute/wasm/flow.rs`, a file of its own: `lower.rs`
 answers *what one instruction computes*, and this answers *where the stack goes*.

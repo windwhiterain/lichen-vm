@@ -7,7 +7,7 @@
 > `to_bits()` back. **Nothing here changed production code, and no test was added.**
 >
 > **[contraction-control](contraction-control.md) found the control this note's §6 named, and
-> `feature/ncir` now emits it.** §§1–8 below are unchanged and remain the record of how the
+> the emitter now emits it.** §§1–8 below are unchanged and remain the record of how the
 > mechanism was found; §9 is what the shipped emitter does about it. **The gap this note names is
 > closed on both vendors**: with `NoContraction` on every float result of a body that inlined a
 > definition, `sin` is **256/256**, **512/512** and **2048/2048** on both sides of `[4000, 8192]`,
@@ -313,7 +313,7 @@ one line each, and what this note says about each.
   whole effect is one flag, and the fact that §1.1's model reproduces the device exactly means the
   probe to verify it is already written. **Landed**: [contraction-control](contraction-control.md)
   §3.1 measured the candidate — `OpDecorate %id NoContraction`, decoration `42` — and
-  `feature/ncir` emits it on every float result of a body that inlined a definition. The second
+  the emitter emits it on every float result of a body that inlined a definition. The second
   half of this bullet, *"or the driver's own switch turned off"*, has **no referent**: no driver
   or toolchain switch was found, and the attribute half is what works.
 - **The emitted polynomial and its constants.** Nothing here needs a new coefficient or a new degree:

@@ -1,6 +1,6 @@
 # The fused multiply-add: what it is, what it would touch, and what is not measured
 
-> Status: **shipped**, by the user's decision, in `feature/fmas`. §1–§10 are the **proposal** and
+> Status: **shipped**, by the user's decision. §1–§10 are the **proposal** and
 > are left as they were measured; **§11 is the landed state and the device measurement that was
 > missing**, and where §6 and §9 say a thing is *inferred* or *unknown*, §11 says what was actually
 > run. Every §11 figure was measured on **two** devices off this branch by running **the same

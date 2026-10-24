@@ -32,8 +32,8 @@
 > that wrote the verdict, and the sanctioned site that should have produced the
 > write instead.
 >
-> Worktree: `.worktrees/dlw`, branch `feature/deep-late-writes`, base `dev@f360c72d`.
-> Build: private target `C:\resource\lichen-vm\.worktrees\dlw\target`, `-j 1`,
+> Base: `dev@f360c72d`.
+> Build: a private target under the worktree, `-j 1`,
 > `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
 >
 > **What this slice did not do**, deliberately: no `settled` bit and no new state of
@@ -508,7 +508,7 @@ earlier" has no handle there at all.
 
 ```
 # private target, never the parent's
-$env:CARGO_TARGET_DIR = "C:\resource\lichen-vm\.worktrees\dlw\target"
+$env:CARGO_TARGET_DIR = "<a private target, never the parent's>"
 $env:CARGO_INCREMENTAL = "0"; $env:CARGO_PROFILE_DEV_DEBUG = "0"; $env:CARGO_PROFILE_TEST_DEBUG = "0"
 
 # baseline
@@ -534,8 +534,8 @@ which is the per-test signal used above.
 
 ## 11. What landed on top of this map
 
-> Slice: `feature/concrete-gate`, worktree `.worktrees/concrete`, base `dev@e3bb7c2b`.
-> Build: private target `C:\resource\lichen-vm\.worktrees\concrete\target`, `-j 1`,
+> Slice: the concrete-only gate, base `dev@e3bb7c2b`.
+> Build: a private target under the worktree, `-j 1`,
 > `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
 > `git diff dev...HEAD --name-only` lists `crates/lichen-lowlevel/src/evaluation.rs`
 > and the two notes, and nothing else.
@@ -564,7 +564,7 @@ re-descended; §11.3 says what that costs.
 
 ### 11.2 The suites, measured against a pristine `dev` in the same worktree
 
-Both sides ran in `.worktrees/concrete`, the baseline before the edit and the gate
+Both sides ran in one worktree, the baseline before the edit and the gate
 after it, so the artifact tree and the commit differ by exactly the one file.
 
 | suite | pristine `dev` | with the gate | name-set delta |
@@ -683,8 +683,8 @@ substituted. The site is untouched.
 
 ## 12. The `fill_class_holes` slice: where they come from, and what removing them is worth
 
-> Slice: `feature/class-hole-fill`, worktree `.worktrees/chf`, base `dev@c666a372`.
-> Build: private target `C:\resource\lichen-vm\.worktrees\chf\target`, `-j 1`,
+> Slice: the class-hole-fill measurement, base `dev@c666a372`.
+> Build: a private target under the worktree, `-j 1`,
 > `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
 > **No behaviour change landed.** Every code edit this slice made was a scratch probe
 > and was reverted; the branch's code diff against `dev` is empty and it carries
@@ -876,8 +876,8 @@ for, are all at sanctioned sites, and cost one descent.**
 
 ## 13. The plain gates, measured together and apart
 
-> Slice: `feature/undecided-final`, worktree `.worktrees/ufin`, base `dev@71adaa1a`.
-> Build: private target `C:\resource\lichen-vm\.worktrees\ufin\target`, `-j 1`,
+> Slice: the plain-gate measurement, base `dev@71adaa1a`.
+> Build: a private target under the worktree, `-j 1`,
 > `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
 > **No probe and no instrumentation anywhere in the measured crates.** Every suite
 > number below is from a run with nothing else in the process, and each arm was run
@@ -1092,7 +1092,7 @@ moving. Read this section with §14 beside it: the "sixty-five" in §13.5 and in
 
 ## 14. Graph recording, and the operator it had to wait for
 
-> Worktree `.worktrees/grec`, branch `feature/graph-recording`. Every number below is
+> Every number below is
 > from a probe-free run: the probe that located the stalls was removed before any of
 > them was taken, as §12.5 warns.
 >
@@ -1226,8 +1226,8 @@ on, and both lists have since been disposed of: [stalled-rerun-epoch](stalled-re
 
 ## 15. The retirement landed: three names, by comparison
 
-> Slice: `feature/retire-epoch`, worktree `.worktrees/re`, base `dev@12425166`. Private
-> target `C:\resource\lichen-vm\.worktrees\re\target`, `-j 1`, `CARGO_INCREMENTAL=0`,
+> Slice: the retirement, base `dev@12425166`. Private
+> target under the worktree, `-j 1`, `CARGO_INCREMENTAL=0`,
 > `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`. **Probe-free**: no
 > instrumentation is in any measured crate, so §12.5's trap is not in play.
 > `git diff dev...HEAD --name-only` lists four `lichen-lowlevel` sources, three

@@ -138,7 +138,7 @@ rather than a new one:
 | `lichen-language` **`tests/lichen_compute/compute.rs`** | **9 passed, 53 failed** |
 
 So the wall is the compute extension's template walk, as in §2.3 and as the
-parked `feature/read-kind-unify` measured for the static pin: once a claim can
+parked read-kind-unify work measured for the static pin: once a claim can
 reach it, a template's parameter type reads as settled instead of deferrable, and
 the extension has nothing to force through.  Unconditional unify therefore does
 not have a sound target to write into *until the compute boundary is answered* —

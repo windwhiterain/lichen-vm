@@ -210,9 +210,8 @@ The deep half did not: `evaluation.rs:552-559` still cuts a **concrete** verdict
 
 ### 8.1 The two gates, and which one was taken
 
-Branch `feature/undecided-final`, worktree `.worktrees/ufin`, base `dev@71adaa1a`,
-private target, `-j 1`, `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`,
-`CARGO_PROFILE_TEST_DEBUG=0`.
+Base `dev@71adaa1a`, a private target, `-j 1`, `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
 
 | gate | site | before | after | taken |
 |---|---|---|---|---|
@@ -332,8 +331,7 @@ was taken, and these three are what the retirement itself costs. None is a desig
 asserts a re-decision — and each asserts something the plain gate changes. §15 of
 [late-writes-map](late-writes-map.md) has the by-name comparison and the per-test reading.
 
-Branch `feature/retire-epoch`, worktree `.worktrees/re`, base `dev@12425166`, private target,
-`-j 1`, probe-free.
+Base `dev@12425166`, a private target, `-j 1`, probe-free.
 
 | suite | pristine `dev` | after the retirement | name-set delta by `Compare-Object` |
 |---|---|---|---|

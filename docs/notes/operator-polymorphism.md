@@ -541,7 +541,7 @@ about, or still open.
    (`crates/lichen-lowlevel/src/function.rs`), which matched
    `AnyFunctionId::Dynamic` and answered `false` for a **static** callee, so the
    call's result cell was never bound; the class was pinned only when the value pass
-   ran. Measured before the fix on `feature/lsp-hover-check`: `x = 3 / y = x + 4`
+   ran. Measured before the fix on `dev`: `x = 3 / y = x + 4`
    reported `y` as `?a` under `Mode::Check`; the bare-language control, where no
    prelude is in scope and `+` stays a `BinOp`, answered `Int` in both modes.
    **The arm that closed it**: `Module::static_function_type_apply` copies the

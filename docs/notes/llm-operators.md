@@ -374,7 +374,7 @@ need a node-local producer for `r`.
     the old sentence is the *diagnostic*, not the rule — `{found}` is a `Debug` render, so an
     array-valued count prints an arena address.
     **Both diagnostics are now worked** ([recorded-extent-count](recorded-extent-count.md) §"Fixed",
-    `feature/rcd`): `{found}` is named through `graph::describe_low_value` — *"a dispatch's count is a
+    at `dcdca031`): `{found}` is named through `graph::describe_low_value` — *"a dispatch's count is a
     tuple or a struct value"*, not an arena address — and the return-value sentence now says it is a
     symptom when a dispatch inside the body refused first (*"… is not one of those: a dispatch in this
     body refused before that, and this is only what it left behind"*). **The rule is unchanged.** What
@@ -461,7 +461,7 @@ need a node-local producer for `r`.
   loud for a parameter. `dim` is still carried as three unrelated literals (`.dim`, `.kdim`, `.dim`) and
   `.kdim` is the **stride**, so a mismatch reads the cache at the wrong pitch, silently.
 - **A hypothesis worth testing, and it is now measured and it is false** (`device-leg-of-the-ladder.md`,
-  RTX 3060 Laptop, `feature/dleg` off `dev@0ec49dbf`). The original text: *the weighting stage is **not**
+  RTX 3060 Laptop, off `dev@0ec49dbf`). The original text: *the weighting stage is **not**
   the GEMV refusal — its reduction is *longer* than its output — so **a chained step may reach a device
   before a lone GEMV does**. Unverified: the chain's device and graph legs are inferred from the KV-cache
   and GEMV measurements, because the CLI installs no compute backend.* **Measured, it does not.** The rule is

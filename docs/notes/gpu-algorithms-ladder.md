@@ -301,7 +301,7 @@ two sides hold the call's argument *values* — so the message is comparing
 values and calling them types, which is why both sides render `Int`.
 
 The first two are silent-wrong-answer defects — a plausible answer that is not
-the right one — and both are **fixed** on `feature/gpu-algorithms`, each with a
+the right one — and both are **fixed**, each with a
 test that fails without the fix. The third is a refusal that named nothing; its
 **message is fixed** and the three cases it names are not, because all three are
 one missing *apply*. The proposal's

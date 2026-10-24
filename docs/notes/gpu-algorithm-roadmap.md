@@ -727,7 +727,7 @@ not assuming the loop and the graph need the same fix.
 ## 8. The defects, and which are fixed
 
 The ladder found three pre-existing silent-wrong-answer defects. **Two are
-fixed** on `feature/gpu-algorithms`, each with a test that fails without the fix.
+fixed**, each with a test that fails without the fix.
 **The third is not**, and it is the one on the critical path.
 
 **The graph registry froze a backend — fixed.** `graph_digest` deliberately

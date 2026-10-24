@@ -298,7 +298,7 @@ entry point, and that nothing further should be built.
    lets `evaluated_deep.is_some()` be the whole gate. Mapping those writes is the first
    step of the replacement work, and the three epoch tests count as a question for the
    maintainer rather than as a cost to accept.
-   **Done, as the concrete-only gate** (`feature/concrete-gate`, `evaluation.rs`'s
+   **Done, as the concrete-only gate** (`evaluation.rs`'s
    `evaluate_node_deep_inner`): the walk cuts a node whose verdict **decided** and is
    asked again only for an `undecided` one. No second bit and no new state — a decided
    verdict's value is read as the answer, an `undecided` verdict is "ask me again", so
@@ -334,7 +334,7 @@ entry point, and that nothing further should be built.
    states — a node evaluated and decided exactly once — was made plain on both gates
    at once, `evaluate_node_deep_inner` cutting any verdict and the run gate trusting
    any set stamp, and the three suites were measured probe-free against a pristine
-   `dev` in the same worktree (`feature/undecided-final`, `dev@71adaa1a`; name sets
+   `dev` in the same worktree (`dev@71adaa1a`; name sets
    compared with `Compare-Object`, never counts). The two halves cost very different
    amounts, and the difference is the finding:
 

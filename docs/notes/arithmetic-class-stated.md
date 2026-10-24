@@ -22,8 +22,8 @@
 > [class-channel](class-channel.md) for the class vocabulary; [operators](operators.md)
 > §2 for what a comparison is specified to yield.
 
-Everything below was measured on `dev` at `4766533e`, in the worktree
-`.worktrees/acs` on `feature/acs`, through `cargo run -p lichen-compiler run` — the
+Everything below was measured on `dev` at `4766533e`, through
+`cargo run -p lichen-compiler run` — the
 language front end, which [test-harness](test-harness.md) §"Verify" calls the
 faithful runner for a runtime value. The probe that produced the class tables in §2
 was reverted before this note was written; §6 names it and what it measured.

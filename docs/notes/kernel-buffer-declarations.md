@@ -1,6 +1,7 @@
 # Kernels declare buffers; the pack places them
 
-> Status: **current design**, being implemented on `feature/pure-kernel-io`.
+> Status: **current design**, being implemented (the work is on a branch, not yet
+> merged into `dev`).
 > Supersedes the `.out`-as-a-parameter-group model in
 > [compute-kernel-struct](compute-kernel-struct.md)'s "The parallel parameter struct".
 > Points at: `crates/lichen-compute/src/compute.lichen` (`BufParam`, `Buf`, `buf`),

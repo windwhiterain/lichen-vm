@@ -7,8 +7,8 @@
 > because the closure acts on a **type**; §3 was wrong, and this note says which of the
 > two halves of the closure does the work and why.
 >
-> Measured in the worktree `.worktrees/shhx` on `feature/shx`, from `dev` at `d2f280c4`,
-> re-verified on `dev` at `7323cf6b`, through `lichen-language`'s own `testing::evaluate`
+> Measured from `dev` at `d2f280c4`, re-verified on `dev` at `7323cf6b`, through
+> `lichen-language`'s own `testing::evaluate`
 > (the faithful runner for a runtime value, per [test-harness](test-harness.md) §"Verify")
 > with an instrumented `crates/lichen-highlevel/src/checker.rs` shallow walk. **Every
 > probe was reverted before any commit**: an `eprintln` in the `n` arm of

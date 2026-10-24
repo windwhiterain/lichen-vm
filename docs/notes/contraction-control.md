@@ -320,7 +320,7 @@ backend-wide constraint on a driver's optimiser is a policy, not an arithmetic c
 [floating-point](floating-point.md) §6's question about a device running a body that does not
 reproduce the definition is still open. It is just no longer open *for want of a control*.
 
-> **Landed, on `feature/ncir`, by the user's decision on this measurement.** All four bullets are
+> **Landed, by the user's decision on this measurement.** All four bullets are
 > addressed and §9 measures the result through the shipped emitter. The third one resolved the
 > way the note says it must: **the decision rides in the IR, not a flag**, so the pipeline cache
 > key needed no change at all — §9.2.
