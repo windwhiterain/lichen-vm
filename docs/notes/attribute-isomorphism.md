@@ -1,10 +1,9 @@
 # The attribute isomorphism — handoff
 
 > Status: **in progress**, handed over. Branch `spec-literals` (base `dev`), HEAD
-> `619a2606`, working tree clean, not merged. The rule is landed in the language
-> spec and the attribute-specific record machinery is gone; **three tests stay red**
-> and their two mechanisms are analysed below — the first is closed, the second is
-> half closed and its remainder needs a ruling.
+> `bdde4d8d`, working tree clean, not merged. The rule is landed in the language
+> spec and the attribute-specific record machinery is gone; **one test stays red**
+> and it is a pinned *rendering* the literal rule changes, not a mechanism.
 >
 > What this note is: the state a successor resumes from — what the rule is, what
 > landed, the exact readings, the two mechanisms with the probes that found them,
@@ -12,8 +11,8 @@
 >
 > Points at: `docs/language-spec.md` §1 and §3, `lichen-highlevel`
 > (`checker`, `checker/annotations`, `checker/lambda`, `shape`), `lichen-lowlevel`
-> (`apply`, `static_module/apply`), `lichen-compute` (`compute.rs`
-> `compile_fragment`), and the notes
+> (`apply`, `static_module`, `static_module/apply`), `lichen-compute`
+> (`compute.rs` `compile_fragment`), and the notes
 > [array-attribute-view](array-attribute-view.md),
 > [kernel-parameter-class](kernel-parameter-class.md),
 > [apply-type-side-check](apply-type-side-check.md).
@@ -52,6 +51,8 @@ decides relaxation. `@any` states nothing, at any position.
 | `0ae17d02` | `shape`'s low-type readers cross the frozen boundary (`static_read`) |
 | `9a5406c0` | a struct instance's provided perspective is the meet of its **fields**; its type expression states a requirement, not a perspective — **and `a_read_takes...` passes** |
 | `619a2606` | `unify`'s fill refuses an answer that still holds an **open frozen position**, so a template's skeleton binds nothing — **and both `jit_inline` tests pass** |
+| `f0f8f668` | a frozen **hole** is materialized as this call's cell when a value is copied (`materialize_leaf`), while a signature cell the unify compares by identity is copied verbatim (`materialize_leaf_verbatim`) — **and both codomain tests pass, the two pinned renderings return to their decided form** |
+| `fc834b67`, `c0802cab`, `bdde4d8d` | the comment budget: every section the branch added fits its 120-character preamble limit |
 
 ## Readings (the tool's own `test result:` lines)
 
@@ -59,13 +60,15 @@ decides relaxation. `@any` states nothing, at any position.
 |---|---|
 | `lichen-highlevel --test highlevel` | **136 passed; 0 failed** |
 | `lichen-language --test language` | **274 passed; 1 failed** |
-| `lichen-compute --test lichen_compute` | **235 passed; 2 failed; 1 ignored** |
+| `lichen-compute --test lichen_compute` | **237 passed; 0 failed; 1 ignored** |
 
 Red:
 
-- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches`
-- `compute::a_jit_kernel_crosses_the_two_classes_both_ways`
-- `language::field_read_kinds::a_named_read_of_a_deferred_struct_is_accepted`
+- `language::field_read_kinds::a_named_read_of_a_deferred_struct_is_accepted` — the
+  program renders `1 # 0: Int` where the pinned expectation says `1: Int`. The
+  literal rule ("a constant states `# 0`") makes the attribute visible, so this is
+  a **stale pin**, not a mechanism: it needs the maintainer's word before the
+  expectation moves.
 
 ## Closed mechanism 1 — a read's lane-varying index stays warp-uniform
 
@@ -98,7 +101,7 @@ Tried and rejected while finding it:
   certificate disappears). While probing, print before the real read, never on the
   same node as it.
 
-## Open mechanism 2 — a jitted kernel's class reads undecided
+## Closed mechanism 2a — a jitted kernel's class reads undecided
 
 `compute.jit` refuses with `UNDECIDED_DOMAIN` for
 `k = compute.jit (x => helper x + 1)`, which must check.
@@ -149,54 +152,48 @@ materialization reusing the check-time one) was tried with
 `materialize_static_return_apply` is the only static type apply there is; there is
 no second owner to defer to.
 
-## The two still red — a kernel's **codomain** stays open
+## Closed mechanism 2b — a kernel's codomain stays open
 
-`a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
-`a_jit_kernel_crosses...` fails on `type_is_float`/`type_is_int` over its five
+`a_float_domain_...` failed on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
+`a_jit_kernel_crosses...` failed on `type_is_float`/`type_is_int` over its five
 cases. Both read the launch's result type, which is `k.O` — the kernel struct's
 codomain field.
 
-Measured (`type_head` on the root type node): the result type is a **five-position
-type expression** whose slots 1–4 are decided and whose slot 0 — the denotation —
-is a free dynamic cell. Its class root is the cell itself, holding nothing, so
-nothing was written and no class holds the answer either: the codomain was simply
-never bound.
+Measured (`type_head` on the root type node): the result type is a five-position
+type expression whose slots 1–4 are decided and whose slot 0 — the denotation — is a
+free dynamic cell. Its class root is the cell itself, holding nothing; a fill log
+over the whole program never named it, so nothing ever unified it — neither a fill
+nor a merge.
 
-Measured further: a fill log over the whole program (`unify_inner`'s two node-less
-arms) **never names that cell**, and it is still its own class root at the end, so
-nothing ever unified it — neither a fill nor a merge. Candidate **F was measured
-and does not close it** (`clone_static_signature_node` cloning every `undecided()`
-ref instead of only a valueless operation: compute stays 235/2).
+Both tests pass at `aeac9efe`, so this was the second casualty of `5d585047`: the
+non-reporting binding now unifies the type position, and the frozen signature's
+return expression it meets names a template hole in its value position. With
+`619a2606` that skeleton no longer fills anything, but the pair is never made either
+(the node-less arm returns before descending), so the codomain stays open.
 
-Both tests pass at `aeac9efe`, so this is the *second* casualty of `5d585047`: on
-that commit the kernel value's own pinned rendering moved from `.O Type` to
-`.O raw[?c, ?d]` — the codomain type expression lost its decided kind and
-denotation at the same moment the non-reporting binding started unifying the type
-position. On `aeac9efe` the call's type was `Int` (the lambda's codomain); now it
-is the frozen signature's open return type expression.
+What landed, `f0f8f668`: the rule is the per-call cell, applied at the copy site.
 
-So the remaining work is the other half of the same rule: an open frozen answer
-must not fill a class (`619a2606`), but the unify still has to **connect the
-template's per-call cell to the caller's expression**, so the caller's own
-inference decides it. Candidates, for a ruling:
+- `frozen_ref_is_open` — a frozen node still names a hole when it holds nothing and
+  computes nothing, or when an expression it holds does. The descent stops at a
+  plain array (`layout() == 0`): only an expression's positions are cells of their
+  own, and copying a shape would also lose the identity of the shapes the checker
+  registered (the arrow set).
+- `materialize_referenced` / `copy_referenced_value` — a copied value keeps the
+  artifact's decided positions and gives every open one a fresh cell of this call.
+- `materialize_leaf` copies through that walk; `materialize_leaf_verbatim` does not,
+  and `materialize_static_signature` uses it: a signature cell a unify compares by
+  identity must stay the artifact's, or the same function stops being one value.
+- The checker's imported-export read (`ExprKind::Static`) reads a materialized leaf,
+  so an imported top-level kernel's open positions are the importer's cells.
 
-- **E. Descend through the open answer.** At the node-less fill, when the answer
-  is open, unify its items against the receiver's counterpart positions instead of
-  writing. The receiver is a free cell, so the descend has to build it or defer.
-- **G. The codomain is read through the applied clone.** The checker reads `k.O`
-  as a field type; if the field's type cell is the template's, the read should go
-  through the applied clone, the way `applied_attribute_slot` reads an applied
-  attribute (spec §3). This is the narrowest, but it treats the type read
-  differently from the value read unless the same rule is stated for both.
-- **H. The applied return type is not the signature's expression.** The type the
-  call binds is the *lambda's* codomain, decided by the body; the signature's
-  return expression is a shape to pair with, not an answer to install. This is
-  the reading the old pinned renderings state (`(raw Kernel, Int, Int)`), and it
-  is the one question this session could not settle by measurement: whether
-  installing the signature's return *expression* as the call's type is ever
-  right, at any position.
+Measured: both codomain tests pass, compute 237/0, and the two pinned renderings
+return to `(raw Kernel, Int, Int)` / `.O Type` — the form `5d585047` had rewritten.
+Measured and rejected on the way: a non-recursive hole predicate (the pinned
+renderings regress to `raw Int`), a broad fill guard covering dynamic items (235/2),
+candidate D (no second owner to defer to), candidate F (cloning every `undecided()`
+ref: 235/2), and materializing at the unify slot sites only (no effect: the hole is
+nested inside a value the slot already holds).
 
-## Traps (each cost time this session)
 
 - **Do not special-case an attribute against the type.** A `slot == 1` skip in
   `unify_parameter_slots` made five pinned renderings pass and was rejected: it
@@ -208,9 +205,13 @@ inference decides it. Candidates, for a ruling:
 - **A static apply mirrors the dynamic one.** `kernel-parameter-class.md`'s
   load-bearing statement; the signature clone carries every per-call cell into
   the remap, and residual operations keep their frozen reference.
-- **The doc/code pair moves together.** This branch is **not mergeable** while
-  the five tests are red, because the spec on this branch states the rule the
-  code does not yet wholly keep.
+- **A materialized copy must not re-create a registered shape.** Deep-copying a
+  shape the checker registered (a function type's `[in, out]`, the arrow set) gives
+  a node the renderer cannot place and a unify cannot pair: it renders `raw[...]`
+  and breaks `function_cells`' identity. That is why the open descent stops at a
+  plain array, and why a signature cell compared by identity stays verbatim.
+- **The doc/code pair moves together.** This branch is **not mergeable** while any
+  test is red, because the spec on this branch states the rule the code keeps.
 - **Bisect before theorising.** Mechanism 2 cost this session hours of reading
   `unify`, `static_node_apply` and the clone walk; `git checkout <commit>` plus
   one filtered test named the culprit (`5d585047`) in four builds. The commits are
