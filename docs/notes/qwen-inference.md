@@ -880,5 +880,11 @@ answered `[9707, 0, 0, 0, 0]`, and a comparison with the per-sequence step on tw
 positions found the packed score missing its `0.0883883476` scale — a single position cannot show
 it, because a softmax over one weight is that weight whatever the scale.
 
+The attention groups the rows by position before it runs: rows at one position have caches of one
+length and take one packed step, a lone row keeps the per-sequence step, and the scatter copies each
+row's answer back into its own slot. A batch probe with two requests at different positions answers
+the same chain the single path does — `[25, 358, 2776, 4460, 311, 3535]` for the short prompt and
+`[2776, 4460, 311, 3535]` for the longer one, the second being the first at its shifted position.
+
 The two steps removed 64% of a token's submissions and 15% of its clock: the rest is the device's
 work at eight rows, which the batch shares but does not remove.

@@ -435,8 +435,9 @@ needs. That the fence count fell 43% and the clock 11% is the same reading as S1
 is not the whole step, and the device's own work at eight rows is the rest.
 
 The attention half landed next: `ATTEND_ROWS_STEP` packs the caches row after row and takes `p` and
-the extents, and `layer_batch` takes it when every row shares a position; a mixed-length batch keeps
-the per-sequence step, whose per-row length and stride the kernel still does not take. At eight rows
+the extents, and `layer_batch` groups the rows by position first — a group of one keeps the
+per-sequence step, and a group of more takes one packed step. A mixed-length batch still needs a
+per-row length and stride the kernel does not take; today it falls back group by group. At eight rows
 the two steps are **1 824 → 648 submissions a token (−64%)** and **0.839 s → 0.710 s (−15%)**, with
 all eight rows answering the same five tokens.
 
