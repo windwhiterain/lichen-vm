@@ -215,7 +215,7 @@ pub unsafe fn array_items<P: Program>(
 where
     P::Value: AsEnum<LowValue>,
 {
-    let value = module.node_value(id)?;
+    let value = node_value(module, id)?;
     let LowValue::Array(array) = value.as_enum()? else {
         return None;
     };
@@ -285,7 +285,7 @@ where
         return false;
     };
     items.len() >= 2
-        && module.node_value(items[EXPR_VALUE_SLOT].node) == Some(P::Value::type_marker())
+        && node_value(module, items[EXPR_VALUE_SLOT].node) == Some(P::Value::type_marker())
         && matches!(items[EXPR_TYPE_SLOT].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
 }
 
@@ -323,7 +323,7 @@ where
         return false;
     };
     items.len() >= 2
-        && module.node_value(items[KIND_MARKER_SLOT].node) == Some(marker)
+        && node_value(module, items[KIND_MARKER_SLOT].node) == Some(marker)
         && is_universe_any(module, universe, items[KIND_UNIVERSE_SLOT].node)
 }
 
@@ -521,7 +521,7 @@ where
         return false;
     };
     items.len() >= 2
-        && module.node_value(items[STRUCT_MARKER_TAG_SLOT].node)
+        && node_value(module, items[STRUCT_MARKER_TAG_SLOT].node)
             == Some(P::Value::type_struct_marker())
 }
 
@@ -582,7 +582,7 @@ where
     let payload_items =
         unsafe { array_items(module, marker_items[STRUCT_MARKER_PAYLOAD_SLOT].node) }?;
     let names_item = payload_items.get(STRUCT_MARKER_NAMES_SLOT)?;
-    match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
+    match node_value(module, names_item.node).and_then(|v| v.as_enum()) {
         Some(LowValue::Table(table)) => Some((kind_items[KIND_UNIVERSE_SLOT].node, shape, table)),
         _ => None,
     }
@@ -952,7 +952,7 @@ where
 {
     // A type constant's own **value** is its marker node, and both spellings
     // denote one class.
-    if let Some(value) = module.node_value(type_value) {
+    if let Some(value) = node_value(module, type_value) {
         if value == P::Value::int_marker() {
             return Some(LowShape::USize);
         }
@@ -979,7 +979,7 @@ where
     }
     let shape = kinded[TYPE_SHAPE_SLOT].node;
     // An atomic type: its shape slot holds the marker itself.
-    let shape_value = module.node_value(shape)?;
+    let shape_value = node_value(module, shape)?;
     if shape_value == P::Value::int_marker() {
         return Some(LowShape::USize);
     }
@@ -999,7 +999,7 @@ where
     if kind.len() < 2 {
         return None;
     }
-    let marker = module.node_value(kind[KIND_MARKER_SLOT].node)?;
+    let marker = node_value(module, kind[KIND_MARKER_SLOT].node)?;
     if marker == P::Value::tuple_type_marker()
         || is_struct_marker_any(module, kind[KIND_MARKER_SLOT].node)
     {
@@ -1086,7 +1086,7 @@ where
     let Some(kind) = (unsafe { array_items(module, node) }) else {
         return false;
     };
-    let Some(marker) = kind.first().and_then(|item| module.node_value(item.node)) else {
+    let Some(marker) = kind.first().and_then(|item| node_value(module, item.node)) else {
         return false;
     };
     marker == P::Value::tuple_type_marker()
@@ -1123,7 +1123,7 @@ where
     let mut slot = slot;
     for _ in 0..8 {
         let Some(LowValue::Array(array)) =
-            module.node_value(slot).and_then(|value| value.as_enum())
+            node_value(module, slot).and_then(|value| value.as_enum())
         else {
             break;
         };
@@ -1225,5 +1225,14 @@ fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
         // A static element is a leaf (a package export); it is never a
         // tuple/array/struct shape we descend into.
         AnyNodeId::Static(_) => false,
+    }
+}
+
+/// The value a dynamic node or a frozen ref answers: a static ref is read in its
+/// own module, which is the frozen boundary the class write crosses.
+pub(crate) fn node_value<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<P::Value> {
+    match id {
+        AnyNodeId::Dynamic(_) => module.node_value(id),
+        AnyNodeId::Static(sref) => module.static_read(sref),
     }
 }
