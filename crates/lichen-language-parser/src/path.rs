@@ -208,7 +208,10 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
         Expr::StructValue { fields, .. } => {
             let repeated = repeated_names(fields.iter().map(|field| Some(field.name.as_str())));
             for (i, field) in fields.iter().enumerate() {
-                out.push((field_step(&Some(field.name.clone()), i, &repeated), Node::Expr(&field.value)));
+                out.push((
+                    field_step(&Some(field.name.clone()), i, &repeated),
+                    Node::Expr(&field.value),
+                ));
             }
         }
         Expr::StructInst { callee, fields, .. } => {

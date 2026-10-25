@@ -893,7 +893,8 @@ fn expression<'a, Er: GrammarError<'a>>(
                             // (`docs/notes/value-templates.md`): the match is a
                             // statement of the body, not a second parameter
                             // channel.
-                            let parameter_value = Expr::Name(parameter.clone(), parameter_span, None);
+                            let parameter_value =
+                                Expr::Name(parameter.clone(), parameter_span, None);
                             let r#return = Box::new(Expr::Block {
                                 statements: vec![Stmt::Expr(Expr::TemplateUnify {
                                     actual: Box::new(parameter_value),
@@ -1094,7 +1095,7 @@ fn kw_atom<'a, Er: GrammarError<'a>>(
         .or(token(TokenKind::KwSet)
             .ignore_then(token(TokenKind::Glue).ignored().or_not())
             .ignore_then(choice((set_value, set_type))))
-        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .then(postfix_parser(tokens, expr).repeated().collect::<Vec<_>>())
         .map(|(atom, postfixes)| {
             postfixes
                 .into_iter()
@@ -1108,7 +1109,7 @@ fn postfix_atom<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     primary_parser(tokens, expr.clone())
-        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .then(postfix_parser(tokens, expr).repeated().collect::<Vec<_>>())
         .map(|(atom, postfixes)| {
             postfixes
                 .into_iter()
@@ -1124,16 +1125,20 @@ fn postfix_atom<'a, Er: GrammarError<'a>>(
 /// delimiter is an ordinary grouping and the two spellings never mean the same
 /// thing.
 fn postfix_parser<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Postfix, Ex<'a, Er>> + Clone {
     let glue = token(TokenKind::Glue).ignored();
+    // An instance's element may carry the `@shallow` marker, as the retired
+    // array literal's element did.
+    let element = shallow_marked(tokens, expr.clone());
     choice((
         token(TokenKind::Dot)
             .ignore_then(name())
             .map(|(field_name, _)| Postfix::DotName(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LBracket))
-            .ignore_then(comma_list(expr.clone()))
+            .ignore_then(comma_list(element))
             .then_ignore(token(TokenKind::RBracket))
             .map(Postfix::Bracket),
         glue.clone()

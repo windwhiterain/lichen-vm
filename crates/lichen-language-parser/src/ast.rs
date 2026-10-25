@@ -116,8 +116,8 @@ pub enum Expr {
         r#return: Box<Expr>,
         span: Span,
     },
-    /// `f x` — application; only a spaced `(` is an argument (see
-    /// [`Expr::StructInst`]).
+    /// `f x` — application; a glued `(` is a read, not an argument (see
+    /// [`Expr::FieldRead`]).
     Apply {
         function: Box<Expr>,
         argument: Box<Expr>,
@@ -178,7 +178,7 @@ pub enum Expr {
         span: Span,
     },
     /// `a(k)` — a positional slot read; the `(` is adjacent and holds one
-    /// expression (`a(1,)` is an instantiation).
+    /// expression.
     FieldRead {
         container: Box<Expr>,
         key: Box<Expr>,
