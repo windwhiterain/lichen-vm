@@ -471,8 +471,8 @@ impl<A: AttrSpec, L> Writer<A, L> {
         )
     }
 
-    /// `name = @clone e` — a clone of `e`: the clone is a fresh instantiation
-    /// of the expression's holes, and nothing else in the program shares them.
+    /// `name = @clone e` — a clone of `e`: its holes become fresh, and
+    /// nothing else shares them.
     pub fn clone(&self, name: &str, value: ExprId) -> ExprId {
         self.named(name, ExprKind::Clone { value })
     }

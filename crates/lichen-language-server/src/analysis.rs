@@ -1489,8 +1489,7 @@ fn classify_token_kind(
         TokenKind::Float(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Str(_) => Some((SemanticTokenType::STRING, Vec::new())),
         // The builtin type constants are type-ish, not keywords.  `Tuple`,
-        // `Array` and `Struct` are the builtin *templates*: values like `Int`,
-        // not spellings of a type (`docs/notes/value-templates.md`).
+        // `Array` and `Struct` are the builtin templates.
         TokenKind::KwInt
         | TokenKind::KwFloat
         | TokenKind::KwString
@@ -1685,9 +1684,8 @@ impl<'a> NameClass<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            // `actual = expected` — a plain unify; `actual <: template` — a
-            // template match; `@clone e` — a clone.  Each carries its own
-            // operands, and a name inside one resolves like any other.
+            // Every operand is walked: a name inside one resolves like any
+            // other.
             Expr::Unify {
                 actual, expected, ..
             } => {
@@ -2009,9 +2007,8 @@ impl Walk {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            // `actual = expected` — a plain unify; `actual <: template` — a
-            // template match; `@clone e` — a clone.  Each carries its own
-            // operands, and a name inside one resolves like any other.
+            // Every operand is walked: a name inside one resolves like any
+            // other.
             Expr::Unify {
                 actual, expected, ..
             } => {
@@ -2362,9 +2359,8 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            // `actual = expected` — a plain unify; `actual <: template` — a
-            // template match; `@clone e` — a clone.  Each carries its own
-            // operands, and a name inside one resolves like any other.
+            // Every operand is walked: a name inside one resolves like any
+            // other.
             Expr::Unify {
                 actual, expected, ..
             } => {
