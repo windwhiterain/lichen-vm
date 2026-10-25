@@ -439,8 +439,8 @@ fn a_pack_naming_the_fan_out_merges_all_three_nodes_into_one() {
         "the pack's own line says it fired for that region: {lines:?}"
     );
     assert!(
-        lines[0].contains("the merged fragment is unregistered"),
-        "and the survivor is still unregistered, so a later pass cannot name it: {lines:?}"
+        lines[0].contains("the merged fragment is registered with the conservative claim `Opaque`"),
+        "and the survivor is registered with the conservative claim, so a later pass names it:          {lines:?}"
     );
     assert_eq!(
         merged(&rewritten),

@@ -235,8 +235,7 @@ fn a_consumer_of_two_producers_merges_into_one_node_under_the_floor() {
             "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
              position {MAXIMUM} of node 1 and input position {MAXIMUM} of node 2 and input position \
              {SUM} of node 2, licensed by the floor: every node of the region claims Reduction and \
-             nothing else; the merged fragment is unregistered, so it carries no claim and a later \
-             digest-keyed pass cannot name it"
+             nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it"
         )],
         "the line names every node and every absorbed position, the consumer's two included"
     );

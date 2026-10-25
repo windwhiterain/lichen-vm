@@ -357,8 +357,7 @@ fn a_chain_of_three_merges_into_one_node_under_the_floor() {
             "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
              position {ABSORBED} of node 1 and input position {ABSORBED} of node 2, licensed by the \
              floor: every node of the region claims Reduction and nothing else; the merged \
-             fragment is unregistered, so it carries no claim and a later digest-keyed pass cannot \
-             name it"
+             fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it"
         )],
         "the report names every node, every absorbed position, and the licence that answered"
     );
@@ -501,8 +500,7 @@ fn a_consumer_that_reads_two_producers_is_a_fan_in_and_merges() {
             "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
              position {ABSORBED} of node 1 and input position 0 of node 2 and input position \
              {ABSORBED} of node 2, licensed by the floor: every node of the region claims Reduction \
-             and nothing else; the merged fragment is unregistered, so it carries no claim and a \
-             later digest-keyed pass cannot name it"
+             and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it"
         )],
         "the consumer's own two absorbed positions are both named, each with the node it is an \
          input of"

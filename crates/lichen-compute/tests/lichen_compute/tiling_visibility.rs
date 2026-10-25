@@ -136,10 +136,9 @@ fn a_composed_node_is_reported_by_name_and_nothing_lands_in_it() {
     clear_graph_pass();
     assert_eq!(composed.len(), 1, "the region became one node");
     assert!(
-        merged_report
-            .iter()
-            .any(|line| line.contains("the merged fragment is unregistered")),
-        "the merge's own report says the fragment it left behind is unregistered, which is what \
+        merged_report.iter().any(|line| line
+            .contains("the merged fragment is registered with the conservative claim `Opaque`")),
+        "the merge's own report says the fragment it left behind is registered with the conservative claim, which is what \
          makes it a miss for a later join: {merged_report:?}"
     );
 
