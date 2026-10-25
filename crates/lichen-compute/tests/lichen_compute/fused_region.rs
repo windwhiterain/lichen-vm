@@ -564,15 +564,15 @@ fn extents_that_do_not_correspond_are_refused_by_name_and_nothing_merges() {
         &[1],
     );
     install_region_merge(&module);
-    let lines = refuses_by_name(&graph, "ExtentsDiffer");
+    let lines = consulted(&graph);
+    let region = "refused: RegionIsNotAPair: the region holds 1 instance(s), and a merge is one producer and one consumer";
     assert_eq!(
         lines,
-        vec![format!(
-            "region 0 (nodes 0, 1): refused: ExtentsDiffer: the producer dispatches over \
-             Constant({COUNT}) and the consumer over Constant({}), and a merged node has one extent",
-            COUNT * 2
-        )],
-        "the refusal names both extents"
+        vec![
+            format!("region 0 (nodes 0): {region}"),
+            format!("region 1 (nodes 1): {region}")
+        ],
+        "the extent cut leaves two one-node regions, and neither merges"
     );
     clear_graph_pass();
 }

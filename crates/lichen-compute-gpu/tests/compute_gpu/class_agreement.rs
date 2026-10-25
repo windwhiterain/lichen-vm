@@ -319,6 +319,7 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
         KernelInstr::Sin => "Sin",
         KernelInstr::Cos => "Cos",
         KernelInstr::BufferReadCall(_) => "BufferReadCall",
+        KernelInstr::OutputReadCall(_) => "OutputReadCall",
         KernelInstr::BufferWriteCall(_) => "BufferWriteCall",
         KernelInstr::BufferAtomicAddCall(_) => "BufferAtomicAddCall",
         KernelInstr::SliceReadCall(_) => "SliceReadCall",

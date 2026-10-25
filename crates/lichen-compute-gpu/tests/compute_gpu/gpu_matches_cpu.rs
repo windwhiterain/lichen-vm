@@ -652,6 +652,17 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                         }
                     };
                 }
+                KernelInstr::OutputReadCall(_) => {
+                    let element_index = operand(1).as_index();
+                    let value = output[element_index];
+                    produced = match class {
+                        ScalarClass::Int => Scalar::Int(value),
+                        ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
+                        ScalarClass::BFloat16 => {
+                            Scalar::Float(f32::from_bits(value as u32 & !0xFFFF))
+                        }
+                    };
+                }
                 KernelInstr::BufferWriteCall(_) => {
                     let value = operand(2).as_class(class);
                     let element_index = operand(1).as_index();
