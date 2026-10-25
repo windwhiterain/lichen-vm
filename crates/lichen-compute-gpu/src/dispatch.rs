@@ -7,9 +7,9 @@
 //! The Vulkan dispatch backend: device-local buffers, explicit ordering, host pools.
 //!
 //! # Invariant
-//! A launch set that stages a slice is dispatched over a whole number of workgroups only,
-//! so the guard's condition is true for every lane of every workgroup and the branch does
-//! not divide one.
+//! A launch set that records a barrier — a slice's or a buffer's — is dispatched over a whole
+//! number of workgroups only, so the guard's condition is true for every lane of every workgroup
+//! and the branch does not divide one.
 //!
 //! # Invariant
 //! Buffers are device-local and data reaches them through a host-cached staging buffer: an
@@ -60,13 +60,13 @@ pub enum RunError {
     Emit(SpirvRefusal),
     /// A run over no indices: Vulkan has no zero-sized allocation to give it.
     EmptyRun,
-    /// A launch that stages a slice at a count that is not a whole number of workgroups.
+    /// A launch that records a barrier at a count that is not a whole number of workgroups.
     ///
     /// # Invariant
     /// The entry point's body runs only for a lane inside the count, and every lane of a workgroup
-    /// must reach a barrier, so a staged launch is a whole number of workgroups: its last workgroup
-    /// is full, the condition is true for all of its lanes, and the branch does not divide one
-    /// (`docs/notes/shared-memory-and-barriers.md` §8).
+    /// must reach a barrier, so a launch that records one is a whole number of workgroups: its
+    /// last workgroup is full, the condition is true for all of its lanes, and the branch does
+    /// not divide one (`docs/notes/shared-memory-and-barriers.md` §8).
     StagedLaunchNotAWholeWorkgroup { count: usize, lane_width: u32 },
     /// More storage buffers than the pool has room for; the pool is allocated once.
     TooManyBindings { total: usize, max: usize },
@@ -207,10 +207,11 @@ impl fmt::Display for RunError {
             RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width } => write!(
                 f,
                 "the launch covers {count} indices, which is not a whole number of workgroups of \
-                 {lane_width} lanes, and this launch stages a slice: the entry point's body runs \
-                 only for a lane inside the count, and every lane of a workgroup has to reach a \
-                 barrier, so a partial workgroup would divide the branch. Launch a multiple of \
-                 {lane_width}, or stage nothing (`docs/notes/shared-memory-and-barriers.md` §8)."
+                 {lane_width} lanes, and this launch records a barrier: the entry point's body \
+                 runs only for a lane inside the count, and every lane of a workgroup has to \
+                 reach a barrier, so a partial workgroup would divide the branch. Launch a \
+                 multiple of {lane_width}, or record no barrier \
+                 (`docs/notes/shared-memory-and-barriers.md` §8)."
             ),
             RunError::TooManyBindings { total, max } => write!(
                 f,
@@ -381,17 +382,19 @@ fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, Run
 /// How many workgroups a launch of `count` indices over `launch` is, or why it cannot be one.
 ///
 /// # Invariant
-/// A launch set that stages declares `Workgroup` storage, and every lane of a workgroup must
-/// reach a barrier while the body runs only for a lane inside the count — so a partial last
-/// workgroup would divide the branch around it. A staged launch is therefore a whole number of
-/// workgroups; the width is the root fragment's own declared fact
+/// A launch set that records a barrier — a slice's or a buffer's — is dispatched over a whole
+/// number of workgroups: every lane of a workgroup must reach the barrier, while the body runs
+/// only for a lane inside the count, so a partial last workgroup would divide the branch around
+/// it. The width is the root fragment's own declared fact
 /// (`docs/notes/shared-memory-and-barriers.md` §8).
 fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunError> {
     let lane_width = launch.root().target.lane_width.lanes();
+    // **A slice's barrier and a buffer's are one rule**: the space says nothing.
     let stages = launch
         .ordered()
         .iter()
-        .any(|fragment| !fragment.slices.is_empty());
+        .any(|fragment| !fragment.slices.is_empty())
+        || spirv::holds_a_staged_store(launch.ordered());
     if stages && count % lane_width as usize != 0 {
         return Err(RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width });
     }

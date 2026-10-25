@@ -4288,7 +4288,7 @@ fn as_condition(
 /// **The read names it**: a staged store is a recorded barrier whose read is an
 /// [`KernelInstr::OutputReadCall`], and the module declares the barrier's constants only when
 /// one is there — so a module without one does not carry a semantics constant nothing names.
-fn holds_a_staged_store(ordered: &[&KernelFragment]) -> bool {
+pub(crate) fn holds_a_staged_store(ordered: &[&KernelFragment]) -> bool {
     ordered.iter().any(|fragment| {
         fragment.body.barriers.iter().any(|expr| {
             matches!(
