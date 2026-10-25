@@ -2,6 +2,6 @@
   order = "1"
   output = "(1, 2, 1, Int): tuple{Int, Int, Int, Type}"
 ---
-a = [1, 2]
-b = (1, Int)
+a := [@any, 2][1, 2]
+b := (1, Int)
 (a[0], a[1], b(0), b(1))
