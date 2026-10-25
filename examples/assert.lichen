@@ -2,5 +2,5 @@
   order = "7"
   output = "(1, 5): tuple{Int, Int}"
 ---
-n = 5
+n := 5
 (@assert (n <= 5), n)

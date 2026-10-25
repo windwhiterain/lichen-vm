@@ -2,4 +2,4 @@
   order = "0"
   output = "(1, Int): tuple{Int, Type}"
 ---
-(1, Int) : tuple{Int, Type}
+(1, Int) <: (@any : Int, @any : Type)

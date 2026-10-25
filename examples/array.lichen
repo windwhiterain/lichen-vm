@@ -2,4 +2,4 @@
   order = "0"
   output = "[1, 2, 3]: array{Int, 3}"
 ---
-[1, 2, 3] : array{Int, 3}
+[@any : Int, 3][1, 2, 3]

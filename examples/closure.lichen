@@ -2,10 +2,10 @@
   order = "2"
   output = "[1, 2, 3, 4]: array{Int, 4}"
 ---
-a = 1
-f1 = x => {
-    b = 2
-    f2 = y => [a, b, x, y]
+a := 1
+f1 := x => {
+    b := 2
+    f2 := y => [@any, 4][a, b, x, y]
     f2
 }
 f1 3 4 
