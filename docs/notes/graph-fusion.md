@@ -482,9 +482,9 @@ fragments between instances**, and of nothing else:
   it is fragment content the engine's inversion step (§6) either handles or
   refuses by name. A tensor-operator pattern would not have matched at all.
 
-**Where the schema meets the algebra.** A region assembles into one
-producer→code→consumer chain or is refused by name: a node fed by two instances
-of its region, or feeding two, is `NotAReductionChain`; a consumer that declares
+**Where the schema meets the algebra.** A region assembles into one of the shapes the fold builds
+— a chain, a sibling, a fan-out or a fan-in — or is refused by name: a region whose edges are
+none of those is `NotAReductionChain`; a consumer that declares
 no `element` role is `NoElementRole`; and the element must read
 `Variable::PRODUCER` or the edge that made the producer its input is not the
 algebra the engine fuses (`ElementWithoutProducer`). A claimed role with no mark

@@ -619,10 +619,11 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   artifact replaces a recorded node and a moved shape *should* be refused.
   **The fan-out landed too** (`52e6a0a8`): a producer feeding two consumers is one region of three,
   the derivation now derives it (it keeps the one-consumer rule and drops the one-producer one, and
-  `RegionSchema::off_chain_node` names the node whose edges are not a chain's), and a **pack's
-  `fuse`** may name its hash — the floor still may not, because `Licence::Floor` additionally
-  requires `off_chain_node().is_none()`, so *a pack changes which regions are attempted, never what
-  must hold*. The composition is one mechanism rather than two: `compose_fan_out` takes the whole
+  `RegionSchema::off_chain_node` names the node whose edges are not a shape the fold builds), and a
+  **pack's `fuse`** may name its hash. **The floor's licence was widened after that**
+  (`docs/notes/automatic-fusion.md`, "The widened floor licence"), so the floor licenses it too: a
+  fan-out is one of the four shapes the fold builds, and *a pack changes which regions are
+  attempted, never what must hold* still holds — every legality check stands under either licence. The composition is one mechanism rather than two: `compose_fan_out` takes the whole
   consumer list and `compose` is that with one consumer, **byte-identical** (the 26 existing compose
   tests did not move). It is **one cone built once**, copied at each consumer's absorbed read at that
   read's own address — because composing twice is *not* the honest reading: the first call removes
@@ -632,10 +633,11 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   outputs are the consumers' outputs summed, and `rebuild` maps them **by name** so the merged node
   stands at the region's last position. Measured on the device: recorded `[3,5,…,17]`, merged
   identical, and moving **both** consumers' `+ 1.0` to `+ 10.0` inside the composed body answers
-  `[12,…,26]`. **Still refused**: a fan-out with no pack (`NotAReductionChain`, from the licence), a
-  **fan-in**, a three-node *chain* (`RegionIsNotAPair` — `compose` inlines consumers of one producer
-  only), a non-last consumer whose entry block branches (`ConsumerEntryDoesNotReturn`), and a
-  composition naming no consumer.
+  `[12,…,26]`. **Still refused**: a non-last consumer whose entry block branches
+  (`ConsumerEntryDoesNotReturn`), and a composition naming no consumer. (A fan-out with no pack and
+  a **fan-in** were refused by the licence when this was measured; the licence is widened now, and
+  a fan-out is one of the four shapes the fold builds.) A three-node *chain* is refused by
+  `RegionIsNotAPair` — `compose` inlines consumers of one producer only.
   **The two outputs are both observable, and finding that out found a bug** (`e36a0cfe`). A run's
   answer is one `RunResult` per return, in order — the bare value when there is **one** return, an
   `Array` of them when there are more — and `r[0]`/`r[1]` check and run unannotated, so the surface

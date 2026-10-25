@@ -14,8 +14,8 @@ use crate::kernel_registry::{kernel_claim, kernel_fragment};
 mod schema;
 
 pub use schema::{
-    Between, DeclaredFold, ELEMENTWISE, Instance, OPAQUE, Port, PortKind, REDUCTION, Region,
-    RegionSchema, RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal,
+    BRIDGED, Between, DeclaredFold, ELEMENTWISE, Instance, OPAQUE, Port, PortKind, REDUCTION,
+    Region, RegionSchema, RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal,
     derive_regions, ordinary_regions, region_positions, sibling_regions,
 };
 pub(crate) use schema::{offsets, producer_ordinal};

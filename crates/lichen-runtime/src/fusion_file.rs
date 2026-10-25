@@ -105,8 +105,9 @@ impl Budget {
 ///
 /// # Invariant
 /// The two refusals the survey names, read and carried. The engine's own refusals stand
-/// whatever they say: a shared producer is refused (`NotAReductionChain`) and an interface the
-/// pass cannot prove is a barrier (`InterfacesAreNotProved`), and this file cannot loosen one.
+/// whatever they say: a shape the fold does not build is refused (`NotAReductionChain`) and an
+/// interface the pass cannot prove is a barrier (`InterfacesAreNotProved`), and this file cannot
+/// loosen one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Refusals {
     /// Whether the file refuses to duplicate a producer several consumers read.

@@ -91,8 +91,10 @@ fuses a producer and its consumer into one kernel — had never run in this path
 - with the scale of the pre-attention composite claimed (`claim:Elementwise(element)` plus the
   `~ "element"` mark), the derivation joins the claimed nodes **across** the unclaimed rotation, and
   the composite derives **one region** (nodes 0–4 and 6–9). The matvec claims the element role
-  too, so the region **derives a schema**; the merge then refuses it with `NotAReductionChain`,
-  because the norm feeds three projections and the floor's own proof holds a reduction chain only.
+  too, so the region **derives a schema**; the merge then refuses it with `ExtentsDiffer`, because
+  the composite dispatches over 2048 lanes and over 1024 and a merged node has one extent (it was
+  refused with `NotAReductionChain` before the floor's licence was widened —
+  `docs/notes/automatic-fusion.md`, "The widened floor licence").
   A `fuse` pack naming the region's hash (`sha256:7c4649db…`, `fuse_probe`) licenses the merge, and
   the composition refuses it with `ForwardedValueIsLaneDependent`: the composite's `squares`
   reduction stages a value a loop carried forward, and the norm reads it at another lane, so the

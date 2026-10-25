@@ -353,32 +353,47 @@ pub struct RegionSchema {
 }
 
 impl RegionSchema {
-    /// The region-local node whose edges are not a shape the floor's own proof holds, or `None`
-    /// when they are.
+    /// The region-local node whose edges are not a shape the fold builds, or `None` when they
+    /// are.
     ///
     /// # Invariant
-    /// **A chain, where a node may read an earlier producer as well**: the edges beyond
-    /// that chain's own are the fan-in's, and each is a [`Between`] this derivation holds.
-    ///
-    /// A node that does **not** read the one before it is the fan-out, and a fan-out is not
-    /// this: so this names the producer such a region leaves twice for.
+    /// **The four shapes the fold builds**: a **chain** (every node but the first reads the one
+    /// before it), a **fan-in** (a node reads two producers), a **fan-out** (a producer feeds two
+    /// consumers), and a **sibling** (no edge inside the region). Edges that are none of them are
+    /// ones the fold composes no step for, and the node that does not read the one before it is
+    /// the one this names.
     pub fn off_chain_node(&self) -> Option<usize> {
-        let chain = (1..self.nodes.len()).all(|local| {
-            self.between
-                .iter()
-                .any(|edge| edge.producer + 1 == local && edge.consumer == local)
-        });
-        if chain {
+        let edges: Vec<(usize, usize)> = self
+            .between
+            .iter()
+            .map(|edge| (edge.producer, edge.consumer))
+            .collect();
+        // **A sibling**: the branches stand beside one another, and no edge is inside the region.
+        if edges.is_empty() {
             return None;
         }
-        let mut leaving: BTreeMap<usize, usize> = BTreeMap::new();
-        for edge in &self.between {
-            *leaving.entry(edge.producer).or_default() += 1;
+        // **A chain**: every node but the first reads the one before it.
+        if (1..self.nodes.len()).all(|local| edges.contains(&(local - 1, local))) {
+            return None;
         }
-        leaving
-            .iter()
-            .find(|(_, count)| **count > 1)
-            .map(|(node, _)| *node)
+        // **A fan-in**: a node reads two producers, each with a slot of its own.
+        let mut arrivals = vec![0usize; self.nodes.len()];
+        for &(_, consumer) in &edges {
+            arrivals[consumer] += 1;
+        }
+        if arrivals.iter().any(|count| *count > 1) {
+            return None;
+        }
+        // **A fan-out**: a producer feeds two consumers.
+        let mut leaving = vec![0usize; self.nodes.len()];
+        for &(producer, _) in &edges {
+            leaving[producer] += 1;
+        }
+        if leaving.iter().any(|count| *count > 1) {
+            return None;
+        }
+        // **None of the four**: the first node that does not read the one before it.
+        (1..self.nodes.len()).find(|local| !edges.contains(&(local - 1, *local)))
     }
 
     /// The canonical text the hash is taken over.
@@ -759,6 +774,13 @@ impl fmt::Display for SchemaRefusal {
 pub const ELEMENTWISE: &str = "Elementwise";
 /// The reduction interface's name.
 pub const REDUCTION: &str = "Reduction";
+/// The interfaces the symbolic bridge composes.
+///
+/// # Invariant
+/// **A node that claims one of these is algebra the bridge reads, and one that claims another is
+/// not**: the bridge reads a reduction's `combine` and `identity` and an elementwise's `element`,
+/// so those are the two it composes — and `Opaque` is the name no reader derives algebra from.
+pub const BRIDGED: &[&str] = &[REDUCTION, ELEMENTWISE];
 /// The opaque interface's name: a merged fragment claims it, and no reader has algebra for it.
 ///
 /// # Invariant

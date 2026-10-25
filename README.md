@@ -2167,12 +2167,13 @@ final = (drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare)) : tuple{Int, KV
     anyway, as `examples/gemv.lichen` states for the case where it is not.\n\n\
     **Three `plrun`s, and the chain is the library's own composition.** `scale` twice (up and \
     down), `lerp` between them, then `clamp` on the result: four kernels, four buffers, no \
-    buffer reused. They are **elementwise**, and this is worth stating because an elementwise \
-    chain is the one shape the fusion floor **refuses by name**: `InterfacesAreNotProved`, \
-    because an `Elementwise` region carries no licence and has no reduction chain for the floor's \
-    own proof to hold (`docs/notes/llm-operators.md`, the SiLU row). These four therefore never \
-    merge, and the answer is four dispatches rather than one — correct, and slower than a \
-    hand-written fuse would be. That is a measured refusal and not a missing feature.\n\n\
+    buffer reused. They are **elementwise**, and this is worth stating because the fusion floor's \
+    licence **covers** an elementwise chain now: every node of the region claims an interface the \
+    bridge composes, its shape is one the fold builds, and it dispatches over one extent \
+    (`docs/notes/automatic-fusion.md`, `The widened floor licence`). This file drives three \
+    `plrun`s and **records no graph**, so it is no region at all and the answer is four dispatches \
+    rather than one — correct, and slower than a fused one would be. That is the example's own \
+    shape, not a refusal.\n\n\
     **The arithmetic is exact, and the declared output is worked out by hand.** `x` is `1 2 3 4`, \
     so `scale` with `k = 2.0` answers `2 4 6 8` and with `k = −1.0` answers `−1 −2 −3 −4`; \
     `lerp` with `t = 0.25` gives `2 + 0.25 · (−1 − 2) = 1.25`, `4 + 0.25 · (−2 − 4) = 2.5`, \

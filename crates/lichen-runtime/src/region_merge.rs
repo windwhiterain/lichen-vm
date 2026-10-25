@@ -19,7 +19,7 @@ use lichen_kernel_ir::{
 };
 
 use crate::fusion_claim::{
-    Instance, PortKind, REDUCTION, Region, RegionSchema, RegionShape, SchemaHash, SchemaRefusal,
+    BRIDGED, Instance, PortKind, Region, RegionSchema, RegionShape, SchemaHash, SchemaRefusal,
     merged_claim, offsets, ordinary_regions, producer_ordinal, sibling_regions,
 };
 use crate::fusion_file::{Budget, FusionPlan, Strategy};
@@ -82,7 +82,7 @@ struct RegionMerge {
 
 /// What licensed one region's merge, as the report names it.
 enum Licence<'a> {
-    /// The engine's own proof: every node claims the reduction chain and nothing else.
+    /// The engine's own proof: bridged interfaces, a shape the fold builds, one extent.
     Floor,
     /// A pack whose `fuse` names this region's schema and whose constraints hold.
     Pack(&'a PlacementPack),
@@ -222,13 +222,13 @@ impl GraphPass for RegionMerge {
                     // stands whatever answered it.
                     match self
                         .gate(graph, &starts, &region.positions, &schema)
-                        .and_then(|()| licence(&schema, &region.positions, &self.packs))
+                        .and_then(|()| licence(graph, &schema, &region.positions, &self.packs))
                         .and_then(|licensed| {
                             merge_region(graph, &starts, &region.positions, &region.shape)
                                 .map(|m| (licensed, m))
                         }) {
                         Ok((licensed, merge)) => (
-                            merged_line(index, &merge, &licensed, &schema.hash, &region.shape),
+                            merged_line(index, &merge, &licensed, &schema, &region.shape),
                             Some(merge),
                         ),
                         Err(refusal) => (
@@ -415,23 +415,29 @@ pub enum MergeRefusal {
         /// What `compose` refused.
         refusal: ComposeRefusal,
     },
-    /// The region's edges are not one producer-to-consumer chain: a node two of them read from.
+    /// The region's edges are not one of the shapes the fold builds.
     ///
     /// # Invariant
     /// A distinct arm from [`Self::InterfacesAreNotProved`] because it is a distinct fact: that
-    /// one is what a node **claims**, this one how the region's values **flow**. A fan-out of
-    /// reductions is refused here and not there, because the floor's own proof is the shape it can
-    /// serve and a fan-out is not it — a fan-in **is**, once every one of its inputs is named.
+    /// one is what a node **claims**, this one how the region's values **flow**. A region's edges
+    /// that are none of the four the fold builds are refused here and not there, because the
+    /// floor's own proof is the shape it can serve — a chain, a sibling, a fan-out and a fan-in
+    /// are all shapes it serves.
     NotAReductionChain {
-        /// The graph node whose edges are not a chain's.
+        /// The graph node whose edges are not a shape the fold builds.
         node: usize,
         /// A pack that named this region and whose constraints did not hold, when one was
         /// consulted.
         inert: Option<(String, ConstraintRefusal)>,
     },
     /// The region holds an interface whose merge this engine has no algebra for.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::NotAReductionChain`] because it is a distinct fact: that one
+    /// is how the region's values **flow**, this one what a node **claims**. An interface the
+    /// bridge does not compose is refused here and not there, whatever the region's shape is.
     InterfacesAreNotProved {
-        /// The interfaces the region's nodes claim, other than the reduction's.
+        /// The interfaces the region's nodes claim, other than one the bridge composes.
         interfaces: Vec<String>,
         /// The region's schema, which is what a pack's `fuse` must name.
         region: SchemaHash,
@@ -607,9 +613,10 @@ impl fmt::Display for MergeRefusal {
             MergeRefusal::NotAReductionChain { node, inert } => {
                 write!(
                     formatter,
-                    "graph node {node}'s edges inside the region do not make one \
-                     producer-to-consumer chain, so the floor's own proof cannot hold it, and a \
-                     merge is licensed only by a pack whose `fuse` names this region's schema"
+                    "graph node {node}'s edges inside the region make none of the shapes the fold \
+                     builds (a chain, a sibling, a fan-out or a fan-in), so the floor's own proof \
+                     cannot hold it, and a merge is licensed only by a pack whose `fuse` names this \
+                     region's schema"
                 )?;
                 write_inert(formatter, inert)
             }
@@ -620,8 +627,9 @@ impl fmt::Display for MergeRefusal {
             } => {
                 write!(
                     formatter,
-                    "the region's node(s) claim {}, and a merge is licensed by the reduction chain \
-                     this pass can prove or by a pack whose `fuse` names this region's schema \
+                    "the region's node(s) claim {}, and a merge is licensed by the proof this pass \
+                     makes (every node an interface the bridge composes, a shape the fold builds, \
+                     one extent) or by a pack whose `fuse` names this region's schema \
                      {region}: no installed pack asks for this region",
                     interfaces.join(", ")
                 )?;
@@ -703,12 +711,12 @@ fn skipped(graph: &Graph, regions: &[Region]) -> Vec<usize> {
 /// decided it does.
 ///
 /// # Invariant
-/// The floor's licence is the reduction **shape this pass can serve**. A region two edges
-/// **leave** towards two readers is a fan-out, attempted only under a pack's `fuse`. A
-/// region two edges **arrive at** is that shape exactly when **every one of those inputs is
-/// named and proven**: a [`Between`](crate::fusion_claim::Between) per arrival, each over a
-/// slot of its own.
+/// The floor's licence is the **proof this pass makes of the region**: every node of it claims
+/// an interface the bridge composes, its shape is one the fold builds, and it dispatches over
+/// one extent. A pack whose `fuse` names the region's schema licenses what the floor cannot
+/// prove, and every legality check stands under either.
 fn licence<'a>(
+    graph: &Graph,
     schema: &RegionSchema,
     positions: &[usize],
     packs: &'a [PlacementPack],
@@ -730,27 +738,50 @@ fn licence<'a>(
             }
         }
     }
-    // The shape first: a fan-out is refused by the shape's own name, not by its interfaces.
+    // **The interfaces**: every node of the region claims one the bridge composes.
+    let unbridged: Vec<&str> = schema
+        .nodes
+        .iter()
+        .map(|node| node.interface.as_str())
+        .filter(|interface| !BRIDGED.contains(interface))
+        .collect();
+    if !unbridged.is_empty() {
+        return Err(MergeRefusal::InterfacesAreNotProved {
+            interfaces: unbridged.into_iter().map(str::to_string).collect(),
+            region: schema.hash.clone(),
+            inert,
+        });
+    }
+    // **The shape**: one the fold builds — a chain, a sibling, a fan-out or a fan-in.
     if let Some(local) = schema.off_chain_node() {
         return Err(MergeRefusal::NotAReductionChain {
             node: positions[local],
             inert,
         });
     }
-    let interfaces: BTreeSet<&str> = schema
-        .nodes
+    // **The extent**: one kernel dispatches over one extent.
+    region_extent(graph, positions)?;
+    Ok(Licence::Floor)
+}
+
+/// The extent the region's nodes dispatch over, or the refusal that they do not share one.
+///
+/// # Invariant
+/// **The first node's extent is the region's own**, and the first node that differs from it is
+/// the one named: a merged node has one extent, so a region whose nodes disagree is not one
+/// kernel.
+fn region_extent(graph: &Graph, positions: &[usize]) -> Result<Count, MergeRefusal> {
+    let Node::Kernel(first_node) = &graph.nodes()[positions[0]];
+    if let Some(disagreeing) = positions[1..]
         .iter()
-        .map(|node| node.interface.as_str())
-        .filter(|interface| *interface != REDUCTION)
-        .collect();
-    if interfaces.is_empty() {
-        return Ok(Licence::Floor);
+        .find(|position| !extents_correspond(first_node.count, count(graph, **position)))
+    {
+        return Err(MergeRefusal::ExtentsDiffer {
+            producer: first_node.count,
+            consumer: count(graph, *disagreeing),
+        });
     }
-    Err(MergeRefusal::InterfacesAreNotProved {
-        interfaces: interfaces.into_iter().map(str::to_string).collect(),
-        region: schema.hash.clone(),
-        inert,
-    })
+    Ok(first_node.count)
 }
 
 /// The element class of the region's first input port, which is the one a pack's `requires`
@@ -839,20 +870,12 @@ fn merge_region(
     }
     // The first node's extent is the merged node's, and the first that differs from it is the one
     // named.
-    let Node::Kernel(first_node) = &graph.nodes()[positions[0]];
-    if let Some(disagreeing) = positions[1..]
-        .iter()
-        .find(|position| !extents_correspond(first_node.count, count(graph, **position)))
-    {
-        return Err(MergeRefusal::ExtentsDiffer {
-            producer: first_node.count,
-            consumer: count(graph, *disagreeing),
-        });
-    }
+    region_extent(graph, positions)?;
     // The union the region's own edges name, against the ports the merged fragment holds.
     let absorbed: Vec<Vec<usize>> = absorbed_positions(positions, &links);
     let union: Vec<GraphValueId> = match shape {
         RegionShape::Ordinary => {
+            let Node::Kernel(first_node) = &graph.nodes()[positions[0]];
             let mut union: Vec<GraphValueId> = first_node.inputs.clone();
             for (index, position) in positions.iter().enumerate().skip(1) {
                 let Node::Kernel(node) = &graph.nodes()[*position];
@@ -1727,17 +1750,34 @@ fn mapped_count(count: Count, map: &[Option<GraphValueId>]) -> Option<Count> {
 /// # Invariant
 /// The region's **own hash** is in the sentence, because that is what the pack's `fuse` matched:
 /// a runner reading the report can tell which region the pack fired for, exactly as the tiling
-/// pass's own line names the node schema its pack fired for.
-fn licensed_by(licensed: &Licence<'_>, region: &SchemaHash) -> String {
+/// pass's own line names the node schema its pack fired for. The floor's sentence names the
+/// **interfaces the region's nodes claim**, and every one of them is one the bridge composes.
+fn licensed_by(licensed: &Licence<'_>, schema: &RegionSchema) -> String {
     match licensed {
-        Licence::Floor => "licensed by the floor: every node of the region claims Reduction and \
-                          nothing else"
-            .to_string(),
+        Licence::Floor => format!(
+            "licensed by the floor: every node of the region claims {} and nothing else",
+            claimed_interfaces(schema)
+        ),
         Licence::Pack(pack) => format!(
-            "licensed by pack \"{}\", whose `fuse` names this region's schema {region}",
-            pack.name()
+            "licensed by pack \"{}\", whose `fuse` names this region's schema {}",
+            pack.name(),
+            schema.hash
         ),
     }
+}
+
+/// The interfaces the region's own nodes claim, in name order, as one sentence's list of them.
+///
+/// # Invariant
+/// **One name per interface, in name order**: a region holds two nodes claiming one interface
+/// names it once, so the sentence says what the region's nodes claim and not how many they are.
+fn claimed_interfaces(schema: &RegionSchema) -> String {
+    let interfaces: BTreeSet<&str> = schema
+        .nodes
+        .iter()
+        .map(|node| node.interface.as_str())
+        .collect();
+    interfaces.into_iter().collect::<Vec<_>>().join(" or ")
 }
 
 /// One merged region's line: the nodes, the absorbed input, the licence and the survivor's claim.
@@ -1751,10 +1791,10 @@ fn merged_line(
     index: usize,
     merge: &Merge,
     licensed: &Licence<'_>,
-    region: &SchemaHash,
+    schema: &RegionSchema,
     shape: &RegionShape,
 ) -> String {
-    let licence = licensed_by(licensed, region);
+    let licence = licensed_by(licensed, schema);
     let registered = "the merged fragment is registered with the conservative claim `Opaque`: a \
                       pass reading the registry names it and refuses it by name, and no reader \
                       reads algebra from it";

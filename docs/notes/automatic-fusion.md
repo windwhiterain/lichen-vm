@@ -206,10 +206,11 @@ domain's leaves), `ParameterCountsDiffer` for the same fact on a consumer, and
 `ScalarArityDiffers` when a node binds another number of runtime scalars than its fragment
 declares.
 
-**The ordinary region's pre-attention still does not merge, for a different reason.** It gets past
-the shape check and refuses at `ForwardedValueIsLaneDependent`: the composite's `squares`
-reduction stages a value a loop carried forward, and the norm reads it at another lane, so the
-cone cannot be rebuilt at the read's address. That limit is the reduction's own, not the
+**The ordinary region's pre-attention still does not merge, for a different reason.** It is now
+refused by the licence's own extent condition, `ExtentsDiffer`: the composite dispatches over 2048
+lanes and over 1024, and one kernel dispatches over one extent. (Before the licence was widened it
+refused at `NotAReductionChain`, the shape's own name, and the composition's
+`ForwardedValueIsLaneDependent` was never reached.) That limit is the reduction's own, not the
 domains'.
 
 ### The sibling merge (H4)
@@ -246,9 +247,10 @@ sibling region's sinks are read by nodes that may sit inside the region's own sp
 attention's rope reads the key projection's output), so the merged node stands before them. Two
 refusals guard that placement — `InputIsProducedAfterTheMerge` and `OutputIsReadBeforeTheMerge`.
 
-**The licence still applies**: a sibling region is a fan-out of the shared producer, so the
-floor's own proof does not hold it and a pack whose `fuse` names the region's schema is what
-licenses it.
+**The licence still applies**: a sibling region is a fan-out of the shared producer, and the
+floor's own proof holds it because the shared producer stays **outside** the region — its value is
+read at one port, and the region's own branches are shapes the fold builds. A pack whose `fuse`
+names the region's schema is what licenses it when the classes have moved its hash.
 
 **What the pre-attention composite shows.** The sibling strategy derives five regions: the sum of
 squares alone, the norm alone (the shared producer), the **sibling region** (the key projection
@@ -315,12 +317,63 @@ that has already run joins the graph's nodes against the kernels *that module na
 kernel is one the module does not name. The registry-scoped paths — the compiler's `--pack` and the
 serve's `install_floor_for_run` — read the registry and do see it.
 
-### What is not true yet
+### The widened floor licence
 
-- **The file is emitted, but not the regions a floor licence merged.** `emit_plan` writes the
-  overrides the report names by hash; a region merged under the floor's own proof leaves a line
-  with no hash (its wording is pinned), so a human adds that override by naming the post-class
-  hash.
+**The floor's licence is the proof the engine makes of the region, and it no longer asks for a
+reduction chain.** It asks three things, each with its own refusal:
+
+| the licence's condition | what it decides | the refusal when it does not hold |
+|---|---|---|
+| every node of the region claims an interface the bridge composes — `Reduction` or `Elementwise` today | the algebra the merge reads | `InterfacesAreNotProved` |
+| the region's shape is one the fold builds — a chain, a sibling, a fan-out or a fan-in | the composition the merge makes | `NotAReductionChain` |
+| the region dispatches over one extent | the launch the merged node makes | `ExtentsDiffer` |
+
+**The four shapes are the four compositions** `lichen-kernel-ir` has: `compose` (a chain),
+`compose_siblings` (a sibling), `compose_fan_out` (a fan-out) and `compose_fan_in` (a fan-in). A
+region whose edges are none of them is refused by the shape's own name; a region whose edges are
+one of them is the floor's to merge.
+
+**The pack's door is unchanged.** A pack whose `fuse` names the region's schema still licenses what
+the floor cannot prove, and every legality check still stands under it: a pack decides which
+regions are attempted, never what a merge must satisfy.
+
+**Measured** (`crates/lichen-serve/examples/fusion_file_probe.rs`, the pre-attention composite, the
+sibling strategy, the plan of `examples/fusion_file.json`):
+
+| region | before | now |
+|---|---|---|
+| 0 (node 0) | `RegionIsNotAPair` | `RegionIsNotAPair` |
+| 1 (node 1) | `InterfacesAreNotProved` | `RegionIsNotAPair` — the licence holds, and the arity check answers |
+| 2 (nodes 6, 2) | merged, licensed by the floor | merged, licensed by the floor |
+| 3 (nodes 3, 4) — the knorm's squares and scale | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the composition at `ForwardedValueIsLaneDependent` |
+| 4 (nodes 7, 8, 9) — the whole query chain | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the composition at `ForwardedValueIsLaneDependent` |
+
+**The licence widened; the reduction's own limit did not.** The two chains the licence now holds
+are led by a reduction whose fold is **lane-dependent**: the `squares` reduction sums one row of
+the hidden state, and the `scale` that reads it asks for the row of *another* lane — so the
+producer's cone cannot be rebuilt at the read's address, and `ForwardedValueIsLaneDependent` says
+so. That is the limit the sibling section above measured, reached now through the licence rather
+than around it. **The node count is unchanged** (11 → 10): the sibling region was the only merge
+the pre-attention had before, and it still is.
+
+**An elementwise chain now merges under the floor, and the floor's own line says so.** The
+`lichen-compute` elementwise chain (`[elementwise, elementwise]`) and the `[elementwise,
+reduction]` chain both merge with no pack installed, and the report reads `licensed by the floor:
+every node of the region claims Elementwise and nothing else`. The line names the **interfaces the
+region's own nodes claim**, so a region's licence is readable from the report alone.
+
+**A fan-out is licensed now.** A producer two consumers read was refused by the shape's own name
+(`NotAReductionChain`); it is one of the four shapes the fold builds, so the floor holds it. The
+`serving-performance-boundary` note's ordinary pre-attention region is refused by the **extent**
+instead, because the composite dispatches over 2048 lanes and over 1024.
+
+
+- **The file is emitted, but not the regions a floor licence merged.** `emit_plan` writes the overrides
+  the report names by hash; a region merged under the floor's own proof leaves a line with no hash
+  (its wording is pinned), so a human adds that override by naming the post-class hash. **A region
+  refused by a check other than the licence's names no hash either** — `RegionIsNotAPair` and
+  `ForwardedValueIsLaneDependent` carry none — so the pre-attention's emitted file now carries **no**
+  override at all. Naming a refused region by hash is the emitter's own business.
 - **`passes` is parsed and the floor runs one merge.** The chain is one class pass, one region merge
   and one tiling pass, and the plan's pass count is carried, not spent.
 - **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
@@ -328,8 +381,8 @@ serve's `install_floor_for_run` — read the registry and do see it.
 - **The strategy steers the regions' shape and nothing else.** `sibling` derives the sibling
   regions beside the ordinary ones; the regions are still attempted in the graph's own order.
 - **The file's `refuse` booleans are carried.** The engine's own refusals — `NotAReductionChain`
-  for a shared producer, `InterfacesAreNotProved` for an unproved interface — stand whatever the
-  file says.
+  for a shape the fold does not build, `InterfacesAreNotProved` for an interface the bridge does not
+  compose — stand whatever the file says.
 - **`patterns` are carried.** Nothing consults them yet.
 
 ## References
