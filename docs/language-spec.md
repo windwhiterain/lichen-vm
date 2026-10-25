@@ -58,7 +58,7 @@ Lowlevel is a graph of nodes.
 A node can have an value, an operation, and a class.
 An operation can have an operand node.
 Nodes inside same class must share same value, class is merged by unify.
-An value can be atomic or an array of nodes.
+An value can be Type or an array of nodes.
 
 ## Attribute
 
@@ -85,12 +85,12 @@ An annotated expr creats a new expression with each annotated attribute:
 
 Annotation: ```lichen <expr> : <type>```.
 
-expression with atomic lowlevel value has type `Atomic`
+expression with unit vairant lowlevel value has type `Type`
 
-`Atomic` is self referencial expression:
+`Type` is self referencial expression:
 
 ```sytax
-`Atomic` := `@raw[@raw AtomicType, Atomic，...]`
+`Type` := `@raw[@raw TypeType, Type, ...]`
 ```
 
 ### Compound
@@ -100,7 +100,7 @@ Compound type is an layout documentation of lowleval array value, e.g. tuple, ar
 Tuple has no special layout.
 
 ```sytax
-`Tuple` := `@raw[@raw TupleType, Atomic, ...]`
+`Tuple` := `@raw[@raw TupleType, Type, ...]`
 
 `(e1, e2)` := `@raw[@raw[e1, e2], TupleType, ...]`
 
@@ -110,7 +110,7 @@ Tuple has no special layout.
 Array unify every element expression to a template expression.
 
 ```sytax
-`Array` := `@raw[@raw ArrayType, Atomic]`
+`Array` := `@raw[@raw ArrayType, Type]`
 
 `[template, n]` := `@raw[@raw[template, <`_`*n>], Array, ...]`
 
