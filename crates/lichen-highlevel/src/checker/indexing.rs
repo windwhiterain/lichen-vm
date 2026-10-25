@@ -451,12 +451,15 @@ where
     }
 
     /// Resolve pending shallow element types before a dependent read or the
-    /// definition pass. An unresolved entry stays pending for the later pass.
+    /// definition pass.
     ///
     /// # Invariant
     /// The type application is evaluated first, so the element's own type is
     /// decided before the tail closes on it; an element that is not a call has
     /// no application, and its own type is decided already.
+    ///
+    /// An entry that is still unresolved stays pending for the later pass: a
+    /// position whose type is open keeps its own undecided cell.
     pub(super) fn resolve_shallow_types(&mut self) {
         let shallow_types = std::mem::take(&mut self.shallow_types);
         for (type_apply, tail, inner) in shallow_types {
@@ -496,10 +499,8 @@ where
     /// 1 only while the spine is a concrete expr at check time; an undecided
     /// slot ends it, and the wraps above the stop still apply.
     ///
-    /// The descent also stops at a spine node it has already walked: the
-    /// universe and a function's own expr are self-referential, so a spine
-    /// that repeats itself is a cycle, not a deeper level. The set holds the
-    /// spine's own nodes, so it is as long as the spine and no longer.
+    /// The descent stops at a spine node already walked: a spine that
+    /// repeats itself is a cycle, not a deeper level.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
         // Level 1 is the element's own expr; a call's is built from the
         // extracted value and type, the apply expr being virtual.

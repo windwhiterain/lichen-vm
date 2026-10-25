@@ -1158,14 +1158,7 @@ where
                 shallow,
             })
             .collect();
-        self.alloc_node(
-            block,
-            None,
-            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
-                self.module.alloc_array(&items, block),
-                0,
-            )))),
-        )
+        self.array_value_node(block, items, 0)
     }
 
     /// [`Self::array_node`] with the array's **attribute layout**.
@@ -1184,6 +1177,12 @@ where
             .iter()
             .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
             .collect();
+        self.array_value_node(block, items, layout)
+    }
+
+    /// The array **value** node over `items`, with the array's attribute
+    /// layout.
+    fn array_value_node(&mut self, block: BlockId, items: Vec<ArrayItem>, layout: u32) -> NodeId {
         self.alloc_node(
             block,
             None,
