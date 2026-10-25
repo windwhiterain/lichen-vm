@@ -862,6 +862,32 @@ fn template_clone_makes_the_template_cells_fresh() {
     assert_eq!(instance.node_of(t), instance.root);
     assert_eq!(instance.node_of(left), ids[0]);
     assert_eq!(instance.node_of(right), ids[1]);
+
+    // The caller unifies the instance with the actual value: the instance's own
+    // cells take it, the template's stay open.
+    let one = u128_node(&mut m, root, 1);
+    let two = u128_node(&mut m, root, 2);
+    let actual = array_node(&mut m, root, &[one, two], None);
+    m.unify(instance.root, actual);
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(
+        u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()),
+        1
+    );
+    assert_eq!(
+        u128_of(m.node_value(AnyNodeId::Dynamic(ids[1])).unwrap()),
+        2
+    );
+    assert!(m.node_value(AnyNodeId::Dynamic(left)).is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(right)).is_none());
+
+    // A second instance is its own: the template's cells are still open.
+    let second = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    assert_ne!(second.root, instance.root);
+    assert_ne!(second.node_of(left), instance.node_of(left));
+    assert!(m.node_value(AnyNodeId::Dynamic(left)).is_none());
 }
 
 #[test]
