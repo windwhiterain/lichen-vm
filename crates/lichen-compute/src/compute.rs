@@ -2037,6 +2037,26 @@ where
         .is_some_and(|value| value.type_id().is_some())
 }
 
+/// The **fields** of a compound value: its items, past a struct value's header.
+///
+/// # Invariant
+/// A struct value's name table and nominal id are the value's own bookkeeping,
+/// not fields, so they are skipped; every other compound value's items are its
+/// fields (`docs/notes/value-templates.md`).
+fn value_field_items<P>(module: &Module<P>, value: AnyNodeId) -> Option<&'static [ArrayItem]>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    let items = shape::value_items(module, value)?;
+    let skip = if is_struct_value(module, value) {
+        shape::STRUCT_VALUE_FIELD_BASE
+    } else {
+        0
+    };
+    Some(&items[skip..])
+}
+
 /// A value's leaves: itself, or a compound's elements.
 ///
 /// # Invariant
@@ -2784,12 +2804,13 @@ where
     // Peel the `value_of` extraction first: asking it whether it is a tuple
     // would answer for the expr it wraps.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
-    // SAFETY: `value` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = match unsafe { module.array_items(value) } {
-        Some(items) if !items.is_empty() => items,
-        _ => return Ok(vec![ret_value]),
+    // A struct value's fields are its leaves; the header is not.
+    let Some(items) = value_field_items(module, AnyNodeId::Dynamic(value)) else {
+        return Ok(vec![ret_value]);
     };
+    if items.is_empty() {
+        return Ok(vec![ret_value]);
+    }
     let mut leaves = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         // An element is a complete slot: the leaf is its value position.
@@ -2807,6 +2828,11 @@ where
 
 /// Whether `node` is (or peels to) a materialized tuple value, for the codomain
 /// and argument walks alike.
+///
+/// # Invariant
+/// A struct value is a compound value too, and it is not a tuple: the nominal id
+/// at its second slot is what tells the two apart
+/// (`docs/notes/value-templates.md`).
 fn is_tuple_value<P>(module: &Module<P>, node: NodeId) -> bool
 where
     P: Program,
@@ -2814,6 +2840,9 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let value = value_of_node(module, node).unwrap_or(node);
+    if is_struct_value(module, AnyNodeId::Dynamic(value)) {
+        return false;
+    }
     // SAFETY: `value` is a live node of `module`.
     matches!(unsafe { module.array_items(value) }, Some(items) if !items.is_empty())
 }
@@ -3195,12 +3224,13 @@ where
     // A `value_of` extraction still carries the expr's value: peel it before
     // asking whether the rest is a tuple.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
-    // SAFETY: `value` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = match unsafe { module.array_items(value) } {
-        Some(items) if !items.is_empty() => items,
-        _ => return vec![ret_value],
+    // A struct value's fields are its outputs; the header is not.
+    let Some(items) = value_field_items(module, AnyNodeId::Dynamic(value)) else {
+        return vec![ret_value];
     };
+    if items.is_empty() {
+        return vec![ret_value];
+    }
     let mut nodes = Vec::with_capacity(items.len());
     for item in items {
         // An element is a complete slot: the output is its value position.
