@@ -198,16 +198,14 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether a cell's own content is **closed**: it holds a decided value
-    /// that is not the wildcard, it has no operator, and every cell its
-    /// content reaches is closed too.
+    /// Whether a cell's own content is **closed**.
     ///
     /// # Invariant
-    /// A cycle among decided cells is closed: the reach runs over decided
-    /// content only, so a cycle is a fact about the content, not a hole. An
-    /// operator's operand is not the cell's content, so it never decides. A
-    /// **marked** cell is the caller's own: its content is the caller's, so the
-    /// reach stops there and the cell's own account alone decides it.
+    /// A closed cell holds a decided value that is not the wildcard, it has
+    /// no operator, and every cell its content reaches is closed too. A cycle
+    /// among decided cells is closed: the reach runs over decided content
+    /// only, so a cycle is a fact about the content, not a hole. A **marked**
+    /// cell is the caller's own: the reach stops there.
     pub(crate) fn template_content_is_closed(
         &mut self,
         node: NodeId,

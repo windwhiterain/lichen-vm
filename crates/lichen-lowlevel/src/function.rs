@@ -501,10 +501,7 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        // The wildcard is **decided**: the clone's own cell carries it, so the
-        // position stays a wildcard and never becomes an inference hole. Each
-        // reach mints its own cell, so two unconstrained positions in one
-        // instantiation stay two cells.
+        // The wildcard is decided: the clone's cell carries it, never a hole.
         if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
             let fresh = self.add_node(ctx.target, None, None);
             self.write_node_value(fresh, value);
@@ -546,13 +543,7 @@ impl<P: Program> Module<P> {
             && operation.is_none()
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
-        // A **closed** cell is shared: nothing can be written into it, so the
-        // instance gains nothing by copying it. The proof is the template
-        // walk's — a decided value that is not the wildcard, no operator, and
-        // every cell its content reaches closed too — so a name table and the
-        // rest of a decided layout are one cell in the instance, not two.
-        // A **closure** is re-homed per call: the clone mints one, so its cell
-        // is never shared, however closed its own content is.
+        // A **closed** cell is shared: decided content, closed all the way down.
         let rehomed = matches!(
             value.and_then(|value| value.as_enum()),
             Some(LowValue::Function(_))
