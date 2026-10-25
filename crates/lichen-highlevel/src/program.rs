@@ -1472,7 +1472,7 @@ where
 /// fresh type cell, and one fresh `[value, type]` expression per attribute
 /// position, at the full-width layout. A bare cell would be read as a slot's
 /// value, and a read of the element would miss the type and the attributes.
-fn placeholder_expr<P: Program>(
+pub(crate) fn placeholder_expr<P: Program>(
     module: &mut Module<P>,
     block: BlockId,
     width: usize,

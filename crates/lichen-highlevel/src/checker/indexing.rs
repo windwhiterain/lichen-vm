@@ -1,11 +1,15 @@
 //! Arrays: the array **template**, the array **instance**, and the element
 //! read with its bounds.
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId, TemplateInstance};
 
+use lichen_utils::extend::AsEnum;
+
+use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{BinOp, ExprId, ExprKind};
+use crate::ir::{BinOp, ExprId};
 use crate::program::{HighProgram, TypeOperator, ValueType};
+use crate::shape;
 
 use super::Checker;
 use crate::diagnostic::AssertSpelling;
@@ -136,21 +140,54 @@ where
             .term
             .expect("the element template is compiled");
         let length_value = self.value_of(length);
-        let operands = self.array_node(self.current_block, &[template_term, length_value]);
-        let value = self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::ArrayTemplate),
-            Some(operands),
-        );
-        // The length may already be decided: the operator answers then, and the
-        // value is read as an ordinary array.
-        self.module.evaluate_node(AnyNodeId::Dynamic(value), None);
+        let value = match self.constant_length(length) {
+            Some(count) => {
+                let mut items = vec![template_term];
+                for _ in 0..count {
+                    items.push(self.placeholder_term());
+                }
+                self.array_node(self.current_block, &items)
+            }
+            None => {
+                let operands = self.array_node(self.current_block, &[template_term, length_value]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(TypeOperator::ArrayTemplate),
+                    Some(operands),
+                )
+            }
+        };
         let ty_node = self.array_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// A fresh **placeholder expression** — the hole an array template's
+    /// element position is.
+    ///
+    /// # Invariant
+    /// It is the operator's own construction, so a template built here and one
+    /// built at run time have the same shape.
+    fn placeholder_term(&mut self) -> NodeId {
+        let width = P::Attr::ORDER.len();
+        let layout = self.full_width_layout();
+        crate::program::placeholder_expr(&mut self.module, self.current_block, width, layout)
+    }
+
+    /// The count a length expression states, when it states one.
+    fn constant_length(&self, length: ExprId) -> Option<usize> {
+        let value = self.state[length].val?;
+        match self
+            .module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|held| held.as_enum())
+        {
+            Some(LowValue::USize(n)) => Some(n),
+            _ => None,
+        }
     }
 
     /// An array **instance** `T[e1, …, en]`.
@@ -187,14 +224,22 @@ where
             self.ir.children[elements.start as usize..elements.end as usize].to_vec();
         let element_depths: Vec<usize> =
             self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
-        // The element template: the template's own element expression.
-        let element_template = match self.ir[template].kind {
-            ExprKind::Array { template, .. } => Some(template),
-            _ => None,
+        // The clone's own shape: the element template is its value's first
+        // slot, and the element count is the rest of the value.
+        let Some(instance) = self.clone_instance(template) else {
+            self.record_guard(
+                template_ty,
+                template_ty,
+                self.loc(template, 0),
+                DiagKind::Guard,
+                None,
+            );
+            return self.refused_expr(e);
         };
-        let Some(element_template) = element_template else {
-            // An element template that is not stated here cannot be checked,
-            // and an unchecked requirement is worse than a refusal.
+        let (requirement, template_count) = self.clone_shape(&instance, template);
+        let (Some(mut requirement), Some(template_count)) = (requirement, template_count) else {
+            // An undecided clone states no element template and no length.
+            // An unchecked requirement is worse than a refusal.
             self.record_guard(
                 template_ty,
                 template_ty,
@@ -224,23 +269,31 @@ where
                     self.element_expr(wrapped, ty, element)
                 }
             };
-            // The element's own clone of the template: the requirement is the
-            // clone's element template.
-            let Some(instance) = self.clone_instance(template) else {
-                self.record_guard(
-                    template_ty,
-                    template_ty,
-                    self.loc(template, 0),
-                    DiagKind::Guard,
-                    None,
-                );
-                return self.refused_expr(e);
-            };
-            let requirement = instance.node_of(
-                self.state[element_template]
-                    .term
-                    .expect("the element template is compiled"),
-            );
+            // Every element but the first gets its own clone, so the
+            // template's holes are never shared between two elements.
+            if index > 0 {
+                let Some(instance) = self.clone_instance(template) else {
+                    self.record_guard(
+                        template_ty,
+                        template_ty,
+                        self.loc(template, 0),
+                        DiagKind::Guard,
+                        None,
+                    );
+                    return self.refused_expr(e);
+                };
+                let (Some(next), _) = self.clone_shape(&instance, template) else {
+                    self.record_guard(
+                        template_ty,
+                        template_ty,
+                        self.loc(template, 0),
+                        DiagKind::Guard,
+                        Some("array instance"),
+                    );
+                    return self.refused_expr(e);
+                };
+                requirement = next;
+            }
             self.check_unify(
                 element,
                 requirement,
@@ -249,32 +302,21 @@ where
             );
             values.push(element);
         }
-        // The element count is the template's own length: the clone's value
-        // holds the template and one hole per element.
-        let Some(instance) = self.clone_instance(template) else {
-            self.record_guard(
-                template_ty,
-                template_ty,
-                self.loc(template, 0),
-                DiagKind::Guard,
-                None,
-            );
-            return self.refused_expr(e);
-        };
-        let clone_value = instance.node_of(
-            self.state[template]
-                .val
-                .expect("the template's value is compiled"),
-        );
-        let count = self.usize_node(values.len());
-        let length = self.array_length_of(clone_value);
-        let count_ops = self.array_node(self.current_block, &[count, length]);
-        let matched = self.op_node(
+        // The count is the template's own length: a directed unify, so a
+        // mismatch is a diagnostic, not a bounds failure.
+
+        // The counts are fresh: the shared `0` and `1` are constants.
+        let count = self.alloc_node(
             self.current_block,
-            P::Operator::from(TypeOperator::from(BinOp::Eq)),
-            Some(count_ops),
+            None,
+            Some(P::Value::from(LowValue::USize(values.len()))),
         );
-        self.register_assert(matched, self.loc(e, 0), false, AssertSpelling::Condition);
+        let length = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(template_count))),
+        );
+        self.check_unify(count, length, self.loc(e, 0), DiagKind::ArrayElement);
         // The result's value: the template's own element template, then the
         // elements.
         let template_value = self.value_of(template);
@@ -502,6 +544,32 @@ where
             P::Operator::from(TypeOperator::ArrayLength),
             Some(operands),
         )
+    }
+
+    /// The clone's **shape**: the element template and the element count.
+    ///
+    /// # Invariant
+    /// Both are read from the clone's **value**, never from the syntax.
+    fn clone_shape(
+        &self,
+        instance: &TemplateInstance,
+        template: ExprId,
+    ) -> (Option<NodeId>, Option<usize>) {
+        let Some(clone_value) = self.state[template].val.map(|node| instance.node_of(node)) else {
+            return (None, None);
+        };
+        let requirement = shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(clone_value),
+            shape::ARRAY_VALUE_TEMPLATE_SLOT,
+        )
+        .and_then(|node| node.dynamic())
+        .map(|node| instance.node_of(node));
+        // The array's first slot holds the element template, so the elements
+        // are the rest.
+        let count = shape::value_len(&self.module, AnyNodeId::Dynamic(clone_value))
+            .map(|length| length.saturating_sub(1));
+        (requirement, count)
     }
 
     /// The value one more than `value`: the `+ 1` an array read's subscript is.
