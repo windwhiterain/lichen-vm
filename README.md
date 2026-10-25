@@ -57,11 +57,12 @@ program's exported type instead of running it, if that is what you want.
 Since `lichen-highlevel` preserves the consistency of `value : type` exprs, as
 long as the input `value : type` exprs are consistent, so are the evaluated ones.
 
-Note: lichen has no subtyping, and a compound type is typed by its kind rather
-than by `Type` (`array{Int, 3} : Type` does not check), so what `Type : Type` buys
-is that types are ordinary values and a recursive type is an ordinary cyclic one —
-the cost is that the decidability of a lichen program is your integration's
-responsibility, e.g. encode your type-system's universes into lichen.
+Note: a compound value carries its own layout and is typed by `Tuple`, `Array` or
+`Struct`, not by `Type` (`[@any : Int, 3][1, 2, 3] : Type` does not check). What
+`Type : Type` buys is that type constants are ordinary values and a recursive type
+is an ordinary cyclic one — the cost is that the decidability of a lichen program
+is your integration's responsibility, e.g. encode your type-system's universes
+into lichen.
 
 ## Quick start
 
@@ -82,7 +83,7 @@ Run a single program:
 
 ```bash
 cargo run -p lichen-compiler -- examples/tuple.lichen
-# (1, Int): tuple{Int, Type}
+# (1, Int): Tuple
 ```
 
 Install the compiler (a binary named `lichen-compiler`, formerly `lichen`):
@@ -96,7 +97,7 @@ then run it directly:
 
 ```bash
 lichen-compiler examples/tuple.lichen
-# (1, Int): tuple{Int, Type}
+# (1, Int): Tuple
 ```
 
 The package manager (a binary named `lichen`, in `crates/lichen-package`)
