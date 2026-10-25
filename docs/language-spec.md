@@ -1,13 +1,13 @@
 # Language spec 
 
-## Syntax 
-
 Illustration only, not precise.
+
+## Syntax 
 
 core:
 ```sytax
 program := block_inner
-expr := name | atom | unify | lambda | apply | block | annotated | compound | access | instanciate
+expr := name | atom | unify | lambda | apply | clone | block | annotated | compound | access | instanciate
 block := `{` block_inner `}`
 block_inner := ( (stmt | expr) sep)* expr
 sep := `,` | `;` | `\n`
@@ -16,10 +16,11 @@ bind := [`let`] name `:=` expr
 assert := `@assert` expr
 unify := expr `=` expr
 lambda := name => expr
+apply := expr expr
+clone := @clone expr
 annotated := expr annotation+
 annotation := annotator expr
 annotator := `:` | `!` | `?` | `#`
-apply := expr expr
 compound := tuple | array | struct
 tuple := `(` (expr sep)* `)`
 array := `[` expr'template sep expr'length `]`
@@ -38,9 +39,11 @@ atom := number | string | `_` | @any | builtin
 
 sugar:
 ```sytax
+`<expr'1> <: <expr'2>` => `<expr'1> = @clone <expr'2>`
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> [<expr'1>, <expr'2>]`
 `<name> <annoation*> => <expr>` => `<name> => {<name> <annoation*>; <expr>}`
+`<name> <: <expr'1> => <expr'2>` => `<name> => {<name> <: <expr'1>; <expr'2>}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -189,15 +192,15 @@ Struct is a special tuple that:
   v := raw[name_table, nominal_id, @raw None, @raw None]
   raw v[name_table["n1"]+2] = e1;
   raw v[name_table["n2"]+2] = e2
-  e3 = raw v[name_table["n2"]]
-  e4 = raw v[name_table["n1"]
+  e3 = raw v[name_table["n2"]+2]
+  e4 = raw v[name_table["n1"]+2]
   raw[raw v, Struct, ...]
 }`
 
-`s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]]}`
+`s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
 ```
 
-> ```lichen raw t[name_table["n1"]]` is lowlevel computation.
+> ```lichen raw t[name_table["n1"]+2]` is lowlevel computation.
 
 ## Preprocessor block
 
@@ -208,7 +211,7 @@ Preprocessor block can define metadata:
 `name = "value" `
 
 or import module:
-- `name = import "path"`: import a lichen file module.
+- `name = import "path"`: import a lichen source module.
 - `name = link "path"`: import a dynamic linked module.
 - `name = plug "path"`: import a compiler plugin module.
 
