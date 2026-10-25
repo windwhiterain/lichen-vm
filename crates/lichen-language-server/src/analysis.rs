@@ -3118,7 +3118,7 @@ mod tests {
     #[test]
     fn local_struct_field_access_hovers_with_value_and_type() {
         // A field access on a *local* struct binding renders the field's
-        // value:type, from this file's struct-block field table.
+        // value:type, from the checked field read.
         let d = doc("point := {.x 1, .y 2}\npoint.x\n");
         let (msg, _) = d
             .hover_at(Position {
