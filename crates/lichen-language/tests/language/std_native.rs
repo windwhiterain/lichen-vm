@@ -159,7 +159,7 @@ fn usize_array(module: &Module<HostProgram>, value: &LangValue) -> Vec<usize> {
 fn std_sort_sorts_a_usize_array() {
     let (module, value, _) = run(r#"
 ---
-  std = import "std.lichen"
+  std := import "std.lichen"
 ---
 std.sort [3, 1, 2]
 "#);
@@ -176,7 +176,7 @@ fn std_sort_is_reusable_and_length_preserving() {
     // each apply.
     let (module, value, _) = run(r#"
 ---
-  std = import "std.lichen"
+  std := import "std.lichen"
 ---
 (std.sort [4, 1, 3, 2], std.sort [9, 7])
 "#);
@@ -199,7 +199,7 @@ fn std_sort_rejects_a_non_array() {
     let diags = fail(
         r#"
 ---
-  std = import "std.lichen"
+  std := import "std.lichen"
 ---
 std.sort 5
 "#,
@@ -216,7 +216,7 @@ fn std_sort_rejects_a_non_int_array() {
     let diags = fail(
         r#"
 ---
-  std = import "std.lichen"
+  std := import "std.lichen"
 ---
 std.sort ["a", "b"]
 "#,
