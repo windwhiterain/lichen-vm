@@ -6,7 +6,7 @@
 //! written, chained and exercised with no `Module` in scope. The installed pass is the language
 //! side's, because a host thread's session is what holds one.
 
-use lichen_graph_ir::Graph;
+use lichen_graph_ir::{Count, Graph, Node};
 
 /// A graph's launch extent, read for the node that dispatches over it.
 ///
@@ -66,11 +66,34 @@ impl GraphPass for PassChain {
     ) -> Option<Graph> {
         let mut current: Option<Graph> = None;
         for stage in &self.stages {
-            let seen = current.as_ref().unwrap_or(graph);
-            if let Some(rewritten) = stage.apply(seen, extent, lines) {
+            // **The extent a stage reads is the one its own graph holds**: a rewrite renumbers
+            // the nodes, so the caller's closure answers about another node.
+            let rewritten = {
+                let seen = current.as_ref().unwrap_or(graph);
+                stage.apply(seen, &stage_extent(seen, extent), lines)
+            };
+            if let Some(rewritten) = rewritten {
                 current = Some(rewritten);
             }
         }
         current
+    }
+}
+
+/// The extent a stage reads, resolved against the graph that stage is about.
+///
+/// # Invariant
+/// **The node's own count is the reading**: a rewrite renumbers the nodes, so a closure built
+/// over the graph the chain was handed answers about another node. A count the graph cannot
+/// name is the host's to name, and the host names it against the graph it holds.
+fn stage_extent<'a>(
+    graph: &'a Graph,
+    host: &'a LaunchExtent<'_>,
+) -> impl Fn(usize) -> Option<usize> + 'a {
+    move |node: usize| match graph.nodes().get(node)? {
+        Node::Kernel(kernel) => match kernel.count {
+            Count::Constant(count) => Some(count),
+            _ => host(node),
+        },
     }
 }

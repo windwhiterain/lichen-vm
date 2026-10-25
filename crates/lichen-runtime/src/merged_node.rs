@@ -214,8 +214,9 @@ fn outputs_of(node: usize, fragment: &KernelFragment) -> Result<Vec<ScalarClass>
 /// one that failed.
 ///
 /// # Invariant
-/// **Every line names the node's identity**: the digest is what a later pass or a fusion file
-/// names the node by, so a line that omits it names a node no reader can find again.
+/// **Every line names the node's identity and its launch's extent**: the digest is what a later
+/// pass or a fusion file names the node by, and the extent is what the checks were made against,
+/// so a line that omits either names a node no reader can find again.
 pub fn line(
     node: usize,
     fragment: &KernelFragment,
@@ -247,7 +248,8 @@ pub fn line(
             )
         }
         Err(refusal) => format!(
-            "node {node}: refused: {name}: {message}; the merged node's identity is {digest}",
+            "node {node}: refused: {name}: {message}; the launch names a {extent:?} extent; the \
+             merged node's identity is {digest}",
             name = refusal.name(),
             message = refusal.message(),
         ),
