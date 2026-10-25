@@ -2037,33 +2037,111 @@ where
         .is_some_and(|value| value.type_id().is_some())
 }
 
-/// The **fields** of a compound value: its items, past a struct value's header.
+/// The layout a compound value carries.
 ///
 /// # Invariant
-/// A struct value's name table and nominal id are the value's own bookkeeping,
-/// not fields, so they are skipped; every other compound value's items are its
-/// fields (`docs/notes/value-templates.md`).
-fn value_field_items<P>(module: &Module<P>, value: AnyNodeId) -> Option<&'static [ArrayItem]>
+/// The layout is the value's **type**: the shared `Tuple`, `Array` and `Struct`
+/// templates name it, and the value's own offsets follow it
+/// (`docs/notes/value-templates.md`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompoundLayout {
+    /// A tuple value: the elements are the value's own items.
+    Tuple,
+    /// An array value: the element template holds slot `0`.
+    Array,
+    /// A struct value: the name table and the nominal id hold the two header
+    /// slots.
+    Struct,
+}
+
+impl CompoundLayout {
+    /// The slot the value's own elements start at.
+    const fn element_base(self) -> usize {
+        match self {
+            CompoundLayout::Tuple => shape::TUPLE_VALUE_ELEMENT_BASE,
+            CompoundLayout::Array => shape::ARRAY_VALUE_ELEMENT_BASE,
+            CompoundLayout::Struct => shape::STRUCT_VALUE_FIELD_BASE,
+        }
+    }
+}
+
+/// The layout the type at `ty` names, read from its **marker**.
+///
+/// # Invariant
+/// A compound's type is the shared template, and the template's value slot holds
+/// the marker that names the layout (`docs/notes/value-templates.md`).
+fn compound_layout<P>(module: &Module<P>, ty: AnyNodeId) -> Option<CompoundLayout>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    let marker = module.node_value(shape::value_item(module, ty, shape::EXPR_VALUE_SLOT)?)?;
+    if marker == P::Value::tuple_type_marker() {
+        Some(CompoundLayout::Tuple)
+    } else if marker == P::Value::array_type_marker() {
+        Some(CompoundLayout::Array)
+    } else if marker == P::Value::type_struct_marker() {
+        Some(CompoundLayout::Struct)
+    } else {
+        None
+    }
+}
+
+/// The slot a compound value's own elements start at.
+///
+/// # Invariant
+/// The layout is the value's **type** where the type names one, so an array
+/// value's element template is skipped. A value whose type names no layout is
+/// read by its own shape: a struct value's header holds the two slots before
+/// the first field, and every other compound value's elements are its own items
+/// (`docs/notes/value-templates.md`).
+fn element_base_of<P>(module: &Module<P>, value: AnyNodeId, ty: Option<AnyNodeId>) -> usize
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    if let Some(layout) = ty.and_then(|ty| compound_layout::<P>(module, ty)) {
+        return layout.element_base();
+    }
+    if is_struct_value(module, value) {
+        shape::STRUCT_VALUE_FIELD_BASE
+    } else {
+        shape::TUPLE_VALUE_ELEMENT_BASE
+    }
+}
+
+/// The **elements** of a compound value: its items, past the layout's own slots.
+///
+/// # Invariant
+/// A struct value's name table and nominal id and an array value's element
+/// template are the value's own bookkeeping, not elements, so they are skipped;
+/// a tuple value's elements are its own items
+/// (`docs/notes/value-templates.md`).
+fn value_element_items<P>(
+    module: &Module<P>,
+    value: AnyNodeId,
+    ty: Option<AnyNodeId>,
+) -> Option<&'static [ArrayItem]>
 where
     P: Program,
     P::Value: ValueType,
 {
     let items = shape::value_items(module, value)?;
-    let skip = if is_struct_value(module, value) {
-        shape::STRUCT_VALUE_FIELD_BASE
-    } else {
-        0
-    };
-    Some(&items[skip..])
+    items.get(element_base_of::<P>(module, value, ty)..)
 }
 
 /// A value's leaves: itself, or a compound's elements.
 ///
 /// # Invariant
-/// A struct value's leaves are its **fields**: the name table and the nominal id
-/// are the value's header, not fields, so they are skipped. Every other element
-/// is read through its own value position, so a leaf is the value a slot holds.
-pub(super) fn value_leaves_of<P>(module: &Module<P>, value: NodeId) -> Result<Vec<NodeId>, String>
+/// A compound's leaves are its **elements**: the layout's own slots — a struct
+/// value's header, an array value's template — are the value's bookkeeping, not
+/// leaves. Every other element is read through its own value position, so a
+/// leaf is the value a slot holds.
+pub(super) fn value_leaves_of<P>(
+    module: &Module<P>,
+    value: NodeId,
+    ty: Option<AnyNodeId>,
+) -> Result<Vec<NodeId>, String>
 where
     P: Program,
     P::Value: ValueType,
@@ -2072,14 +2150,10 @@ where
     let Some(items) = (unsafe { module.array_items(value) }) else {
         return Ok(vec![value]);
     };
-    let skip = if is_struct_value(module, AnyNodeId::Dynamic(value)) {
-        shape::STRUCT_VALUE_FIELD_BASE
-    } else {
-        0
-    };
+    let base = element_base_of::<P>(module, AnyNodeId::Dynamic(value), ty);
     items
         .iter()
-        .skip(skip)
+        .skip(base)
         .map(|item| match item.node {
             AnyNodeId::Dynamic(node) => module
                 .element_value_node(AnyNodeId::Dynamic(node))
@@ -2183,40 +2257,28 @@ where
 }
 
 /// A field's **value**: the cell the field's own expression holds.
+///
+/// # Invariant
+/// The field is the one at the layout's own base, so a struct value's field is
+/// past its header and a tuple value's element is its own item.
 fn struct_field_value<P>(module: &Module<P>, value: AnyNodeId, index: usize) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: ValueType,
 {
-    let field = shape::value_item(module, value, shape::STRUCT_VALUE_FIELD_BASE + index)?;
+    let base = element_base_of::<P>(module, value, None);
+    let field = shape::value_item(module, value, base + index)?;
     struct_field_value_of_expr(module, field)
 }
 
-/// The **low type** a field states.
-///
-/// # Invariant
-/// The type slot is read first and the field's own expression second, because a
-/// field states its class in one of two places: a **value** field states it in
-/// its type slot (`1.0` states `Float`), and a **type constant** states it in
-/// its own value (`Int` is the `Int` marker). One reader covers both, so a
-/// reader never guesses a class the field does not state.
-fn struct_field_low_type<P>(module: &Module<P>, field: AnyNodeId) -> Option<LowShape>
-where
-    P: Program,
-    P::Value: ValueType,
-{
-    struct_field_type_of_expr(module, field)
-        .and_then(|ty| low_type_of_slot(module, ty))
-        .or_else(|| low_type_of_slot(module, field))
-}
-
-/// The **field expression** at `path`.
+/// The **type** the field at `path` states.
 ///
 /// # Invariant
 /// The walk follows the field's **value** — the struct value a field holds — and
 /// reads the next level off the field's own expression, so a nested group is
-/// walked through the value that carries it.
-fn struct_field_expr_at_path<P>(
+/// walked through the value that carries it. The class a leaf has is the one its
+/// **type slot** states (`1.0` states `Float`), so the walk ends at that slot.
+fn struct_field_type_at_path<P>(
     module: &Module<P>,
     value: AnyNodeId,
     path: &[usize],
@@ -2232,7 +2294,8 @@ where
         field = Some(expr);
         current = struct_field_value_of_expr(module, expr)?;
     }
-    field
+    let expr = field?;
+    struct_field_type_of_expr(module, expr)
 }
 
 /// The class of every scalar leaf of a parallel parameter, in signature order.
@@ -2256,8 +2319,8 @@ where
     // A scalar role is a leaf at its own path: `[field]`, or `[in, g, s]`.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
         value
-            .and_then(|value| struct_field_expr_at_path(module, value, path))
-            .and_then(|field| struct_field_low_type(module, field))
+            .and_then(|value| struct_field_type_at_path(module, value, path))
+            .and_then(|ty| low_type_of_slot(module, ty))
             .map(|shape| scalar_class_of(&shape))
             .unwrap_or(ScalarClass::Int)
     };
@@ -2376,9 +2439,14 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(names) = struct_field_names(module, value) else {
+    // A struct value is what carries a field list; a value that is not one —
+    // the retired tuple `cfg`, or a template match not yet resolved — states
+    // no roles at all.
+    if !is_struct_value(module, value) {
         return Err(RoleUnread::Undecided);
-    };
+    }
+    // An anonymous struct has no table: every field is unnamed.
+    let names = struct_field_names(module, value).unwrap_or_default();
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     // A reserved group may be absent or written empty: the walk treats both
     // alike, so neither needs a filler field.
@@ -2468,8 +2536,10 @@ where
     // is a leaf.
     let held = struct_field_value_of_expr(module, field);
     if let Some(held) = held
-        && let Some(names) = struct_field_names(module, held)
+        && is_struct_value(module, held)
     {
+        // An anonymous struct has no table: every field is unnamed.
+        let names = struct_field_names(module, held).unwrap_or_default();
         if is_buf_shape(&names) {
             // The class is the buffer type's first shape position.
             let fields = struct_field_exprs(module, held);
@@ -2525,7 +2595,8 @@ where
         }
         return Ok(());
     }
-    let shape = struct_field_low_type(module, field);
+    let shape =
+        struct_field_type_of_expr(module, field).and_then(|ty| low_type_of_slot(module, ty));
     match (role, &shape) {
         // An output is produced by a write, and a write produces a buffer: any
         // other output type has no mechanism.
@@ -2680,12 +2751,11 @@ where
     shape::prepare_template_low_types(module, fid);
     // What the parameter states — the fact the domain check needs and the
     // decoded shape cannot supply. A struct's layout is in its value, so a
-    // struct parameter is recognised by the value it holds.
+    // struct parameter is recognised by the value it holds; a tuple parameter is
+    // a structure, and its positions are what the refusal names.
     let statement = if is_struct_value(module, AnyNodeId::Dynamic(param_value)) {
         DomainStatement::Struct
-    } else if param_type
-        .is_some_and(|slot| matches!(low_type_of_slot(module, slot), Some(LowShape::Tuple(_))))
-    {
+    } else if is_tuple_value(module, param_value) {
         DomainStatement::Shape
     } else {
         DomainStatement::Absent
@@ -2708,7 +2778,7 @@ where
     let mut tally = Positions::for_params(&params);
     // The body is emitted leaf by leaf: a scalar codomain is one leaf, a tuple
     // one per element, each its own stack slot.
-    let leaves = codomain_leaves(module, ret_value)?;
+    let leaves = codomain_leaves(module, ret_value, expr_type(module, ret))?;
     // A codomain may mix classes: each leaf is lowered in its own, so results
     // are typed per position (`result_classes`).
     let result_classes: Vec<ScalarClass> = leaves
@@ -2734,6 +2804,7 @@ where
         param_value,
         fid,
         ret_value,
+        expr_type(module, ret),
         &mut tally,
         type_classes_ref,
     )?;
@@ -2792,20 +2863,24 @@ where
 /// The body's value resolved into the leaves a wasm body must leave on the stack.
 ///
 /// # Invariant
-/// A bare value node is the single-leaf form and a materialized tuple value the
-/// multi-leaf one; a *nested* tuple is not flattened, because each leaf is one
+/// A bare value node is the single-leaf form and a materialized compound value the
+/// multi-leaf one; a *nested* compound is not flattened, because each leaf is one
 /// value on the stack — it is refused by name with the path instead.
-fn codomain_leaves<P>(module: &Module<P>, ret_value: NodeId) -> Result<Vec<NodeId>, String>
+fn codomain_leaves<P>(
+    module: &Module<P>,
+    ret_value: NodeId,
+    ret_type: Option<AnyNodeId>,
+) -> Result<Vec<NodeId>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // Peel the `value_of` extraction first: asking it whether it is a tuple
     // would answer for the expr it wraps.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
-    // A struct value's fields are its leaves; the header is not.
-    let Some(items) = value_field_items(module, AnyNodeId::Dynamic(value)) else {
+    // A compound's leaves are its elements; the layout's own slots are not.
+    let Some(items) = value_element_items::<P>(module, AnyNodeId::Dynamic(value), ret_type) else {
         return Ok(vec![ret_value]);
     };
     if items.is_empty() {
@@ -2836,7 +2911,7 @@ where
 fn is_tuple_value<P>(module: &Module<P>, node: NodeId) -> bool
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let value = value_of_node(module, node).unwrap_or(node);
@@ -2896,7 +2971,7 @@ where
     );
     let type_classes_ref = &type_classes;
     // The output count is the codomain's arity, fixed before any index runs.
-    let outputs = parallel_output_nodes(module, ret_value);
+    let outputs = parallel_output_nodes(module, ret_value, expr_type(module, body));
     // The codomain states the outputs; the parameter carries no `.out` group.
     if roles.outputs.is_empty()
         && let Ok(codomain) = codomain_roles(module, body)
@@ -3215,17 +3290,21 @@ where
 /// materialized tuple one per element. The elements are handed to the emitter
 /// unresolved — what a position *is* is the emitter's to determine, which keeps
 /// the specific cause with the code that can name it.
-fn parallel_output_nodes<P>(module: &Module<P>, ret_value: NodeId) -> Vec<NodeId>
+fn parallel_output_nodes<P>(
+    module: &Module<P>,
+    ret_value: NodeId,
+    ret_type: Option<AnyNodeId>,
+) -> Vec<NodeId>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // A `value_of` extraction still carries the expr's value: peel it before
     // asking whether the rest is a tuple.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
-    // A struct value's fields are its outputs; the header is not.
-    let Some(items) = value_field_items(module, AnyNodeId::Dynamic(value)) else {
+    // A compound's elements are its outputs; the layout's own slots are not.
+    let Some(items) = value_element_items::<P>(module, AnyNodeId::Dynamic(value), ret_type) else {
         return vec![ret_value];
     };
     if items.is_empty() {
@@ -3757,14 +3836,18 @@ where
 /// source's read; the wrapper's field order is fixed by [`is_buf_shape`], so the
 /// payload is its first **field** — a struct value's fields start after the two
 /// header slots.
+///
+/// The field is a complete expression, so the payload is the **value** the field
+/// holds and not the field itself.
 fn buf_payload<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
-    items_of(module, node)?
-        .get(shape::STRUCT_VALUE_FIELD_BASE)
-        .map(|item| item.node)
+    let field = items_of(module, node)?
+        .get(shape::STRUCT_VALUE_FIELD_BASE)?
+        .node;
+    slot_value_of(module, field).or(Some(field))
 }
 
 /// The items of `node`'s array value, whichever side of the freeze the node sits on.
@@ -4071,17 +4154,18 @@ where
     if let Ok(at) = cells.binary_search_by(|(candidate, _)| candidate.as_slice().cmp(path)) {
         return Some(cells[at].1);
     }
+    // A group is a struct value; a leaf the walk did not number is a hole the
+    // caller refuses.
+    if !is_struct_value(module, value) {
+        return None;
+    }
     let fields = struct_field_exprs(module, value)?;
     let mut items: Vec<ArrayItem> = Vec::with_capacity(fields.len());
     for (at, field) in fields.into_iter().enumerate() {
         let mut nested = path.to_vec();
         nested.push(at);
-        // A group is walked through the value the field holds; a leaf the walk
-        // did not number is a hole the caller refuses.
+        // A group is walked through the value the field holds.
         let held = struct_field_value_of_expr(module, field)?;
-        if !is_struct_value(module, held) {
-            return None;
-        }
         let node = assemble_parameter::<P>(module, block, held, cells, &nested)?;
         // An element is a complete slot, like the result's own (`assemble_result`).
         let slot = element_slot(module, block, node)?;
@@ -4886,11 +4970,32 @@ where
     None
 }
 
+/// The **value** a struct value's first field holds.
+///
+/// # Invariant
+/// Only a struct value has fields: a struct value's fields start after the two
+/// header slots, and a field is a complete expression, so the value a field
+/// holds is the one the expression keeps in its own value position
+/// (`docs/notes/value-templates.md`).
+fn first_field_value<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    if !is_struct_value(module, AnyNodeId::Dynamic(node)) {
+        return None;
+    }
+    // SAFETY: `node` is a live node of `module`.
+    let items = (unsafe { module.array_items(node) })?;
+    let field = items.get(shape::STRUCT_VALUE_FIELD_BASE)?.node;
+    slot_value_of(module, field).and_then(|node| node.dynamic())
+}
+
 /// The [`KernelId`] of a kernel-value node, through `value_of` and `.native` reads.
 fn kernel_id_of<P>(module: &Module<P>, node: NodeId) -> Option<KernelId>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
@@ -4905,11 +5010,7 @@ where
     }
     // A kernel struct value reached by value: its first **field** is the bare
     // artifact, and a struct value's fields start after the two header slots.
-
-    // SAFETY: `node` is a live node of `module`; the `items()` calls are safe.
-    if let Some(items) = (unsafe { module.array_items(node) })
-        && let Some(first) = items.get(shape::STRUCT_VALUE_FIELD_BASE)
-        && let Ok(first) = dyn_node(first.node)
+    if let Some(first) = first_field_value::<P>(module, node)
         && let Some(kid) = kernel_id_of(module, first)
     {
         return Some(kid);
@@ -4918,12 +5019,10 @@ where
     // first field, past the name table and the nominal id.
     if let Some(operation) = module.node_operation(node)
         && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
-            && let Ok((target, index)) = operand_expr(module, operation.operand)
-            && usize_value(module, index) == Some(shape::STRUCT_VALUE_FIELD_BASE)
-            && let Some(target) = target.dynamic()
-            // SAFETY: `target` is a live node of `module`.
-            && let Some(items) = (unsafe { module.array_items(target) })
-            && let Ok(first) = dyn_node(items.get(shape::STRUCT_VALUE_FIELD_BASE)?.node)
+        && let Ok((target, index)) = operand_expr(module, operation.operand)
+        && usize_value(module, index) == Some(shape::STRUCT_VALUE_FIELD_BASE)
+        && let Some(target) = target.dynamic()
+        && let Some(first) = first_field_value::<P>(module, target)
     {
         return kernel_id_of(module, first);
     }
@@ -4940,7 +5039,7 @@ where
 fn pending_kernel<P>(module: &Module<P>, node: NodeId) -> bool
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // The one operator that produces a `Kernel`; a lazy value here is a function
@@ -4958,10 +5057,7 @@ where
     {
         return true;
     }
-    // SAFETY: `node` is a live node of `module`.
-    if let Some(items) = unsafe { module.array_items(node) }
-        && let Some(first) = items.get(shape::STRUCT_VALUE_FIELD_BASE)
-        && let Ok(first) = dyn_node(first.node)
+    if let Some(first) = first_field_value::<P>(module, node)
         && pending_kernel(module, first)
     {
         return true;

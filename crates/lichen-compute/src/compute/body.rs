@@ -215,6 +215,7 @@ where
         domain: NodeId,
         function: FunctionId,
         codomain: NodeId,
+        codomain_type: Option<AnyNodeId>,
         tally: &'a mut Positions,
         type_classes: &'a HashSet<NodeId>,
     ) -> Result<KernelBody, String> {
@@ -246,7 +247,7 @@ where
             declared: HashMap::new(),
         };
         let mut values = Vec::new();
-        for node in lower.leaves_of(codomain)? {
+        for node in lower.leaves_of(codomain, codomain_type)? {
             values.push(lower.value(node)?);
         }
         // **The return belongs where the walk ended** — the entry block, or a nest's merge block.
@@ -733,12 +734,18 @@ where
 
     /// The domain's leaves, flattened — the ABI's argument list.
     fn domain_leaves(&self) -> Result<Vec<NodeId>, String> {
-        super::value_leaves_of(self.module, self.domain)
+        super::value_leaves_of(self.module, self.domain, self.domain_type())
     }
 
-    /// A value's leaves: itself, or an array's items. A codomain is at most a tuple of scalars.
-    fn leaves_of(&self, value: NodeId) -> Result<Vec<NodeId>, String> {
-        super::value_leaves_of(self.module, value)
+    /// The domain's **type**: the layout its leaves are read at.
+    fn domain_type(&self) -> Option<AnyNodeId> {
+        let slot = self.params.first()?;
+        shape::expr_type(self.module, slot.expr)
+    }
+
+    /// A value's leaves: itself, or a compound's elements. A codomain is at most a tuple of scalars.
+    fn leaves_of(&self, value: NodeId, ty: Option<AnyNodeId>) -> Result<Vec<NodeId>, String> {
+        super::value_leaves_of(self.module, value, ty)
     }
 
     /// The ABI slot the domain's `leaf`-th leaf takes.
@@ -1346,8 +1353,9 @@ where
                 return Ok(None);
             };
             let value = self.module.expr_value_half(argument).unwrap_or(argument);
-            let elements = super::value_leaves_of(self.module, value)
-                .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
+            let elements =
+                super::value_leaves_of(self.module, value, shape::expr_type(self.module, argument))
+                    .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
             let (Some(lhs), Some(rhs)) = (elements.first().copied(), elements.get(1).copied())
             else {
                 return Err(format!("{ty_op:?} is missing an operand"));
