@@ -127,6 +127,20 @@ impl Instantiation {
 }
 
 impl<P: Program> Module<P> {
+    /// Whether `clone` is a **plain cell**: no operator of its own and no answer.
+    ///
+    /// # Invariant
+    /// A plain cell owes no answer, so joining two of them cannot make a class
+    /// member run early.  The template's other pairs are the runtime's own: a
+    /// reader joins the cell it reads when the read runs
+    /// ([`Module::alias_read`]), and the conditional's arms are one class that
+    /// holds one arm's answer, so joining it early would put the conditional's
+    /// result there.
+    fn clone_is_a_plain_cell(&self, clone: NodeId) -> bool {
+        let clone = &self.nodes[clone];
+        clone.operation.is_none() && clone.value.is_none()
+    }
+
     /// `#[stacksafe]`: apply recursion is one frame per level, so the depth guard must be
     /// able to grow the stack.
     #[stacksafe]
@@ -363,14 +377,18 @@ impl<P: Program> Module<P> {
         }
         // The clone is unified with the argument, not replaced by it, so the binding propagates.
         if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-            // Re-establish the template's class topology among the fresh singleton clones.
+            // Re-establish the template's class topology among the fresh singleton
+            // clones — among the plain cells only.
             if ctx.remap.len() > 1 {
                 let groups = crate::apply::regroup_clones(
                     ctx.remap
                         .iter()
                         .map(|(&template, &clone)| (template, clone)),
                     |template| disjoint::find(&mut self.nodes, template),
-                );
+                )
+                .into_iter()
+                .filter(|(_, clone)| self.clone_is_a_plain_cell(*clone))
+                .collect();
                 crate::apply::unify_clone_groups(groups, |first, clone| {
                     self.unify(first, clone);
                 });
