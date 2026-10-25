@@ -93,21 +93,12 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
     // Check decides `k_double`'s cells; `k_outer`'s `.O` stays open (`raw none`).
-    for (sv, (value, ty)) in vals.iter().zip([
-        (
-            "(raw none, Int, Int)",
-            "struct{.native raw[?a, ?b], .I Type, .O Type}",
-        ),
-        (
-            "(raw none, Int, raw none)",
-            "struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}",
-        ),
-    ]) {
+    for (sv, value) in vals.iter().zip(["(raw none, Int, Int)", "(raw none, Int, raw none)"]) {
         // The two field values are type constants, so their own types name them.
         assert_eq!(sv.value.as_deref(), Some(value), "value = {:?}", sv.value);
-        // The type is read where it is decided: the input and output fields hold
-        // types, so their own type is the universe.
-        assert_eq!(sv.ty, ty, "type = {:?}", sv.ty);
+        // The type is the shared `Struct` layout: a compound's type is its
+        // template, and the field types live in the fields' own values.
+        assert_eq!(sv.ty, "Struct", "type = {:?}", sv.ty);
     }
 
     // The hover on the `k_double` binding renders the snapshot's `value : type`.
@@ -117,11 +108,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
             character: 0,
         })
         .expect("hover on k_double");
-    assert_eq!(
-        hover,
-        "`k_double` — `(raw none, Int, Int) : \
-         struct{.native raw[?a, ?b], .I Type, .O Type}`"
-    );
+    assert_eq!(hover, "`k_double` — `(raw none, Int, Int) : Struct`");
 }
 
 /// The named type variables (`?a`, …) a rendered line mentions, in order.
