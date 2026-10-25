@@ -161,7 +161,10 @@ and no local capture reaches it.
 
 A captured compound input or output is a **value**, not a type. It must be
 consumed with `<:` — which clones it — and never with `:` — which would pin the
-captured value into the place that uses it.
+captured value into the place that uses it. A captured scalar input or output is
+also a full expression: its value stays open and its type half states the scalar
+type, so the compute prelude can consume both scalar and compound I/O with `<:`.
+A concrete scalar type constant still uses ordinary `:`.
 
 Only a **whole** bare hole captures. A hole *inside* a concrete template is a
 match position: the template is cloned and the hole is cloned with it, so the
@@ -173,18 +176,18 @@ match fills it and never shares it with the written template.
   an arbitrary expression merely to allocate the value's repeated holes. The
   current checker builds a decidable length directly and refuses an instance
   whose cloned value or length is not decidable; that is a limitation, not the
-  dynamic-array semantics.
+  dynamic-array semantics. A layout-only constraint can use ordinary `Array`
+  annotation: `std.sort` does so, and the native operator retains its non-`Int`
+  rejection rather than pretending `[T, _]` already infers the length.
 - The interaction of `@shallow` with template arrays and instances needs to be
   stated rather than inherited accidentally from the retired array literal.
 - The highlevel clone boundary currently shares only enclosing lambda
   parameters. It deliberately does not infer lexical ownership for local
   bindings in nested lambdas.
-- Compound arrow domains require template-aware signature unification, including
-  inference when the written domain or codomain is still a hole. The design must
-  preserve frozen functions and scalar signatures, not only concrete examples.
-  The signature now reads a compound domain as a template and a bare hole as a
-  capture; a frozen callee's return value and a parameter-typed arrow's
-  codomain value stay uncaptured, as **The arrow's two sides** above records.
+- Compound arrow domains and bare-hole capture are implemented. Remaining limits
+  are a frozen callee's return value, a parameter-typed arrow's codomain value,
+  and a deferred operation domain that later decides to a scalar; **The arrow's
+  two sides** above records the exact boundary.
 
 ## Verification boundary
 
