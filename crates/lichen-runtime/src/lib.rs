@@ -31,7 +31,7 @@ pub use fused::{
 };
 pub use fusion_file::{
     Action, Budget, FusionFile, FusionFileRefusal, FusionPlan, Override, Pattern, Refusals,
-    Strategy, read_fusion_file,
+    Strategy, emit_plan, read_fusion_file,
 };
 pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
 pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};

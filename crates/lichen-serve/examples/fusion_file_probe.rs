@@ -6,7 +6,7 @@
 //! budget is tighter, and refused by the plan's own barrier: the gate declines a region, and
 //! it never accepts one a legality check refuses.
 
-use lichen_compute::fusion_file::{Budget, FusionPlan, read_fusion_file};
+use lichen_compute::fusion_file::{Budget, FusionPlan, emit_plan, read_fusion_file};
 use lichen_compute::placement_pack::read_placement_pack;
 use lichen_serve::{PRE_STEP, record, record_with_plan};
 
@@ -58,6 +58,21 @@ fn main() {
     println!("=== the plan: {} node(s)", recorded.nodes());
     for line in recorded.report() {
         println!("{line}");
+    }
+
+    // The file that report and plan answer: the editable starting point, and the file read back.
+    let emitted = emit_plan(recorded.report(), &plan);
+    println!("=== the emitted file");
+    println!("{emitted}");
+    let round = read_fusion_file(&emitted).expect("the emitted file reads");
+    let round = round.plan().expect("the emitted file answers a plan");
+    println!("=== the round trip");
+    println!("strategy: {}", round.strategy.as_str());
+    for pack in &round.overrides {
+        println!("override: the pack \"{}\"", pack.name());
+    }
+    for barrier in &round.barriers {
+        println!("barrier: {barrier}");
     }
 
     let tight = FusionPlan {

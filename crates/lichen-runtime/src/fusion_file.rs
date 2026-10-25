@@ -418,6 +418,112 @@ impl From<artifact::Pattern> for Pattern {
     }
 }
 
+/// The fusion file a recorded report and a plan answer: the editable starting point.
+///
+/// # Invariant
+/// **The text is the schema [`read_fusion_file`] parses**, so the file a run answers can be
+/// written down and read back: the strategy and the budget are the plan's own, and every
+/// override is one region line the report holds. Nothing is invented here — a line the report
+/// does not hold is not in the file.
+pub fn emit_plan(report: &[String], plan: &FusionPlan) -> String {
+    let file = artifact::File {
+        strategy: Some(plan.strategy.as_str().to_string()),
+        budget: Some(artifact::Budget {
+            max_region_nodes: Some(plan.budget.max_region_nodes),
+            max_region_depth: Some(plan.budget.max_region_depth),
+            compute_tolerance: Some(plan.budget.compute_tolerance),
+            staging_bytes: Some(plan.budget.staging_bytes),
+            passes: Some(plan.budget.passes),
+        }),
+        refuse: None,
+        patterns: None,
+        overrides: Some(overrides_of(report)),
+    };
+    facet_json::to_string_pretty(&file).expect("a fusion file is a plain data artifact")
+}
+
+/// The overrides the report's region lines state, one per region.
+///
+/// # Invariant
+/// **One region takes one action**, so a region two lines name is stated once: the reader
+/// refuses a file that overrides one region twice, and the file this writes is one the reader
+/// reads.
+fn overrides_of(report: &[String]) -> Vec<artifact::Override> {
+    let mut overrides: Vec<artifact::Override> = Vec::new();
+    for line in report {
+        let Some((region, action, reason)) = region_line(line) else {
+            continue;
+        };
+        if overrides.iter().any(|held| held.region == region) {
+            continue;
+        }
+        overrides.push(artifact::Override {
+            region,
+            action,
+            reason,
+        });
+    }
+    overrides
+}
+
+/// The override one line of a report states, or `None` when the line states none.
+///
+/// # Invariant
+/// **Only a region line is read**, and only the two facts such a line carries: the
+/// `sha256:` hash it names and whether the region merged or was refused. A line that is not a
+/// region line, a region line that names no hash, and a region line that neither merged nor was
+/// refused are all skipped — the emitter reads a report, it does not guess.
+fn region_line(line: &str) -> Option<(String, artifact::Action, Option<String>)> {
+    let rest = line.strip_prefix("region ")?;
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &rest[digits..];
+    // **Two shapes, and no other**: `region N: …` and `region N (nodes …): …`.
+    if !(rest.starts_with(':') || rest.starts_with(" (nodes ")) {
+        return None;
+    }
+    let region = schema_hash(rest)?;
+    if rest.contains("merged into one node") {
+        return Some((
+            region,
+            artifact::Action::ForceMerge,
+            Some("the region merged".to_string()),
+        ));
+    }
+    let check = refusal_of(rest)?;
+    Some((region, artifact::Action::Barrier, Some(check)))
+}
+
+/// The `sha256:<hex>` a text names, or `None` when it names none.
+///
+/// # Invariant
+/// **One spelling**: `sha256:` and 64 hex digits, the shape a region report prints. A text that
+/// names no hash names no region, and the region is left out of the file.
+fn schema_hash(text: &str) -> Option<String> {
+    let start = text.find("sha256:")?;
+    let digits = text.get(start + "sha256:".len()..)?.get(..64)?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("sha256:{digits}"))
+}
+
+/// The check that refused a region, as the reason the file states.
+///
+/// # Invariant
+/// **The check's own name**, which is what a report prints first after `refused:`: the reason a
+/// human reads says which check answered, and not the sentence it answered with.
+fn refusal_of(text: &str) -> Option<String> {
+    let after = text.split_once("refused: ")?.1;
+    let name = after.split_once(": ")?.0;
+    if name.is_empty() {
+        return None;
+    }
+    Some(format!("refused: {name}"))
+}
+
 /// The fusion file's own text, as the JSON spells it.
 ///
 /// # Invariant

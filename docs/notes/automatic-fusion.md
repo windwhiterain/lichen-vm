@@ -155,6 +155,18 @@ the engine already knows. A **barrier** names the region and asks for no merge �
 vocabulary cannot spell that, because `fuse` is the only directive that names a region and it
 asks for a merge — so the plan carries the barred regions beside the packs.
 
+### The emitted file
+
+`emit_plan` is the other direction: a recorded report and a `FusionPlan` answer a **file text**,
+and the text is the schema `read_fusion_file` parses — so `read_fusion_file(emit_plan(report,
+plan))` reads back. The strategy and the budget are the plan's own, and every override is one
+region line the report holds: a region that **merged** becomes a `force_merge`, a region that was
+**refused** becomes a `barrier` with the check's own name as its reason, and a region line that
+names no `sha256:` hash is left out. The parse is deliberately conservative — only `region N …`
+lines are read, and only the two facts such a line carries — so a report the emitter cannot read
+yields a file that states less, never a file that states something else. `fusion_file_probe`
+prints the file and reads it back, and `fusion_file_emit` prints the report it came from.
+
 ### The gate
 
 The merge pass reads the plan's policy before any legality check: a barred region is refused
