@@ -210,14 +210,14 @@ fn goto_definition(uri: &str, id: u32, line: u32, character: u32) -> String {
 fn a_burst_of_edits_runs_the_frontend_once() {
     let mut server = Server::start();
     let uri = "file:///burst.lichen";
-    server.send(&did_open(uri, "a = 1\na\n"));
+    server.send(&did_open(uri, "a := 1\na\n"));
     let _opened = server.next_publish();
 
     for version in 2..=6 {
-        let text = format!("a = 1\nb{version} = a + 1\nb{version}\n");
+        let text = format!("a := 1\nb{version} := a + 1\nb{version}\n");
         server.send(&did_change(uri, version, &text));
     }
-    server.send(&did_change(uri, 7, "a = 1\nb = unknown_name\nb\n"));
+    server.send(&did_change(uri, 7, "a := 1\nb := unknown_name\nb\n"));
 
     let publishes = server.publishes(QUIET);
     assert_eq!(
@@ -243,7 +243,7 @@ fn a_burst_of_edits_runs_the_frontend_once() {
 #[test]
 fn an_edit_to_an_imported_file_refreshes_the_answer() {
     let dir = temp_dir("dep");
-    write(&dir, "math.lichen", "succ = x => x + 1\n");
+    write(&dir, "math.lichen", "succ := x => x + 1\n");
     let main = write(
         &dir,
         "main.lichen",
@@ -271,7 +271,7 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
     );
 
     // Only the import changes; the document the editor holds is untouched.
-    write(&dir, "math.lichen", "succ = x => x + 1\nextra = 7\n");
+    write(&dir, "math.lichen", "succ := x => x + 1\nextra := 7\n");
 
     let after = server.request(3, &completion(&uri, 3, 3, 5));
     assert!(
@@ -296,7 +296,9 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
 #[test]
 fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
     let dir = temp_dir("prelude");
-    let main = write(&dir, "main.lichen", "add [\"a\", \"b\"]\n");
+    // The argument is a pair of strings: the prelude's `add` takes a tuple of
+    // two numbers, so the refinement inside the built-in fails.
+    let main = write(&dir, "main.lichen", "add (\"a\", \"b\")\n");
     let uri = Url::from_file_path(&main).unwrap().to_string();
 
     let mut server = Server::start();
@@ -346,10 +348,10 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
 fn a_closed_document_publishes_nothing_further() {
     let mut server = Server::start();
     let uri = "file:///closing.lichen";
-    server.send(&did_open(uri, "a = 1\na\n"));
+    server.send(&did_open(uri, "a := 1\na\n"));
     let _opened = server.next_publish();
 
-    server.send(&did_change(uri, 2, "a = 1\nb = unknown_name\nb\n"));
+    server.send(&did_change(uri, 2, "a := 1\nb := unknown_name\nb\n"));
     server.send(&did_close(uri));
 
     let publishes = server.publishes(QUIET);
