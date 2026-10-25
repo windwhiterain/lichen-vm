@@ -46,6 +46,7 @@ mod indexing;
 mod lambda;
 mod native_call;
 mod operators;
+mod signatures;
 mod structs;
 mod templates;
 mod tuples;
@@ -1592,11 +1593,9 @@ where
                 parameter,
                 return_type,
             } => {
-                // Compile both sides in the enclosing scope, ahead of the
-                // signature's shell.
-                let parameter_ty = self.check_type_element(parameter);
-                let return_ty = self.check_type_element(return_type);
-                self.check_signature(e, parameter_ty, return_ty)
+                // The signature compiles both sides in the enclosing scope,
+                // ahead of its own shell.
+                self.check_signature(e, parameter, return_type)
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
             ExprKind::Struct { fields, names } => self.check_struct_value(e, fields, names),
