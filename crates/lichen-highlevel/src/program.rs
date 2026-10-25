@@ -1172,11 +1172,16 @@ where
                 else {
                     return None;
                 };
+                // The holes are full placeholder expressions, so a read of an
+                // element reads a slot and not a bare cell.
+                let layout = module.full_width_layout().unwrap_or(0);
+                let width = module.attribute_layout(layout).len();
                 let mut values = Vec::with_capacity(length + 1);
                 values.push(ArrayItem::new(items[0].node));
                 for _ in 0..length {
-                    let hole = module.add_node(block, None, None);
-                    values.push(ArrayItem::new(AnyNodeId::Dynamic(hole)));
+                    values.push(ArrayItem::new(AnyNodeId::Dynamic(placeholder_expr(
+                        module, block, width, layout,
+                    ))));
                 }
                 Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
                     module.alloc_array(&values, block),
@@ -1355,6 +1360,11 @@ where
                     | TypeOperator::Ln => {
                         unreachable!("the prefix scalar operators are unary, and handled above")
                     }
+                    // The array operators are unary or own their operand layout,
+                    // and are handled above.
+                    TypeOperator::ArrayTemplate | TypeOperator::ArrayLength => {
+                        unreachable!("the array operators are handled above")
+                    }
                     // The refinement's membership test; the outer arm already
                     // gated on an undecided side.
                     TypeOperator::InDomain => {
@@ -1455,6 +1465,61 @@ where
             TypeOperator::ArrayLength => Some(LowShape::USize),
         }
     }
+}
+
+/// A fresh **placeholder expression** — the hole an array template's element
+/// position is.
+///
+/// # Invariant
+/// It is a full expression, exactly as a written `_` is: a fresh value cell, a
+/// fresh type cell, and one fresh `[value, type]` expression per attribute
+/// position, at the full-width layout. A bare cell would be read as a slot's
+/// value, and a read of the element would miss the type and the attributes.
+fn placeholder_expr<P: Program>(
+    module: &mut Module<P>,
+    block: BlockId,
+    width: usize,
+    layout: u32,
+) -> NodeId
+where
+    P::Value: ValueType,
+{
+    let any = module.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+    let value = module.add_node(block, None, None);
+    let ty = module.add_node(block, None, None);
+    let mut items = vec![
+        ArrayItem::new(AnyNodeId::Dynamic(value)),
+        ArrayItem::new(AnyNodeId::Dynamic(ty)),
+    ];
+    for _ in 0..width {
+        let slot_value = module.add_node(block, None, None);
+        let slot_type = module.add_node(block, None, None);
+        let mut slot_items = vec![
+            ArrayItem::new(AnyNodeId::Dynamic(slot_value)),
+            ArrayItem::new(AnyNodeId::Dynamic(slot_type)),
+        ];
+        slot_items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(any)),
+            width,
+        ));
+        let slot = module.alloc_array(&slot_items, block);
+        let slot = module.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                slot, layout,
+            )))),
+        );
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(slot)));
+    }
+    let array = module.alloc_array(&items, block);
+    module.add_node(
+        block,
+        None,
+        Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+            array, layout,
+        )))),
+    )
 }
 
 /// A `Div`/`Rem` whose divisor evaluated to zero: record why and stay lazy.

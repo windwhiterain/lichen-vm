@@ -92,24 +92,29 @@ where
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
             ExprKind::Find { container, key } => vec![container, key],
-            ExprKind::TypeArray {
-                element_type,
-                length,
-            } => vec![element_type, length],
             ExprKind::TypeFunction {
                 parameter,
                 return_type,
             } => vec![parameter, return_type],
             ExprKind::Tuple(_)
-            | ExprKind::TypeTuple(_)
             | ExprKind::TypeSet(_)
             | ExprKind::TypeTable(_)
-            | ExprKind::Array(_)
             | ExprKind::Set(_)
             | ExprKind::Table(_)
-            | ExprKind::ShallowArray { .. } => self.range_children(e),
-            ExprKind::TypeStruct { fields, .. } => {
-                self.ir.children[fields.start as usize..fields.end as usize].to_vec()
+            | ExprKind::Struct { .. } => self.range_children(e),
+            // The array forms: the template is an operand and the elements are
+            // the instance's own.
+            ExprKind::Array { template, length } => vec![template, length],
+            ExprKind::ArrayInst {
+                template,
+                elements,
+                ..
+            } => {
+                let mut children = vec![template];
+                children.extend(
+                    self.ir.children[elements.start as usize..elements.end as usize].iter().copied(),
+                );
+                children
             }
             // An annotated value contributes no sub-expression: its attribute
             // is its own slot, never the value beneath it.
@@ -129,6 +134,9 @@ where
             // A prefix operator's operands' perspectives meet as a `BinOp`'s do.
             ExprKind::Prefix { .. } => self.range_children(e),
             ExprKind::NativeCall { .. } => self.range_children(e),
+            // The clone and the unify are leaves for stage 1: their own slots
+            // bind.
+            ExprKind::Clone { .. } | ExprKind::Unify { .. } => Vec::new(),
         }
     }
 
@@ -550,20 +558,19 @@ where
             expr = value;
         }
         match self.ir[expr].kind {
-            ExprKind::Tuple(_) | ExprKind::TypeTuple(_) => Some(self.range_children(expr)),
+            ExprKind::Tuple(_) => Some(self.range_children(expr)),
             // A value's elements: a set's members, a table's interleaved
-            // key/value list, an array's element list.
-            ExprKind::Array(_)
-            | ExprKind::Set(_)
-            | ExprKind::Table(_)
-            | ExprKind::ShallowArray { .. } => Some(self.range_children(expr)),
+            // key/value list, an array instance's elements.
+            ExprKind::Set(_) | ExprKind::Table(_) => Some(self.range_children(expr)),
+            ExprKind::ArrayInst { elements, .. } => Some(
+                self.ir.children[elements.start as usize..elements.end as usize].to_vec(),
+            ),
             // The type forms: a set's one slot and a table's two, each of which
             // exprs with the value's elements.
             ExprKind::TypeSet(_) => Some(self.range_children(expr)),
             ExprKind::TypeTable(_) => Some(self.range_children(expr)),
-            ExprKind::TypeArray { element_type, .. } => Some(vec![element_type]),
-            // A struct's field types are element positions like a tuple's.
-            ExprKind::TypeStruct { .. } => Some(self.range_children(expr)),
+            // A struct's fields are element positions like a tuple's.
+            ExprKind::Struct { .. } => Some(self.range_children(expr)),
             // A struct instance's arguments, positional call only.
             ExprKind::Instantiate { value, names, .. } => {
                 let named = self.ir.struct_names[names.start as usize..names.end as usize]

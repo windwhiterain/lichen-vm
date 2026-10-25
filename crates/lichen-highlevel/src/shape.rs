@@ -517,7 +517,9 @@ where
 {
     // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    let items = unsafe { array_items(module, ty) }?;
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
+        return false;
+    };
     items.len() >= 2
         && kind_marker_is_any(
             module,
