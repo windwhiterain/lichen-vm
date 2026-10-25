@@ -308,7 +308,7 @@ fn a_sibling_diamond_reading_the_launch_extent_is_one_region_and_merges() {
         vec![format!(
             "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
              position 2 of node 2 and input position 3 of node 2, licensed by the floor: every \
-             node of the region claims Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:f5a6fec67930b118"
+             node of the region claims Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:b4704ca8020901fb"
         )],
         "the pass's own line: one region, three nodes, both arrivals absorbed. Positions `2` and \
          `3` are `.s` and `.q` here, not the `minimal()` expr's `{SUM}` and `{SUMSQ}`, because \
