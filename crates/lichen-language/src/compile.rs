@@ -599,7 +599,7 @@ impl Compiler {
                 span,
             } => {
                 // The callee is the struct's template; the fields are its values.
-                let type_expr = self.compile_expr(callee);
+                let template = self.compile_expr(callee);
                 let field_ids: Vec<ExprId> =
                     fields.iter().map(|f| self.compile_expr(&f.value)).collect();
                 let names: Vec<Option<&'static str>> = fields
@@ -607,9 +607,9 @@ impl Compiler {
                     .map(|f| Some(self.intern_str(&f.name)))
                     .collect();
                 let value = self.alloc_tuple(&field_ids, span);
-                self.alloc_instantiate(type_expr, value, &names, span)
+                self.alloc_instantiate(template, value, &names, span)
             }
-            // `{.a e1, .b e2}`: the struct template, its fields and their names.
+            // `{.a e1, .b e2}`: the struct value, its fields and their names.
             Expr::StructValue { fields, span } => {
                 let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
                     .iter()

@@ -607,10 +607,11 @@ const SHALLOW_WITHOUT_CARRIER: &str = "an `@shallow` mark has no place here — 
 ///
 /// # Invariant
 ///
-/// The compound **templates** are trees: a tuple, an array template and a
-/// struct template are layouts a value is written against, so a cycle among
-/// them is the deep pass's to cut. An instance is a value, so its cycles are
-/// refused like any other value's.
+/// A compound value that names a layout — a tuple, an array template, a struct
+/// value or a struct instance — is a tree: a cycle among such bindings is the
+/// deep pass's to cut, because the layout a value is written against may name
+/// itself. An array instance is a plain value, so its cycle is refused like
+/// any other value's.
 fn is_tree_expr(e: &Expr) -> bool {
     matches!(
         e,
