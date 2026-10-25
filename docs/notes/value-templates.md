@@ -46,11 +46,11 @@ table, and the nominal id move into the value. A read therefore checks the layou
 template in the type position, then decodes the value at that template's offsets.
 
 `@clone` must instantiate the value graph reached through a name, not merely the
-syntax at the call site. A synthetic immediate lambda application was rejected:
-`T := (_, _); x <: T` would capture the name and share the template's holes, so
-the match would write back into `T`. The lowlevel therefore provides a template
-instantiation walk with an explicit caller-owned sharing boundary. See
-[template-instantiation](template-instantiation.md).
+syntax at the call site. The lowlevel provides [the template
+instantiation](template-instantiation.md), which reuses the apply's clone rules
+and class regroup with an explicit caller-owned sharing boundary. A synthetic
+immediate lambda application was rejected: `T := (_, _); x <: T` would capture
+the name and share the template's holes, so the match would write back into `T`.
 
 ## Open details
 
