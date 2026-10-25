@@ -4,8 +4,10 @@
 //! The mark is **permission, not a command**: marked and unmarked must answer
 //! the same value, differing only in what the expansion can afford.
 
+use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{BinOp, ExprKind};
 use lichen_highlevel::program::{HighProgramLiteral, ProgramImpl, TupleTemplateLit};
+use lichen_lowlevel::BudgetExhausted;
 use lichen_testkit::{Probe, Writer};
 
 /// `sum_to (n, 0) = n`, iterated: the reduction whose count is the answer.
@@ -39,15 +41,22 @@ fn sum_to(marked: bool, count: usize) -> Probe<ProgramImpl> {
     Probe::build(w.finish(root))
 }
 
+/// The budget a refused program was stopped by.
+fn refusal(probe: &Probe<ProgramImpl>) -> BudgetExhausted {
+    probe
+        .checked()
+        .diagnostics()
+        .into_iter()
+        .find(|d| d.kind == DiagKind::NonTerminating)
+        .and_then(|d| d.budget)
+        .unwrap_or_else(|| panic!("no budget refusal in {:?}", probe.diagnostics()))
+}
+
 #[test]
 fn the_loop_and_the_unroll_answer_the_same_value() {
     // This compares the loop's values with the expansion's, not with the loop's
     // own idea of the answer.
-    //
-    // The counts stop where the expansion is affordable: the unmarked
-    // expansion's cost grows sharply with the trip count in the value-template
-    // encoding, so the two answers are compared over the small counts only.
-    for count in [0usize, 1, 2, 7] {
+    for count in [0usize, 1, 2, 7, 64, 200] {
         let mut looped = sum_to(true, count);
         let mut unrolled = sum_to(false, count);
         assert_eq!(
@@ -68,5 +77,11 @@ fn a_marked_reduction_runs_a_count_the_expansion_cannot_afford() {
         looped.usize_of("root"),
         600,
         "the loop must answer a count the expansion cannot afford"
+    );
+    let unrolled = sum_to(false, 600);
+    assert_eq!(
+        refusal(&unrolled),
+        BudgetExhausted::ApplyDepth { limit: 500 },
+        "the same program unmarked must be refused by the *nesting* guard"
     );
 }

@@ -1224,21 +1224,20 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
-    // The diagnostic names the value's own slots: the element template holds
-    // slot 0, so the fifth element is slot 6 and the value is four slots long.
-    assert_eq!(diags[0].index, Some(6));
-    assert_eq!(diags[0].length, Some(4));
+    // The diagnostic is source-level: the subscript the program wrote and the
+    // element count the program wrote, never the value's internal slots.
+    assert_eq!(diags[0].index, Some(5));
+    assert_eq!(diags[0].length, Some(3));
     assert_eq!(
         diags[0].value_a,
-        Some(HighProgramValue::LowValue(LowValue::USize(6)))
+        Some(HighProgramValue::LowValue(LowValue::USize(5)))
     );
     assert_eq!(
         diags[0].value_b,
-        Some(HighProgramValue::LowValue(LowValue::USize(4)))
+        Some(HighProgramValue::LowValue(LowValue::USize(3)))
     );
-    // The subscript the read uses is the index plus one, and no expression
-    // names that node, so the diagnostic carries no location.
-    assert!(diags[0].loc().is_none());
+    // The diagnostic is located at the subscript the program wrote.
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
 }
 
 #[test]
@@ -1264,11 +1263,10 @@ fn array_index_out_of_bounds_against_a_bound_length() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
-    // The diagnostic names the value's own slots: the element template holds
-    // slot 0, so the fourth element is slot 4 and the value is three slots
-    // long.
-    assert_eq!(diags[0].index, Some(4));
-    assert_eq!(diags[0].length, Some(3));
+    // The diagnostic is source-level: the subscript the program wrote and the
+    // element count the bound states, never the value's internal slots.
+    assert_eq!(diags[0].index, Some(3));
+    assert_eq!(diags[0].length, Some(2));
 }
 
 // --- struct values ----------------------------------------------------------
@@ -1436,6 +1434,10 @@ fn two_struct_value_occurrences_do_not_unify() {
         err.value_a.is_some() && err.value_b.is_some(),
         "the conflict names both sides: {err:?}"
     );
+    assert_ne!(
+        err.value_a, err.value_b,
+        "the two occurrences are distinct: {err:?}"
+    );
 }
 
 #[test]
@@ -1543,6 +1545,11 @@ fn two_struct_values_conflict_on_their_name_tables() {
         diags[0].value_a,
         diags[0].value_b
     );
+    assert_ne!(
+        diags[0].value_a, diags[0].value_b,
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a, diags[0].value_b
+    );
 }
 
 #[test]
@@ -1559,23 +1566,20 @@ fn an_annotation_with_a_struct_value_rejects_a_literal_at_apply_time() {
     let b = build(whole, w);
     assert!(!b.ok, "a literal is not a struct value");
     let diags = b.diagnostics();
-    // The apply-time check reports the struct's layout against the literal's
-    // int type. A second diagnostic accompanies it — the clone of the struct
-    // value carries a copy of the name table, and a copy does not unify with
-    // the original — so the reported one is the one that names the argument.
-    let runtime = diags
-        .iter()
-        .find(|diag| {
-            diag.kind == DiagKind::Runtime
-                && diag.value_b == Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
-        })
-        .expect("the apply-time check reports the argument");
+    // One diagnostic: the apply-time check reports the struct's layout against
+    // the literal's int type.
+    assert_eq!(diags.len(), 1, "one diagnostic: {diags:?}");
+    assert_eq!(diags[0].kind, DiagKind::Runtime);
     // reversed direction: a = the parameter's expected type (the struct's
     // layout), b = the argument's found type (int)
     assert!(matches!(
-        runtime.value_a,
+        diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::Array(_)))
     ));
+    assert_eq!(
+        diags[0].value_b,
+        Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
+    );
 }
 
 #[test]
@@ -1711,13 +1715,17 @@ fn instances_of_different_struct_occurrences_conflict() {
         diags[0].value_a,
         diags[0].value_b
     );
+    assert_ne!(
+        diags[0].value_a, diags[0].value_b,
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a, diags[0].value_b
+    );
 }
 
 #[test]
-fn an_instantiation_through_a_call_result_callee_is_refused() {
+fn an_instantiation_through_a_call_result_callee_checks() {
     // `(mk (Int)){.f 1, .g 2}` with `mk = u => {...}` — the callee is an
-    // unevaluated apply, and its result type is not decided at check time, so
-    // the instantiation cannot resolve a struct layout for it.
+    // unevaluated apply the checker forces first.
     let w = Writer::new();
     let p = w.param("p");
     let f1 = any_of(&w, "f1", w.int_type("int_ty"));
@@ -1732,17 +1740,15 @@ fn an_instantiation_through_a_call_result_callee_is_refused() {
     let inst = w.instantiate("inst", call, v, &[Some("f"), Some("g")]);
     let b = build(inst, w);
     assert!(
-        !b.ok,
-        "a call-result callee has no decided layout: {:?}",
+        b.ok,
+        "a call-result callee resolves to its struct layout: {:?}",
         b.diagnostics()
     );
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
+    // The instance's type is the struct layout the callee returns: the shared
+    // `Struct` template the callee's own struct value carries.
     assert_eq!(
-        diags[0].loc.as_ref().map(|loc| loc.expr),
-        Some(call),
-        "the not-a-struct error points at the callee"
+        b.state[inst].ty, b.state[s].ty,
+        "the instance's type is the callee's struct layout"
     );
 }
 
@@ -1964,10 +1970,9 @@ fn a_shallow_array_element_is_masked() {
 }
 
 #[test]
-fn a_shallow_marked_element_keeps_its_value_under_the_mask() {
-    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5] — the marked element's
-    // value slot is a masked slot, and the element's own value is under the
-    // mask.
+fn shallow_marked_position_stays_lazy_until_a_read() {
+    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5] — the apply sits at the
+    // marked position, so the deep pass skips it.
     let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
@@ -1982,7 +1987,7 @@ fn a_shallow_marked_element_keeps_its_value_under_the_mask() {
     let b = build(arr, w);
     assert!(b.ok, "the shallow array should check");
     let ids = array_ids(&b, b.state[arr].val.unwrap());
-    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.len(), 3, "the element template and the two elements");
     // The unmarked element's value slot is its own value.
     let plain = array_ids(&b, ids[1]);
     assert_eq!(
@@ -1999,12 +2004,22 @@ fn a_shallow_marked_element_keeps_its_value_under_the_mask() {
         b.state[call].term.unwrap(),
         "the element's own value is under the mask"
     );
+    // The marked position is **lazy**: the apply under the mask has not run,
+    // so its answer is undecided until a read forces it.
+    let answer = b
+        .module
+        .element_value_node(AnyNodeId::Dynamic(masked[0]))
+        .unwrap_or(AnyNodeId::Dynamic(masked[0]));
+    assert!(
+        b.module.node_value(answer).is_none(),
+        "the masked apply never ran in the deep pass"
+    );
 }
 
 #[test]
-fn a_read_of_a_shallow_position_reaches_the_masked_slot() {
-    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5][1] — the read reaches the
-    // marked element's own slot, and the element's value is under the mask.
+fn a_read_of_a_shallow_position_forces_the_element() {
+    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5][1] — the read runs the
+    // apply that the deep pass deliberately skipped.
     let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
@@ -2026,14 +2041,14 @@ fn a_read_of_a_shallow_position_reaches_the_masked_slot() {
         .unwrap();
     let items = array_ids_from(value);
     assert_eq!(items.len(), width(), "the read's value is the masked slot");
-    let element = b
+    let answer = b
         .module
         .element_value_node(AnyNodeId::Dynamic(items[0]))
         .unwrap_or(AnyNodeId::Dynamic(items[0]));
     assert_eq!(
-        b.module.node_value(element),
+        b.module.node_value(answer),
         Some(HighProgramValue::LowValue(LowValue::USize(6))),
-        "the element's own value is under the mask"
+        "the read forces the apply at the masked position"
     );
 }
 
