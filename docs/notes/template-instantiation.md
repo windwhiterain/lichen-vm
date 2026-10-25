@@ -98,10 +98,14 @@ semantics; this one is the apply's walk with two decisions swapped.
 
 ## 5. The readings
 
-`lichen-lowlevel`'s own line, on this branch:
+`lichen-lowlevel`'s own lines, on this branch:
 
 ```text
+cargo test -p lichen-lowlevel --test basic
 test result: ok. 174 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+
+cargo test -p lichen-lowlevel --lib
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 The ten `template_clone_*` tests in `crates/lichen-lowlevel/tests/basic/function.rs`
