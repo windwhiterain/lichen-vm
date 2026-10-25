@@ -274,7 +274,7 @@ fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
     // No requirement form exists for the fragment: a uniform value is accepted.
     assert!(ok(&format!("{program}wmma 7 (0 # 64)")));
     assert_eq!(
-        message(&format!("{program}mma = wmma 7 (0 # 1)\nmma # 32")),
+        message(&format!("{program}mma := wmma 7 (0 # 1)\nmma # 32")),
         "expected 32, found 1"
     );
 }

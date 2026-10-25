@@ -66,7 +66,7 @@ fn a_gc_scope_inside_a_body_is_cloned_per_call() {
 fn a_gc_block_yields_its_record() {
     let out = run::evaluate("@gc { a := 1; b := 2 }").expect("the program runs");
     assert!(
-        out.contains("struct"),
+        out.contains("Struct"),
         "the struct-returning form is a gc block too, got {out:?}"
     );
 }

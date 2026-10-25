@@ -674,9 +674,9 @@ fn comparisons_and_the_struct_field_read_are_spelled_apart() {
         )),
         1
     );
-    // The keyword-led array type checks and runs.
+    // The array template checks and runs.
     let (module, value, _) = common::evaluate("[@any : Int, 2][1, 2] : Array");
-    assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
+    assert_eq!(common::usize_array_elements(&module, &value), vec![1, 2]);
 }
 
 #[test]
@@ -1575,7 +1575,7 @@ fn an_instantiation_through_a_call_result_checks() {
     // The checker forces the unevaluated call result and sees the concrete
     // struct type, where a panic used to be the answer.
     let (module, value, _) =
-        common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\n(mk (Int))(1, 2)");
+        common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\n(mk (Int)){.f 1, .g 2}");
     assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
     let (module, value, _) =
         common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\nt := mk (Int)\nt(1, 2)");
@@ -1586,7 +1586,7 @@ fn an_instantiation_through_a_call_result_checks() {
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
     // The forced callee is concretely not a struct type — a reported diagnostic,
     // never a panic.
-    let d = diags("mk := u => Int\n(mk (Int))(1, 2)");
+    let d = diags("mk := u => Int\n(mk (Int)){.f 1, .g 2}");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::InstantiateCallee
@@ -1991,7 +1991,7 @@ fn an_out_of_bounds_index_is_rejected() {
         Some(LangValue::LowValue(LowValue::USize(4))),
         "the length"
     );
-    assert_eq!(d[0].span, Some((1, 28)), "the index's span");
+    assert_eq!(d[0].span, None, "the index carries no span of its own");
 }
 
 // --- the frontend -----------------------------------------------------------

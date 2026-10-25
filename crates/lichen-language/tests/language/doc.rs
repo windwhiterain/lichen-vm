@@ -157,13 +157,13 @@ fn attributes_render_only_when_present() {
             "{DOC}5 ? Doc{{.name \"five\", .description \"a\"}}"
         ))
         .unwrap(),
-        "5 ? name := \"five\", description := \"a\": Int"
+        "5 ? name = \"five\", description = \"a\": Int"
     );
     assert_eq!(
         evaluate(&format!(
             "{DOC}5 # 4 ? Doc{{.name \"five\", .description \"a\"}}"
         ))
         .unwrap(),
-        "5 # 4 ? name := \"five\", description := \"a\": Int"
+        "5 # 4 ? name = \"five\", description = \"a\": Int"
     );
 }
