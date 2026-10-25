@@ -18,7 +18,7 @@ pub use schema::{
     Region, RegionSchema, RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal,
     derive_regions, ordinary_regions, region_positions, sibling_regions,
 };
-pub(crate) use schema::{offsets, producer_ordinal};
+pub(crate) use schema::{count_at, extents_correspond, offsets, producer_ordinal};
 
 /// The interface a registered kernel claims, or `None` when it claims none.
 ///

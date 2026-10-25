@@ -20,7 +20,8 @@ use lichen_kernel_ir::{
 
 use crate::fusion_claim::{
     BRIDGED, Instance, PortKind, Region, RegionSchema, RegionShape, SchemaHash, SchemaRefusal,
-    merged_claim, offsets, ordinary_regions, producer_ordinal, sibling_regions,
+    count_at, extents_correspond, merged_claim, offsets, ordinary_regions, producer_ordinal,
+    sibling_regions,
 };
 use crate::fusion_file::{Budget, FusionPlan, Strategy};
 use crate::graph_pass::{GraphPass, LaunchExtent};
@@ -812,11 +813,11 @@ fn region_extent(graph: &Graph, positions: &[usize]) -> Result<Count, MergeRefus
     let Node::Kernel(first_node) = &graph.nodes()[positions[0]];
     if let Some(disagreeing) = positions[1..]
         .iter()
-        .find(|position| !extents_correspond(first_node.count, count(graph, **position)))
+        .find(|position| !extents_correspond(first_node.count, count_at(graph, **position)))
     {
         return Err(MergeRefusal::ExtentsDiffer {
             producer: first_node.count,
-            consumer: count(graph, *disagreeing),
+            consumer: count_at(graph, *disagreeing),
         });
     }
     Ok(first_node.count)
@@ -1683,12 +1684,6 @@ fn written_and_deleted(
     (outputs, deleted)
 }
 
-/// The extent the node at `position` dispatches over.
-fn count(graph: &Graph, position: usize) -> Count {
-    let Node::Kernel(node) = &graph.nodes()[position];
-    node.count
-}
-
 /// The fragment the node at `position` dispatched.
 fn fragment_at(graph: &Graph, position: usize) -> &KernelFragment {
     let Node::Kernel(node) = &graph.nodes()[position];
@@ -1699,25 +1694,6 @@ fn fragment_at(graph: &Graph, position: usize) -> &KernelFragment {
 fn scalars_at(graph: &Graph, position: usize) -> &[GraphScalar] {
     let Node::Kernel(node) = &graph.nodes()[position];
     &node.scalars
-}
-
-/// Whether the two nodes dispatch over one extent, as `Count` states it.
-fn extents_correspond(producer: Count, consumer: Count) -> bool {
-    match (producer, consumer) {
-        (Count::Constant(producer), Count::Constant(consumer)) => producer == consumer,
-        (Count::Value(producer), Count::Value(consumer)) => producer == consumer,
-        (
-            Count::Device {
-                value: producer,
-                index: producer_index,
-            },
-            Count::Device {
-                value: consumer,
-                index: consumer_index,
-            },
-        ) => producer == consumer && producer_index == consumer_index,
-        _ => false,
-    }
 }
 
 /// Every read of `value` in the graph, one entry per reading node.

@@ -879,7 +879,8 @@ pub fn ordinary_regions(graph: &Graph, instances: &[Instance]) -> Vec<Region> {
 pub fn sibling_regions(graph: &Graph, instances: &[Instance]) -> Vec<Region> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
-    let components = components(graph, &starts, claimed_run(graph, &registry));
+    // **The sibling rule's own component**: the run's connectivity, not the ordinary regions.
+    let components = components(graph, &starts, claimed_run(graph, &registry), |_, _| true);
     let mut regions = Vec::new();
     for component in components {
         sibling_component(graph, &starts, &registry, component, &mut regions);
@@ -902,7 +903,10 @@ fn sibling_component(
     regions: &mut Vec<Region>,
 ) {
     let Some((producer, branches)) = shared_producer(graph, starts, &component) else {
-        regions.push(ordinary_region(graph, starts, registry, component));
+        // **No shared producer**: the whole component keeps the ordinary rule, cut and all.
+        for group in ordinary_components(graph, starts, component) {
+            regions.push(ordinary_region(graph, starts, registry, group));
+        }
         return;
     };
     // **The producer keeps a region of its own**: it stays materialized.
@@ -917,15 +921,24 @@ fn sibling_component(
         claimed.extend(group.iter().flatten().copied());
         regions.push(sibling_region(graph, starts, registry, producer, group));
     }
-    // **What the sibling regions did not claim** keeps the ordinary rule, chain and all.
+    // **What the sibling regions did not claim** keeps the ordinary rule, cut at the extents.
     let rest: Vec<usize> = component
         .iter()
         .copied()
         .filter(|position| *position != producer && !claimed.contains(position))
         .collect();
-    for group in components(graph, starts, rest) {
+    for group in ordinary_components(graph, starts, rest) {
         regions.push(ordinary_region(graph, starts, registry, group));
     }
+}
+
+/// The ordinary rule's components: the run's, each cut where the extent changes.
+///
+/// # Invariant
+/// **A cut is made at every data edge whose ends dispatch over different extents**: one merged
+/// node dispatches over one extent, so what lies beyond the change is a region of its own.
+fn ordinary_components(graph: &Graph, starts: &[usize], run: Vec<usize>) -> Vec<Vec<usize>> {
+    components(graph, starts, run, extents_correspond)
 }
 
 /// One ordinary region: the nodes, and the schema they derive.
@@ -1120,10 +1133,20 @@ fn groups_by_extent(graph: &Graph, branches: &[Vec<usize>]) -> Vec<Vec<Vec<usize
 /// relation: a node joins an earlier claimed node's component, **fed by it or feeding it**, and
 /// two producers one consumer reads are one component. An unclaimed node belongs to no region and
 /// is not a run separator, so a claimed consumer may join a claimed producer across it.
+///
+/// # Invariant
+/// **The relation keeps one extent**: a node joins a producer's component only when the two
+/// dispatch over the same extent, so a chain is cut where the extent changes.
 pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
-    components(graph, &starts, claimed_run(graph, &registry))
+    // **The ordinary rule cuts at the extent changes**: one merged node has one extent.
+    components(
+        graph,
+        &starts,
+        claimed_run(graph, &registry),
+        extents_correspond,
+    )
 }
 
 /// The claimed nodes of the graph, in evaluation order.
@@ -1153,7 +1176,17 @@ fn claimed_run(graph: &Graph, registry: &Registry<'_>) -> Vec<usize> {
 /// **backwards**, so a node joins the component of every producer it reads: a recorded graph cannot
 /// express an edge before its producer, so one sweep is enough. A component is named by its
 /// **earliest** node, which is what puts the components in evaluation order.
-fn components(graph: &Graph, starts: &[usize], run: Vec<usize>) -> Vec<Vec<usize>> {
+///
+/// # Invariant
+/// **A count edge joins whatever the two extents are** — the consumer's extent is the producer's
+/// output — and a data edge joins when the rule says so: the ordinary rule asks the extents to
+/// correspond, for one merged node dispatches over one extent.
+fn components(
+    graph: &Graph,
+    starts: &[usize],
+    run: Vec<usize>,
+    data_edge_joins: impl Fn(Count, Count) -> bool,
+) -> Vec<Vec<usize>> {
     if run.len() < 2 {
         return if run.is_empty() {
             Vec::new()
@@ -1171,17 +1204,21 @@ fn components(graph: &Graph, starts: &[usize], run: Vec<usize>) -> Vec<Vec<usize
     let mut reach: Vec<usize> = (0..run.len()).collect();
     for (later, &position) in run.iter().enumerate().rev() {
         let Node::Kernel(node) = &graph.nodes()[position];
-        for value in node
-            .inputs
-            .iter()
-            .copied()
-            .chain(extent_of(graph, position))
-        {
+        for &value in &node.inputs {
+            // **A data edge joins when the rule says so**: the ordinary rule asks the extents.
             if let Some(&earlier) = producer_of.get(&value)
                 && earlier < later
+                && data_edge_joins(count_at(graph, run[earlier]), node.count)
             {
                 join(&mut reach, earlier, later);
             }
+        }
+        // **A count edge is not a data edge**: the consumer's extent is the producer's output.
+        if let Some(value) = extent_of(graph, position)
+            && let Some(&earlier) = producer_of.get(&value)
+            && earlier < later
+        {
+            join(&mut reach, earlier, later);
         }
     }
     let mut grouped: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -1520,6 +1557,37 @@ fn extent_of(graph: &Graph, position: usize) -> Option<GraphValueId> {
         Count::Value(value) => Some(value),
         Count::Device { value, .. } => Some(value),
         Count::Constant(_) => None,
+    }
+}
+
+/// The count a node dispatches over.
+pub(crate) fn count_at(graph: &Graph, position: usize) -> Count {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    node.count
+}
+
+/// Whether two counts are one extent, as `Count` states it.
+///
+/// # Invariant
+/// **Two constants are one extent when they are equal, two values when they name the same
+/// one, and two device counts when they name the same value and the same element**: a merged
+/// node dispatches over one extent, so a rule that admitted a pair the merge cannot take
+/// would only move the refusal later.
+pub(crate) fn extents_correspond(producer: Count, consumer: Count) -> bool {
+    match (producer, consumer) {
+        (Count::Constant(producer), Count::Constant(consumer)) => producer == consumer,
+        (Count::Value(producer), Count::Value(consumer)) => producer == consumer,
+        (
+            Count::Device {
+                value: producer,
+                index: producer_index,
+            },
+            Count::Device {
+                value: consumer,
+                index: consumer_index,
+            },
+        ) => producer == consumer && producer_index == consumer_index,
+        _ => false,
     }
 }
 
