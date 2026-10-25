@@ -171,6 +171,18 @@ pub const STRUCT_VALUE_ID_SLOT: usize = 1;
 /// the two slots before it.
 pub const STRUCT_VALUE_FIELD_BASE: usize = 2;
 
+// --- scratch-only: the retired struct marker slots, kept so the render crate
+// compiles against the new layout while the compute migration is verified.
+
+/// Scratch: the retired struct marker payload slot.
+pub const STRUCT_MARKER_PAYLOAD_SLOT: usize = 0;
+/// Scratch: the retired struct marker tag slot.
+pub const STRUCT_MARKER_TAG_SLOT: usize = 1;
+/// Scratch: the retired struct marker id slot.
+pub const STRUCT_MARKER_ID_SLOT: usize = 0;
+/// Scratch: the retired struct marker names slot.
+pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
+
 // --- shape-half layout: each kind names its own shape positions --------------
 
 /// Element 0 of a **buffer type**'s `[element type, length]` shape.
