@@ -308,7 +308,10 @@ serve's `install_floor_for_run` — read the registry and do see it.
 
 ### What is not true yet
 
-- **The file is read, not emitted.** The pass does not write a plan back.
+- **The file is emitted, but not the regions a floor licence merged.** `emit_plan` writes the
+  overrides the report names by hash; a region merged under the floor's own proof leaves a line
+  with no hash (its wording is pinned), so a human adds that override by naming the post-class
+  hash.
 - **`passes` is parsed and the floor runs one merge.** The chain is one class pass, one region merge
   and one tiling pass, and the plan's pass count is carried, not spent.
 - **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
