@@ -41,7 +41,7 @@ sugar:
 ```sytax
 `<expr'1> <: <expr'2>` => `<expr'1> = @clone <expr'2>`
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
-bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> [<expr'1>, <expr'2>]`
+bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
 `<name> <annoation*> => <expr>` => `<name> => {<name> <annoation*>; <expr>}`
 `<name> <: <expr'1> => <expr'2>` => `<name> => {<name> <: <expr'1>; <expr'2>}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
@@ -58,7 +58,7 @@ Lowlevel is a graph of nodes.
 A node can have an value, an operation, and a class.
 An operation can have an operand node.
 Nodes inside same class must share same value, class is merged by unify.
-An value can be atomic or an array of nodes.
+An value can be Type or an array of nodes.
 
 ## Attribute
 
@@ -85,12 +85,12 @@ An annotated expr creats a new expression with each annotated attribute:
 
 Annotation: ```lichen <expr> : <type>```.
 
-expression with atomic lowlevel value has type `Atomic`
+expression with unit vairant lowlevel value has type `Type`
 
-`Atomic` is self referencial expression:
+`Type` is self referencial expression:
 
 ```sytax
-`Atomic` := `@raw[@raw AtomicType, Atomic，...]`
+`Type` := `@raw[@raw TypeType, Type, ...]`
 ```
 
 ### Compound
@@ -100,9 +100,9 @@ Compound type is an layout documentation of lowleval array value, e.g. tuple, ar
 Tuple has no special layout.
 
 ```sytax
-`Tuple` := `@raw[@raw TupleType, Atomic, ...]`
+`Tuple` := `@raw[@raw TupleType, Type, ...]`
 
-`(e1, e2)` := `@raw[@raw[e1, e2], TupleType, ...]`
+`(e1, e2)` := `@raw[@raw[e1, e2], Tuple, ...]`
 
 `t(n)` := `{(type_of t) = Tuple; @raw t.value[n]}` 
 ```
@@ -110,7 +110,7 @@ Tuple has no special layout.
 Array unify every element expression to a template expression.
 
 ```sytax
-`Array` := `@raw[@raw ArrayType, Atomic]`
+`Array` := `@raw[@raw ArrayType, Type]`
 
 `[template, n]` := `@raw[@raw[template, <`_`*n>], Array, ...]`
 
@@ -119,10 +119,10 @@ Array unify every element expression to a template expression.
   (e1, 2) = (template, length)
   let [template, length] := @clone e0
   (e2, 2) = (template, length)
-  raw[raw[template, e1, e2], Array, ...]
+  @raw[@raw[template, e1, e2], Array, ...]
 }`
 
-`a[n]` := `{(type_of t) = Array; @raw t.value[n+1]}` 
+`a[n]` := `{(type_of a) = Array; @raw a.value[n+1]}`
 ```
 
 ## Subtype
@@ -179,7 +179,7 @@ Struct is a special tuple that:
 - Nominal over the sytax position.
 
 ```sytax
-`Struct` = `@raw[@raw StructType, Struct, ...]`
+`Struct` := `@raw[@raw StructType, Struct, ...]`
 
 `s := {.n1 e1 .n2 e2}` 
 
@@ -189,18 +189,18 @@ Struct is a special tuple that:
 := 
 `{
   let {.n1 e1, .n2 e2} = @clone s
-  v := raw[name_table, nominal_id, @raw None, @raw None]
+  v := @raw[name_table, nominal_id, @raw None, @raw None]
   raw v[name_table["n1"]+2] = e1;
   raw v[name_table["n2"]+2] = e2
   e3 = raw v[name_table["n2"]+2]
   e4 = raw v[name_table["n1"]+2]
-  raw[raw v, Struct, ...]
+  @raw[@raw v, Struct, ...]
 }`
 
 `s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
 ```
 
-> ```lichen raw t[name_table["n1"]+2]` is lowlevel computation.
+> ```lichen @raw t[name_table["n1"]+2]` is lowlevel computation.
 
 ## Preprocessor block
 
