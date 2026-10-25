@@ -2,8 +2,8 @@
   order = "3"
   output = "(struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g struct{.f Type, .g …}}}, (1, (Int, (1, …))), (Int, (1, …))): tuple{TypeStruct, TypeStruct, struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g …}}}"
 ---
-A := {.f @any : Int, .g @any : B}
-B := {.f @any : Type, .g @any : A}
+A := {.f @any : Int, .g B}
+B := {.f @any : Type, .g A}
 a := A{.f 1, .g b}
 b := B{.f Int, .g a}
 (A , B, a, b)
