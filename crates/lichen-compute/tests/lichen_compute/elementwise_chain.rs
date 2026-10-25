@@ -222,13 +222,13 @@ fn merge_lines(module: &Module<LangProgram>, graph: &Graph) -> Vec<String> {
 /// The sentence names the **region's** own hash, because that is what a pack's `fuse` must
 /// match: §5's rule is that a pack that steers a fusion names the region's schema, so a runner
 /// reading this line can write the pack that would change it.
-fn merged(absorbed: usize, interfaces: &str) -> String {
+fn merged(absorbed: usize, interfaces: &str, digest: &str) -> String {
     format!(
         "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
          position {absorbed} of node 1, licensed by the floor: every node of the region claims \
          {interfaces} and nothing else; the merged fragment is registered with the conservative \
          claim `Opaque`: a pass reading the registry names it and refuses it by name, and no \
-         reader reads algebra from it"
+         reader reads algebra from it; the merged node's identity is digest:{digest}"
     )
 }
 
@@ -297,7 +297,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_proves() {
 
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![merged(1, "Elementwise or Reduction")],
+        vec![merged(1, "Elementwise or Reduction", "7ed98e859724537d")],
         "the floor proves the region: the elementwise kernel and the reduction it feeds are one          kernel the pass's own proof holds"
     );
 }
@@ -324,7 +324,7 @@ fn two_elementwise_kernels_derive_a_region_the_floor_proves() {
     hash_is_of_printed_form(&schema);
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![merged(0, "Elementwise")],
+        vec![merged(0, "Elementwise", "48f3536517e065d2")],
         "the floor proves the chain: two elementwise kernels are one kernel the pass can build"
     );
 }

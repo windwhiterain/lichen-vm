@@ -388,7 +388,7 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         vec![format!(
             "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
              position {ABSORBED} of node 1, licensed by the floor: every node of the region claims \
-             Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it"
+             Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:f69c5b6bc9c0a3a8"
         )],
         "the report names both nodes, the survivor, the absorbed input and the licence that \
          answered: with no pack installed it is the floor's own proof"
@@ -641,7 +641,7 @@ fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
             format!(
                 "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
                  position {ABSORBED} of node 1, licensed by the floor: every node of the region \
-                 claims Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it"
+                 claims Reduction and nothing else; the merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:f69c5b6bc9c0a3a8"
             ),
             "node 0: refused: no claim is registered for the fragment at 0, so it is in no row \
              of the digest join and no algebra can be derived for it; a composed fragment is \
