@@ -98,7 +98,7 @@ fn a_struct_template_renders_as_its_field_tuple() {
     // The template's fields are its own values; its type is the shared layout.
     assert_eq!(
         output("A := {.f @any : Int, .t @any : Type}\nA"),
-        "(@any, raw @any): Struct"
+        "(@any, @any): Struct"
     );
 }
 
@@ -106,7 +106,7 @@ fn a_struct_template_renders_as_its_field_tuple() {
 fn a_struct_instance_renders_its_field_tuple() {
     assert_eq!(
         output("A := {.f @any : Int, .t @any : Type}\na := A{.f 1, .t Int}\n(A, a, a.f, a.t)"),
-        "((@any, raw @any), (1, Int), 1, Int): Tuple"
+        "((@any, @any), (1, Int), 1, Int): Tuple"
     );
 }
 

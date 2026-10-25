@@ -268,6 +268,9 @@ where
     /// structural value typed by the universe is no type constant at all, and
     /// falls back to the raw layout.
     fn atomic(&mut self, value: P::Value) -> String {
+        if matches!(value.as_enum(), Some(LowValue::Any)) {
+            return "@any".to_string();
+        }
         match self.printer.type_constant(&value) {
             Some(spelling) => spelling,
             None if value.as_enum().is_some() => self.raw(value),
