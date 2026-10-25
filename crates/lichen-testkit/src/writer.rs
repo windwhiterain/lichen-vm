@@ -486,11 +486,11 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(name, ExprKind::Unify { actual, expected })
     }
 
-    /// `name = S(a, b, …)` — `names` is index-aligned with `value`'s elements.
+    /// `name = S{…}` — `names` is index-aligned with `value`'s elements.
     pub fn instantiate(
         &self,
         name: &str,
-        type_expr: ExprId,
+        template: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
     ) -> ExprId {
@@ -503,7 +503,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(
             name,
             ExprKind::Instantiate {
-                type_expr,
+                template,
                 value,
                 names: name_range,
             },
