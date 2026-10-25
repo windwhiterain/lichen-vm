@@ -6,14 +6,15 @@ taken from, so a reader can check the original against any transcription here.
 ## Vertex Block Descent
 
 Anka He Chen, Ziheng Liu, Yin Yang, Cem Yuksel. *Vertex Block Descent*.
-ACM Transactions on Graphics 43(7), SIGGRAPH 2024.
+ACM Transactions on Graphics 43(4), Article 116, SIGGRAPH 2024.
 
 - [Vertex Block Descent.pdf](Vertex%20Block%20Descent.pdf) — the paper as
   published, downloaded from [arXiv:2403.06321](https://arxiv.org/abs/2403.06321)
   (v4, 1 Jun 2024). The published version is
   [doi:10.1145/3658179](https://doi.org/10.1145/3658179).
 - [Vertex Block Descent.md](Vertex%20Block%20Descent.md) — the same paper as
-  Markdown, converted from the PDF with the Firecrawl `anydoc` CLI 0.2.4.
+  Markdown, with its mathematics as LaTeX and its figures under
+  [figures/vbd/](figures/vbd/).
 
 The method: a block coordinate descent solver for the variational form of
 implicit Euler, run as vertex-level Gauss-Seidel iterations — one vertex block
@@ -25,31 +26,48 @@ the project, not as a citation of lichen's own design.
 
 ### How the Markdown was produced
 
-The converter is Firecrawl's open-source document-to-Markdown tool, `anydoc`
-([firecrawl/anydoc](https://github.com/firecrawl/anydoc)), used through its
-command-line entry point:
+The Markdown is generated from the paper's own LaTeX source — the arXiv
+e-print, `https://arxiv.org/e-print/2403.06321` — because that source is what
+the published PDF was compiled from, and it carries the mathematics as LaTeX
+rather than as positioned glyphs.
 
-```
-anydoc "Vertex Block Descent.pdf" -o "Vertex Block Descent.md"
-```
+A PDF has no mathematical structure: the numerator of a fraction is drawn
+above the denominator, and the text layer stores the two as separate runs. A
+text extractor therefore cannot rebuild `1/(2h^2)`, and the transcription of
+such a PDF loses the fraction, the exponents, and often the reading order
+between the two columns. The LaTeX source has all of that explicitly.
 
-On this machine the CLI is installed outside the repository, at
-`C:\resource\tools\pdf2md` — the npm package `@firecrawl/anydoc` 0.2.4 with
-its prebuilt Windows native addon, driven by the portable Node.js 24.21.0
-runtime in `C:\resource\tools\node`. `anydoc.cmd` and `anydoc` in that
-directory are the wrappers.
+The pipeline is `pandoc` for the document structure, with the parts pandoc's
+LaTeX reader cannot carry handled afterwards:
 
-The conversion extracts text, so it is a transcription rather than a
-re-typeset paper:
+| Part | How it was made |
+| --- | --- |
+| Text, sections, inline math | `pandoc` from the section sources |
+| Display mathematics | `pandoc`'s `align` and `equation` environments; every equation is verified verbatim against the source |
+| Figures | the 58 image files from the e-print, cropped as the paper crops them, scaled to 1200 px, and the nine vector diagrams rasterised at 150 dpi |
+| Table 1 | the `tabular` source, parsed into a Markdown table |
+| Algorithm 1 | the `algorithm2e` source, parsed into an indented code block |
+| Citations and references | the ACM author-year style of `main.bbl`, with the bibliography in the paper's order |
 
-- **Kept**: the full body text, the section numbering, the figure and table
-  captions, and the bibliography with its DOI links.
-- **Lost**: the page layout. Running headers and author lines appear inline in
-  the text, the two-column reading order is not recovered, and words split
-  across a line break keep the hyphen ("reduc- tions"). Equations survive as
-  inline fragments of text rather than as LaTeX, figures are absent (only
-  their captions remain), and wide tables keep their cell text but lose their
-  layout.
+Two things in the source have no counterpart in the rendered paper and are
+dropped: the tracked-change markers (`\del{…}` removes text, `\add{…}` keeps
+it) and the authors' comments.
 
-Read the PDF when the exact wording, the typeset mathematics, or the figures
-matter; read the Markdown when the text is what is wanted.
+The paper's `\Vec{}` macro renders as ordinary italic mathematics — the
+published PDF contains no bold or arrow font — so it is transcribed as plain
+italic. The equation numbers, the figure numbers and the cross references
+("Equation 8", "Figure 19a") are the paper's own.
+
+Read the PDF when the typeset layout, the figures' original resolution, or
+the exact wording of a caption matters; read the Markdown for the text and
+the mathematics.
+
+A text-extraction converter is also installed on this machine for PDF work:
+Firecrawl's open-source [`anydoc`](https://github.com/firecrawl/anydoc) CLI
+0.2.4, at `C:\resource\tools\pdf2md` (`anydoc.cmd` and `anydoc` are the
+wrappers), driven by the portable Node.js 24.21.0 runtime in
+`C:\resource\tools\node`. It is a fast, general PDF-to-Markdown tool, and it
+is what a plain text extraction of this paper produces — which is why this
+paper's Markdown is not built from it: the mathematics does not survive a
+text extraction.
+

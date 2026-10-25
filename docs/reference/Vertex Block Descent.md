@@ -1,454 +1,898 @@
-## Vertex Block Descent
+# Vertex Block Descent
 
-### ANKA HE CHEN, University of Utah, USA ZIHENG LIU, University of Utah, USA
+Anka He Chen, Ziheng Liu, Yin Yang, Cem Yuksel
 
-### YIN YANG, University of Utah, USA CEM YUKSEL, University of Utah & Roblox, USA
+ACM Transactions on Graphics 43(4), Article 116, SIGGRAPH 2024.
 
-Fig. 1. *Example simulation results using our solver, both of those methods involve more than 100 million DoFs and 1 million active collisions.*
+Abstract
 
-We introduce vertex block descent, a block coordinate descent solution for the variational form of implicit Euler through vertex-level Gauss-Seidel iterations. It operates with local vertex position updates that achieve reduc- tions in global variational energy with maximized parallelism. This forms a physics solver that can achieve numerical convergence with unconditional stability and exceptional computation performance. It can also fit in a given computation budget by simply limiting the iteration count while maintaining its stability and superior convergence rate. We present and evaluate our method in the context of elastic body dy- namics, providing details of all essential components and showing that it outperforms alternative techniques. In addition, we discuss and show exam- ples of how our method can be used for other simulation systems, including particle-based simulations and rigid bodies.
+We introduce vertex block descent, a block coordinate descent solution for the variational form of implicit Euler through vertex-level Gauss-Seidel iterations. It operates with local vertex position updates that achieve reductions in global variational energy with maximized parallelism. This forms a physics solver that can achieve numerical convergence with unconditional stability and exceptional computation performance. It can also fit in a given computation budget by simply limiting the iteration count while maintaining its stability and superior convergence rate.
 
-CCS Concepts: • Computing methodologies → Physical simulation; *Collision detection*.
+We present and evaluate our method in the context of elastic body dynamics, providing details of all essential components and showing that it outperforms alternative techniques. In addition, we discuss and show examples of how our method can be used for other simulation systems, including particle-based simulations and rigid bodies.
 
-Additional Key Words and Phrases: physics-based simulation, elastic body, rigid body, time integration
+# Introduction
 
-1 INTRODUCTION Physics-based simulation is the cornerstone of most graphics ap- plications and the demands from simulation systems to deliver im- proved stability, accelerated computational performance, and en- hanced visual realism are ever-growing. Particularly in real-time graphics applications, the stability and performance requirements are so strict that realism can sometimes be begrudgingly considered of secondary importance. Notwithstanding the substantial amount of research and ground- breaking discoveries made on physics solvers over the past decades,
+Physics-based simulation is the cornerstone of most graphics applications and the demands from simulation systems to deliver improved stability, accelerated computational performance, and enhanced visual realism are ever-growing. Particularly in real-time graphics applications, the stability and performance requirements are so strict that realism can sometimes be begrudgingly considered of secondary importance.
 
-Authors’ addresses:Anka He Chen, ankachan92@gmail.com, University of Utah, Salt Lake City, UT, USA;Ziheng Liu, NA, University of Utah, Salt Lake City, UT, USA;Yin Yang, NA, University of Utah, Salt Lake City, UT, USA;Cem Yuksel, cem@cemyuksel. com, University of Utah & Roblox, Salt Lake City, UT, USA.
+Notwithstanding the substantial amount of research and groundbreaking discoveries made on physics solvers over the past decades, existing methods still leave some things to be desired. They either deliver high-quality results, but fail to meet the computational demands of many applications or fit in a given computation time by sacrificing quality. Stability, on the other hand, is always a challenge, particularly with strict computation budgets.
 
-existing methods still leave some things to be desired. They either deliver high-quality results, but fail to meet the computational de- mands of many applications or fit in a given computation time by sacrificing quality. Stability, on the other hand, is always a challenge, particularly with strict computation budgets. In this paper, we introduce *vertex block descent (VBD)*, a physics solver that offers unconditional stability, superior computational performance than prior methods, and the ability to achieve nu- merical convergence to an implicit Euler integration. Though our method is a general solution that can be used for a variety of simu- lation problems, we present and evaluate it in the context of elastic body dynamics. Then, we briefly discuss how our method can be applied to some other simulation systems, including particle-based simulations and rigid bodies. Our VBD method is based on block coordinate descent that per- forms vertex-based Gauss-Seidel iterations to solve the variational form of implicit Euler. For elastic body dynamics, each iteration runs a loop over the mesh vertices, adjusting the position of a single vertex at a time, temporarily fixing all others. This offers maxi- mized parallelism when coupled with vertex-based mesh coloring, which can achieve an order of magnitude fewer colors (i.e. serialized workloads) as compared to element-based parallelization. Our local position-based updates can ensure that the variational energy is always reduced. Therefore, our method maintains its stability even with a single iteration per time step and large time steps, operating with unconverged solutions containing a large amount of resid- ual. With more iterations, it converges faster than its alternatives. Thus, it can more easily fit in a given computation budget, while maintaining stability with improved convergence. We present all essential components of using VBD for elastic body dynamics, including formulations for damping, constraints,
+In this paper, we introduce *vertex block descent (VBD)*, a physics solver that offers unconditional stability, superior computational performance than prior methods, and the ability to achieve numerical convergence to an implicit Euler integration.
 
-# arXiv:2403.06321v4 [cs.GR] 1 Jun 2024
+Though our method is a general solution that can be used for a variety of simulation problems, we present and evaluate it in the context of elastic body dynamics. Then, we briefly discuss how our method can be applied to some other simulation systems, including particle-based simulations and rigid bodies.
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-Fig. 3. *Stress tests that begin simulations under extreme deformations:*
+Our VBD method is based on block coordinate descent that performs vertex-based Gauss-Seidel iterations to solve the variational form of implicit Euler.
 
-*(top) a perfectly flattened armadillo model with 15 thousand vertices* *and 50 thousand tetrahedra, and (bottom) a Utah teapot model with 2* *thousand vertices and 8.5 thousand tetrahedra, deformed by randomly* *placing its vertices onto the surface of a sphere. Both models quickly* *recover to their original shape shortly after the simulation starts. Both* *simulations use accelerated iterations with 𝜌* = 0*.*95*.*
+For elastic body dynamics, each iteration runs a loop over the mesh vertices, adjusting the position of a single vertex at a time, temporarily fixing all others.
 
-Fig. 2. *Twisting two beams together, totaling 97 thousand vertices and*
+This offers maximized parallelism when coupled with vertex-based mesh coloring, which can achieve an order of magnitude fewer colors (i.e. serialized workloads) as compared to element-based parallelization.
 
-*266 thousand tetrahedra, demonstrating complex frictional contact* *and buckling.*
+Our local position-based updates can ensure that the variational energy is always reduced.
 
-collisions, and friction. We also introduce a simple initialization scheme to warm-start the optimization and improve convergence. In addition, we discuss momentum-based acceleration techniques and parallelization in the presence of dynamic collisions. Our evaluation includes large simulations (Figure 1) and stress tests (e.g.Figure 2and
+Therefore, our method maintains its stability even with a single iteration per time step and large time steps, operating with unconverged solutions containing a large amount of residual. With more iterations, it converges faster than its alternatives. Thus, it can more easily fit in a given computation budget, while maintaining stability with improved convergence.
 
-3) that demonstrate VBD’s performance, scalability, and stability. 2 RELATED WORK There is a large body of work on physics-based simulation in com- puter graphics. Here we only discuss the recent and the most rele- vant work to our method. Implicit time integrators are widely accepted as the primary methods for simulating elastic bodies in computer graphics due to their exceptional stability, especially when addressing stiff prob- lems. Among these options, backward Euler [Baraff and Witkin 1998;Hirota et al. 2001;Martin et al. 2011;Volino and Magnenat- Thalmann2001] is the most commonly utilized method, though other approaches like implicit Newmark [Bridson et al. 2002,2005; Kane et al. 2000], BDF2 [Choi and Ko2005;Hauth and Etzmuss2001], and implicit-explicit [Eberhardt et al. 2000;Stern and Grinspun2009] have also been explored. Backward Euler is often approximated as a single Newton step, solving a linear system of equations [Baraff and Witkin1998]. Line search can be applied to improve robustness [Hirota et al. 2001]. Preconditioning [Ascher and Boxerman2003] or positive-definite projection [Teran et al. 2005] can be used to improve convergence. To circumvent a full linear solve for every Newton step, Cholesky factorization [Hecht et al. 2012] emerges as a viable strategy. Techniques like multi-resolution [Capell et al. 2002;Grinspun et al. 2002] or multigrid [Bolz et al. 2003;Tamstorf et al. 2015;Wang et al. 2020;Xian et al. 2019;Zhu et al. 2010] solvers project finer details onto a coarser grid with fewer degrees of free- dom, effectively reducing the computational cost of the linear system solver. Our solution linearizes the forces locally, avoiding the global linear system, and it converges to the same result as backward Euler with multiple Newton steps. Additionally, stiffness warping [Müller et al. 2002] repurposes the stiffness matrix from the rest shape to handle significant rotational deformations. Using a quasi-Newton method [Liu et al. 2017] with an approximate Hessian can be far more cost-effective for computing its inverse with prefactoring than the actual Hessian. Example-based dynamics has also been explored [Chao et al. 2010;Martin et al. 2011; Müller et al.2005], where the deformation energy is defined based on the nearest point in the example space. Projective Dynamics [Bouaziz et al. 2023] represents deformation energy via a series of constraints that can be solved independently, then synchronized either through a prefactorized global step to accelerate convergence.
-The relation between dynamics, energy, and minimization has been leveraged in variational integrators [Kane et al. 1999,2000; Kharevych et al. 2006;Lew et al. 2004;Simo et al. 1992]. Reformu- lating backward Euler to an optimization problem combined with optimization techniques to allows the usage of large steps [Gast et al. 2015;Martin et al. 2011]. Domain-decomposed optimization for solv- ing the nonlinear problems of implicit numerical time integration can accelerate convergenceLi et al. [2019]. Yet, the optimization formulation has its drawbacks, notably the varying problem formu- lation and initial positions in each step. Consequently, achieving consistent convergence within a fixed time budget becomes chal- lenging. Real-time simulators compromise by accepting partially converged results, which visually resemble the final solution. Un- fortunately, this compromise can lead to significant visual artifacts mainly due to retained residuals from earlier steps, which can ac- cumulate across frames and can jeopardize the solver’s stability. Our method, as illustrated inFigure 16, demonstrates exceptional stability even when retaining a substantial amount of residual with a limited number of iterations. Position-based dynamics methods (PBD [Müller et al. 2007] and XPBD [Macklin et al. 2016]) convert forces into (soft) constraints and directly update the positions with Gauss-Seidel iterations op- erating on one constraint at a time. These position-based updates result in exceptional stability, which is often exploited by limiting the number of iterations to fix the computation cost, an effective strategy for real-time simulations. Akin to PBD, our method also works with position updates, but operates directly using the force formulations without converting them to constraints. Parallelization with XPBD is achieved by graph coloring the constraints (i.e. the dual graph) [Fratarcangeli and Pellacini2015;Fratarcangeli et al. 2016;Ton-That et al. 2023]. However, this dual graph contains multi- ple times more connections (depending on the types of constraints) than the original graph of vertices, severely limiting the level of parallelism. In comparison, our method is parallelized by coloring the original graph, which leads to much fewer colors (i.e. computa- tion groups that must be processed sequentially) and thereby better
+We present all essential components of using VBD for elastic body dynamics, including formulations for damping, constraints, collisions, and friction. We also introduce a simple initialization scheme to warm-start the optimization and improve convergence. In addition, we discuss momentum-based acceleration techniques and parallelization in the presence of dynamic collisions.
 
-parallelism. More importantly, the approximations in XPBD’s for- mulation introduce errors that make it diverge from the solution of implicit Euler and can degrade realism, particularly with large time steps and limited iteration count, which are common in practice. In addition, XPBD particularly struggles with high mass ratios. Our method, on the other hand, has none of these problems. In recent years, a growing effort has been placed on accelerating simulations using GPUs [Huthwaite2014;Lan et al. 2022;Li et al. 2020b,2023;Macklin et al. 2020;Wang2015;Wang and Yang2016]. Among them, the first-order descent methods [Macklin et al. 2020; Wang and Yang2016] have gained popularity due to their excellent parallelism. These methods employ a Jacobi-style preconditioned first-order descent on the backward Euler minimization formula- tion, enabling full vertex-level parallelization. However, Jacobi-style iterations typically converge substantially slower than Gauss-Seidel iterations. Also, such methods necessitate a line search to avoid overshooting and ensure stability. Our method can be categorized as a coordinate descent method for optimization [Wright2015]. In graphics, this technique has been used for geometric processing [Naitsat et al. 2020] and simulation with a barrier function [Lan et al. 2023]. Recently,Lan et al. [2023] proposed a hybrid scheme where Gauss-Sediel and Jacobi iterations are combined at each parallel call. In comparison, our method uses blocks of coordinates based on vertices instead of blocks based on elements, which results in much better parallelism and smaller local linear systems to solve, leading to faster convergence.
+Our evaluation includes large simulations (fig:teaser) and stress tests (e.g. [1](#fig:ExtremeTwist){reference-type="ref+label" reference="fig:ExtremeTwist"} and Figure 2) that demonstrate VBD's performance, scalability, and stability.
 
-3 VERTEX BLOCK DESCENT FOR ELASTIC BODIES Our vertex block descent method is essentially a solver for optimiza- tion problems. Therefore, it can be applied to various simulation problems, particularly if they can formulated as an optimization problem. In this section, we explain our method in the context of elastic body dynamics for objects represented by a set of vertices that carry mass and a set of force elements and constraints that act on them. Generalization of our method to other example simulation problems is discussed later inSection 6. We begin with deriving our global optimization method that splits the simulated system into vertex-level local systems (Section 3.1). Then, we discuss the methods we use for solving the local systems (Section 3.2) and describe how we incorporate damping (Section 3.3) and constraints (Section 3.4). We present our collision formulation (Section 3.5) and friction formulation (Section 3.6). After explaining our methods for warm-starting our optimization to improve con- vergence (Section 3.7), we describe how to incorporate momentum- based acceleration to improve convergence (Section 3.8). Finally, we discuss the improved parallelization that our method provides along with methods for efficiently parallelizing dynamically-introduced force elements due to varying collision events (Section 3.9).
+![Twisting two beams together, totaling 97 thousand vertices and 266 thousand tetrahedra, demonstrating complex frictional contact and buckling.](figures/vbd/BeamRotation/b-cc.jpg)
 
-3.1 Global Optimization Our vertex block descent method is formulated based on the opti- mization form of implicit Euler time integration [Gast et al. 2015; Martin et al. 2011]. Given a system with *𝑁* vertices, we represent the state of our simulation at step *𝑡* as (x
-*𝑡* *,* v *𝑡* ), where x *𝑡* ∈ R3 *𝑁*
+![](figures/vbd/BeamRotation/c-cc.jpg)
 
-and v *𝑡* ∈ R3 *𝑁* are the concatenated position and velocity vectors,
+**Figure 1.** Twisting two beams together, totaling 97 thousand vertices and 266 thousand tetrahedra, demonstrating complex frictional contact and buckling.
 
-Vertex Block Descent •
 
-respectively. The resulting optimization problem can be written as
+# Related Work
 
-x *𝑡*+1 = argmin *𝐺*(x)*,* (1) x for evaluating the positions at the end of the time step x *𝑡*+1 that minimizes the *variational energy 𝐺*(x) in the form of <u>1</u> *𝐺*(x) = 2 ∥x − y∥ *𝑀* 2 + *𝐸*(x)*.* (2) 2*ℎ* The first term here is the *inertia potential*, which contains the time step size *ℎ*, the mass-weighted norm ∥·∥*𝑀*, and
+There is a large body of work on physics-based simulation in computer graphics. Here we only discuss the recent and the most relevant work to our method.
 
-#### y = x
+Implicit time integrators are widely accepted as the primary methods for simulating elastic bodies in computer graphics due to their exceptional stability, especially when addressing stiff problems. Among these options, backward Euler [Baraff and Witkin 1998; Hirota et al. 2001; Volino and Magnenat-Thalmann 2001; Martin et al. 2011] is the most commonly utilized method, though other approaches like implicit Newmark [Kane et al. 2000; Bridson et al. 2002; Bridson et al. 2005], BDF2 [Choi and Ko 2005; Hauth and Etzmuss 2001], and implicit-explicit [Eberhardt et al. 2000; Stern and Grinspun 2009] have also been explored.
 
-*𝑡* + *ℎ*v *𝑡* + *ℎ* 2 aext (3)
+Backward Euler is often approximated as a single Newton step, solving a linear system of equations [Baraff and Witkin 1998]. Line search can be applied to improve robustness [Hirota et al. 2001].
 
-with a fixed external acceleration aext, such as gravity. The second term *𝐸*(x) is the *total potential energy* evaluated at x. We propose an optimization technique that falls under the cat- egory of coordinate descent methods to efficiently minimize this energy *𝐺*. If we only modify a single vertex at a time, fixing all other vertices, the part of the energy term *𝐸*(x) that is affected only includes the set of force elements F that are acting on (or using the*𝑖* position of) vertex *𝑖*. Thus, we define the *local variational energy 𝐺𝑖* around vertex *𝑖* as <u>𝑚𝑖</u>2 ∑︁ *𝐺𝑖* (x) = 2 *ℎ* 2 ∥x*𝑖*− y*𝑖*∥ + *𝐸 𝑗* (x)*,* (4) *𝑗*∈F*𝑖* where *𝑚𝑖* is the mass of the vertex and *𝐸 𝑗* is the energy of force element *𝑗* in F*𝑖*. Note that *𝐺* Í is not equal to the sum of local variational energies,
+Preconditioning [Ascher and Boxerman 2003] or positive-definite projection [Teran et al. 2005] can be used to improve convergence.
 
-i.e. *𝐺*(x) ≠*𝑖𝐺𝑖* (x), simply because the force elements appear multiple times in this sum (once for each of its vertices). However, when we modify the position of a single vertex only, the reduction in *𝐺𝑖*is equal to the resulting reduction in*𝐺*. Based on this observation, our method operates on a single vertex at a time and updates its position by minimizing the local energy
-x *𝑖*← argmin *𝐺𝑖* (x) (5) x *𝑖* and solves the global system using Gauss-Seidel iterations. Each local minimization for a vertex effectively finds a descent step for *𝐺* using the degrees of freedom (DoF) for the vertex as a block of coordinates, hence the name *vertex block descent* (VBD). After each iteration, the total reduction in*𝐺* is equal to the sum of all reductions in *𝐺𝑖*. In other words, the energy change of each vertex position adjustment is accumulated to the system energy. Consequently, if we can make sure that each local energy drops *𝐺𝑖* when we are adjusting vertex *𝑖*, we can guarantee that we are descending the system energy*𝐺*. Thus, our system directly operates on vertex positions and the resulting velocities are calculated following the implicit Euler for- mulation
+To circumvent a full linear solve for every Newton step, Cholesky factorization [Hecht et al. 2012] emerges as a viable strategy. Techniques like multi-resolution [Grinspun et al. 2002; Capell et al. 2002] or multigrid [Bolz et al. 2003; Tamstorf et al. 2015; Xian et al. 2019; Wang et al. 2020; Zhu et al. 2010] solvers
 
-v *𝑡*+1 = <u>1</u> x *𝑡*+1 − x *𝑡*
+project finer details onto a coarser grid with fewer degrees of freedom, effectively reducing the computational cost of the linear system solver. Our solution linearizes the forces locally, avoiding the global linear system, and it converges to the same result as backward Euler with multiple Newton steps.
 
-*.* (6)
-*ℎ*
+Additionally, stiffness warping [M{\"uller et al. 2002] repurposes the stiffness matrix from the rest shape to handle significant rotational deformations. Using a quasi-Newton method [Liu et al. 2017] with an approximate Hessian can be far more cost-effective for computing its inverse with prefactoring than the actual Hessian. Example-based dynamics has also been explored [Chao et al. 2010; M{\"uller et al. 2005; Martin et al. 2011], where the deformation energy is defined based on the nearest point in the example space. Projective Dynamics [Bouaziz et al. 2023] represents deformation energy via a series of constraints that can be solved independently, then synchronized either through a prefactorized global step to accelerate convergence.
 
-3.2 Local System Solver The position updates per vertex (inEquation 5) involve solving a local system that only depends on the position change of a single vertex, represented by *𝐺𝑖*. Note thatEquation 4only has 3 DoF, so the cost of evaluating and inverting its Hessian is much cheaper compared to the global problem inEquation 2. Therefore, we can
+The relation between dynamics, energy, and minimization has been leveraged in variational integrators [Kane et al. 2000; Kane et al. 1999; Simo et al. 1992; Lew et al. 2004; Kharevych et al. 2006]. Reformulating backward Euler to an optimization problem combined with optimization techniques to allows the usage of large steps [Martin et al. 2011; Gast et al. 2015]. Domain-decomposed optimization for solving the nonlinear problems of implicit numerical time integration can accelerate convergence @li_decomposed_2019. Yet, the optimization formulation has its drawbacks, notably the varying problem formulation and initial positions in each step. Consequently, achieving consistent convergence within a fixed time budget becomes challenging. Real-time simulators compromise by accepting partially converged results, which visually resemble the final solution. Unfortunately, this compromise can lead to significant visual artifacts mainly due to retained residuals from earlier steps, which can accumulate across frames and can jeopardize the solver's stability.
 
-Hessian, the system could potentially become frozen. Yet, it is cru- cial to note that such a case is highly improbable, since the Hessian of the inertia potential is always full-rank. One potential remedy for this would be switching to the modified Conjugate Gradient solver [Lan et al. 2023] when such a case happens. However, doing this will add additional branching to the code and can slow down the solver. Thus, we have not included it in our implementation, but, depending on specific use cases, there is always the flexibility to opt
+Our method, as illustrated in Figure 15, demonstrates exceptional stability even when retaining a substantial amount of residual with a limited number of iterations.
 
-|for the Conjugate Gradient solver as a backup solution. step, so it does not necessarily provide the optimal solution for Equation 5. In fact, since it is just a second-order approximation of of energy with this single step, we can incorporate a backtracking|The linear system inEquation 7corresponds to a single Newton 𝐺 𝑖||
-|---|---|---|
-|line search along the descent direction. Note that, unlike global line searches in descent-based simulation methods (e.g.Wang and Yang [2016]), this line search operates locally. It specifically verifies the, which in turn guarantees a descent in In practice, however, the additional computation cost of line search may not be justified. In our experiments, we found that line search costs an extra 40% computation time, while not providing any mea- surable benefits. This is because VBD can maintain stability even without line search. Therefore, the results we present in this paper do not include line search, though it is an option available. Damping plays a crucial role in simulations. It prevents excessive oscillations and also enhances system stability. Despite the inherent numerical damping introduced by the implicit Euler method, pro- viding users with manual control over damping is highly desirable. To address this, we have integrated a simplified Rayleigh damping model into our solver [Sifakis and Barbic2012]. This process is both straightforward and efficient, as it also operates locally within the 3×3 system and utilizes the precomputed stiffness matrix. 𝑖 the damping term to the Hessian inEquation 9, resulting 2 𝜕 𝐸 𝑗|Line search avoids over-shooting and, thereby, ensures stability. Since we are relying on implicit Euler, we can represent the ve-)/ = (x − x 𝑖 𝑖𝑡 (x) + © ∑︁|𝐺 ℎ 2 (x) ª 𝑘𝑑 𝜕 𝐸 𝑗|
-|𝜕 x 𝜕 x 𝑖 𝑖 force toEquation 8using the same damping term, such that 𝜕𝐸 (x) 𝑗|ℎ 𝑗 ∈F 𝑖 « is the damping coefficient. Finally, we add the damping ∑︁ 𝑘 𝑑|𝜕 x 𝜕 x 𝑖 𝑖 2 𝜕 𝐸 (x) 𝑗|
+**Figure 2.** Stress tests that begin simulations under extreme deformations: (top) a perfectly flattened armadillo model with 15 thousand vertices and 50 thousand tetrahedra, and (bottom) a Utah teapot model with 2 thousand vertices and 8.5 thousand tetrahedra, deformed by randomly placing its vertices onto the surface of a sphere. Both models quickly recover to their original shape shortly after the simulation starts. Both simulations use accelerated iterations with ρ = 0.95.
 
-*𝐺*, *𝑖* it does not even guarantee a reduction in. To ensure the descent
+Position-based dynamics methods (PBD [M{\"uller et al. 2007] and XPBD [Macklin et al. 2016]) convert forces into (soft) constraints and directly update the positions with Gauss-Seidel iterations operating on one constraint at a time. These position-based updates result in exceptional stability, which is often exploited by limiting the number of iterations to fix the computation cost, an effective strategy for real-time simulations. Akin to PBD, our method also works with position updates, but operates directly using the force formulations without converting them to constraints. Parallelization with XPBD is achieved by graph coloring the constraints (i.e. the dual graph) [Fratarcangeli and Pellacini 2015; Fratarcangeli et al. 2016; Ton-That et al. 2023]. However, this dual graph contains multiple times more connections (depending on the types of constraints) than the original graph of vertices, severely limiting the level of parallelism. In comparison, our method is parallelized by coloring the original graph, which leads to much fewer colors (i.e. computation groups that must be processed sequentially) and thereby better parallelism.
 
-#### descent of 𝐺𝑖 without the
+More importantly, the approximations in XPBD's formulation introduce errors that make it diverge from the solution of implicit Euler and can degrade realism, particularly with large time steps and limited iteration count, which are common in practice. In addition, XPBD particularly struggles with high mass ratios. Our method, on the other hand, has none of these problems.
 
-#### need for evaluating the global system.
+In recent years, a growing effort has been placed on accelerating simulations using GPUs [Wang 2015; Huthwaite 2014; Wang and Yang 2016; Lan et al. 2022; Macklin et al. 2020; Li et al. 2020b; Li et al. 2023]. Among them, the first-order descent methods [Wang and Yang 2016; Macklin et al. 2020] have gained popularity due to their excellent parallelism. These methods employ a Jacobi-style preconditioned first-order descent on the backward Euler minimization formulation, enabling full vertex-level parallelization.
 
-3.3 Damping
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-fully utilize the second-order information and use Newton’s method to minimize the localized energy *𝐺𝑖*, which involves solving the 3D linear system
+However, Jacobi-style iterations typically converge substantially slower than Gauss-Seidel iterations.
 
-H*𝑖*Δx*𝑖*= f*𝑖,* (7)
+Also, such methods necessitate a line search to avoid overshooting and ensure stability.
 
-where Δx*𝑖*is the change in position, f*𝑖*is the total force acting on the vertex, calculated using ∑︁ *𝜕𝐸 𝑗* (x) *𝜕𝐺𝑖*(x) *𝑚𝑖* f *𝑖*= − = −2(x*𝑖*− y*𝑖*) −*,* (8) *𝜕*x*𝑖 ℎ 𝜕*x*𝑖* *𝑗*∈F*𝑖*
+Our method can be categorized as a coordinate descent method for optimization [Wright 2015]. In graphics, this technique has been used for geometric processing [Naitsat et al. 2020] and simulation with a barrier function [Lan et al. 2023].
 
-and H*𝑖*∈ R3×3 is the Hessian of *𝐺𝑖* with respect to the DoF of vertex *𝑖*, such that
+Recently, @lan_second-order_2023 proposed a hybrid scheme where Gauss-Sediel and Jacobi iterations are combined at each parallel call. In comparison, our method uses blocks of coordinates based on vertices instead of blocks based on elements, which results in much better parallelism and smaller local linear systems to solve, leading to faster convergence.
 
-*𝜕* 2 *𝐺𝑖*(x) *𝑚𝑖* ∑︁ *𝜕*2*𝐸 𝑗* (x) H*𝑖*= = 2 I +*.* (9) *𝜕*x*𝑖𝜕*x*𝑖 ℎ 𝜕*x*𝑖𝜕*x*𝑖* *𝑗*∈F*𝑖*
 
-Here, the first term is a diagonal matrix and the second one is the sum of Hessians of the force elements with respect to vertex *𝑖*. Intuitively, the solution of this linear system is the extreme point of the quadratic approximation for the localized energy*𝐺𝑖*. By reducing *𝐺𝑖* with each iteration, we can guarantee a reduction in*𝐺*, thereby iteratively solving the global system inEquation 2. We can analytically solve this system using Δx*𝑖*= H *𝑖* −1 f *𝑖*. For such a small system, the analytical solver is very efficient and stable. We found it to be faster than solvers based on Conjugate Gradient or LU/QR decomposition. Another advantage of the analytical solver is that it does not require the Hessian to be positive-definite. Of course, when the Hessian is not positive-definite, the direction given byEquation 7may not be a descent direction. Nevertheless, we opt for this direction regardless, recognizing that even when H*𝑖*is not positive-definite, solvingEquation 7still brings us towards the extremum of the quadratic approximation for the localized energy *𝐺𝑖*. This solution is close to where the gradient of the inertia and the potential terms balance out and it is usually a stable state of the system. Also, the motivation of the variational form of implicit Euler (Equation 2), is to find a point where*𝑑𝐺*(x)/*𝑑*x = 0. Therefore, any extreme point is a valid solution of implicit Euler, and it does not have to be a local minimum. In all our experiments, including those specifically designed stress tests (seeFigure 2andFigure 3), we have consistently observed that this scheme does not pose any issues concerning system stability or convergence. An alternative solution to this is the PSD Hessian projection [Teran et al. 2005]. However, it is exceptionally rare for the Hessian to not be positive-definite, and the PSD projection process is notably costly due to multiple SVD decompositions. Engaging in this costly operation to prevent such rare events seems unjustified, especially considering that these occurrences do not jeopardize system stability or convergence significantly. Another challenge with the analytical solver arises when encoun- tering a (nearly) rank-deficient Hessian. To address this, we propose a simple solution: if | det(H*𝑖*)|≤ *𝜖* for some small threshold*𝜖*, we opt to bypass adjusting this particular vertex for that iteration. Given that its neighboring vertices are likely to undergo adjustments be- fore the next iteration, it is improbable that its Hessian will remain rank-deficient in subsequent iterations. With this simple solution, in the extreme scenario where all vertices possess a rank-deficient
+# Vertex Block Descent for Elastic Bodies
+Our vertex block descent method is essentially a solver for optimization problems. Therefore, it can be applied to various simulation problems, particularly if they can formulated as an optimization problem.
 
-locity as position change, using v. Then, we can add
+In this section, we explain our method in the context of elastic body dynamics for objects represented by a set of vertices that carry mass and a set of force elements and constraints that act on them. Generalization of our method to other example simulation problems is discussed later in Section 6.
 
-*𝑚𝑖* H = I + ∑︁*,* (10) *𝑖* 2® *ℎ* *𝑗*∈F*𝑖*¬ where *𝑘𝑑*
+We begin with deriving our global optimization method that splits the simulated system into vertex-level local systems ([1.1](#sec:global_opt){reference-type="ref+label" reference="sec:global_opt"}). Then, we discuss the methods we use for solving the local systems ([1.2](#sec:local_solver){reference-type="ref+label" reference="sec:local_solver"}) and describe how we incorporate damping ([1.3](#sec:damping){reference-type="ref+label" reference="sec:damping"}) and constraints ([1.4](#sec:constraints){reference-type="ref+label" reference="sec:constraints"}). We present our collision formulation ([1.5](#sec:collisions){reference-type="ref+label" reference="sec:collisions"}) and friction formulation ([1.6](#sec:friction){reference-type="ref+label" reference="sec:friction"}).
 
-∑︁ *𝑚𝑖* ª® f *𝑖*= −2(x*𝑖*− y*𝑖*) − − © x*𝑖*− x*𝑖𝑡.* *ℎ* *𝑗*∈F*𝑖* *𝜕*x*𝑖* « *𝑗*∈F*𝑖* *ℎ 𝜕*x*𝑖𝜕*x*𝑖* ¬ (11)
+After explaining our methods for warm-starting our optimization to improve convergence
 
-3.4 Constraints Since our method directly manipulates the position of each ver- tex, managing a constraint on a vertex becomes straightforward. Constraints generally fall into two categories: unilateral (*𝐶*(x)≤ 0) or bilateral (*𝐶*(x) = 0). With bilateral constraints, if a vertex po- sition is directly set to a specific value, we simply skip updating
+([1.7](#Sec:Initialization){reference-type="ref+label" reference="Sec:Initialization"}), we describe how to incorporate momentum-based acceleration to improve convergence ([1.8](#sec:acceleration){reference-type="ref+label" reference="sec:acceleration"}). Finally, we discuss the improved parallelization that our method provides along with
 
-**x**
+methods for efficiently parallelizing dynamically-introduced force elements due to varying collision events ([1.9](#sec:parallelism){reference-type="ref+label" reference="sec:parallelism"}).
 
-**x x**
+## Global Optimization
+Our vertex block descent method is formulated based on the optimization form of implicit Euler time integration [Martin et al. 2011; Gast et al. 2015].
 
-**x**
+Given a system with $N$ vertices, we represent the state of our simulation at step $t$ as ($x^t, v^t)$, where $x^t \in  \mathbb{R}^{3N}$ and $v^t\in \mathbb{R}^{3N}$ are the concatenated position and velocity vectors, respectively.
 
-|x|||
-|---|---|---|
-|(a) Edge-edge|(b) Vertex-triangle||
+The resulting optimization problem can be written as
 
-Fig. 4. *Two collisions types: (a) edge-edge can have at most two pairs*
+$$\begin{aligned}
+x^{t+1} &= \underset{x}{\operatorname{argmin}} \; G(x) \;,
+\end{aligned}$$
 
-*and (b) vertex-face can have at most one pair with the same color,* *since vertices on the same side of a collision must have different colors.*
+for evaluating the positions at the end of the time step $x^{t+1}$ that minimizes the *variational energy* $G(x)$ in the form of
 
-its position. Otherwise, it is constrained to a (usually linear) sub- space. Our approach involves representing the constrained vertex position using the subspace basis. This transforms both the ver- tex position and gradient into an *𝐿*-dimensional vector, where *𝐿* is the subspace dimension. Consequently, handling local steps for constrained vertices involves solving an *𝐿* × *𝐿* system. Regarding unilateral constraints, we allow compromises and define potential energy to be solved alongside other potentials. This method handles world box constraints in our simulations.
+$$\begin{aligned}
+G(x) &= \frac{1}{2h^2} \lVert {x}-y \rVert _M^2 + E(x) \;.
+\end{aligned}$$
 
-3.5 Collisions Collisions can be handled by simply introducing a quadratic collision energy per vertex, based on the penetration depth*𝑑*, such that <u>1</u>2 *𝐸𝑐* (x) = *𝑘𝑐 𝑑* with *𝑑* = max 0*,* (x*𝑏*− x*𝑎*)· nˆ*,* (12) 2 where *𝑘𝑐* is the collision stiffness parameter, x*𝑎*and x*𝑏*are the two *contact points* on either side of the collision, and nˆ is the contact normal. There are two collision types for triangle meshes (Figure 4):
-- Edge-edge collisions use continuous collision detection (CCD). x*𝑎*and x*𝑏*correspond to the intersection points on either edge and the contact normal is the direction between them, i.e. nˆ = n/∥n∥, where n = x*𝑏*− x*𝑎*.
-- Vertex-triangle collisions are detected either by CCD or dis- crete collision detection (DCD). In this case, x*𝑎*is the collid- ing vertex and x*𝑏*is the corresponding point on either the collision point (for CCD) or the closest point (for DCD) on the triangle [Chen et al. 2023]. nˆ is the surface normal at x*𝑏*.
-In our implementation, we perform a DCD at the beginning of the time step using x *𝑡* to identify vertices that have already penetrated, and the rest of the collisions use CCD. We simplify the computa- tion of the gradient and the Hessian of the collision energy by not differentiating through nˆ, i.e. assuming that nˆ is constant. Performing collision detection at every iteration using CCD can be expensive and can easily become the bottleneck. Therefore, in our implementation, we perform CCD once every *𝑛*coliterations. While this has the risk of missing some collision events, they are likely to be captured via DCD in the next time step. All detected collisions remain as force elements until the next collision detection. For vertex-triangle collisions detected with DCD, it is important to recompute the closest point (x*𝑏*) before computing the gradient and Hessian of *𝐸𝑐*.
+The first term here is the *inertia potential*, which contains the time step size $h$, the mass-weighted norm $\lVert \cdot \rVert_M$, and
 
-3.6 Friction To compute friction for collision *𝑐*, we must consider the relative motion of the contact points defined as
-*𝑡𝑎 𝑡* *𝛿*x*𝑐*= x*𝑎*− x − x*𝑏*− x*,* (13) *𝑏* where x *𝑡𝑎* and x *𝑏* *𝑡* are the positions of x*𝑎*and x*𝑏*at the beginning of the time step. With this *𝛿*x*𝑐*, we can use the friction model of *incremental po-* *tential contact* (IPC) [Li et al. 2020a]. First, we project *𝛿*x*𝑐*to the 2D 3×2 contact tangential space, using a transformation matrix T*𝑐*∈ R, to evaluate the tangential relative translation u*𝑐*= T *𝑇* *𝑐𝛿*x*𝑐*, where T*𝑐*= [ˆt bˆ] is formed by a tangent ˆt and binormal bˆ vectors orthog- onal to nˆ. The signed magnitude of the collision force applied on vertex *𝑖* is *𝜆* = <u>𝜕𝐸𝑐</u> · nˆ. Note that the sign of *𝜆* is different for *𝑐,𝑖 𝜕*x*𝑖𝑐,𝑖* vertices on different sides of the collision. Let *𝜇* be the friction coefficient. We can then calculate the friction force using *𝑐*
+$$\begin{aligned}
+y &= x^t + h {v}^t + h^2 a_{\text{ext}}
+\end{aligned}$$
 
-f *𝑐,𝑖*= −*𝜇𝑐 𝜆𝑐,𝑖* <u>𝜕𝛿x𝑐</u> T*𝑐𝑓*1(∥u*𝑐*∥) <u>u</u> <u>𝑐</u>, where (14) *𝜕*x*𝑖*∥u*𝑐*∥   <u>𝑢 𝑢</u> 2 2 *𝜖* *𝑣* *ℎ* − *𝜖* *𝑣* *ℎ* *, 𝑢* ∈(0*,ℎ𝜖𝑣*) *𝑓* 1
+with a fixed external acceleration $a_{\text{ext}}$, such as gravity. The second term $E(x)$ is the *total potential energy* evaluated at $x$.
 
-(*𝑢*) =*.* (15)  1*, 𝑢* ≥ *ℎ𝜖𝑣* 
-Here, *𝑓*1serves as a smooth transition function between static and dynamic friction. When the relative velocity exceeds a small thresh- old*𝜖𝑣*, dynamic friction is applied. Conversely, if the relative velocity is below this threshold, static friction is applied, scaling between the range of [0*,*1]. In our formulation, we need the Hessian of the friction term, which is the derivative of this function. We approximate the deriva- tive by not differentiating through ∥u*𝑐*∥ for a more stable friction force formulation [Macklin et al.2020], such that *𝑇* *𝜕*f*𝑐,𝑖𝜕𝛿*x*𝑐𝑓*1(∥u*𝑐*∥)*𝑇𝜕𝛿*x*𝑐* *𝜕*x ≈−*𝜇𝑐 𝜆𝑐,𝑖* *𝜕*x T*𝑐* ∥u ∥ T*𝑐* *𝜕*x
+We propose an optimization technique that falls under the category of coordinate descent methods to efficiently minimize this energy $G$.
 
-*.* (16)
-*𝑖 𝑖 𝑐 𝑖* Without this approximation, PSD projection and line search might be needed to ensure stability. Finally, all friction forces f*𝑐,𝑖*and their derivatives *𝜕*f*𝑐,𝑖*/*𝜕*x*𝑖*are added to f*𝑖*and H*𝑖*, respectively.
+If we only modify a single vertex at a time, fixing all other vertices,
 
-3.7 Initialization Since our method is an iterative solver, we begin with an *initial* *guess* for x. The closer this initial guess is to the resulting x
-*𝑡*+1, the fewer number of iterations we would need to converge. Typically, if the simulation converges, different initializations should not sig- nificantly affect the final results, although they may influence the number of iterations required to achieve convergence. Providing a good initial guess (one that is close to x *𝑡*+1 ) is particu- larly important for applications with a limited computation budget,
+the part of the energy term $E(\vec{x})$ that is affected only includes the set of force elements $\mathcal{F}_i$ that are acting on (or using the position of) vertex $i$. Thus, we define the *local variational energy* $G_i$ around vertex $i$ as
 
-e.g. using a fixed number of iterations. In such applications, the initial guess can strongly impact the remaining residual at the end of the final iteration. We begin with considering three simple options for initialization:
-#### (a) Previous position: x = x
+$$\begin{aligned}
+    G_i(x) &= \frac{m_i}{2h^2} \lVert {x}_i-y_i \rVert ^2 + \sum_{j\in \mathcal{F}_i} E_j(x) \;,
+\end{aligned}$$
 
-*𝑡*
+where $m_i$ is the mass of the vertex and $E_j$ is the energy of force element $j$ in $\mathcal{F}_i$.
 
-#### (b) Inertia: x = x
+Note that $G$ is not equal to the sum of local variational energies, i.e. $G(x)\neq\sum_i G_i(x)$, simply because the force elements appear multiple times in this sum (once for each of its vertices). However, when we modify the position of a single vertex only, the reduction in $G_i$ is equal to the resulting reduction in $G$.
 
-*𝑡* + *ℎ*v *𝑡*
+Based on this observation, our method operates on a single vertex at a time and updates its position by minimizing the local energy
 
-*𝑡 𝑡* 2
+$$\begin{aligned}
+x_i &\gets  \underset{x_i}{\operatorname{argmin}} \; G_i(x)
+\end{aligned}$$
 
-(c) Inertia and acceleration: x = x + *ℎ*v + *ℎ* aext = y
+and solves the global system using Gauss-Seidel iterations. Each local minimization for a vertex effectively finds a descent step for $G$ using the degrees of freedom (DoF) for the vertex as a block of coordinates, hence the name *vertex block descent* (VBD).
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-(d) *Adaptive* (e) *Reference*
+After each iteration, the total reduction in $G$ is equal to the sum of all reductions in $G_i$. In other words, the energy change of each vertex position adjustment is accumulated to the system energy. Consequently, if we can make sure that each local energy drops $G_i$ when we are adjusting vertex $i$, we can guarantee that we are descending the system energy $G$.
 
-|(a) Previous|(b) Inertia (c) Inertia &||
-|---|---|---|
-|position|acceleration||
+Thus, our system directly operates on vertex positions
 
-Fig. 5. *Different initialization options for a swinging elastic pendulum*
+and the resulting velocities are calculated following the implicit Euler formulation
 
-*dropped from the same height (blue line) simulated with our method* *using only 20 iterations per frame, showing the same frame of the* *simulation. Notice that initializing using (a) previous position and*
+$$\begin{aligned}
+    v^{t+1} = \frac{1}{h}\big(x^{t+1}-x^t\big) \;.
+\end{aligned}$$
 
-*(b) inertia fail to properly move under gravity, while (c) inertia and* *acceleration leads to accessive stretching (red line) when VBD does not* *run to convergence. (d) Our adaptive solution closely matches (e) the* *reference generated by fully converged Newton’s method (green line).* Option (a) struggles with substantially stiff materials. As we adjust each vertex separately, assuming the others remain fixed, our method must lean on the inertia potential’s gradient (i.e. *𝑚𝑖* (x*𝑖*− y*𝑖*)/2*ℎ*
-2 ) to march toward the local minimum. With stiff materials, this method results in notably slower convergence rates due to the inertia potential being considerably less stiff. Consequently, it encounters challenges in simulating scenarios that resemble free fall, like a swinging elastic pendulum at its maximum height, as shown inFigure 5a. Option (b) allows the system to start with the inertia of the previ- ous step, which helps, but terminating the iterations prior to con- vergence can again result in local material stiffness overpowering external acceleration, as shown inFigure 5b. Option (c) is similar to the initialization of position-based dynam- ics, and performs notably better as it effectively preserves inertia and properly reacts to external acceleration. However, with a limited number of iterations, materials behave softer than they should, often resulting in overstretching or collapsing under gravity. An example of this can be seen inFigure 5c, where the pendulum extends more than it should. Most notably, it struggles with steady objects at rest in contact, consistently initializing them into a penetrating state, as if they are in free fall. In such cases, the contact forces must entirely undo the position change of initialization during the iterations. This not only creates unnecessary computation, but also places consider- able strain on the accuracy of the collision detection and handling methods (including friction). Therefore, properly simulating objects that are stacked on top of each other becomes a major challenge with this initialization option. We propose an adaptive initialization scheme that combines op- tions (b) and (c), taking advantage of the freedom that VBD provides in the choice of initialization. This scheme uses
+## Local System Solver
+The position updates per vertex (in Equation 5) involve solving a local system that only depends on the position change of a single vertex, represented by $G_i$.
 
-#### (d) Adaptive: x = x
+Note that Equation 4 only has 3 DoF, so the cost of evaluating and inverting its Hessian is much cheaper compared to the global problem in Equation 2. Therefore, we can fully utilize the second-order information and use Newton's method to minimize the localized energy $G_i$, which involves solving the 3D linear system $$\begin{aligned}
+   H_i \, \Delta{x}_i &= \vec{f}_i \;,
+\end{aligned}$$ where $\Delta\vec{x}_i$ is the change in position, $\vec{f}_i$ is the total force acting on the vertex, calculated using
 
-*𝑡* + *ℎ*v *𝑡* + *ℎ* 2 a˜
+$$\begin{aligned}
+    \vec{f}_i &= - \frac{\partial G_i(x)}{\partial {x}_i} 
+    = - \frac{m_i}{h^2} \left(\vec{x}_i-\vec{y}_i\right) \;- \sum_{j\in\mathcal{F}_i} \frac{\partial E_j(x)}{ \partial {x}_i} \;,
+\end{aligned}$$
 
-replacing the external acceleration aext in (c) with an estimated ac- celeration term a˜, determined by exploiting the typical similarity be- tween two consecutive time steps. We begin with the acceleration of
+and $H_i \in \mathbb{R}^{3 \times 3}$ is the Hessian of $G_i$ with respect to the DoF of vertex $i$, such that $$\begin{aligned}
+H_i &= \frac{\partial^2 G_i(x)}{\partial {x}_i \partial {x}_i} 
+    = \frac{m_i}{h^2} \vec{I} \;+ \sum_{j\in\mathcal{F}_i} \frac{\partial^2 E_j(x)}{\partial {x}_i \partial {x}_i} \;.
+\end{aligned}$$
 
-1.0
-0.8
-0.6
-0.4
-0.2
-0.0
-gravity initialization factor (*𝑎*˜)
+Here, the first term is
 
-Fig. 6. *The ratio of gravity 𝑎*˜ *used with adaptive initialization during*
+a diagonal matrix and the second one is the sum of Hessians of the
 
-*the swinging of an elastic pendulum. The model is a single-piece tetra-* *hedral mesh. It automatically distinguishes vertices in approximate* *free-fall (red) and those where elasticity counteracts gravity (blue).*
+force elements with respect to vertex $i$. Intuitively, the solution of this linear system is the extreme point of the quadratic approximation for the localized energy $G_i$.
 
-#### the previous frame a
+By reducing $G_i$ with each iteration, we can guarantee a reduction in $G$, thereby iteratively solving the global system in Equation 2.
 
-*𝑡* = (v *𝑡* − v *𝑡*−1 )/*ℎ* and compute its component *𝑎𝑡* along the external acceleration direction aˆext= aext/∥aext ∥, such that ext *𝑎𝑡* = a *𝑡* · aˆ. Then, we simply make sure that the esti- ext ext mated acceleration does not exceed the external acceleration, using  1*,* if *𝑎𝑡 >* ∥aext ∥  ext a˜ = *𝑎*˜ aext*,* where *𝑎*˜ = 0*,* if *𝑎𝑡* ext *<* 0 (17)   *𝑎𝑡* /∥aext ∥*,* otherwise.  ext This adaptive approach includes external acceleration in the ini- tialization when the motion of a vertex resembles free fall. When an object is stationary, however, as in rest-in-contact, it maintains the previous position in the initialization, preventing undesired penetrations before the first iteration. It also successfully avoids excessive stretching, as can be seen inFigure 5d. Visualizations of different *𝑎*˜ values in this simulation are shown inFigure 6. In short, our adaptive initialization is a simple but effective strategy and it is possible because VBD does not dictate a particular initialization (unlike XPBD, for example).
+We can analytically solve this system using $\Delta\vec{x}_i=\vec{H}_i^{-1}\vec{f}_i$.
 
-3.8 Accelerated Iterations We use the Chebyshev semi-iterative approach [Wang2015] to improve the convergence of our method, though other momentum- based acceleration techniques, such as the Nesterov’s method [Golub and Van Loan2013] can be applied as well. The Chebyshev method iteratively computes an acceleration ratio based on the approxima- tion of the system’s spectral radius. Instead of directly using the output vertex positions of Gauss-Seidel x¯
-(*𝑛*) after iteration *𝑛*, it
-recomputes the positions at the end of the iteration using
+For such a small system, the analytical solver is very efficient and stable. We found it to be faster than solvers based on Conjugate Gradient or LU/QR decomposition. Another advantage of the analytical solver is that it does not require the Hessian to be positive-definite. Of course, when the Hessian is not positive-definite, the direction given by Equation 7 may not be a descent direction. Nevertheless, we opt for this direction regardless, recognizing that even when $H_i$ is not positive-definite, solving Equation 7 still brings us towards the extremum of the quadratic approximation for the localized energy $G_i$. This solution is close to where the gradient of the inertia and the potential terms balance out and it is usually a stable state of the system. Also, the motivation of the variational form of implicit Euler (Equation 2), is to find a point where ${d G(x)/d {x}=0}$. Therefore, any extreme point is a valid solution of implicit Euler, and it does not have to be a local minimum. In all our experiments, including those specifically designed stress tests (see Figure 1 and Figure 2), we have consistently observed that this scheme does not pose any issues concerning system stability or convergence.
 
-x( *𝑛*) = *𝜔𝑛*(x¯ ( *𝑛*) − x( *𝑛*−2) )+ x( *𝑛*−2) *,* (18)
+An alternative solution to this is the PSD Hessian projection [Teran et al. 2005]. However, it is exceptionally rare for the Hessian to not be positive-definite, and the PSD projection process is notably costly due to multiple SVD decompositions. Engaging in this costly operation to prevent such rare events seems unjustified, especially considering that these occurrences do not jeopardize system stability or convergence significantly.
 
-where *𝜔𝑛* is the acceleration ratio that changes at each iteration as
+Another challenge with the analytical solver arises when encountering a (nearly) rank-deficient Hessian. To address this, we propose a simple solution: if $|\det(H_i)| \leq \epsilon$ for some small threshold $\epsilon$, we opt to bypass adjusting this particular vertex for that iteration. Given that its neighboring vertices are likely to undergo adjustments before the next iteration, it is improbable that its Hessian will remain rank-deficient in subsequent iterations. With this simple solution, in the extreme scenario where all vertices possess a rank-deficient Hessian, the system could potentially become frozen. Yet, it is crucial to note that such a case is highly improbable, since the Hessian of the inertia potential is always full-rank. One potential remedy for this would be switching to the modified Conjugate Gradient solver [Lan et al. 2023] when such a case happens. However, doing this will add additional branching to the code and can slow down the solver. Thus, we have not included it in our implementation, but, depending on specific use cases, there is always the flexibility to opt for the Conjugate Gradient solver as a backup solution.
 
-*𝜔𝑛* = <u>4</u> with *𝜔*1= 1 and *𝜔*2= <u>2</u> *,* (19) 4 − *𝜌*2*𝜔𝑛*−12 − *𝜌*2 where *𝜌* ∈(0*,*1) is the estimated spectral radius, which can be set manually, or automatically tuned using the technique introduced in [Wang and Yang2016]. Note that this position recomputation procedure is performed globally after each Gauss-Seidel iteration is completed, not after each local solver step. This accelerator was originally developed for solving linear sys- tems, assuming the energy to be smooth and (nearly) quadratic. Elastic energy generally fulfills these criteria. However, collision energy tends to be discontinuous and highly stiff, making the use
+The linear system in Equation 7 corresponds to a single Newton step, so it does not necessarily provide the optimal solution for Equation 5. In fact, since it is just a second-order approximation of $G_i$, it does not even guarantee a reduction in $G_i$.
 
-(a) *Vertex colors: 3* (b) *Dual graph & element colors: 7*
-(a) *Not accelerated* (b) *Accelerated* (c) *Reference*
-Fig. 7. *Demonstrating the accelerator’s impact in a collision-intensive*
+To ensure the descent of energy with this single step,
 
-*scene: a squishy ball (230K vertices, 700K tetrahedra) dropping and* *bouncing. Both (a) and (b) use ℎ* = 1/120 *seconds with a constant* *number of* 120 *iterations per time step, taking* 0*.*11 *seconds of average* *computation time per frame. (a) Without acceleration 120 iterations* *appear to be insufficient. (b) Our acceleration scheme (𝜌* = 0*.*95*), skip-* *ping colliding vertices, manages to resolve complex collisions, notably* *enhancing elasticity convergence for much stiffer outcomes, closely* *matching (c) the reference computed using 2000 iterations.*
+we can incorporate a backtracking line search along the descent direction.
 
-of an accelerator in collision-intensive scenes prone to overshot and compromise the system’s stability. To address this, we propose a simple yet highly effective solution for accelerating scenes with collisions: skipping the accelerations for actively colliding vertices. Note that the acceleration must be a continuous process. If a vertex is detected colliding at a certain iteration, we will skip the acceleration for it in all the following iterations in the same step, regardless of whether the collision has been resolved. This approach has minimal impact on the convergence of elasticity, since typically only a small fraction of vertices are in collision. Also, for those colliding vertices, the elasticity is usually overpowered by the collision forces. Thus, this solution maintains the stability of the system, while effectively accelerating the convergence of elasticity, as shown inFigure 7.
+Note that, unlike global line searches in descent-based simulation methods (e.g. @wang_descent_2016), this line search operates locally. It specifically verifies the descent of $G_i$, which in turn guarantees a descent in $G$ without the need for evaluating the global system.
 
-3.9 Parallelization Gauss-Seidel-type iterative methods are often parallelized using graph coloring by determining groups (i.e. colors) that can be han- dled in parallel without impacting the sequential nature of the Gauss- Seidel loop. Obviously, the same can be applied to VBD by simply coloring vertices such that no force element uses multiple vertices of the same color. The advantage of VBD here is that, because it colors vertices, it typically results in much fewer colors as compared to techniques that color constraints/force elements, such as PBD. This is because coloring these elements is equivalent to coloring the vertices of the dual graph, which not only has more vertices, but, more importantly, also has a lot more connections per vertex in general. Examples of this are shown inFigure 8. Since different colors must be handled sequentially, fewer colors means better parallelism. When all force elements are known ahead of the simulation, graph coloring can be performed as a preprocess. However, dynamically generated constraints/force elements, such as ones due to collisions, cannot be known ahead of time, requiring dynamic recoloring. In our implementation for elastic body dynamics, we avoid the cost of recoloring by precomputing coloring only for material forces, ignoring dynamically generated force elements due to collisions. This means that these collision forces may use multiple vertices of the same color. Therefore, we cannot simply run a parallel loop over
-(c) *Vertex colors: 8* (d) *Element colors: 76*
-Fig. 8. *Coloring vertices vs. elements: (a) vertex coloring needs 3 colors*
+Line search avoids over-shooting and, thereby, ensures stability.
 
-*for 10 vertices while (b) element coloring (i.e. coloring the vertices of* *the dual graph) needs 7 colors for 9 triangles in this example. The* *difference is more pronounced for tet-meshes: (c) our vertex coloring* *uses only 8 colors for 3,891 vertices while (d) our element coloring* *implementation needs 76 colors for 14,802 tetrahedra in this example.*
+In practice, however, the additional computation cost of line search may not be justified. In our experiments, we found that line search costs an extra 40% computation time, while not providing any measurable benefits.
 
-all vertices of the same color and update them, because handling a vertex with a dynamically generated force element may run into race conditions (with partially updated vertex positions) when accessing other vertices of the same color. We resolve this by having an auxiliary vertex position buffer (xnew) that stores the updated vertex position. When executing each local VBD position update, we write the updated vertex positions to the auxiliary buffer, instead of directly overwriting the original vertex position buffer. Then, we copy the updated positions from the auxiliary buffer to the original vertex position buffer after each color pass. This prevents the race conditions that arise from simultaneous read and write operations on vertex positions. With this process, dynamically generated force elements using multiple vertices of the same color result in (partially) Jacobi-style iterations for those vertices, because they rely on the positions from the previous iteration of those vertices. For vertices with differ- ent colors, it is equivalent to Gauss-Seidel iterations, considering the updated positions of the vertices with different colors. Note that our algorithm does not explicitly switch between Jacobi and Gauss-Seidel iterations, but the resulting iteration we describe above corresponds to either (partially) Jacobi or Gauss-seidel, depending on the colors of the colliding vertices. One might expect this solution to negatively impact the conver- gence of VBD. Fortunately, however, such Jacobi-style information exchanges are relatively rare. This is because, as shown inFigure 4, with vertex-face collisions at most one pair and with edge-edge col- lisions at most two pairs of vertices can have the same color. Also, vertices with the same colors must be located on different sides of the collision; therefore, their elastic energies are usually decoupled. This ensures that the majority of the information exchange follows the Gauss-Seidel order and thereby the impact of our solution on
+This is because VBD can maintain
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-Fig. 10. *Tearing a piece of cloth with 2500 vertices and 4800 triangles.*
+stability even without line search.
 
-(a) *No recoloring (ours)* (b) *Recoloring*
-Fig. 9. *Handling collisions using (a) our scheme without recoloring*
+Therefore, the results we present in this paper do not include line search, though it is an option available.
 
-*and (b) recoloring to achieve perfect Gauss-Seidel iterations, both* *simulated using friction forces and accelerated iterations with 𝜌* = 0*.*95*.* *Notice that the results are highly similar, though not identical.*
+## Damping
+Damping plays a crucial role in simulations. It prevents excessive oscillations and also enhances system stability. Despite the inherent numerical damping introduced by the implicit Euler method, providing users with manual control over damping is highly desirable. To address this, we have integrated a simplified Rayleigh damping model into our solver [Sifakis and Barbic 2012]. This process is both straightforward and efficient, as it also operates locally within the $3 \times 3$ system and utilizes the precomputed stiffness matrix.
 
-convergence is minimal.Figure 9presents an example with a large number of collisions, comparing our solution of skipping recoloring to proper Gauss-Seidel iterations with recoloring, showing that the differences are minor. Our solution also works with other types of topological changes, such as tearing and fracturing. Deleting force elements does not require any changes to vertex coloring. When an object is split by duplicating vertices, as in the case of tearing a piece of cloth along some edges (seeFigure 10), duplicated vertices can safely inherit the colors of their original vertices.
+Since we are relying on implicit Euler, we can represent the velocity as position change, using $v_i=(x_i-x_i^t)/h$.
 
-4 GPU IMPLEMENTATION In this section, we describe a GPU implementation specifically de- signed to leverage the inherent parallelization mechanism of mod- ern GPUs, which consists of two hierarchical levels: block-level and thread-level parallelism. Block-level parallelism facilitates large- scale parallel operations, assuming that each block operates inde- pendently. On the other hand, thread-level parallelism provides finer, single-instruction-multiple-thread (SIMT) style parallelism, al- lowing for inter-thread communication and synchronization within the same block. Reflecting on VBD, we observed that it naturally aligns with this hierarchical architecture. We have thousands of vertices within a single color category that operate independently, and each vertex is associated with multiple force elements, which can be processed concurrently.Algorithm 1shows the pseudocode of our implemen- tation. It uses block-level parallelism for processing each vertex. The threads within each block are used for computing the forces and Hessians, storing them in local shared memory, and computing the sums via reduction. We use a fixed number of threads for each block. When the total number of adjacent force elements exceeds the number of threads for each block, individual threads will loop over their assigned elements. During this process, they calculate the forces and Hessians for these force elements and then sum them to their assigned shared memory. In our experiments, we observed nearly *an order of magnitude* *performance improvement*, as compared to processing each vertex with a single thread. The primary advantage lies in the optimiza-
+Then, we can add the damping term to the Hessian in Equation 9, resulting
 
-tion of the memory access pattern, a common bottleneck in GPU programs. This implementation reduces memory divergence within blocks. Because the neighboring force elements of a vertex often share multiple vertices, the threads within the same block can share a global memory access to those shared vertices. Furthermore, this strategy improved the parallelism of the algorithm by allowing par- allel evaluation of the force and Hessian of adjacent force elements, which are then written to the significantly faster shared memory. This bypasses the slower global memory and enables the paral- lel aggregation of force and Hessian values, enhancing the overall efficiency of the process.
+$$\begin{aligned}
+H_i &= \frac{m_i}{h^2} \vec{I} \;+ \sum_{j\in\mathcal{F}_i} \frac{\partial^2 E_j(x)}{\partial {x}_i \partial {x}_i} 
+    + \left(\sum_{j\in\mathcal{F}_i} \frac{k_d}{h} \frac{\partial^2 E_j(x)}{\partial {x}_i \partial {x}_i}\right) \;,
+\end{aligned}$$
 
-5 RESULTS We evaluate our method with elastic body dynamics qualitatively with various tests and quantitatively with direct comparisons to alternative methods. We use Neo-Hookean[Smith et al. 2018] ma- terials (without the logarithmic term) for our volumetric objects, StVK [Volino et al. 2009] for clothes, and linear springs for elastic rods. We use a fixed frame time of 1/60 seconds and a fixed iteration count *𝑛*max, instead of estimating convergence after every iteration. Each frame is computed using *𝑆* substeps, such that *ℎ* = 1/(60*𝑆*) seconds. Using smaller time steps increases accuracy and reduces numerical damping with any implicit Euler method. With VBD, a smaller time step only requires fewer iterations per step for similar visual quality, but it can also achieve a smaller residual with the same number of total iterations per frame (i.e., *𝑆𝑛*max). The number of threads per block is set to 16 for all the experiments. We use no line search in our tests, as none of our tests required it for stability, and running line search can result in a noticeable drop in performance. In our experiments, we apply CCD only in the first iteration (i.e. *𝑛*col= *𝑛*max), unless otherwise specified. In our implementation, we handle collisions on the CPU using Intel’s Embree library [Wald et al.2014]. The two phases with par- allel loops are implemented on the GPU using CUDA. All timing results are generated on a computer with an AMD Ryzen 5950X CPU, 64GB DDR3 RAM, and an NVIDIA RTX 4090 GPU.
+where $k_d$ is the damping coefficient. Finally, we add the damping
 
-5.1 Large-Scale Tests InFigure 1we present two large-scale test, showcasing our method’s performance, scalability, and stability in scenarios involving a large number of complex collisions, including stacking and rest in contact. The first one has 216 squishy balls with tentacles, totaling 48 million vertices and 151 million tetrahedra acting as force elements, dropped into a Utah teapot. Intermediate frames of this simulation are shown inFigure 11. The second one includes more than 10 thousand deformable ob- jects, totaling over 36 million vertices and 124 million tetrahedra, dropped into a box and piled on a platform, which is then suddenly
+force to Equation 8 using the same damping term, such that
 
-|Fig. 11. using 𝑆 = 4 substeps per frame and 𝑛||= 40 max|forming a stable pile with active frictional contacts. The average and maximum computation time per time step is 3.6 and 3.9 seconds, respectively,||Simulation of 216 squishy balls with tentacles, a total of 48 million vertices and 151 million tetrahedra, dropped into a Utah teapot, iterations per step. The final frame of this simulation is shown inFigure 1.|||
-|---|---|---|---|---|---|---|---|
-||||||↑ This platform will be removed.|||
-|Fig. 12. 𝑛 = 60 max removed, making the pile collectively fall onto the ground. The intermediate frames are shown inFigure 12. As can be seen in our supplemental video, both of these simu- lations exhibit stable motion, quickly forming static piles, while maintaining rest-in-contact behavior with over 1 million active collisions. VBD’s parallelism and fast convergence resulted in an average computation time of 40 and 25 seconds per frame in these simulations, respectively. 5.2 Unit Tests The convergence rate of VBD depends on the stiffness of the sim- ulated system. This is demonstrated inFigure 13, comparing VBD with different numbers of iterations per frame to the converged solution computed using Newton’s method. As expected, VBD con-||container. Then, the platform is suddenly removed and the objects collectively fall onto the ground, forming stable piles both before and after the platform is removed. The average and maximum computation times per time step are 4.2 and 4.7 seconds, respectively, using 𝑆 iterations per step. The final frame of this simulation is shown inFigure 1.|||Simulation of 10,368 deformable objects, totaling over 36 million vertices and 124 million tetrahedra, dropped onto a platform inside a box||= 2 substeps and|
+$$\begin{aligned}
+    \vec{f}_i &= - \frac{m_i}{h^2} \left(\vec{x}_i-\vec{y}_i\right) -\!\! \sum_{j\in\mathcal{F}_i} \frac{\partial E_j(x)}{ \partial {x}_i}
+    - \left(\sum_{j\in\mathcal{F}_i} \frac{k_d}{h} \frac{\partial^2 E_j(x)}{\partial {x}_i \partial {x}_i}\right)
+    \left(x_i-x_i^t\right)
+    .
+\end{aligned}$$
 
-verges slower for stiffer materials, which is common for descent- based solvers. In this example, 15 iterations are more than sufficient
+## Constraints
+Since our method directly manipulates the position of each vertex, managing a constraint on a vertex becomes straightforward. Constraints generally fall into two categories: unilateral ($C(\vec{x}) \leq 0$) or bilateral ($C(\vec{x}) = 0$). With bilateral constraints, if a vertex position is directly set to a specific value, we simply skip updating its position. Otherwise, it is constrained to a (usually linear) subspace. Our approach involves representing the constrained vertex position using the subspace basis. This transforms both the vertex position and gradient into an $L$-dimensional vector, where $L$ is the subspace dimension. Consequently, handling local steps for constrained vertices involves solving an $L\times L$ system. Regarding unilateral constraints, we allow compromises and define potential energy to be solved alongside other potentials. This method handles world box constraints in our simulations.
 
-Fig. 13. *Visual convergence with different numbers of iterations per*
+![Edge-edge](figures/vbd/CollisionPotential/CollisionPotentialEdge.png)
 
-for the softest material, while stiffer ones require more. As can be *frame for different material stiffness (with accelerated iterations using*
+![Vertex-triangle](figures/vbd/CollisionPotential/CollisionPotentialTriangle.png)
 
-seen in our supplemental video, even though VBD can qualitatively *𝜌* = 0*.*75*,*0*.*86*,*0*.*93 *top to bottom), simulating a beam with 463 vertices*
+**Figure 3.** Two collisions types: (a) edge-edge can have at most two pairs and (b) vertex-face can have at most one pair with the same color, since vertices on the same side of a collision must have different colors.
 
-imitate the behavior of stiff materials with a relatively small number *and 1.5 thousand tetrahedra.*
+## Collisions
+Collisions can be handled by simply introducing a quadratic collision energy per vertex, based on the penetration depth $d$, such that
 
-of iterations, the motion can quickly diverge from the converged solution, due to the remaining residual, unless a sufficient number of iterations are used. In our supplemental video, we also include a comparison of differ- We present our tests with different friction coefficients *𝜇𝑐* for ent damping stiffness *𝑘𝑑*, showing that, despite numerical damping friction forces inFigure 14. Notice that, *𝜇𝑐* impacts the motion, as of implicit Euler, without damping we can preserve kinetic energy expected, and with sufficiently high *𝜇𝑐*, we can properly preserve for a long time. As we increase *𝑘𝑑*, the motion subsides quicker, as the position on an incline and form taller piles. expected.
+$$\begin{aligned}
+    E_c(x) &= \frac{1}{2} \, k_c \, d^2
+    &&\text{with}&
+    d &= \max\Big( 0, (x_b - x_a) \cdot {\hat{n}}\Big) \;,
+\end{aligned}$$
 
-*𝜇𝑐* = 0*.*0 *𝜇𝑐* = 0*.*3 *𝜇𝑐* = 0*.*6 *𝜇𝑐* = 0*.*9
+where $k_c$ is the collision stiffness parameter, $\vec{x}_a$ and $\vec{x}_b$ are the two *contact points* on either side of the collision, and $\vec{\hat{n}}$ is the contact normal.
 
-*𝜇𝑐* = 0*.*0 *𝜇𝑐* = 0*.*2 *𝜇𝑐* = 0*.*4 *𝜇𝑐* = 0*.*6
+There are two collision types for triangle meshes ([1](#fig:CollisionPotential){reference-type="ref+label" reference="fig:CollisionPotential"}):
 
-Fig. 14. *Testing different friction coefficients 𝜇𝑐for (top) an elastic*
+- Edge-edge collisions use continuous collision detection (CCD). $\vec{x}_a$ and $\vec{x}_b$ correspond to the intersection points on either edge and the contact normal is the direction between them, i.e. ${\vec{\hat{n}}=\vec{n}/\|\vec{n}\|}$, where ${\vec{n}=\vec{x}_b-\vec{x}_a}$.
 
-*cube with 400 vertices and 1.45 thousand tetrahedra, initially resting* *on an incline, and (bottom) 4 elastic octopus models, totaling 15.6* *thousand vertices and 60 thousand tetrahedra, dropped into a box.*
+- Vertex-triangle collisions are detected either by CCD or discrete collision detection (DCD). In this case, $\vec{x}_a$ is the colliding vertex and $\vec{x}_b$ is the corresponding point on either the collision point (for CCD) or the closest point (for DCD) on the triangle [Chen et al. 2023]. $\vec{\hat{n}}$ is the surface normal at $\vec{x}_b$.
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-#### Algorithm 1: VBD simulation for one time step.
+In our implementation, we perform a DCD at the beginning of the time step using $\vec{x}^t$ to identify vertices that have already penetrated, and the rest of the collisions use CCD.
 
-#### Input: x
+We simplify the computation of the gradient and the Hessian of the collision energy by not differentiating through $\vec{\hat{n}}$, i.e. assuming that $\vec{\hat{n}}$ is constant.
 
-*𝑡* : the positions of the previous step; v *𝑡* : the velocities of the previous step; aext: the external acceleration Output: This step’s position x *𝑡*+1 and velocity v *𝑡*+1. 1 y ← x *𝑡* + *ℎ*v *𝑡* + *ℎ* 2 aext 2 Initial DCD using x *𝑡*
+Performing collision detection at every iteration using CCD can be expensive and can easily become the bottleneck. Therefore, in our implementation, we perform CCD once every $n_{\text{col}}$ iterations.
 
-3 x ← initial guess with adaptive initialization 4 for each iteration *𝑛* ≤ *𝑛*maxdo 5 if *𝑛* mod *𝑛*col= 1 then CCD using x 6 for each color *𝑐* do //Block-level parallelization 7 parallel for each vertex *𝑖* in color *𝑐* do //Thread-level parallelization 8 parallel for each *𝑗* ∈F*𝑖*do //Variables in shared memory <u>𝜕𝐸𝑗</u> 9 f*𝑖,𝑗*= − *𝜕*x*𝑖* <u>𝜕</u> 2 <u>𝐸</u> <u>𝑗</u> 10 H*𝑖,𝑗*= *𝜕*x*𝑖𝜕*x*𝑖* 11 end //Local reduction sums Í 12 f*𝑖*=*𝑗*∈F *𝑖* f *𝑖,𝑗* Í 13 H*𝑖*=*𝑗*∈F *𝑖* H*𝑖,𝑗* 14 Δx*𝑖*← H *𝑖* −1 f *𝑖* 15 Δx*𝑖*← optional line search from x*𝑖*+ Δx*𝑖*to x*𝑖* 16 x *𝑖* new ← x*𝑖*+ Δx*𝑖* 17 end //Copy updated positions back to the vertex buffer
+While this has the risk of missing some collision events, they are likely to be captured via DCD in the next time step.
 
-|(a)|(b)|(c)|
-|---|---|---|
-|(d)|(e)|(f)|
+All detected collisions remain as force elements until the next collision detection.
 
-18 parallel for each vertex *𝑖* in color *𝑐* do 19 x*𝑖*= x *𝑖* new
+For vertex-triangle collisions detected with DCD, it is important to recompute the closest point ($\vec{x}_b$) before computing the gradient and Hessian of $E_c$.
 
-20 end 21 end //Optional: accelerated iteration 22 parallel for each vertex *𝑖* do 23 Update x*𝑖*usingEquation 18. 24 end 25 end 26 v = (x − x *𝑡* )/*ℎ* 27 return x, v
+## Friction
+To compute friction for collision $c$, we must consider the relative motion of the contact points defined as
 
-Fig. 15. *A stress test with extreme stretching: a Stanford bunny model*
+$$\delta\vec{x}_c  = \big(\vec{x}_a - \vec{x}_a^t\big) - \big(\vec{x}_b - \vec{x}_b^t\big) \;,$$ where $\vec{x}_a^t$ and $\vec{x}_b^t$ are the positions of $\vec{x}_a$ and $\vec{x}_b$ at the beginning of the time step.
 
-*with 1.8 thousand vertices and 5.9 thousand tetrahedra is stretched by* *slowly pulling 10 vertices away, which are then suddenly released. The* *model recovers its shape after going through considerable deformations* *and high-velocity motion, simulated with self-collisions and using* *𝑆* = 5 *substeps and 𝑛*max= 10 *iterations per step.*
+With this $\delta\vec{x}_c$, we can use the friction model of *incremental potential contact* (IPC) [Li et al. 2020a]. First, we project $\delta\vec{x}_c$ to the 2D contact tangential space, using a transformation matrix $\vec{T}_c \in \mathbb{R}^{3 \times 2}$, to evaluate the tangential relative translation $\vec{u}_c=T_c^T\delta{x}_c$, where $\vec{T}_c=[\vec{\hat{t}}~\vec{\hat{b}}]$ is formed by a tangent $\vec{\hat{t}}$ and binormal $\vec{\hat{b}}$ vectors orthogonal to $\vec{\hat{n}}$.
 
-these extremely unstable energy configurations, VBD quickly re- covers these models without performing a line search and using 100 iterations per frame. Another stress test is shown inFigure 15. In this case, 10 vertices of a Stanford bunny model are first slowly pulled away, generating a state with considerable potential energy, and then suddenly released (right afterFigure 15b), causing severe deformations. Once again, VBD successfully handles this challenging simulation case, involving self-collisions with high-velocity impacts, using only *𝑛*max= 10 iterations per step and*𝑆* = 5 per frame.Figure 16presents a stability test under large residuals by using only a single iteration per frame (i.e. *𝑆* = 1 and *𝑛*max= 1). Notice that our method produces stable deformations with extreme stretching, even though the simulation
+The signed magnitude of the collision force applied on vertex $i$ is $\lambda_{c,i}=\frac{\partial E_c}{\partial {x}_i}\cdot \vec{\hat{n}}$. Note that the sign of $\lambda_{c,i}$ is different for vertices on different sides of the collision. Let $\mu_c$ be the friction coefficient. We can then calculate the friction force using $$\begin{aligned}
+   \vec{f}_{c,i}
+   &= -\mu_c\,\lambda_{c,i}\,\frac{\partial \delta {x}_c}{\partial {x}_i}\,T_c\,f_1(\|u_c\|)\frac{u_c}{\|u_c\|}\;\text{,  where} \\
+   f_1(u) &=
+    \begin{cases}
+      2\left(\frac{u}{\epsilon_vh}\right) - 
+       \left(\frac{u}{\epsilon_vh}\right)^2, &u \in (0,h\epsilon_v)\\
+      1, &u \geq h\epsilon_v
+    \end{cases}.
+\end{aligned}$$ Here, $f_1$ serves as a smooth transition function between static and dynamic friction. When the relative velocity exceeds a small threshold $\epsilon_v$, dynamic friction is applied. Conversely, if the relative velocity is below this threshold, static friction is applied, scaling between the range of $[0,1]$.
 
-5.3 Stress Tests We present a challenging frictional contact case inFigure 2, twisting two thin beams together. This example includes extreme deforma- tions, generating strong material forces that compete with self- collisions and collisions between the two beams. It is simulated with collision detection occurring once every 5 iterations (i.e. *𝑛*col= 5). Notice that VBD can properly handle such strong deformations with frictional contact. We show two simulations inFigure 3for stress-testing the sta- bility of VBD under extreme deformations. The first one shows an armadillo model that is perfectly flattened and the second one is a Utah teapot model with all vertices randomly scrambled and placed on the surface of a sphere. Even though the simulations begin with
+In our formulation, we need the Hessian of the friction term, which is the derivative of this function. We approximate the derivative by not differentiating through $\|u_c\|$ for a more stable friction force formulation [Macklin et al. 2020], such that
 
-Fig. 16. *A stress test using only a single iteration per frame (i.e. a time*
- *step of ℎ* = 1/60 *seconds and 𝑛*max= 1*). One vertex on the armadillo* *model’s nose is pulled while the finger and toe vertices are fixed. The* *model has 15 thousand vertices and 50 thousand tetrahedra.* lacks a sufficient iteration count to properly reduce the residual at each frame.
-5.4 Convergence Rate To evaluate the convergence rate of VBD, we present a simple test shown inFigure 17, where an armadillo model that was previously stretched is suddenly released. Here, we calculate the relative loss after each iteration and compare it to alternative solvers. The first alternative is preconditioned gradient descent (GD) [Wang and Yang2016] implemented on GPU within the same frame- work as ours. GD requires a form of line search for stability, which is implemented as testing the variational energy after every 8 it- erations and, when needed, reducing the optimization step size and backtracking (following the implementation ofWang and Yang [2016]). We also include a version of GD that is accelerated us- ing the Chebyshev semi-iterative approach [Wang2015], as our method. The iterations of GD are about 30% faster than ours with- out line search. However, it necessitates line search for stability. This makes it about 10% slower than our VBD, which does not need line search. Furthermore, its convergence rate per iteration is considerably slower, as it corresponds to Jacobi iterations. In this example, when combined with acceleration, GD performs similar to our method without acceleration but lags significantly behind our method with acceleration. We also compare to a version of our method that uses Jacobi iter- ations, called *Block Jacobi*, implemented by computing the position change for all vertices in parallel and then applying the position update simultaneously to all vertices at the end of each iteration. We incorporate the same line search scheme as GD for Block Jacobi, as it is necessary for stability. Block Jacobi outperforms GD, as it uses vertex blocks for computation, which corresponds to using a diagonal Hessian block as a precondition, as opposed to just a diagonal line that GD uses. Without line search, it achieves 20% faster iteration times than our VBD, due to its perfect vertex-level parallelization (without any coloring). However, combined with line search, its iterations are about 17% slower than VBD. More impor- tantly, because it uses Jacobi iterations, its convergence is hindered, as compared to our Gauss-Seidel iterations. Furthermore, we compare the convergence of our method to two implementations of Newton’s method: first using a direct Cholesky (LDLT) factorization solver provided by Intel’s MKL library [Wang et al. 2014] running on the CPU, and the second using a GPU-
-based conjugate gradient (CG) method. To ensure convergence, we do a PSD projection for each tet’s Hessian of elasticity. Newton’s method uses a line search for each iteration. Since its iterations are slow, the computational overhead of line search is negligible. Though the convergence of Newton’s method per iteration is far superior to all others, because of its expensive computation time per iteration, in these examples it lags far behind. Nonetheless, for relatively tame experiments with less stretching and motion, and especially for highly stiff and high-resolution simulations that are much more expensive to simulate, we would expect Newton’s method to eventually overtake all alternatives beyond a certain level of convergence. Finally, we compare our method to a quasi-Newton approach using Laplacian preconditioning [Liu et al. 2017]. We utilize a GPU- based conjugate gradient solver, similar to the one employed in our GPU-CG Newton’s method’s implementation. Laplacian pre- conditioning accelerates each linear solve, as it eliminates the need for PSD projection and involves solving a smaller system. Practi- cally, this method demonstrates faster convergence than Newton’s method, particularly in the initial stages of the optimization pro- cess. Nevertheless, it still lags behind both the accelerated and non- accelerated versions of our VBD. A part of the performance advan- tages of our VBD method presented above is related to its efficiency in parallel execution on the GPU. To demonstrate its convergence in the absence of parallel computation, we include a comparison using single-threaded CPU implementations of our VBD and Newton’s method with Cholesky factorization and CG.Figure 18shows the convergence results for the same experiment in the bottom row of
+$$\begin{aligned}
+\frac{\partial \vec{f}_{c,i}}{\partial \vec{x}_i} &\approx -\mu_c\,\lambda_{c,i}\,\frac{\partial \delta\vec{x}_c}{\partial \vec{x}_i}\,T_c\,\frac{f_1(\|u_c\|)}{\|u_c\|} T_c^T\,  \left(\frac{\partial \delta\vec{x}_c}{\partial \vec{x}_i}\right)^T\;.
+\end{aligned}$$
 
-Figure 17. In these tests, our method initially demonstrates faster
+Without this approximation, PSD projection and line search might be needed to ensure stability.
 
-convergence than both versions of Newton’s method. Over time, the CG-based Newton’s method catches up to our VBD without Chebyshev acceleration. However, VBD with Chebyshev accelera- tion maintains a significant performance lead over the others. This experiment shows that the performance advantages of our method are not only due to its GPU parallelism.
+Finally, all friction forces $\vec{f}_{c,i}$ and their derivatives $\partial \vec{f}_{c,i}/\partial\vec{x}_i$ are added to $\vec{f}_i$ and $\vec{H}_i$, respectively.
 
-5.5 Comparisons to XPBD Our method has an entirely different formulation than XPBD, but there are some strong similarities, as both methods operate with position updates using Gauss-Seidel iterations. Here we provide two direct comparisons to highlight some important differences. XPBD replaces the Hessian matrix and uses only the Hessian of inertia potential. This omission is justified by using a small time step, because the significance of the inertia potential increases quadrat- ically as the time step decreases. Nonetheless, with complex ex- amples, the impact of this approximation can be severe, even with small time step. This is demonstrated inFigure 19with a challeng- ing collision-rich scenario involving a squishy ball with tentacles dropped to the ground. Comparing XPBD with 120 iterations per step (Figure 19a) to our method with the same number of iterations (Figure 19d), we can see that our method not only achieves a more stable animation, it also performs faster because of its improved parallelism, as compared to XPBD. Reducing the time step helps XPBD even when using a similar total number of iterations per frame (Figure 19b). However, simply reducing the time step is not
+## Initialization
+Since our method is an iterative solver, we begin with an *initial guess* for $x$. The closer this initial guess is to the resulting $x^{t+1}$, the fewer number of iterations we would need to converge. Typically, if the simulation converges, different initializations should not significantly affect the final results, although they may influence the number of iterations required to achieve convergence.
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-100
+Providing a good initial guess (one that is close to $x^{t+1}$) is particularly important for applications with a limited computation budget, e.g. using a fixed number of iterations. In such applications, the initial guess can strongly impact the remaining residual at the end of the final iteration.
 
-Relative Loss 103
+![Previous position](figures/vbd/AdaptiveInitialization/D4.png)
 
-104 0 50 100 150 200 Iterations 100
+**Figure 4.** Different initialization options for a swinging elastic pendulum dropped from the same height (blue line) simulated with our method using only 20 iterations per frame, showing the same frame of the simulation. Notice that initializing using (a) previous position and (b) inertia fail to properly move under gravity, while (c) inertia and acceleration leads to accessive stretching (red line) when VBD does not run to convergence. (d) Our adaptive solution closely matches (e) the reference generated by fully converged Newton’s method (green line).
 
-Relative Loss 103
+We begin with considering three simple options for initialization:
 
-104 0 200 400 600 Iterations
+$$\begin{aligned}
+    \text{(a)~}&\text{\textbf{Previous position:}}&
+    x &= x^t \\
+    \text{(b)~}&\text{\textbf{Inertia:}}&
+    x &= x^t + h\vec{v}^t \\
+    \text{(c)~}&\text{\textbf{Inertia and acceleration:}}&
+    x &= \vec{x}^t + h\vec{v}^t + h^2\vec{a}_{\text{ext}} = y
+\end{aligned}$$
 
-2 VBD 10 VBD (accelerated) GD GD (accelerated) Relative LossBlock Jacobi 103Block Jacobi (accelerated) Newton (CPU Cholesky) Newton (GPU CG) 4 Quasi-Newton (GPU CG) 10 250 300 350 0 2 4 6 8 10 12 14 16 Computational Time (ms) 100
+Option (a) struggles with substantially stiff materials. As we adjust each vertex separately, assuming the others remain fixed, our method must lean on the inertia potential's gradient (i.e. ${m_i(\vec{x}_i-\vec{y}_i)/2h^2}$) to march toward the local minimum. With stiff materials, this method results in notably slower convergence rates due to the inertia potential being considerably less stiff. Consequently, it encounters challenges in simulating scenarios that resemble free fall, like a swinging elastic pendulum at its maximum height, as shown in [2](#fig:Initialization:a){reference-type="ref+label" reference="fig:Initialization:a"}.
 
-2 VBD 10 VBD (accelerated) GD GD (accelerated) Relative LossBlock Jacobi 103Block Jacobi (accelerated) Newton (CPU Cholesky) Newton (GPU CG) 4 Quasi-Newton (GPU CG) 10 800 1000 0 5 10 15 20 25 30 35 40 Computational Time (ms)
+Option (b) allows the system to start with the inertia of the previous step, which helps, but terminating the iterations prior to convergence can again result in local material stiffness overpowering external acceleration, as shown in [3](#fig:Initialization:b){reference-type="ref+label" reference="fig:Initialization:b"}.
 
-Table 1.
+Option (c) is similar to the initialization of position-based dynamics, and performs notably better as it effectively preserves inertia and properly reacts to external acceleration.
 
-|Experiment Name|Number of|Material|||Contact &Fiction|Simulation Parameters|Time per step|
-|---|---|---|---|---|---|---|---|
-||Vert. Tet.|color Type|Stiffness|Damping|𝑘𝑐 𝜇𝑐,𝜖𝑣|ℎ(sec.) Iterations|avg./max|
-|Twisting Thin Beams (Figure 2)|97K 266K|8 NeoHookean|𝜇 = 5𝑒4,𝜆 = 1𝑒6|1e-6|1e6 0.1, 1e-2|1/300 100|60/78ms|
-|Flattening initialization (Figure 3)|15K 50K|8 NeoHookean|𝜇 = 2𝑒6,𝜆 = 1𝑒7|1e-6|NA NA|1/60 100|3.3/3.8ms|
-|Random initialization (Figure 3)|2K 8.5K|8 NeoHookean|𝜇 = 2𝑒6,𝜆 = 1𝑒7|1e-6|NA NA|1/60 100|2.6/2.8ms|
-|Tetmesh Pendulum (Figure 6)|304 755|6 NeoHookean|𝜇 = 1𝑒7,𝜆 = 1𝑒8|0|NA NA|1/300 20|<0.1ms|
-|Squishy Ball Drops (Figure.7,9,19)|230K 700K|8 NeoHookean|𝜇 = 2𝑒6,𝜆 = 2𝑒7|1e-7|1e7 0.1, 1e-2|1/120 120|15/17ms|
-|Tearing Cloth (Figure 10)|2500 4800|3 StVK|𝜇 = 1𝑒4,𝜆 = 1𝑒4|1e-5|NA NA|1/300 20|11.2/11.5 ms(cpu)|
-|Dropping 216 Squshy Balls (Figure 11)|48M 151M|9 NeoHookean|𝜇 = 2𝑒6,𝜆 = 2𝑒7|1e-7|1e7 0.1, 1e-2|1/240 40|3.6/3.9s|
-|Dropping 10368 Models (Figure 12)|36M 124M|8 NeoHookean|𝜇 = 1𝑒6,𝜆 = 1𝑒7|1e-7|1e7 0.1, 1e-2|1/120 60|4.2/4.7s|
-|Beam Sagging (Figure 13)|463 1.5K|6 NeoHookean|𝜇 = 1𝑒6/3𝑒6/1𝑒7 𝜆 = 1𝑒7/3𝑒7/1𝑒8|1e-6|NA NA NA|1/300 3/5/10|avg.: 0.08/0.12/0.24ms max: 0.08/0.16/0.31ms|
-|Cude Sliding (Figure 14)|800 2.9K|6 NeoHookean|𝜇 = 1𝑒6,𝜆 = 1𝑒7|1e-6|1e7 0/0.3/0.6/0.9, 1e-2|1/300 10|0.10/0.17ms|
-|Octopi Stacking (Figure 14)|15.6K 60K|8 NeoHookean|𝜇 = 1𝑒6,𝜆 = 1𝑒7|1e-6|1e7 0/0.1/0.4/0.6, 1e-2|1/300 10|1.1/1.3ms|
-|Extreme Stretch (Figure 16)|1.8K 5.9K|8 NeoHookean|𝜇 = 2𝑒6,𝜆 = 1𝑒7|1e-6|1e7 0.2, 1e-2|1/300 10|0.36/1.02ms|
-|2 Cube colliding (Figure 20)|800 2.9K|6 NeoHookean|𝜇 = 1𝑒6,𝜆 = 1𝑒7|1e-6|1e7 0.3, 1e-2|1/300 10|0.16/0/20ms|
+However, with a limited number of iterations, materials behave softer than they should, often resulting in overstretching or collapsing under gravity. An example of this can be seen in [4](#fig:Initialization:c){reference-type="ref+label" reference="fig:Initialization:c"}, where the pendulum extends more than it should. Most notably, it struggles with steady objects at rest in contact, consistently initializing them into a penetrating state, as if they are in free fall. In such cases, the contact forces must entirely undo the position change of initialization during the iterations. This not only creates unnecessary computation, but also places considerable strain on the accuracy of the collision detection and handling methods (including friction). Therefore, properly simulating objects that are stacked on top of each other becomes a major challenge with this initialization option.
 
-sufficient in this case, as XPBD also needs more frequent collision detection (Figure 19c). Using collision detection with the same fre- quency as ours while taking small time step (Figure 19b) leads to collisions that are detected too late and cause stability issues in this case. This is not only because the collisions that are detected too late are deeper, but also because smaller time step lead to higher vertex velocities when resolving stiff collisions. One of the fundamental challenges of XPBD is handling high mass ratios. This is demonstrated with a simple example inFigure 20, where a large and heavy elastic cube is dropped onto a smaller and
+![The ratio of gravity ã used with adaptive initialization during the swinging of an elastic pendulum. The model is a single-piece tetrahedral mesh. It automatically distinguishes vertices in approximate free-fall (red) and those where elasticity counteracts gravity (blue).](figures/vbd/AdaptiveInitialization/combined3.jpg)
 
-much lighter cube, with a mass ratio of 1:2000. In this example, XPBD’s collision constraints, even with infinite stiffness, cannot overcome the mass ratio and the smaller cube is entirely crushed upon contact. This is because of the dual formulation of XPBD [Macklin et al. 2020]. Our method, on the other hand, has no such difficulties with handling high mass ratios.
+**Figure 5.** The ratio of gravity ã used with adaptive initialization during the swinging of an elastic pendulum. The model is a single-piece tetrahedral mesh. It automatically distinguishes vertices in approximate free-fall (red) and those where elasticity counteracts gravity (blue).
 
-6 VBD FOR OTHER SIMULATION SYSTEMS We have described our method inSection 3in the context of elastic body dynamics. Yet, VBD is not limited to such simulations and can
+We propose an adaptive initialization scheme that combines options (b) and (c), taking advantage of the freedom that VBD provides in the choice of initialization.
 
-Fig. 17. *Convergence of different descent methods for simulating an armadillo model with 15 thousand vertices and 50 thousand tetrahedra with*
+This scheme uses
 
-*(top) a relatively soft material and (bottom) a 10*× *stiffer material. Vertices near the top inside the glass block are fixed and the models are initially* *stretched, as shown on the left, by pulling down foot vertices. Then, the position constraints on foot vertices are suddenly removed, allowing the* *model to deform for 33 ms. The deformation is computed using a single time step of ℎ* = 33 *ms. The graphs show relative loss over iterations and* *computation time. All methods are implemented on the GPU using the same framework with single precision (32-bit) floating-point numbers,* *except for Newton’s method with Cholesky factorization, which runs on the CPU using double precision (64-bit). Accelerated versions use 𝜌* = 0*.*95*.*
+$$\begin{aligned}
+    \text{(d)~}&\text{\textbf{Adaptive:}}&
+    x &= \vec{x}^t + h\vec{v}^t + h^2\vec{\tilde{a}}
+    &\hspace{0.2\linewidth}
+\end{aligned}$$
 
-#### Performance results and simulation parameters.
+replacing the external acceleration $\vec{a}_{\text{ext}}$ in (c) with an estimated acceleration term $\vec{\tilde{a}}$, determined by exploiting the typical similarity between two consecutive time steps.
 
-(a) *Initial State* (b) *XPBD* (c) *VBD (ours)*
-Relative Loss
+We begin with the acceleration of the previous frame
 
-Fig. 20. *Dropping a large and heavy elastic cube onto a smaller and*
+${a^t=(\vec{v}^t-\vec{v}^{t-1})/h}$ and compute its component $a^t_{\text{ext}}$ along the external acceleration direction ${\vec{\hat{a}}_{\text{ext}}=\vec{a}_{\text{ext}}/\|\vec{a}_{\text{ext}}\|}$, such that ${a^t_{\text{ext}}=\vec{a}^t\cdot\vec{\hat{a}}_{\text{ext}}}$.
 
-VBD (CPU single threaded) 103 *much lighter box with a mass ratio of 1:2000. Each cube has 400 vertices* VBD (accelerated, CPU single threaded) Newton (CPU Cholesky, single threaded) *and 1.5 thousand tetrahedra.* Newton (CPU CG, single threaded) 104
+Then, we simply make sure that the estimated acceleration does
 
-0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 20.0 Computational Time (s)
-Fig. 18. *Comparing a single-threaded CPU implementation of our*
+not exceed the external acceleration, using
 
-*method with single-threaded Newton’s method (using both CG and* *Cholesky). The scene is identical to the bottom row ofFigure 17.*
+$$\begin{aligned}
+    \vec{\tilde{a}} &= \tilde{a}\,\vec{a}_{\text{ext}} \;, &&\text{where}&
+    \tilde{a} &=
+    \begin{cases}
+      1\;, & \text{if $a^t_{\text{ext}}>\|\vec{a}_{\text{ext}}\|$}\\
+      0\;, & \text{if $a^t_{\text{ext}}<0$}\\
+      a^t_{\text{ext}}/\|\vec{a}_{\text{ext}}\|\;, & \text{otherwise.}
+    \end{cases}       
+\end{aligned}$$
 
-stiff soft springs springs
+This adaptive approach includes external acceleration in the initialization when the motion of a vertex resembles free fall. When an object is stationary, however, as in rest-in-contact, it maintains the previous position in the initialization, preventing undesired penetrations before the first iteration. It also successfully avoids excessive stretching, as can be seen in [5](#fig:Initialization:d){reference-type="ref+label" reference="fig:Initialization:d"}. Visualizations of different $\tilde{a}$ values in this simulation are shown in [8](#fig:AdaptiveInitialization){reference-type="ref+label" reference="fig:AdaptiveInitialization"}. In short, our adaptive initialization is a simple but effective strategy and it is possible because VBD does not dictate a particular initialization (unlike XPBD, for example).
 
-Fig. 21. *20 particles attached with springs, forming a swinging chain,*
+## Accelerated Iterations
+We use the Chebyshev semi-iterative approach [Wang 2015] to improve the convergence of our method, though other momentum-based acceleration techniques, such as the Nesterov's method [Golub and Van Loan 2013] can be applied as well. The Chebyshev method
 
-*simulated using VBD with a 𝑆* = 1 *substep and* 100 *iterations per* *step. The particle on one end of the chain is fixed and the particle* *on the other end has 1000*× *more mass than the others. (Left) using*
+iteratively computes an acceleration ratio based on the approximation of the system's spectral radius. Instead of directly using the output vertex positions of Gauss-Seidel ${\vec{\bar{x}}}^{(n)}$ after iteration $n$, it recomputes the positions at the end of the iteration using $$\begin{aligned}
+    \vec{x}^{(n)} &= \omega_{n} ({\vec{\bar{x}}}^{(n)} - \vec{x}^{(n-2)} ) + \vec{x}^{(n-2)} \;,
+\end{aligned}$$ where
 
-|(a) XPBD|(b) XPBD|(c) XPBD|(d) VBD (ours)|
-|---|---|---|---|
-|ℎ = 1/120 sec.|ℎ = 1/3000 sec.|ℎ = 1/3000 sec.|ℎ = 1/120 sec.|
-|𝑛max= 120|𝑛max= 5|𝑛max= 5|𝑛max= 120|
-|𝑛col= 120|𝑛col= 125|𝑛col= 5|𝑛col= 120|
-|(0.32 sec./frame)|(0.35 sec./frame)|(3.1 sec./frame)|(0.031 sec./frame)|
+$\omega_{n}$ is the acceleration ratio that changes at each iteration as $$\begin{aligned}
+    \omega_{n}&=\frac{4}{4-\rho^2\omega_{n-1}}
+    &\text{with}&&
+    \omega_1 &= 1
+    &\text{and}&&
+    \omega_2 &= \frac{2}{2-\rho^2} \;,
+\end{aligned}$$
 
-*sufficiently stiff springs, they expand no more than 0.7% of their rest* *lengths, despite the substantial mass difference. (Right) using 100*× *less stiff springs, the chain undergoes a visible expansion as it swings.*
+where $\rho \in(0,1)$ is the estimated spectral radius, which can be set manually, or automatically tuned using the technique introduced in [Wang and Yang 2016]. Note that this position recomputation procedure is performed globally after each Gauss-Seidel iteration is completed,
 
-Fig. 19. *A squishy ball with tentacles, comprising 230 thousand ver-*
+not after each local solver step.
 
-*tices and 700 thousand tetrahedra, dropped on the ground, simulated* *using (a) XPBD with a large time step and 240 iterations per frame,*
+![Not accelerated](figures/vbd/AccelerationComparison/a.jpg)
 
-*(b) XPBD with a* 25× *smaller time step and 250 total iterations per* *frame, (c) XPBD with the same small time step and iteration count but* *with* 25× *more frequent collision detection, and (d) VBD with a large* *time step and 240 iterations per frame. Comparing (a) and (d), VBD is* *faster than XPBD with the same settings. XPBD’s solution approaches* *VBD as the time step decreases, but it also requires more frequent* *collision detection to achieve a visually similar result to VBD.* be used to solve various optimization problems. Here, we consider some other example simulation systems and briefly discuss how our method can be applied. This is not intended as an exhaustive list but merely as examples that could guide the reader to discern how their specific simulation problem could utilize VBD.
-6.1 Particle-Based Simulations Particle-based simulations can easily use VBD by simply replacing the vertices in our description above with particles. Since VBD needs the Hessian of the force element energies, implementations would require computing the derivatives of all forces acting on a particle wrt. its position.
-Parallelizing particle-based simulations also involves additional considerations. Mass-spring type simulations, such as peridynamics [Levine et al. 2015], can use our parallelization approach with vertex coloring. However, simulations involving disjoint or loosely-joined particles, such as particle-based fluid simulation [Müller et al. 2003; Peer et al. 2015;Takahashi et al. 2015], would not only require recol- oring at each time step but also using a conservative neighborhood definition (including potential position change within a time step) for coloring, since position updates can alter the set of neighboring particles that interact with each particle.Figure 21shows a simple example where 20 particles, including one that is 1000× heavier, are connected with springs of two different stiffness, simulated using VBD.
+![Accelerated](figures/vbd/AccelerationComparison/b.jpg)
 
-6.2 Rigid Body Simulation For handling rigid body simulations with VBD, we can replace each vertex in our formulation with an entire rigid body, using the variational formulation of rigid body dynamics [Ferguson et al. 2021]. Unlike a vertex that has only 3 DoF, a rigid body also has rotational DoF, resulting in 6 DoF. Therefore, in our local system, we must solve a larger problem, where x*𝑖*∈ R6 and H*𝑖*∈ R6×6, including Hessians of all force elements wrt. all 6 DoF of x*𝑖*. Note that, in this case, these force elements are not internal material
+![Reference](figures/vbd/AccelerationComparison/c.jpg)
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-6.3 Unified Simulations Unified simulation systems are useful for handling scenarios that involve different material types. Typical unified simulation systems use a fundamental building block, such as a particle, to represent all supported materials [Becker et al. 2009;Macklin et al. 2014;Martin et al. 2010;Müller et al. 2004;Solenthaler et al. 2007]. We can form a unified simulation system using VBD without representing all materials using the same building block. For any simulation system described above, we can combine it with another, provided that we can define the information exchange as an energy potential.
-Fig. 22. *5 rigid bodies, each with 6 DoF, forming a chain through col-*
- For example, when the interactions take place as collisions, we can
-*lisions, simulated using our VBD formulation for rigid body dynamics.* easily join rigid body simulations with elastic bodies or particles via the collision potential. Joint constraints with elastic potential would be another easy way to combine different simulation systems. The advantage here is that a large rigid body, for example, can be represented as a single object with just 6 DoF, as opposed to using multiple building blocks that are constrained to move as a rigid con- struction. This way, a heterogeneous collection of representations can be joined within the same integrator using VBD. On the other hand, this form of defining a unified simulation system may be challenging for other types of information exchange, such as evaluating buoyancy. Exploring such problems would be another interesting direction for future research.
+**Figure 6.** Demonstrating the accelerator’s impact in a collision-intensive scene: a squishy ball (230K vertices, 700K tetrahedra) dropping and bouncing. Both (a) and (b) use h = 1/120 seconds with a constant number of 120 iterations per time step, taking 0.11 seconds of average computation time per frame. (a) Without acceleration 120 iterations appear to be insufficient. (b) Our acceleration scheme (ρ = 0.95), skipping colliding vertices, manages to resolve complex collisions, notably enhancing elasticity convergence for much stiffer outcomes, closely matching (c) the reference computed using 2000 iterations.
 
-Fig. 23. *Dropping 60 rigid bodies into a Utah teapot, showcasing*
+This accelerator was originally developed for solving linear systems, assuming the energy to be smooth and (nearly) quadratic. Elastic energy generally fulfills these criteria. However, collision energy tends to be discontinuous and highly stiff, making the use of an accelerator in collision-intensive scenes prone to overshot and compromise the system's stability. To address this, we propose a simple yet highly effective solution for accelerating scenes with collisions: skipping the accelerations for actively colliding vertices. Note that the acceleration must be a continuous process. If a vertex is detected colliding at a certain iteration, we will skip the acceleration for it in all the following iterations in the same step, regardless of whether the collision has been resolved. This approach has minimal impact on the convergence of elasticity, since
 
-*collisions and frictional contact. Remarkably, one rigid body stays on* *the spout due to friction.*
+typically only a small fraction of vertices are in collision. Also, for those colliding vertices, the elasticity is usually overpowered by the collision forces. Thus, this solution maintains the stability of the system, while effectively accelerating the convergence of elasticity, as shown in [12](#fig:AccelerationComparison){reference-type="ref+label" reference="fig:AccelerationComparison"}.
 
-forces, but external forces acting on the rigid body, due to collisions or other constraints. Other than this additional complexity, we can follow the same procedure with VBD. Parallelization with coloring depends on the nature of the rigid body simulation. For example, pre-coloring, as we used in our examples for elastic bodies might work for problems like a rigid body chain. For disjoint rigid bodies interacting through collisions only, dynamic recoloring might be needed. Articulated rigid bodies can be handled by defining joint con- straints with an elastic potential. Infinitely stiff constraints are also possible, but VBD cannot guarantee that they will be satisfied using a fixed number of iterations. Another alternative is hard constraints can be introduced by reducing the total DoF in the system and re- placing the vertices in our formulation with an articulated rigid body, having more than 6 DoF. Obviously, this would lead to an even larger local system, requiring modifications to the variational formulation. Example rigid body simulations are shown inFigure 22andFig- ure 23, simulated using VBD, as described above. Note that since our collision formulation is based on penetration potential, it corresponds to penalty forces. We leave the exploration of handling impulse-based collisions [Mirtich1996] with VBD to future work.
+## Parallelization
+Gauss-Seidel-type iterative methods are often parallelized using graph coloring by determining groups (i.e. colors) that can be handled in parallel without impacting the sequential nature of the Gauss-Seidel loop. Obviously, the same can be applied to VBD by simply coloring vertices such that no force element uses multiple vertices of the same color.
 
-7 DISCUSSION We derive our method as a block coordinate descent method for variational time integrators, which offers optimization techniques like PSD projection and line search. The fact that we do not require those techniques to guarantee stability actually makes our method a more general solver of nonlinear equations. When line search is not used, our method can effectively manage *non-conservative* *forces*, such as friction, the same as how it handles conservative forces. In other words, our method allows for a seamless transition between block coordinate descent and block Gauss-Sediel [Grippo and Sciandrone2000;Hageman and Porsching1975]. While we do not practically utilize these optimization techniques derived from the descent view, they remain available options for users. VBD is a descent-based method that operates through local iter- ations. Therefore, it may not be a good solution for problems that would benefit from a global treatment. The speed of information travel with VBD depends on the connec- tions of vertices and the number of iterations used. A perturbation applied on a vertex can impact other vertices of a connected chain through force elements at most as far as the number of colors within a single iteration. Therefore, VBD is not ideal for high-resolution stiff systems, as it may require too many iterations for a perturba- tion of a vertex to travel across the system. In such cases, a global solution using Newton’s method may prove to be more effective. Our collision formulation for VBD is based on penetration poten- tial. Therefore, it cannot guarantee penetration-free results. In fact, penetrations are almost never completely resolved, as some amount of penetration is needed to maintain some collision force. Explor- ing penetration-free collisions with VBD would be an interesting direction for future research.
+![Vertex colors: 3](figures/vbd/GraphAndColoring/GraphAndColoringVerts.png)
 
-(a) *100 iterations* (b) *Converged* (c) *100 iterations* (d) *Converged*
-Fig. 24. *A chain of particles connected with soft springs (orange) and*
- *10,000*× *stiffer (blue) springs. Simulations with VBD using (a,c) 100* *iterations per frame fail to converge and result in excessive extensions,* *as compared to (b,d) convreged results.* In addition, defining a similar collision energy for codimensional objects, particularly for self-collisions, can be a challenge. VBD is a primal solver [Macklin et al. 2020], so it can easily handle high mass ratios (seeFigure 6,20, and21), but it struggles with high stiffness ratios. This is shown inFigure 24using a stiffness ratio of 1:10000, where VBD has poor convergence behavior. 8 CONCLUSION We have presented vertex block descent, an efficient iterative descent-based solution for optimization problems, and described how it can be used for physics-based simulations with implicit Euler integration defined through a variational formulation. We have explained all essential details of elastic body dynamics using VBD, including handling damping, constraints, collisions, and friction. We have defined an adaptive initialization technique, enabled by VBD’s formulation, and discussed how to use momentum-based acceleration to improve convergence. We have also presented effective methods for parallelization using VBD, considering dynamically introduced/removed force elements, and explained how its vertex-level computation improves the parallelization of its Gauss-Seidel iterations. Our results show that VBD can handle highly complex simulation cases (Figure 1), it remains stable under extreme stress tests (Figure 2, 3,15, and16), and offers fast convergence (Figure 17). In addition, we have summarized how VBD can be used for other types of simulation problems, such as particle systems and rigid bodies, including unified simulations. We have also mentioned some related future research directions and discussed VBD’s limitations. ACKNOWLEDGMENTS We thank Miles Macklin and Theodore Kim for an inspiring discus- sion on primal solvers. This work was supported in part by NSF grant 1764071. REFERENCES Uri M Ascher and Eddy Boxerman. 2003. On the modified conjugate gradient method in cloth simulation. *The Visual Computer* 19 (2003), 526–531. David Baraff and Andrew Witkin. 1998. Large Steps in Cloth Simulation. (1998). Markus Becker, Markus Ihmsen, and Matthias Teschner. 2009. Corotated SPH for deformable solids. In *Proceedings of the Fifth Eurographics Conference on Natural* *Phenomena* (Munich, Germany) *(NPH’09)*. Eurographics Association, Goslar, DEU, 27–34. Jeff Bolz, Ian Farmer, Eitan Grinspun, and Peter Schröder. 2003. Sparse matrix solvers on the GPU: conjugate gradients and multigrid. *ACM transactions on graphics (TOG)* 22, 3 (2003), 917–924. Sofien Bouaziz, Sebastian Martin, Tiantian Liu, Ladislav Kavan, and Mark Pauly. 2023. Projective dynamics: Fusing constraint projections for fast simulation. In *Seminal*
-*Graphics Papers: Pushing the Boundaries, Volume 2*. 787–797. Robert Bridson, Ronald Fedkiw, and John Anderson. 2002. Robust treatment of collisions, contact and friction for cloth animation. In *Proceedings of the 29th annual conference* *on Computer graphics and interactive techniques*. 594–603. Robert Bridson, Sebastian Marino, and Ronald Fedkiw. 2005. Simulation of clothing with folds and wrinkles. In *ACM SIGGRAPH 2005 Courses*. 3–es. Steve Capell, Seth Green, Brian Curless, Tom Duchamp, and Zoran Popović. 2002. A mul- tiresolution framework for dynamic deformations. In *Proceedings of the 2002 ACM*
+![Dual graph & element colors: 7](figures/vbd/GraphAndColoring/GraphAndColoringElems.png)
 
-Texas, 41–47. *SIGGRAPH/Eurographics symposium on Computer animation* [https://doi.org/10.1145/545261.545268](https://doi.org/10.1145/545261.545268). ACM, San Antonio
+![Vertex colors: 8](figures/vbd/GraphAndColoring/Vert.jpg)
 
-Isaac Chao, Ulrich Pinkall, Patrick Sanan, and Peter Schröder. 2010. A simple geometric model for elastic deformations. *ACM Transactions on Graphics* 29, 4 (July 2010), 1–6. [https://doi.org/10.1145/1778765.1778775](https://doi.org/10.1145/1778765.1778775) He Chen, Elie Diaz, and Cem Yuksel. 2023. Shortest Path to Boundary for Self- Intersecting Meshes. 42, 4, Article 146 (2023), 15 pages.[https://doi.org/10.1145/](https://doi.org/10.1145/) 3592136 Kwang-Jin Choi and Hyeong-Seok Ko. 2005. Stable but responsive cloth. In *ACM* *SIGGRAPH 2005 Courses on-SIGGRAPH ’05* [https://doi.org/10.1145/1198555.1198571](https://doi.org/10.1145/1198555.1198571). ACM Press, Los Angeles, California, 1.
+![Element colors: 76](figures/vbd/GraphAndColoring/Tet.jpg)
 
-B. Eberhardt, O. Etzmuß, and M. Hauth. 2000. Implicit-Explicit Schemes for Fast Animation with Particle Systems. In *Computer Animation and Simulation 2000*,
-W. Hansmann, W. Purgathofer, F. Sillion, Nadia Magnenat-Thalmann, Daniel Thalmann, and Bruno Arnaldi (Eds.). Springer Vienna, Vienna, 137–151.https: //doi.org/10.1007/978-3-7091-6344-3_11Series Title: Eurographics.
-Zachary Ferguson, Minchen Li, Teseo Schneider, Francisca Gil-Ureta, Timothy Langlois, Chenfanfu Jiang, Denis Zorin, Danny M. Kaufman, and Daniele Panozzo. 2021. Intersection-free Rigid Body Dynamics. *ACM Transactions on Graphics (SIGGRAPH)*
+**Figure 7.** Coloring vertices vs. elements: (a) vertex coloring needs 3 colors for 10 vertices while (b) element coloring (i.e. coloring the vertices of the dual graph) needs 7 colors for 9 triangles in this example. The difference is more pronounced for tet-meshes: (c) our vertex coloring uses only 8 colors for 3,891 vertices while (d) our element coloring implementation needs 76 colors for 14,802 tetrahedra in this example.
 
-M. Fratarcangeli and F. Pellacini. 2015. 40, 4, Article 183 (2021).
-Scalable Partitioning for Parallel Position Based Dynamics. *Computer Graphics Forum* 34, 2 (May 2015), 405–413.https: //doi.org/10.1111/cgf.12570 Marco Fratarcangeli, Valentina Tibaldo, and Fabio Pellacini. 2016. Vivace: a practical gauss-seidel method for stable soft body dynamics. *ACM Transactions on Graphics* 35, 6 (Nov. 2016), 1–9.[https://doi.org/10.1145/2980179.2982437](https://doi.org/10.1145/2980179.2982437) Theodore F. Gast, Craig Schroeder, Alexey Stomakhin, Chenfanfu Jiang, and Joseph M. Teran. 2015. Optimization Integrator for Large Time Steps. *IEEE Transactions on* *Visualization and Computer Graphics* 21, 10 (Oct. 2015), 1103–1115.[https://doi.org/](https://doi.org/)
+The advantage of VBD here is that, because it colors vertices, it typically results in much fewer colors as compared to techniques that color constraints/force elements, such as PBD. This is because coloring these elements is equivalent to coloring the vertices of the dual graph, which not only has more vertices, but, more importantly, also has a lot more connections per vertex in general. Examples of this are shown in [17](#fig:GraphAndColoring){reference-type="ref+label" reference="fig:GraphAndColoring"}. Since different colors must be handled sequentially, fewer colors means better parallelism.
 
-10.1109/TVCG.2015.2459687
-Gene H Golub and Charles F Van Loan. 2013. Eitan Grinspun, Petr Krysl, and Peter Schröder. 2002. CHARMS: A simple framework *Matrix computations*. JHU press.
+When all force elements are known ahead of the simulation, graph coloring can be performed as a preprocess. However, dynamically generated constraints/force elements, such as ones due to collisions, cannot be known ahead of time, requiring dynamic recoloring.
 
-for adaptive simulation. *ACM transactions on graphics (TOG)* 21, 3 (2002), 281–290.
+In our implementation for elastic body dynamics, we avoid the cost of recoloring by precomputing coloring only for material forces, ignoring dynamically generated force elements due to collisions.
 
-L. Grippo and M. Sciandrone. 2000. On the convergence of the block nonlinear (2000), 127–136. Gauss–Seidel method under convex constraints.
-[https://doi.org/10.1016/S0167-6377(99](https://doi.org/10.1016/S0167-6377(99))00074-7 *Operations Research Letters* 26, 3
+This means that these collision forces may use multiple vertices of the same color. Therefore, we cannot simply run a parallel loop over all vertices of the same color and update them, because handling a vertex with a dynamically generated force element may run into race conditions (with partially updated vertex positions) when accessing other vertices of the same color.
 
-LA Hageman and TA Porsching. 1975. Aspects of nonlinear block successive overrelax- ation. *SIAM J. Numer. Anal.*12, 3 (1975), 316–335. Michael Hauth and Olaf Etzmuss. 2001. A High Performance Solver for the Animation of Deformable Objects using Advanced Numerical Methods. *Computer Graphics* *Forum* 20, 3 (Sept. 2001), 319–328.[https://doi.org/10.1111/1467-8659.00524](https://doi.org/10.1111/1467-8659.00524) Florian Hecht, Yeon Jin Lee, Jonathan R. Shewchuk, and James F. O’Brien. 2012. Updated sparse cholesky factors for corotational elastodynamics. *ACM Transactions on* *Graphics* 31, 5 (Aug. 2012), 1–13.[https://doi.org/10.1145/2231816.2231821](https://doi.org/10.1145/2231816.2231821)
+We resolve this by having an auxiliary vertex position buffer ($\vec{x}^{\text{new}}$) that stores the updated vertex position. When executing each local VBD position update, we write the updated vertex positions to the auxiliary buffer, instead of directly overwriting the original vertex position buffer. Then, we copy the updated positions from the auxiliary buffer to the original vertex position buffer after each color pass. This prevents the race conditions that arise from simultaneous read and write operations on vertex positions.
 
-G. Hirota, S. Fisher, A. State, C. Lee, and H. Fuchs. 2001. An implicit finite element method for elastic solids in contact. In *teenth Conference on Computer Animation (Cat. No.01TH8596)*
-*Proceedings Computer Animation 2001. Four-*. IEEE Comput. Soc, Seoul, South Korea, 136–254.[https://doi.org/10.1109/CA.2001.982387](https://doi.org/10.1109/CA.2001.982387) Peter Huthwaite. 2014. Accelerated finite element elastodynamic simulations using the GPU. *J. Comput. Phys.*257 (2014), 687–707.
+With this process, dynamically generated force elements using multiple vertices of the same color result in (partially) Jacobi-style iterations for those vertices, because they rely on the positions from the previous iteration of those vertices. For vertices with different colors, it is equivalent to Gauss-Seidel iterations, considering the updated positions of the vertices with different colors. Note that our algorithm does not explicitly switch between Jacobi and Gauss-Seidel iterations, but the resulting iteration we describe above corresponds to either (partially) Jacobi or Gauss-seidel, depending on the colors of the colliding vertices.
 
-C. Kane, J. E. Marsden, and M. Ortiz. 1999. Symplectic-energy-momentum preserving variational integrators. *J. Math. Phys.*40, 7 (July 1999), 3353–3371.[https://doi.org/](https://doi.org/)
-10.1063/1.532892
-Couro Kane, Jerrold E Marsden, Michael Ortiz, and Matthew West. 2000. Variational integrators and the Newmark algorithm for conservative and dissipative mechanical systems. *International Journal for numerical methods in engineering* 49, 10 (2000),
+![No recoloring (ours)](figures/vbd/CollisionResolutionScheme/A00000061-cc.jpg)
 
-Liliya Kharevych, Weiwei Yang, Yiying Tong, Eva Kanso, Jerrold E. Marsden, Peter 1295–1325.
+![Recoloring](figures/vbd/CollisionResolutionScheme/A00000061-cc.jpg)
 
-Schröder, and Matthieu Desbrun. 2006. Geometric, Variational Integrators for Com- puter Animation. In *ACM SIGGRAPH / Eurographics Symposium on Computer Ani-* *mation*, Marie-Paule Cani and James O’Brien (Eds.). The Eurographics Association. [https://doi.org/10.2312/SCA/SCA06/043-051](https://doi.org/10.2312/SCA/SCA06/043-051) Lei Lan, Minchen Li, Chenfanfu Jiang, Huamin Wang, and Yin Yang. 2023. Second-order Stencil Descent for Interior-point Hyperelasticity. *ACM Transactions on Graphics* 42, 4 (Aug. 2023), 1–16.[https://doi.org/10.1145/3592104](https://doi.org/10.1145/3592104) Lei Lan, Guanqun Ma, Yin Yang, Changxi Zheng, Minchen Li, and Chenfanfu Jiang.
+**Figure 8.** Handling collisions using (a) our scheme without recoloring and (b) recoloring to achieve perfect Gauss-Seidel iterations, both simulated using friction forces and accelerated iterations with ρ = 0.95. Notice that the results are highly similar, though not identical.
 
-2022. Penetration-free projective dynamics on the GPU. *ACM Transactions on* *Graphics (TOG)* 41, 4 (2022), 1–16.
+One might expect this solution to negatively impact the convergence of VBD. Fortunately, however, such Jacobi-style information exchanges are relatively rare. This is because, as shown in [1](#fig:CollisionPotential){reference-type="ref+label" reference="fig:CollisionPotential"}, with vertex-face collisions at most one pair and with edge-edge collisions at most two pairs of vertices can have the same color. Also, vertices with the same colors must be located on different sides of the collision; therefore, their elastic energies are usually decoupled. This ensures that the majority of the information exchange follows the Gauss-Seidel order and thereby the impact of our solution on convergence is minimal. [20](#fig:CollisionResolutionScheme){reference-type="ref+label" reference="fig:CollisionResolutionScheme"} presents an example with a large number of collisions, comparing our solution of skipping recoloring to proper Gauss-Seidel iterations with recoloring, showing that the differences are minor.
 
-- Anka He Chen, Ziheng Liu, Yin Yang, and Cem Yuksel
-J. A. Levine, A. W. Bargteil, C. Corsi, J. Tessendorf, and R. Geist. 2015. A peridynamic per- spective on spring-mass fracture. In *Proceedings of the ACM SIGGRAPH/Eurographics* *Symposium on Computer Animation* (Copenhagen, Denmark) *(SCA ’14)*. Eurographics Association, Goslar, DEU, 47–55.
-A. Lew, J. E. Marsden, M. Ortiz, and M. West. 2004. Variational time integrators. *Internat.*
-*J. Numer. Methods Engrg.*60, 1 (May 2004), 153–212.[https://doi.org/10.1002/nme.958](https://doi.org/10.1002/nme.958)
-Cheng Li, Min Tang, Ruofeng Tong, Ming Cai, Jieyi Zhao, and Dinesh Manocha. 2020b. P-cloth: interactive complex cloth simulation on multi-GPU systems using dynamic matrix assembly and pipelined implicit integrators. *ACM Transactions on Graphics* *(TOG)* 39, 6 (2020), 1–15. Minchen Li, Zachary Ferguson, Teseo Schneider, Timothy R Langlois, Denis Zorin, Daniele Panozzo, Chenfanfu Jiang, and Danny M Kaufman. 2020a. Incremental po- tential contact: intersection-and inversion-free, large-deformation dynamics. *ACM* *Trans. Graph.*39, 4 (2020), 49. Minchen Li, Ming Gao, Timothy Langlois, Chenfanfu Jiang, and Danny M. Kaufman.
+Our solution also works with other types of topological changes, such as tearing and fracturing. Deleting force elements does not require any changes to vertex coloring. When an object is split by duplicating vertices, as in the case of tearing a piece of cloth along some edges (see [21](#fig:TopologicalChange){reference-type="ref+label" reference="fig:TopologicalChange"}), duplicated vertices can safely inherit the colors of their original vertices.
 
-2019. Decomposed optimization time integrator for large-step elastodynamics. *ACM* *Transactions on Graphics* 38, 4 (Aug. 2019), 1–10.[https://doi.org/10.1145/3306346](https://doi.org/10.1145/3306346). 3322951
-Xuan Li, Yu Fang, Lei Lan, Huamin Wang, Yin Yang, Minchen Li, and Chenfanfu Jiang.
+# GPU Implementation
 
-2023. Subspace-Preconditioned GPU Projective Dynamics with Contact for Cloth Simulation. In *SIGGRAPH Asia 2023 Conference Papers*. 1–12.
-Tiantian Liu, Sofien Bouaziz, and Ladislav Kavan. 2017. Quasi-Newton Methods for Real-Time Simulation of Hyperelastic Materials. *ACM Transactions on Graphics* 36, 3 (June 2017), 1–16.[https://doi.org/10.1145/2990496](https://doi.org/10.1145/2990496)
+In this section, we describe a GPU implementation specifically designed to leverage the inherent parallelization mechanism of modern GPUs, which consists of two hierarchical levels: block-level and thread-level parallelism. Block-level parallelism facilitates large-scale parallel operations, assuming that each block operates independently. On the other hand, thread-level parallelism provides finer, single-instruction-multiple-thread (SIMT) style parallelism, allowing for inter-thread communication and synchronization within the same block.
 
-M. Macklin, K. Erleben, M. Müller, N. Chentanez, S. Jeschke, and T.Y. Kim. 2020. Pri- mal/Dual Descent Methods for Dynamics. *Computer Graphics Forum* 39, 8 (Dec.
-2020), 89–100.[https://doi.org/10.1111/cgf.14104](https://doi.org/10.1111/cgf.14104)
-Miles Macklin, Matthias Müller, Nuttapong Chentanez, and Tae-Yong Kim. 2014. Unified particle physics for real-time applications. *ACM Trans. Graph.*33, 4, Article 153 (jul
+Reflecting on VBD, we observed that it naturally aligns with this hierarchical architecture. We have thousands of vertices within a single color category that operate independently, and each vertex is associated with multiple force elements, which can be processed concurrently. Algorithm 1 shows the pseudocode of our implementation. It uses block-level parallelism for processing each vertex. The threads within each block are used for computing the forces and Hessians, storing them in local shared memory, and computing the sums via reduction. We use a fixed number of threads for each block.
 
-2014), 12 pages.[https://doi.org/10.1145/2601097.2601152](https://doi.org/10.1145/2601097.2601152)
-Miles Macklin, Matthias Müller, and Nuttapong Chentanez. 2016. XPBD: position- based simulation of compliant constrained dynamics. In *Proceedings of the 9th* *International Conference on Motion in Games*. ACM, Burlingame California, 49–54. [https://doi.org/10.1145/2994258.2994272](https://doi.org/10.1145/2994258.2994272) Sebastian Martin, Peter Kaufmann, Mario Botsch, Eitan Grinspun, and Markus Gross.
+When the total number of adjacent force elements exceeds the number of threads for each block, individual threads will loop over their assigned elements. During this process, they calculate the forces and Hessians for these force elements and then sum them to their assigned shared memory.
 
-2010. Unified simulation of elastic rods, shells, and solids. *ACM Trans. Graph.*29, 4, Article 39 (jul 2010), 10 pages.[https://doi.org/10.1145/1778765.1778776](https://doi.org/10.1145/1778765.1778776)
-Sebastian Martin, Bernhard Thomaszewski, Eitan Grinspun, and Markus Gross. 2011. Example-based elastic materials. In *ACM SIGGRAPH 2011 papers*. 1–8. Brian Vincent Mirtich. 1996. *Impulse-based dynamic simulation of rigid body systems*. Ph. D. Dissertation. AAI9723116. Matthias Müller, David Charypar, and Markus Gross. 2003. Particle-based fluid simulation for interactive applications. In *Proceedings of the 2003 ACM SIG-* *GRAPH/Eurographics Symposium on Computer Animation* (San Diego, California) *(SCA ’03)*. Eurographics Association, Goslar, DEU, 154–159. Matthias Müller, Julie Dorsey, Leonard McMillan, Robert Jagnow, and Barbara Cut- ler. 2002. Stable real-time deformations. In *Proceedings of the 2002 ACM SIG-* *GRAPH/Eurographics symposium on Computer animation*. 49–54. Matthias Müller, Bruno Heidelberger, Marcus Hennix, and John Ratcliff. 2007. Position based dynamics. *Journal of Visual Communication and Image Representation* 18, 2 (2007), 109–118. Matthias Müller, Bruno Heidelberger, Matthias Teschner, and Markus Gross. 2005. Meshless deformations based on shape matching. *ACM transactions on graphics* *(TOG)* 24, 3 (2005), 471–478.
+In our experiments, we observed nearly *an order of magnitude performance improvement*, as compared to processing each vertex with a single thread.
 
-M. Müller, R. Keiser, A. Nealen, M. Pauly, M. Gross, and M. Alexa. 2004. Point based animation of elastic, plastic and melting objects. In *Proceedings of the 2004 ACM* *SIGGRAPH/Eurographics Symposium on Computer Animation* (Grenoble, France) *(SCA ’04)*. Eurographics Association, Goslar, DEU, 141–151.[https://doi.org/10.1145/](https://doi.org/10.1145/) 1028523.1028542 Alexander Naitsat, Yufeng Zhu, and Yehoshua Y Zeevi. 2020. Adaptive block coordinate descent for distortion optimization. In *Computer Graphics Forum*, Vol. 39. Wiley Online Library, 360–376. Andreas Peer, Markus Ihmsen, Jens Cornelis, and Matthias Teschner. 2015. An implicit viscosity formulation for SPH fluids. *ACM Trans. Graph.*34, 4, Article 114 (jul 2015), 10 pages.[https://doi.org/10.1145/2766925](https://doi.org/10.1145/2766925) Eftychios Sifakis and Jernej Barbic. 2012. FEM simulation of 3D deformable solids: A practitioner’s guide to theory, discretization and model reduction. *ACM SIGGRAPH* *2012 Courses, SIGGRAPH’12* (08 2012).[https://doi.org/10.1145/2343483.2343501](https://doi.org/10.1145/2343483.2343501)
-J.C. Simo, N. Tarnow, and K.K. Wong. 1992. Exact energy-momentum conserving algorithms and symplectic schemes for nonlinear dynamics. *Computer Methods in* *Applied Mechanics and Engineering* 100, 1 (Oct. 1992), 63–116.[https://doi.org/10](https://doi.org/10). 1016/0045-7825(92)90115-Z Breannan Smith, Fernando De Goes, and Theodore Kim. 2018. Stable neo-hookean flesh simulation. *ACM Transactions on Graphics (TOG)* 37, 2 (2018), 1–15. Barbara Solenthaler, Jürg Schläfli, and Renato Pajarola. 2007. A unified particle model for fluid–solid interactions: Research Articles. *Comput. Animat. Virtual Worlds* 18, 1
-(feb 2007), 69–82. Ari Stern and Eitan Grinspun. 2009. Implicit-Explicit Variational Integration of Highly Oscillatory Problems. *Multiscale Modeling & Simulation* 7, 4 (Jan. 2009), 1779–1794. [https://doi.org/10.1137/080732936arXiv:0808.2239](https://doi.org/10.1137/080732936arXiv:0808.2239) [math]. Tetsuya Takahashi, Yoshinori Dobashi, Issei Fujishiro, Tomoyuki Nishita, and Ming C. Lin. 2015. Implicit Formulation for SPH-based Viscous Fluids. *Comput. Graph.* *Forum* 34, 2 (may 2015), 493–502.[https://doi.org/10.1111/cgf.12578](https://doi.org/10.1111/cgf.12578) Rasmus Tamstorf, Toby Jones, and Steve McCormick. 2015. Smoothed Aggregation Multigrid for Cloth Simulation. *ACM Transactions on Graphics* 34 (Oct. 2015), 1–13. [https://doi.org/10.1145/2816795.2818081](https://doi.org/10.1145/2816795.2818081) Joseph Teran, Eftychios Sifakis, Geoffrey Irving, and Ronald Fedkiw. 2005. Robust quasistatic finite elements and flesh simulation. In *Proceedings of the 2005 ACM* *SIGGRAPH/Eurographics symposium on Computer animation*. 181–190. Quoc-Minh Ton-That, Paul G. Kry, and Sheldon Andrews. 2023. Parallel block Neo- Hookean XPBD using graph clustering. *Computers & Graphics* 110 (Feb. 2023), 1–10. [https://doi.org/10.1016/j.cag.2022.10.009](https://doi.org/10.1016/j.cag.2022.10.009)
+The primary advantage lies in the optimization of the memory access pattern, a common bottleneck in GPU programs. This implementation reduces memory divergence within blocks. Because the neighboring force elements of a vertex often share multiple vertices, the threads within the same block can share a global memory access to those shared vertices. Furthermore, this strategy improved the parallelism of the algorithm by allowing parallel evaluation of the force and Hessian of adjacent force elements, which are then written to the significantly faster shared memory. This bypasses the slower global memory and enables the parallel aggregation of force and Hessian values, enhancing the overall efficiency of the process.
 
-P. Volino and N. Magnenat-Thalmann. 2001. Comparing efficiency of integration methods for cloth simulation. In *Proceedings. Computer Graphics International 2001*. IEEE Comput. Soc, Hong Kong, China, 265–272.[https://doi.org/10.1109/CGI.2001](https://doi.org/10.1109/CGI.2001). 934683 Pascal Volino, Nadia Magnenat-Thalmann, and Francois Faure. 2009. A simple approach to nonlinear tensile stiffness for accurate cloth simulation. *ACM Trans. Graph.*28, 4, Article 105 (sep 2009), 16 pages.[https://doi.org/10.1145/1559755.1559762](https://doi.org/10.1145/1559755.1559762) Ingo Wald, Sven Woop, Carsten Benthin, Gregory S Johnson, and Manfred Ernst. 2014. Embree: a kernel framework for efficient CPU ray tracing. *ACM Transactions on* *Graphics (TOG)* 33, 4 (2014), 1–8. Endong Wang, Qing Zhang, Bo Shen, Guangyong Zhang, Xiaowei Lu, Qing Wu, Yajuan Wang, Endong Wang, Qing Zhang, Bo Shen, et al. 2014. Intel math kernel library. *High-Performance Computing on the Intel® Xeon Phi™: How to Fully Exploit MIC* *Architectures* (2014), 167–188. Huamin Wang. 2015. A chebyshev semi-iterative approach for accelerating projective and position-based dynamics. *ACM Transactions on Graphics* 34, 6 (Nov. 2015), 1–9. [https://doi.org/10.1145/2816795.2818063](https://doi.org/10.1145/2816795.2818063) Huamin Wang and Yin Yang. 2016. Descent methods for elastic body simulation on the GPU. *ACM Transactions on Graphics* 35, 6 (Nov. 2016), 1–10.[https://doi.org/10](https://doi.org/10). 1145/2980179.2980236 Xinlei Wang, Minchen Li, Yu Fang, Xinxin Zhang, Ming Gao, Min Tang, Danny M. Kaufman, and Chenfanfu Jiang. 2020. Hierarchical Optimization Time Integration for CFL-Rate MPM Stepping. *ACM Transactions on Graphics* 39, 3 (June 2020), 1–16. [https://doi.org/10.1145/3386760](https://doi.org/10.1145/3386760) Stephen J Wright. 2015. Coordinate descent algorithms. *Mathematical programming* 151, 1 (2015), 3–34. Zangyueyang Xian, Xin Tong, and Tiantian Liu. 2019. A scalable galerkin multigrid method for real-time simulation of deformable objects. *ACM Transactions on Graph-* *ics* 38, 6 (Dec. 2019), 1–13.[https://doi.org/10.1145/3355089.3356486](https://doi.org/10.1145/3355089.3356486) Yongning Zhu, Eftychios Sifakis, Joseph Teran, and Achi Brandt. 2010. An efficient multi- grid method for the simulation of high-resolution elastic solids. *ACM Transactions* *on Graphics* 29, 2 (March 2010), 1–18.[https://doi.org/10.1145/1731047.1731054](https://doi.org/10.1145/1731047.1731054)
+![Tearing a piece of cloth with 2500 vertices and 4800 triangles.](figures/vbd/TopologicalChange/a-cc.jpg)
+
+![](figures/vbd/TopologicalChange/b-cc.jpg)
+
+![](figures/vbd/TopologicalChange/c-cc.jpg)
+
+**Figure 9.** Tearing a piece of cloth with 2500 vertices and 4800 triangles.
+
+**Algorithm 1.** VBD simulation for one time step.
+```
+Input: $x^t$:  the positions of the previous step
+Input: $v^t$:  the velocities of the previous step
+Input: $a_{\text{ext}}$: the external acceleration
+Output: This step's position $x^{t+1}$ and velocity $v^{t+1}$.
+$y\gets{x}^t + h {v}^t + h^2 a_{\text{ext}}$
+Initial DCD using $x^t$
+$x\gets$ initial guess with adaptive initialization
+for each  iteration $n\leq n_{\max}$ do
+  if  $n\!\!\mod{n_{\text{col}}}=1$ then CCD using $x$
+  for each  color $c$ do
+    # Block-level parallelization
+    parallel for each  vertex $i$ in color $c$ do
+      # Thread-level parallelization
+      parallel for each $j\in \mathcal{F}_i$ do
+        # Variables in shared memory
+        $\vec{f}_{i,j} = -\frac{\partial E_j}{\partial  \vec{x}_i}$
+        $\vec{H}_{i,j} = \frac{\partial^2 E_j}{\partial \vec{x}_i \partial \vec{x}_i}$
+      # Local reduction sums
+      $\vec{f}_i = \sum_{j\in\mathcal{F}_i}\vec{f}_{i,j}$
+      $\vec{H}_i = \sum_{j\in\mathcal{F}_i}\vec{H}_{i,j}$
+      $\Delta {x}_i \gets \vec{H}_i^{-1} \vec{f}_i$
+      $\Delta {x}_i \gets$  optional line search from $x_i + \Delta {x}_i$ to $\vec{x}_i$
+      $x_i^\text{new} \gets {x}_i + \Delta {x}_i$
+    # Copy updated positions back to the vertex buffer
+    parallel for each  vertex $i$ in color $c$ do
+      $\vec{x}_i =  x_i^\text{new}$
+  # Optional: accelerated iteration
+  parallel for each  vertex $i$ do
+    Update $\vec{x}_i$ using Equation 18.
+$v = (x - x^t)/h$
+return $x$, $v$
+```
+
+
+![Simulation of 216 squishy balls with tentacles, a total of 48 million vertices and 151 million tetrahedra, dropped into a Utah teapot, forming a stable pile with active frictional contacts. The average and maximum computation time per time step is 3.6 and 3.9 seconds, respectively, using S = 4 substeps per frame and nmax = 40 iterations per step. The final frame of this simulation is shown in [fig:teaser].](figures/vbd/SquishyBallsToTeapot/A00000130-cc.jpg)
+
+![](figures/vbd/SquishyBallsToTeapot/A00000370-cc.jpg)
+
+![](figures/vbd/SquishyBallsToTeapot/A00001030-cc.jpg)
+
+![](figures/vbd/SquishyBallsToTeapot/A00001510-cc.jpg)
+
+**Figure 10.** Simulation of 216 squishy balls with tentacles, a total of 48 million vertices and 151 million tetrahedra, dropped into a Utah teapot, forming a stable pile with active frictional contacts. The average and maximum computation time per time step is 3.6 and 3.9 seconds, respectively, using S = 4 substeps per frame and nmax = 40 iterations per step. The final frame of this simulation is shown in [fig:teaser].
+
+![Simulation of 10,368 deformable objects, totaling over 36 million vertices and 124 million tetrahedra, dropped onto a platform inside a box container. Then, the platform is suddenly removed and the objects collectively fall onto the ground, forming stable piles both before and after the platform is removed. The average and maximum computation times per time step are 4.2 and 4.7 seconds, respectively, using S = 2 substeps and nmax = 60 iterations per step. The final frame of this simulation is shown in [fig:teaser].](figures/vbd/HybrridModelsDropping/a-cc.jpg)
+
+![](figures/vbd/HybrridModelsDropping/b-cc.jpg)
+
+![](figures/vbd/HybrridModelsDropping/c-cc.jpg)
+
+![](figures/vbd/HybrridModelsDropping/d-cc.jpg)
+
+**Figure 11.** Simulation of 10,368 deformable objects, totaling over 36 million vertices and 124 million tetrahedra, dropped onto a platform inside a box container. Then, the platform is suddenly removed and the objects collectively fall onto the ground, forming stable piles both before and after the platform is removed. The average and maximum computation times per time step are 4.2 and 4.7 seconds, respectively, using S = 2 substeps and nmax = 60 iterations per step. The final frame of this simulation is shown in [fig:teaser].
+
+# Results
+
+We evaluate our method with elastic body dynamics qualitatively with various tests and quantitatively with direct comparisons to alternative methods.
+
+We use Neo-Hookean[Smith et al. 2018] materials (without the logarithmic term) for our volumetric objects, StVK [Volino et al. 2009] for clothes, and linear springs for elastic rods.
+
+We use a fixed frame time of $1/60$ seconds and a fixed iteration count $n_{\max}$, instead of estimating convergence after every iteration. Each frame is computed using $S$ substeps, such that ${h=1/(60S)}$ seconds. Using smaller time steps increases accuracy and reduces numerical damping with any implicit Euler method. With VBD, a smaller time step only requires fewer iterations per step for similar visual quality, but it can also achieve a smaller residual with the same number of total iterations per frame (i.e., $S n_{\max}$). The number of threads per block is set to 16 for all the experiments.
+
+We use no line search in our tests, as none of our tests required it for stability, and running line search can result in a noticeable drop in performance.
+
+In our experiments, we apply CCD only in the first iteration (i.e. $n_{\text{col}}=n_{\max}$), unless otherwise specified.
+
+In our implementation, we handle collisions on the CPU using Intel's Embree library [Wald et al. 2014]. The two phases with parallel loops are implemented on the GPU using CUDA.
+
+All timing results are generated on a computer with an AMD Ryzen 5950X CPU, 64GB DDR3 RAM, and an NVIDIA RTX 4090 GPU.
+
+## Large-Scale Tests
+
+In fig:teaser we present two large-scale test, showcasing our method's performance, scalability, and stability in scenarios involving a large number of complex collisions, including stacking and rest in contact.
+
+The first one has 216 squishy balls with tentacles, totaling 48 million vertices and 151 million tetrahedra acting as force elements, dropped into a Utah teapot. Intermediate frames of this simulation are shown in [1](#fig:SquishyBallsToTeapot){reference-type="ref+label" reference="fig:SquishyBallsToTeapot"}.
+
+The second one includes more than 10 thousand deformable objects,
+
+totaling over 36 million vertices and 124 million tetrahedra, dropped into a box and piled on a platform, which is then suddenly removed, making the pile collectively fall onto the ground. The intermediate frames are shown in [2](#fig:HybrridModelsDropping){reference-type="ref+label" reference="fig:HybrridModelsDropping"}.
+
+As can be seen in our supplemental video, both of these simulations exhibit stable motion, quickly forming static piles, while maintaining rest-in-contact behavior with over 1 million active collisions. VBD's parallelism and fast convergence resulted in an average computation time of 40 and 25 seconds per frame in these simulations, respectively.
+
+![Visual convergence with different numbers of iterations per frame for different material stiffness (with accelerated iterations using ${\rho=0.75,0.86,0.93}$ top to bottom), simulating a beam with 463 vertices and 1.5 thousand tetrahedra.](figures/vbd/ElasticityConvergence/bending-cc.jpg)
+
+**Figure 12.** Visual convergence with different numbers of iterations per frame for different material stiffness (with accelerated iterations using ${\rho=0.75,0.86,0.93}$ top to bottom), simulating a beam with 463 vertices and 1.5 thousand tetrahedra.
+
+## Unit Tests
+
+The convergence rate of VBD depends on the stiffness of the simulated system. This is demonstrated in [3](#fig:ElasticityConvergence){reference-type="ref+label" reference="fig:ElasticityConvergence"}, comparing VBD with different numbers of iterations per frame to the converged solution computed using Newton's method.
+
+As expected, VBD converges slower for stiffer materials, which is common for descent-based solvers. In this example, 15 iterations are more than sufficient for the softest material, while stiffer ones require more. As can be seen in our supplemental video, even though VBD can qualitatively imitate the behavior of stiff materials with a relatively small number of iterations, the motion can quickly diverge from the converged solution, due to the remaining residual, unless a sufficient number of iterations are used.
+
+![Testing different friction coefficients μc for (top) an elastic cube with 400 vertices and 1.45 thousand tetrahedra, initially resting on an incline, and (bottom) 4 elastic octopus models, totaling 15.6 thousand vertices and 60 thousand tetrahedra, dropped into a box.](figures/vbd/FrictionUnitTest/aa-cc.jpg)
+
+![](figures/vbd/FrictionUnitTest/0.jpg)
+
+![](figures/vbd/FrictionUnitTest/0.jpg)
+
+![](figures/vbd/FrictionUnitTest/0.jpg)
+
+![](figures/vbd/FrictionUnitTest/0.jpg)
+
+**Figure 13.** Testing different friction coefficients μc for (top) an elastic cube with 400 vertices and 1.45 thousand tetrahedra, initially resting on an incline, and (bottom) 4 elastic octopus models, totaling 15.6 thousand vertices and 60 thousand tetrahedra, dropped into a box.
+
+We present our tests with different friction coefficients $\mu_c$ for friction forces in [4](#fig:FrictionUnitTest){reference-type="ref+label" reference="fig:FrictionUnitTest"}. Notice that, $\mu_c$ impacts the motion, as expected, and with sufficiently high $\mu_c$, we can properly preserve the position on an incline and form taller piles.
+
+In our supplemental video, we also include a comparison of different damping stiffness $k_d$, showing that, despite numerical damping of implicit Euler, without damping we can preserve kinetic energy for a long time. As we increase $k_d$, the motion subsides quicker, as expected.
+
+## Stress Tests
+
+We present a challenging frictional contact case in Figure 1, twisting two thin beams together. This example includes extreme deformations, generating strong material forces that compete with self-collisions and collisions between the two beams. It is simulated with collision detection occurring
+
+once every 5 iterations (i.e. $n_{\text{col}}=5$). Notice that VBD can properly handle such strong deformations with frictional contact.
+
+We show two simulations in Figure 2 for stress-testing the stability of VBD under extreme deformations. The first one shows an armadillo model that is perfectly flattened and the second one is a Utah teapot model with all vertices randomly scrambled and placed on the surface of a sphere. Even though the simulations begin with these extremely unstable energy configurations, VBD quickly recovers these models without performing a line search and using 100 iterations per frame.
+
+**Figure 14.** A stress test with extreme stretching: a Stanford bunny model with 1.8 thousand vertices and 5.9 thousand tetrahedra is stretched by slowly pulling 10 vertices away, which are then suddenly released. The model recovers its shape after going through considerable deformations and high-velocity motion, simulated with self-collisions and using S = 5 substeps and nmax = 10 iterations per step.
+
+Another stress test is shown in [5](#fig:ExtremeStretch){reference-type="ref+label" reference="fig:ExtremeStretch"}. In this case, 10 vertices of a Stanford bunny model are first slowly pulled away, generating a state with considerable potential energy, and then suddenly released (right after [5](#fig:ExtremeStretch){reference-type="ref+label" reference="fig:ExtremeStretch"}b), causing severe deformations. Once again, VBD successfully handles this challenging simulation case, involving self-collisions with high-velocity impacts, using only $n_{\max}=10$ iterations per step and $S=5$ per frame.
+
+![A stress test using only a single iteration per frame (i.e. a time step of h = 1/60 seconds and nmax = 1). One vertex on the armadillo model’s nose is pulled while the finger and toe vertices are fixed. The model has 15 thousand vertices and 50 thousand tetrahedra.](figures/vbd/StabilityUnderResidual/A00000100-cc.jpg)
+
+![](figures/vbd/StabilityUnderResidual/A00000300-cc.jpg)
+
+![](figures/vbd/StabilityUnderResidual/A00000500-cc.jpg)
+
+**Figure 15.** A stress test using only a single iteration per frame (i.e. a time step of h = 1/60 seconds and nmax = 1). One vertex on the armadillo model’s nose is pulled while the finger and toe vertices are fixed. The model has 15 thousand vertices and 50 thousand tetrahedra.
+
+[6](#fig:ExtremeStretch2){reference-type="ref+label" reference="fig:ExtremeStretch2"} presents a stability test under large residuals by using only a single iteration per frame (i.e. $S=1$ and $n_{\max}=1$). Notice that our method produces stable deformations with extreme stretching, even though the simulation lacks a sufficient iteration count to properly reduce the residual at each frame.
+
+![Convergence of different descent methods for simulating an armadillo model with 15 thousand vertices and 50 thousand tetrahedra with (top) a relatively soft material and (bottom) a 10× stiffer material. Vertices near the top inside the glass block are fixed and the models are initially stretched, as shown on the left, by pulling down foot vertices. Then, the position constraints on foot vertices are suddenly removed, allowing the model to deform for 33 ms. The deformation is computed using a single time step of h = 33 ms. The graphs show relative loss over iterations and computation time. All methods are implemented on the GPU using the same framework with single precision (32-bit) floating-point numbers, except for Newton’s method with Cholesky factorization, which runs on the CPU using double precision (64-bit). Accelerated versions use ρ = 0.95.](figures/vbd/ConvergenceComparisonQuantative/energyByIter_armadillo2_soft.png)
+
+![](figures/vbd/ConvergenceComparisonQuantative/energyByTime_armadillo2_soft.png)
+
+![](figures/vbd/ConvergenceComparisonQuantative/energyByIter_armadillo2_stiff.png)
+
+![](figures/vbd/ConvergenceComparisonQuantative/energyByTime_armadillo2_stiff.png)
+
+![](figures/vbd/ConvergenceComparisonQuantative/combined_soft-cca.jpg)
+
+![](figures/vbd/ConvergenceComparisonQuantative/combined_stiff-cca.jpg)
+
+**Figure 16.** Convergence of different descent methods for simulating an armadillo model with 15 thousand vertices and 50 thousand tetrahedra with (top) a relatively soft material and (bottom) a 10× stiffer material. Vertices near the top inside the glass block are fixed and the models are initially stretched, as shown on the left, by pulling down foot vertices. Then, the position constraints on foot vertices are suddenly removed, allowing the model to deform for 33 ms. The deformation is computed using a single time step of h = 33 ms. The graphs show relative loss over iterations and computation time. All methods are implemented on the GPU using the same framework with single precision (32-bit) floating-point numbers, except for Newton’s method with Cholesky factorization, which runs on the CPU using double precision (64-bit). Accelerated versions use ρ = 0.95.
+
+## Convergence Rate
+
+To evaluate the convergence rate of VBD, we present a simple test shown in [7](#fig:ConvergenceComparisons){reference-type="ref+label" reference="fig:ConvergenceComparisons"}, where an armadillo model that was previously stretched is suddenly released. Here, we calculate the relative loss after each iteration and compare it to alternative solvers.
+
+The first alternative is preconditioned gradient descent (GD) [Wang and Yang 2016] implemented on GPU within the same framework as ours. GD requires a form of line search for stability, which is implemented as testing the variational energy after every 8 iterations and, when needed, reducing the optimization step size and backtracking (following the implementation of @wang_descent_2016). We also include a version of GD that is accelerated using the Chebyshev semi-iterative approach [Wang 2015], as our method. The iterations of GD are about 30% faster than ours without line search. However, it necessitates line search for stability. This makes it about 10% slower than our VBD, which does not need line search. Furthermore, its convergence rate per iteration is considerably slower, as it corresponds to Jacobi iterations. In this example, when combined with acceleration, GD performs similar to our method without acceleration but lags significantly behind our method with acceleration.
+
+We also compare to a version of our method that uses Jacobi iterations, called *Block Jacobi*, implemented by computing the position change for all vertices in parallel and then applying the position update simultaneously to all vertices at the end of each iteration. We incorporate the same line search scheme as GD for Block Jacobi, as it is necessary for stability. Block Jacobi outperforms GD, as it uses vertex blocks for computation, which corresponds to using a diagonal Hessian block as a precondition, as opposed to just a diagonal line that GD uses. Without line search, it achieves 20% faster iteration times than our VBD, due to its perfect vertex-level parallelization (without any coloring). However, combined with line search, its iterations are about 17% slower than VBD. More importantly, because it uses Jacobi iterations, its convergence is hindered, as compared to our Gauss-Seidel iterations.
+
+Furthermore, we compare the convergence of our method to two implementations of Newton's method: first using a direct Cholesky (LDLT) factorization solver provided by Intel's MKL library [Wang et al. 2014] running on the CPU, and the second using a GPU-based conjugate gradient (CG) method. To ensure convergence, we do a PSD projection for each tet's Hessian of elasticity. Newton's method uses a line search for each iteration. Since its iterations are slow, the computational overhead of line search is negligible. Though the convergence of Newton's method per iteration is far superior to all others, because of its expensive computation time per iteration, in these examples it lags far behind. Nonetheless, for relatively tame experiments with less stretching and motion, and especially for highly stiff and high-resolution simulations that are much more expensive to simulate, we would expect Newton's method to eventually overtake all alternatives beyond a certain level of convergence.
+
+Finally, we compare our method to a quasi-Newton approach using Laplacian preconditioning [Liu et al. 2017]. We utilize a GPU-based conjugate gradient solver, similar to the one employed in our GPU-CG Newton's method's implementation. Laplacian preconditioning accelerates each linear solve, as it eliminates the need for PSD projection and involves solving a smaller system. Practically, this method demonstrates faster convergence than Newton's method, particularly in the initial stages of the optimization process. Nevertheless, it still lags behind both the accelerated and non-accelerated versions of our VBD.
+
+![Comparing a single-threaded CPU implementation of our method with single-threaded Newton's method (using both CG and Cholesky). The scene is identical to the bottom row of [7](#fig:ConvergenceComparisons){reference-type="ref+label" reference="fig:ConvergenceComparisons"} .](figures/vbd/ConvergenceComparisonQuantative/energyByTime_armadillo2_singleThreaded_stiff.png)
+
+**Figure 17.** Comparing a single-threaded CPU implementation of our method with single-threaded Newton's method (using both CG and Cholesky). The scene is identical to the bottom row of [7](#fig:ConvergenceComparisons){reference-type="ref+label" reference="fig:ConvergenceComparisons"} .
+
+A part of the performance advantages of our VBD method presented above is related to its efficiency in parallel execution on the GPU. To demonstrate its convergence in the absence of parallel computation, we include a comparison using single-threaded CPU implementations of our VBD and Newton's method with Cholesky factorization and CG. [8](#fig:singleThreaded){reference-type="ref+label" reference="fig:singleThreaded"} shows the convergence results for the same experiment in the bottom row of [7](#fig:ConvergenceComparisons){reference-type="ref+label" reference="fig:ConvergenceComparisons"}. In these tests,
+
+our method initially demonstrates faster convergence than both versions of Newton's method. Over time, the CG-based Newton's method catches up to our VBD without Chebyshev acceleration. However, VBD with Chebyshev acceleration maintains a significant performance lead over the others. This experiment shows that the performance advantages of our method are not only due to its GPU parallelism.
+
+**Table 1.** Performance results and simulation parameters.
+| Experiment Name | Vert. | Tet. | color | Type | Stiffness | Damping | $k_c$ | $\mu_c, \epsilon_v$ | h (sec.) | Iterations | avg./max |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Twisting Thin Beams (Figure 1) | 97K | 266K | 8 | NeoHookean | $\mu = 5e4, \lambda=1e6$ | 1e-6 | 1e6 | 0.1, 1e-2 | 1/300 | 100 | 60/78ms |
+| Flattening initialization (Figure 2) | 15K | 50K | 8 | NeoHookean | $\mu=2e6, \lambda=1e7$ | 1e-6 | NA | NA | 1/60 | 100 | 3.3/3.8ms |
+| Random initialization (Figure 2) | 2K | 8.5K | 8 | NeoHookean | $\mu=2e6, \lambda=1e7$ | 1e-6 | NA | NA | 1/60 | 100 | 2.6/2.8ms |
+| Tetmesh Pendulum (Figure 5) | 304 | 755 | 6 | NeoHookean | $\mu=1e7, \lambda=1e8$ | 0 | NA | NA | 1/300 | 20 | <0.1ms |
+| Squishy Ball Drops (Figure.\ref{fig:AccelerationComparison},\ref{fig:CollisionResolutionScheme},\ref{fig:CompareToXPBD_TimeStep}) | 230K | 700K | 8 | NeoHookean | $\mu=2e6, \lambda=2e7$ | 1e-7 | 1e7 | 0.1, 1e-2 | 1/120 | 120 | 15/17ms |
+| Tearing Cloth (Figure 9) | 2500 | 4800 | 3 | StVK | $\mu=1e4, \lambda=1e4$ | 1e-5 | NA | NA | 1/300 | 20 | 11.2/11.5 ms(cpu) |
+| Dropping 216 Squshy Balls (Figure 10) | 48M | 151M | 9 | NeoHookean | $\mu=2e6, \lambda=2e7$ | 1e-7 | 1e7 | 0.1, 1e-2 | 1/240 | 40 | 3.6/3.9s |
+| Dropping 10368 Models (Figure 11) | 36M | 124M | 8 | NeoHookean | $\mu=1e6, \lambda=1e7$ | 1e-7 | 1e7 | 0.1, 1e-2 | 1/120 | 60 | 4.2/4.7s |
+| Beam Sagging (Figure 12) | 463 | 1.5K | 6 | NeoHookean | $\mu=1e6/3e6/1e7$ | 1e-6 | NA | NA | 1/300 | 3/5/10 | avg.: 0.08/0.12/0.24ms |
+|  |  |  |  |  | $\lambda=1e7/3e7/1e8$ |  |  | NA |  |  | max: 0.08/0.16/0.31ms |
+| Cude Sliding (Figure 13) | 800 | 2.9K | 6 | NeoHookean | $\mu=1e6, \lambda=1e7$ | 1e-6 | 1e7 | 0/0.3/0.6/0.9, 1e-2 | 1/300 | 10 | 0.10/0.17ms |
+| Octopi Stacking (Figure 13) | 15.6K | 60K | 8 | NeoHookean | $\mu=1e6, \lambda=1e7$ | 1e-6 | 1e7 | 0/0.1/0.4/0.6, 1e-2 | 1/300 | 10 | 1.1/1.3ms |
+| Extreme Stretch (Figure 15) | 1.8K | 5.9K | 8 | NeoHookean | $\mu=2e6, \lambda=1e7$ | 1e-6 | 1e7 | 0.2, 1e-2 | 1/300 | 10 | 0.36/1.02ms |
+| 2 Cube colliding (Figure 19) | 800 | 2.9K | 6 | NeoHookean | $\mu=1e6, \lambda=1e7$ | 1e-6 | 1e7 | 0.3, 1e-2 | 1/300 | 10 | 0.16/0/20ms |
+
+## Comparisons to XPBD
+
+Our method has an entirely different formulation than XPBD, but there are some strong similarities, as both methods operate with position updates using Gauss-Seidel iterations. Here we provide two direct comparisons to highlight some important differences.
+
+![XPBD h = 1/120 sec. nmax = 120 ncol = 120 (0.32 sec./frame)](figures/vbd/CompareToXPBD_TimeStep/b1-cc.jpg)
+
+![XPBD h = 1/3000 sec. nmax = 5 ncol = 125 (0.35 sec./frame)](figures/vbd/CompareToXPBD_TimeStep/b2-cc.jpg)
+
+![XPBD h = 1/3000 sec. nmax = 5 ncol = 5 (3.1 sec./frame)](figures/vbd/CompareToXPBD_TimeStep/c1-cc.jpg)
+
+![VBD (ours) h = 1/120 sec. nmax = 120 ncol = 120 (0.031 sec./frame)](figures/vbd/CompareToXPBD_TimeStep/c2-cc.jpg)
+
+![A squishy ball with tentacles, comprising 230 thousand vertices and 700 thousand tetrahedra, dropped on the ground, simulated using (a) XPBD with a large time step and 240 iterations per frame, (b) XPBD with a 25× smaller time step and 250 total iterations per frame, (c) XPBD with the same small time step and iteration count but with 25× more frequent collision detection, and (d) VBD with a large time step and 240 iterations per frame. Comparing (a) and (d), VBD is faster than XPBD with the same settings. XPBD’s solution approaches VBD as the time step decreases, but it also requires more frequent collision detection to achieve a visually similar result to VBD.](figures/vbd/CompareToXPBD_TimeStep/d1-cc.jpg)
+
+![](figures/vbd/CompareToXPBD_TimeStep/d2-cc.jpg)
+
+![](figures/vbd/CompareToXPBD_TimeStep/a1-cc.jpg)
+
+![](figures/vbd/CompareToXPBD_TimeStep/a2-cc.jpg)
+
+**Figure 18.** A squishy ball with tentacles, comprising 230 thousand vertices and 700 thousand tetrahedra, dropped on the ground, simulated using (a) XPBD with a large time step and 240 iterations per frame, (b) XPBD with a 25× smaller time step and 250 total iterations per frame, (c) XPBD with the same small time step and iteration count but with 25× more frequent collision detection, and (d) VBD with a large time step and 240 iterations per frame. Comparing (a) and (d), VBD is faster than XPBD with the same settings. XPBD’s solution approaches VBD as the time step decreases, but it also requires more frequent collision detection to achieve a visually similar result to VBD.
+
+XPBD replaces the Hessian matrix and uses only the Hessian of inertia potential. This omission is justified by using a small time step, because the significance of the inertia potential increases quadratically as the time step decreases.
+
+Nonetheless, with complex examples, the impact of this approximation can be severe, even with small time step.
+
+This is demonstrated in [13](#fig:CompareToXPBD_TimeStep){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep"} with a challenging collision-rich scenario involving a squishy ball with tentacles dropped to the ground. Comparing XPBD with 120 iterations per step ([9](#fig:CompareToXPBD_TimeStep:a){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep:a"}) to our method with the same number of iterations ([12](#fig:CompareToXPBD_TimeStep:d){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep:d"}), we can see that our method not only achieves a more stable animation, it also performs faster because of its improved parallelism, as compared to XPBD. Reducing the time step helps XPBD even when using a similar total number of iterations per frame ([10](#fig:CompareToXPBD_TimeStep:b){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep:b"}). However, simply reducing the time step is not sufficient in this case, as XPBD also needs more frequent collision detection ([11](#fig:CompareToXPBD_TimeStep:c){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep:c"}). Using collision detection with the same frequency as ours while taking small time step ([10](#fig:CompareToXPBD_TimeStep:b){reference-type="ref+label" reference="fig:CompareToXPBD_TimeStep:b"}) leads to collisions that are detected too late and cause stability issues in this case. This is not only because the collisions that are detected too late are deeper, but also because smaller time step lead to higher vertex velocities when resolving stiff collisions.
+
+![Initial State](figures/vbd/CompareToXPBD_MassRatio/a.jpg)
+
+![XPBD](figures/vbd/CompareToXPBD_MassRatio/b.jpg)
+
+![VBD (ours)](figures/vbd/CompareToXPBD_MassRatio/c.jpg)
+
+**Figure 19.** Dropping a large and heavy elastic cube onto a smaller and much lighter box with a mass ratio of 1:2000. Each cube has 400 vertices and 1.5 thousand tetrahedra.
+
+One of the fundamental challenges of XPBD is handling high mass ratios. This is demonstrated with a simple example in [17](#fig:CompareToXPBD_MassRatio){reference-type="ref+label" reference="fig:CompareToXPBD_MassRatio"}, where a large and heavy elastic cube is dropped onto a smaller and much lighter cube, with a mass ratio of 1:2000. In this example, XPBD's collision constraints, even with infinite stiffness, cannot overcome the mass ratio and the smaller cube is entirely crushed upon contact. This is because of the dual formulation of XPBD [Macklin et al. 2020]. Our method, on the other hand, has no such difficulties with handling high mass ratios.
+
+
+# VBD for Other Simulation Systems
+We have described our method in Section 3 in the context of elastic body dynamics. Yet, VBD is not limited to such simulations and can be used to solve various optimization problems. Here, we consider some other example simulation systems and briefly discuss how our method can be applied. This is not intended as an exhaustive list but merely as examples that could guide the reader to discern how their specific simulation problem could utilize VBD.
+
+## Particle-Based Simulations
+
+Particle-based simulations can easily use VBD by simply replacing the vertices in our description above with particles. Since VBD needs the Hessian of the force element energies, implementations would require computing the derivatives of all forces acting on a particle wrt. its position.
+
+Parallelizing particle-based simulations also involves additional considerations.
+
+Mass-spring type simulations, such as peridynamics [Levine et al. 2015], can use our parallelization approach with vertex coloring.
+
+However, simulations involving disjoint or loosely-joined particles, such as particle-based fluid simulation
+
+[M\"{uller et al. 2003; Takahashi et al. 2015; Peer et al. 2015], would not only require recoloring at each time step but also using a conservative neighborhood definition (including potential position change within a time step) for coloring, since position updates can alter the set of neighboring particles that interact with each particle.
+
+![20 particles attached with springs, forming a swinging chain, simulated using VBD with a S = 1 substep and 100 iterations per step. The particle on one end of the chain is fixed and the particle on the other end has 1000× more mass than the others. (Left) using sufficiently stiff springs, they expand no more than 0.7% of their rest lengths, despite the substantial mass difference. (Right) using 100× less stiff springs, the chain undergoes a visible expansion as it swings.](figures/vbd/MassSpring/Stiff_combined-cc.jpg)
+
+![](figures/vbd/MassSpring/Soft_combined-cc.jpg)
+
+**Figure 20.** 20 particles attached with springs, forming a swinging chain, simulated using VBD with a S = 1 substep and 100 iterations per step. The particle on one end of the chain is fixed and the particle on the other end has 1000× more mass than the others. (Left) using sufficiently stiff springs, they expand no more than 0.7% of their rest lengths, despite the substantial mass difference. (Right) using 100× less stiff springs, the chain undergoes a visible expansion as it swings.
+
+[1](#fig:massspring){reference-type="ref+label" reference="fig:massspring"} shows a simple example where 20 particles, including one that is 1000$\times$ heavier, are connected with springs of two different stiffness, simulated using VBD.
+
+## Rigid Body Simulation
+
+For handling rigid body simulations with VBD, we can replace each vertex in our formulation with an entire rigid body, using the variational formulation of rigid body dynamics [Ferguson et al. 2021]. Unlike a vertex that has only 3 DoF, a rigid body also has rotational DoF, resulting in 6 DoF. Therefore, in our local system, we must solve a larger problem, where $\vec{x}_i \in  \mathbb{R}^{6}$ and $H_i \in \mathbb{R}^{6 \times 6}$, including Hessians of all force elements wrt. all 6 DoF of $\vec{x}_i$. Note that, in this case, these force elements are not internal material forces, but external forces acting on the rigid body, due to collisions or other constraints.
+
+Other than this additional complexity, we can follow the same procedure with VBD. Parallelization with coloring depends on the nature of the rigid body simulation. For example, pre-coloring, as we used in our examples for elastic bodies might work for problems like a rigid body chain. For disjoint rigid bodies interacting through collisions only, dynamic recoloring might be needed.
+
+Articulated rigid bodies can be handled by defining joint constraints with an elastic potential. Infinitely stiff constraints are also possible, but VBD cannot guarantee that they will be satisfied using a fixed number of iterations. Another alternative is hard constraints can be introduced by reducing the total DoF in the system and replacing the vertices in our formulation with an articulated rigid body, having more than 6 DoF. Obviously, this would lead to an even larger local system, requiring modifications to the variational formulation.
+
+![5 rigid bodies, each with 6 DoF, forming a chain through collisions, simulated using our VBD formulation for rigid body dynamics.](figures/vbd/RigidBody/chain-cc.jpg)
+
+**Figure 21.** 5 rigid bodies, each with 6 DoF, forming a chain through collisions, simulated using our VBD formulation for rigid body dynamics.
+
+![Dropping 60 rigid bodies into a Utah teapot, showcasing collisions and frictional contact. Remarkably, one rigid body stays on the spout due to friction.](figures/vbd/TeapotOfRigid/A0102.jpg)
+
+![](figures/vbd/TeapotOfRigid/A0193.jpg)
+
+![](figures/vbd/TeapotOfRigid/A0272.jpg)
+
+![](figures/vbd/TeapotOfRigid/A0720.jpg)
+
+**Figure 22.** Dropping 60 rigid bodies into a Utah teapot, showcasing collisions and frictional contact. Remarkably, one rigid body stays on the spout due to friction.
+
+Example rigid body simulations are shown in [2](#fig:rigidbody){reference-type="ref+label" reference="fig:rigidbody"} and [3](#fig:RigidToTeapot){reference-type="ref+label" reference="fig:RigidToTeapot"}, simulated using VBD, as described above.
+
+Note that since our collision formulation is based on penetration potential, it corresponds to penalty forces. We leave the exploration of handling impulse-based collisions [Mirtich 1996] with VBD to future work.
+
+## Unified Simulations
+
+Unified simulation systems are useful for handling scenarios that involve different material types. Typical unified simulation systems use a fundamental building block, such as a particle, to represent all supported materials [M\"{uller et al. 2004; Solenthaler et al. 2007; Becker et al. 2009; Martin et al. 2010; Macklin et al. 2014].
+
+We can form a unified simulation system using VBD without representing all materials using the same building block.
+
+For any simulation system described above, we can combine it with another, provided that we can define the information exchange as an energy potential. For example, when the interactions take place as collisions, we can easily join rigid body simulations with elastic bodies or particles via the collision potential. Joint constraints with elastic potential would be another easy way to combine different simulation systems. The advantage here is that a large rigid body, for example, can be represented as a single object with just 6 DoF, as opposed to using multiple building blocks that are constrained to move as a rigid construction.
+
+This way, a heterogeneous collection of representations can be joined within the same integrator using VBD.
+
+On the other hand, this form of defining a unified simulation system may be challenging for other types of information exchange, such as evaluating buoyancy. Exploring such problems would be another interesting direction for future research.
+
+
+# Discussion
+
+We derive our method as a block coordinate descent method for variational time integrators, which offers optimization techniques like PSD projection and line search. The fact that we do not require those techniques to guarantee stability actually makes our method a more general solver of nonlinear equations. When line search is not used, our method can effectively manage *non-conservative forces*, such as friction, the same as how it handles conservative forces. In other words, our method allows for a seamless transition between block coordinate descent and block Gauss-Sediel [Hageman and Porsching 1975; Grippo and Sciandrone 2000]. While we do not practically utilize these optimization techniques derived from the descent view, they remain available options for users.
+
+VBD is a descent-based method that operates through local iterations. Therefore, it may not be a good solution for problems that would benefit from a global treatment.
+
+The speed of information travel with VBD depends on the connections of vertices and the number of iterations used. A perturbation applied on a vertex can impact other vertices of a connected chain through force elements at most as far as the number of colors within a single iteration. Therefore, VBD is not ideal for high-resolution stiff systems, as it may require too many iterations for a perturbation of a vertex to travel across the system. In such cases, a global solution using Newton's method may prove to be more effective.
+
+Our collision formulation for VBD is based on penetration potential. Therefore, it cannot guarantee penetration-free results. In fact, penetrations are almost never completely resolved, as some amount of penetration is needed to maintain some collision force. Exploring penetration-free collisions with VBD would be an interesting direction for future research.
+
+In addition, defining a similar collision energy for codimensional objects, particularly for self-collisions, can be a challenge.
+
+![100 iterations](figures/vbd/MassSpring/Rendered_100iters_combined2-cc.jpg)
+
+![Converged](figures/vbd/MassSpring/Rendered_converged_combined2-cc.jpg)
+
+![100 iterations](figures/vbd/MassSpring/Rendered_100iters_combined4-cc.jpg)
+
+![Converged](figures/vbd/MassSpring/Rendered_converged_combined4-cc.jpg)
+
+**Figure 23.** A chain of particles connected with soft springs (orange) and 10,000× stiffer (blue) springs. Simulations with VBD using (a,c) 100 iterations per frame fail to converge and result in excessive extensions, as compared to (b,d) convreged results.
+
+VBD is a primal solver [Macklin et al. 2020], so it can easily handle high mass ratios (see Figure 5, Figure 19, and Figure 20), but it struggles with high stiffness ratios. This is shown in [1](#fig:stiffnessratios){reference-type="ref+label" reference="fig:stiffnessratios"} using a stiffness ratio of 1:10000, where VBD has poor convergence behavior.
+
+# Conclusion
+
+We have presented vertex block descent, an efficient iterative descent-based solution for optimization problems, and described how it can be used for physics-based simulations with implicit Euler integration defined through a variational formulation.
+
+We have explained all essential details of elastic body dynamics using VBD, including handling damping, constraints, collisions, and friction. We have defined an adaptive initialization technique, enabled by VBD's formulation, and discussed how to use momentum-based acceleration to improve convergence. We have also presented effective methods for parallelization using VBD, considering dynamically introduced/removed force elements, and explained how its vertex-level computation improves the parallelization of its Gauss-Seidel iterations.
+
+Our results show that VBD can handle highly complex simulation cases (fig:teaser), it remains stable under extreme stress tests (Figure 1, Figure 2, Figure 14, and Figure 15), and offers fast convergence (Figure 16).
+
+In addition, we have summarized how VBD can be used for other types of simulation problems, such as particle systems and rigid bodies, including unified simulations. We have also mentioned some related future research directions and discussed VBD's limitations.
+
+
+## References
+
+1. Uri M Ascher and Eddy Boxerman. 2003. On the modified conjugate gradient method in cloth simulation. *The Visual Computer* 19 (2003), 526--531.
+
+2. David Baraff and Andrew Witkin. 1998. Large Steps in Cloth Simulation. (1998).
+
+3. Markus Becker, Markus Ihmsen, and Matthias Teschner. 2009. Corotated SPH for deformable solids. In *Proceedings of the Fifth Eurographics Conference on Natural Phenomena* (Munich, Germany) *(NPH'09)*. Eurographics Association, Goslar, DEU, 27--34. ISBN 9783905674118
+
+4. Jeff Bolz, Ian Farmer, Eitan Grinspun, and Peter Schröder. 2003. Sparse matrix solvers on the GPU: conjugate gradients and multigrid. *ACM transactions on graphics (TOG)* 22, 3 (2003), 917--924.
+
+5. Sofien Bouaziz, Sebastian Martin, Tiantian Liu, Ladislav Kavan, and Mark Pauly. 2023. Projective dynamics: Fusing constraint projections for fast simulation. In *Seminal Graphics Papers: Pushing the Boundaries, Volume 2*. 787--797.
+
+6. Robert Bridson, Ronald Fedkiw, and John Anderson. 2002. Robust treatment of collisions, contact and friction for cloth animation. In *Proceedings of the 29th annual conference on Computer graphics and interactive techniques*. 594--603.
+
+7. Robert Bridson, Sebastian Marino, and Ronald Fedkiw. 2005. Simulation of clothing with folds and wrinkles. In *ACM SIGGRAPH 2005 Courses*. 3--es.
+
+8. Steve Capell, Seth Green, Brian Curless, Tom Duchamp, and Zoran Popović. 2002. A multiresolution framework for dynamic deformations. In *Proceedings of the 2002 ACM SIGGRAPH/Eurographics symposium on Computer animation*. ACM, San Antonio Texas, 41--47. ISBN 978-1-58113-573-2 `https://doi.org/10.1145/545261.545268`
+
+9. Isaac Chao, Ulrich Pinkall, Patrick Sanan, and Peter Schröder. 2010. A simple geometric model for elastic deformations. *ACM Transactions on Graphics* 29, 4 (July 2010), 1--6. `https://doi.org/10.1145/1778765.1778775`
+
+10. He Chen, Elie Diaz, and Cem Yuksel. 2023. Shortest Path to Boundary for Self-Intersecting Meshes. , 4, Article 146 (2023), 15 pages. `https://doi.org/10.1145/3592136`
+
+11. Kwang-Jin Choi and Hyeong-Seok Ko. 2005. Stable but responsive cloth. In *ACM SIGGRAPH 2005 Courses on - SIGGRAPH '05*. ACM Press, Los Angeles, California, 1. `https://doi.org/10.1145/1198555.1198571`
+
+12. B. Eberhardt, O. Etzmuß, and M. Hauth. 2000. Implicit-Explicit Schemes for Fast Animation with Particle Systems. In *Computer Animation and Simulation 2000*, W. Hansmann, W. Purgathofer, F. Sillion, Nadia Magnenat-Thalmann, Daniel Thalmann, and Bruno Arnaldi (Eds.). Springer Vienna, Vienna, 137--151. ISBN 978-3-211-83549-4 978-3-7091-6344-3 `https://doi.org/10.1007/978-3-7091-6344-3_11` Series Title: Eurographics.
+
+13. Zachary Ferguson, Minchen Li, Teseo Schneider, Francisca Gil-Ureta, Timothy Langlois, Chenfanfu Jiang, Denis Zorin, Danny M. Kaufman, and Daniele Panozzo. 2021. Intersection-free Rigid Body Dynamics. *ACM Transactions on Graphics (SIGGRAPH)* 40, 4, Article 183 (2021).
+
+14. M. Fratarcangeli and F. Pellacini. 2015. Scalable Partitioning for Parallel Position Based Dynamics. *Computer Graphics Forum* 34, 2 (May 2015), 405--413. `https://doi.org/10.1111/cgf.12570`
+
+15. Marco Fratarcangeli, Valentina Tibaldo, and Fabio Pellacini. 2016. Vivace: a practical gauss-seidel method for stable soft body dynamics. *ACM Transactions on Graphics* 35, 6 (Nov. 2016), 1--9. `https://doi.org/10.1145/2980179.2982437`
+
+16. Theodore F. Gast, Craig Schroeder, Alexey Stomakhin, Chenfanfu Jiang, and Joseph M. Teran. 2015. Optimization Integrator for Large Time Steps. *IEEE Transactions on Visualization and Computer Graphics* 21, 10 (Oct. 2015), 1103--1115. `https://doi.org/10.1109/TVCG.2015.2459687`
+
+17. Gene H Golub and Charles F Van Loan. 2013. *Matrix computations*. JHU press.
+
+18. Eitan Grinspun, Petr Krysl, and Peter Schröder. 2002. CHARMS: A simple framework for adaptive simulation. *ACM transactions on graphics (TOG)* 21, 3 (2002), 281--290.
+
+19. L. Grippo and M. Sciandrone. 2000. On the convergence of the block nonlinear Gauss--Seidel method under convex constraints. *Operations Research Letters* 26, 3 (2000), 127--136. `https://doi.org/10.1016/S0167-6377(99)00074-7`
+
+20. LA Hageman and TA Porsching. 1975. Aspects of nonlinear block successive overrelaxation. *SIAM J. Numer. Anal.* 12, 3 (1975), 316--335.
+
+21. Michael Hauth and Olaf Etzmuss. 2001. A High Performance Solver for the Animation of Deformable Objects using Advanced Numerical Methods. *Computer Graphics Forum* 20, 3 (Sept. 2001), 319--328. `https://doi.org/10.1111/1467-8659.00524`
+
+22. Florian Hecht, Yeon Jin Lee, Jonathan R. Shewchuk, and James F. O'Brien. 2012. Updated sparse cholesky factors for corotational elastodynamics. *ACM Transactions on Graphics* 31, 5 (Aug. 2012), 1--13. `https://doi.org/10.1145/2231816.2231821`
+
+23. G. Hirota, S. Fisher, A. State, C. Lee, and H. Fuchs. 2001. An implicit finite element method for elastic solids in contact. In *Proceedings Computer Animation 2001. Fourteenth Conference on Computer Animation (Cat. No.01TH8596)*. IEEE Comput. Soc, Seoul, South Korea, 136--254. ISBN 978-0-7803-7237-5 `https://doi.org/10.1109/CA.2001.982387`
+
+24. Peter Huthwaite. 2014. Accelerated finite element elastodynamic simulations using the GPU. *J. Comput. Phys.* 257 (2014), 687--707.
+
+25. C. Kane, J. E. Marsden, and M. Ortiz. 1999. Symplectic-energy-momentum preserving variational integrators. *J. Math. Phys.* 40, 7 (July 1999), 3353--3371. `https://doi.org/10.1063/1.532892`
+
+26. Couro Kane, Jerrold E Marsden, Michael Ortiz, and Matthew West. 2000. Variational integrators and the Newmark algorithm for conservative and dissipative mechanical systems. *International Journal for numerical methods in engineering* 49, 10 (2000), 1295--1325.
+
+27. Liliya Kharevych, Weiwei Yang, Yiying Tong, Eva Kanso, Jerrold E. Marsden, Peter Schröder, and Matthieu Desbrun. 2006. . In *ACM SIGGRAPH / Eurographics Symposium on Computer Animation*, Marie-Paule Cani and James O'Brien (Eds.). The Eurographics Association. ISBN 3-905673-34-7 `https://doi.org/10.2312/SCA/SCA06/043-051`
+
+28. Lei Lan, Minchen Li, Chenfanfu Jiang, Huamin Wang, and Yin Yang. 2023. Second-order Stencil Descent for Interior-point Hyperelasticity. *ACM Transactions on Graphics* 42, 4 (Aug. 2023), 1--16. `https://doi.org/10.1145/3592104`
+
+29. Lei Lan, Guanqun Ma, Yin Yang, Changxi Zheng, Minchen Li, and Chenfanfu Jiang. 2022. Penetration-free projective dynamics on the GPU. *ACM Transactions on Graphics (TOG)* 41, 4 (2022), 1--16.
+
+30. J. A. Levine, A. W. Bargteil, C. Corsi, J. Tessendorf, and R. Geist. 2015. A peridynamic perspective on spring-mass fracture. In *Proceedings of the ACM SIGGRAPH/Eurographics Symposium on Computer Animation* (Copenhagen, Denmark) *(SCA '14)*. Eurographics Association, Goslar, DEU, 47--55.
+
+31. A. Lew, J. E. Marsden, M. Ortiz, and M. West. 2004. Variational time integrators. *Internat. J. Numer. Methods Engrg.* 60, 1 (May 2004), 153--212. `https://doi.org/10.1002/nme.958`
+
+32. Cheng Li, Min Tang, Ruofeng Tong, Ming Cai, Jieyi Zhao, and Dinesh Manocha. 2020b. P-cloth: interactive complex cloth simulation on multi-GPU systems using dynamic matrix assembly and pipelined implicit integrators. *ACM Transactions on Graphics (TOG)* 39, 6 (2020), 1--15.
+
+33. Minchen Li, Zachary Ferguson, Teseo Schneider, Timothy R Langlois, Denis Zorin, Daniele Panozzo, Chenfanfu Jiang, and Danny M Kaufman. 2020a. Incremental potential contact: intersection-and inversion-free, large-deformation dynamics. *ACM Trans. Graph.* 39, 4 (2020), 49.
+
+34. Minchen Li, Ming Gao, Timothy Langlois, Chenfanfu Jiang, and Danny M. Kaufman. 2019. Decomposed optimization time integrator for large-step elastodynamics. *ACM Transactions on Graphics* 38, 4 (Aug. 2019), 1--10. `https://doi.org/10.1145/3306346.3322951`
+
+35. Xuan Li, Yu Fang, Lei Lan, Huamin Wang, Yin Yang, Minchen Li, and Chenfanfu Jiang. 2023. Subspace-Preconditioned GPU Projective Dynamics with Contact for Cloth Simulation. In *SIGGRAPH Asia 2023 Conference Papers*. 1--12.
+
+36. Tiantian Liu, Sofien Bouaziz, and Ladislav Kavan. 2017. Quasi-Newton Methods for Real-Time Simulation of Hyperelastic Materials. *ACM Transactions on Graphics* 36, 3 (June 2017), 1--16. `https://doi.org/10.1145/2990496`
+
+37. M. Macklin, K. Erleben, M. Müller, N. Chentanez, S. Jeschke, and T.Y. Kim. 2020. Primal/Dual Descent Methods for Dynamics. *Computer Graphics Forum* 39, 8 (Dec. 2020), 89--100. `https://doi.org/10.1111/cgf.14104`
+
+38. Miles Macklin, Matthias Müller, Nuttapong Chentanez, and Tae-Yong Kim. 2014. Unified particle physics for real-time applications. *ACM Trans. Graph.* 33, 4, Article 153 (jul 2014), 12 pages. `https://doi.org/10.1145/2601097.2601152`
+
+39. Miles Macklin, Matthias Müller, and Nuttapong Chentanez. 2016. : position-based simulation of compliant constrained dynamics. In *Proceedings of the 9th International Conference on Motion in Games*. ACM, Burlingame California, 49--54. ISBN 978-1-4503-4592-7 `https://doi.org/10.1145/2994258.2994272`
+
+40. Sebastian Martin, Peter Kaufmann, Mario Botsch, Eitan Grinspun, and Markus Gross. 2010. Unified simulation of elastic rods, shells, and solids. *ACM Trans. Graph.* 29, 4, Article 39 (jul 2010), 10 pages. `https://doi.org/10.1145/1778765.1778776`
+
+41. Sebastian Martin, Bernhard Thomaszewski, Eitan Grinspun, and Markus Gross. 2011. Example-based elastic materials. In *ACM SIGGRAPH 2011 papers*. 1--8.
+
+42. Brian Vincent Mirtich. 1996. *Impulse-based dynamic simulation of rigid body systems*. Ph. D. Dissertation. ISBN 0591320894 AAI9723116.
+
+43. Matthias Müller, David Charypar, and Markus Gross. 2003. Particle-based fluid simulation for interactive applications. In *Proceedings of the 2003 ACM SIGGRAPH/Eurographics Symposium on Computer Animation* (San Diego, California) *(SCA '03)*. Eurographics Association, Goslar, DEU, 154--159. ISBN 1581136595
+
+44. Matthias Müller, Julie Dorsey, Leonard McMillan, Robert Jagnow, and Barbara Cutler. 2002. Stable real-time deformations. In *Proceedings of the 2002 ACM SIGGRAPH/Eurographics symposium on Computer animation*. 49--54.
+
+45. Matthias Müller, Bruno Heidelberger, Marcus Hennix, and John Ratcliff. 2007. Position based dynamics. *Journal of Visual Communication and Image Representation* 18, 2 (2007), 109--118.
+
+46. Matthias Müller, Bruno Heidelberger, Matthias Teschner, and Markus Gross. 2005. Meshless deformations based on shape matching. *ACM transactions on graphics (TOG)* 24, 3 (2005), 471--478.
+
+47. M. Müller, R. Keiser, A. Nealen, M. Pauly, M. Gross, and M. Alexa. 2004. Point based animation of elastic, plastic and melting objects. In *Proceedings of the 2004 ACM SIGGRAPH/Eurographics Symposium on Computer Animation* (Grenoble, France) *(SCA '04)*. Eurographics Association, Goslar, DEU, 141--151. ISBN 3905673142 `https://doi.org/10.1145/1028523.1028542`
+
+48. Alexander Naitsat, Yufeng Zhu, and Yehoshua Y Zeevi. 2020. Adaptive block coordinate descent for distortion optimization. In *Computer Graphics Forum*, Vol. 39. Wiley Online Library, 360--376.
+
+49. Andreas Peer, Markus Ihmsen, Jens Cornelis, and Matthias Teschner. 2015. An implicit viscosity formulation for SPH fluids. *ACM Trans. Graph.* 34, 4, Article 114 (jul 2015), 10 pages. `https://doi.org/10.1145/2766925`
+
+50. Eftychios Sifakis and Jernej Barbic. 2012. FEM simulation of 3D deformable solids: A practitioner's guide to theory, discretization and model reduction. *ACM SIGGRAPH 2012 Courses, SIGGRAPH'12* (08 2012). `https://doi.org/10.1145/2343483.2343501`
+
+51. J.C. Simo, N. Tarnow, and K.K. Wong. 1992. Exact energy-momentum conserving algorithms and symplectic schemes for nonlinear dynamics. *Computer Methods in Applied Mechanics and Engineering* 100, 1 (Oct. 1992), 63--116. `https://doi.org/10.1016/0045-7825(92)90115-Z`
+
+52. Breannan Smith, Fernando De Goes, and Theodore Kim. 2018. Stable neo-hookean flesh simulation. *ACM Transactions on Graphics (TOG)* 37, 2 (2018), 1--15.
+
+53. Barbara Solenthaler, Jürg Schläfli, and Renato Pajarola. 2007. A unified particle model for fluid--solid interactions: Research Articles. *Comput. Animat. Virtual Worlds* 18, 1 (feb 2007), 69--82.
+
+54. Ari Stern and Eitan Grinspun. 2009. Implicit-Explicit Variational Integration of Highly Oscillatory Problems. *Multiscale Modeling & Simulation* 7, 4 (Jan. 2009), 1779--1794. `https://doi.org/10.1137/080732936` arXiv:0808.2239 \[math\].
+
+55. Tetsuya Takahashi, Yoshinori Dobashi, Issei Fujishiro, Tomoyuki Nishita, and Ming C. Lin. 2015. Implicit Formulation for SPH-based Viscous Fluids. *Comput. Graph. Forum* 34, 2 (may 2015), 493--502. `https://doi.org/10.1111/cgf.12578`
+
+56. Rasmus Tamstorf, Toby Jones, and Steve McCormick. 2015. Smoothed Aggregation Multigrid for Cloth Simulation. *ACM Transactions on Graphics* 34 (Oct. 2015), 1--13. `https://doi.org/10.1145/2816795.2818081`
+
+57. Joseph Teran, Eftychios Sifakis, Geoffrey Irving, and Ronald Fedkiw. 2005. Robust quasistatic finite elements and flesh simulation. In *Proceedings of the 2005 ACM SIGGRAPH/Eurographics symposium on Computer animation*. 181--190.
+
+58. Quoc-Minh Ton-That, Paul G. Kry, and Sheldon Andrews. 2023. Parallel block Neo-Hookean XPBD using graph clustering. *Computers & Graphics* 110 (Feb. 2023), 1--10. `https://doi.org/10.1016/j.cag.2022.10.009`
+
+59. P. Volino and N. Magnenat-Thalmann. 2001. Comparing efficiency of integration methods for cloth simulation. In *Proceedings. Computer Graphics International 2001*. IEEE Comput. Soc, Hong Kong, China, 265--272. ISBN 978-0-7695-1007-1 `https://doi.org/10.1109/CGI.2001.934683`
+
+60. Pascal Volino, Nadia Magnenat-Thalmann, and Francois Faure. 2009. A simple approach to nonlinear tensile stiffness for accurate cloth simulation. *ACM Trans. Graph.* 28, 4, Article 105 (sep 2009), 16 pages. `https://doi.org/10.1145/1559755.1559762`
+
+61. Ingo Wald, Sven Woop, Carsten Benthin, Gregory S Johnson, and Manfred Ernst. 2014. Embree: a kernel framework for efficient CPU ray tracing. *ACM Transactions on Graphics (TOG)* 33, 4 (2014), 1--8.
+
+62. Endong Wang, Qing Zhang, Bo Shen, Guangyong Zhang, Xiaowei Lu, Qing Wu, Yajuan Wang, Endong Wang, Qing Zhang, Bo Shen, et al. 2014. Intel math kernel library. *High-Performance Computing on the Intel Xeon Phi™: How to Fully Exploit MIC Architectures* (2014), 167--188.
+
+63. Huamin Wang. 2015. A chebyshev semi-iterative approach for accelerating projective and position-based dynamics. *ACM Transactions on Graphics* 34, 6 (Nov. 2015), 1--9. `https://doi.org/10.1145/2816795.2818063`
+
+64. Huamin Wang and Yin Yang. 2016. Descent methods for elastic body simulation on the GPU. *ACM Transactions on Graphics* 35, 6 (Nov. 2016), 1--10. `https://doi.org/10.1145/2980179.2980236`
+
+65. Xinlei Wang, Minchen Li, Yu Fang, Xinxin Zhang, Ming Gao, Min Tang, Danny M. Kaufman, and Chenfanfu Jiang. 2020. Hierarchical Optimization Time Integration for CFL-Rate MPM Stepping. *ACM Transactions on Graphics* 39, 3 (June 2020), 1--16. `https://doi.org/10.1145/3386760`
+
+66. Stephen J Wright. 2015. Coordinate descent algorithms. *Mathematical programming* 151, 1 (2015), 3--34.
+
+67. Zangyueyang Xian, Xin Tong, and Tiantian Liu. 2019. A scalable galerkin multigrid method for real-time simulation of deformable objects. *ACM Transactions on Graphics* 38, 6 (Dec. 2019), 1--13. `https://doi.org/10.1145/3355089.3356486`
+
+68. Yongning Zhu, Eftychios Sifakis, Joseph Teran, and Achi Brandt. 2010. An efficient multigrid method for the simulation of high-resolution elastic solids. *ACM Transactions on Graphics* 29, 2 (March 2010), 1--18. `https://doi.org/10.1145/1731047.1731054`
+
