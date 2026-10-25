@@ -528,9 +528,7 @@ where
             self.loc(template, 1),
             DiagKind::Guard,
         );
-        // The arguments, in call order. The instantiation's value is the tuple
-        // of arguments; a value that is not one supplies none, and the
-        // instantiation is refused rather than reaching the fields.
+        // The arguments, in call order: the value is the tuple of arguments.
         let elements = match self.ir[value].kind {
             ExprKind::Tuple(_) => self.range_children(value),
             _ => {
@@ -549,8 +547,7 @@ where
             self.check_expr(el);
             vals.push(self.state[el].term.expect("an argument is compiled"));
         }
-        // The template's own value: a call result is decided by running it, so
-        // the checker forces it before it reads the template's fields.
+        // The template's own value: a call result is decided by running it.
         let template_value = self.value_of(template);
         self.module.evaluate_node_deep(template_value, None);
         // The template's clone: the requirements are the clone's own fields.
