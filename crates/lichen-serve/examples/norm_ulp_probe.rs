@@ -214,9 +214,7 @@ struct Answers {
     scaled: Vec<u32>,
     /// The divisor each head's lane computed.
     divisors: Vec<u32>,
-    /// **The step between one head's divisor and the next**: the wide chain writes one per
-    /// element and the per-head chain one per head, so the divisor of head `h` is at
-    /// `h * stride`.
+    /// **The step between one head's divisor and the next**: head `h`'s is at `h * stride`.
     divisor_stride: usize,
 }
 
