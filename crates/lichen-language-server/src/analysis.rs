@@ -1488,14 +1488,17 @@ fn classify_token_kind(
         TokenKind::Int(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Float(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Str(_) => Some((SemanticTokenType::STRING, Vec::new())),
-        // The builtin type constants are type-ish, not keywords.
-        TokenKind::KwInt | TokenKind::KwFloat | TokenKind::KwString | TokenKind::KwType => {
-            Some((SemanticTokenType::TYPE, Vec::new()))
-        }
-        TokenKind::KwStruct
-        | TokenKind::KwTable
-        | TokenKind::KwSet
+        // The builtin type constants are type-ish, not keywords.  `Tuple`,
+        // `Array` and `Struct` are the builtin templates.
+        TokenKind::KwInt
+        | TokenKind::KwFloat
+        | TokenKind::KwString
+        | TokenKind::KwType
+        | TokenKind::KwTuple
         | TokenKind::KwArray
+        | TokenKind::KwStruct => Some((SemanticTokenType::TYPE, Vec::new())),
+        TokenKind::KwTable
+        | TokenKind::KwSet
         | TokenKind::KwLet
         | TokenKind::KwIf
         | TokenKind::KwThen
@@ -1521,10 +1524,10 @@ fn classify_token_kind(
         | TokenKind::KwIn
         // `@shallow` is a prefix marker over one array position.
         | TokenKind::KwShallow
+        // `@clone` is the clone marker over one expression.
+        | TokenKind::KwClone
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
-        // `tuple` is a keyword-led type form, like `array`.
-        TokenKind::KwTuple
         // `@any` is the wildcard literal — a reserved form like `_`.
         | TokenKind::Any
         // `@gc` opens a block whose scope is released at the `}`.
@@ -1537,6 +1540,9 @@ fn classify_token_kind(
         | TokenKind::TableArrow
         | TokenKind::TableFindArrow
         | TokenKind::Colon
+        // `:=` binds a name; `<:` matches a value against a template.
+        | TokenKind::ColonEquals
+        | TokenKind::TemplateUnify
         | TokenKind::Hash
         | TokenKind::Question
         | TokenKind::Bang
@@ -1678,6 +1684,21 @@ impl<'a> NameClass<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
+            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -1723,17 +1744,30 @@ impl<'a> NameClass<'a> {
                 self.expr(parameter_type);
                 self.expr(return_type);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for f in fields {
-                    self.expr(&f.ty);
+                    self.expr(&f.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -1754,14 +1788,6 @@ impl<'a> NameClass<'a> {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => {
@@ -1981,6 +2007,21 @@ impl Walk {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
+            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -2026,17 +2067,30 @@ impl Walk {
                 self.expr(parameter_type);
                 self.expr(return_type);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for field in fields {
-                    self.expr(&field.ty);
+                    self.expr(&field.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -2057,14 +2111,6 @@ impl Walk {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => self.scope(statements, Some(expr)),
@@ -2313,6 +2359,21 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
+            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -2358,17 +2419,30 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(parameter_type);
                 self.expr(return_type);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for f in fields {
-                    self.expr(&f.ty);
+                    self.expr(&f.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -2389,14 +2463,6 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => self.scope(statements, Some(expr)),
