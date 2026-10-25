@@ -389,16 +389,20 @@ sibling strategy, the plan of `examples/fusion_file.json`):
 | 0 (node 0) | `RegionIsNotAPair` | `RegionIsNotAPair` |
 | 1 (node 1) | `InterfacesAreNotProved` | `RegionIsNotAPair` — the licence holds, and the arity check answers |
 | 2 (nodes 6, 2) | merged, licensed by the floor | merged, licensed by the floor |
-| 3 (nodes 3, 4) — the knorm's squares and scale | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the composition at `ForwardedValueIsLaneDependent` |
-| 4 (nodes 7, 8, 9) — the whole query chain | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the composition at `ForwardedValueIsLaneDependent` |
+| 3 (nodes 3, 4) — the knorm's squares and scale | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the merge at `StagedReadIsNotOrdered` — the merged node keeps the producer's store, and its 1 024 lanes are 16 groups of 64, so the barrier that separates them reaches no read |
+| 4 (nodes 7, 8, 9) — the whole query chain | `InterfacesAreNotProved` | **licensed by the floor**, and refused by the composition at `MergedBodyIsRefused` — the staged fan-in's barrier would sit in the reduction's own loop |
 
 **The licence widened; the reduction's own limit did not.** The two chains the licence now holds
 are led by a reduction whose fold is **lane-dependent**: the `squares` reduction sums one row of
 the hidden state, and the `scale` that reads it asks for the row of *another* lane — so the
-producer's cone cannot be rebuilt at the read's address, and `ForwardedValueIsLaneDependent` says
-so. That is the limit the sibling section above measured, reached now through the licence rather
-than around it. **The node count is unchanged** (11 → 10): the sibling region was the only merge
-the pre-attention had before, and it still is.
+producer's cone cannot be rebuilt at the read's address. The store-keeping path is the answer to
+that limit, and it has **two** of its own: the merged node must be narrower than one lane group
+(`StagedReadIsNotOrdered`), and the staged read must sit in control flow every lane reaches
+(`MergedBodyIsRefused` — the qnorm fan-in's barrier would sit in the reduction's own loop). The
+path and its measurements are in [graph-fusion](graph-fusion.md) §5; the fan-in's own store-keeping
+composition is `compose_fan_in_staged`, beside the pinned `compose_fan_in`. **The node count is
+unchanged** (11 → 10): the sibling region was the only merge the pre-attention had before, and it
+still is.
 
 **An elementwise chain now merges under the floor, and the floor's own line says so.** The
 `lichen-compute` elementwise chain (`[elementwise, elementwise]`) and the `[elementwise,

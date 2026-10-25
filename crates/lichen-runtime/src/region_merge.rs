@@ -15,7 +15,7 @@ use lichen_graph_ir::{
 };
 use lichen_kernel_ir::{
     ComposeRefusal, KernelFragment, Producer, ScalarClass, Sibling, carried_producers, compose,
-    compose_fan_out, compose_fan_in_staged, compose_siblings,
+    compose_fan_in_staged, compose_fan_out, compose_siblings,
 };
 
 use crate::fusion_claim::{
@@ -1386,8 +1386,7 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
 /// reads it, so the merged fragment writes it too and the value is no longer deleted.
 fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRefusal> {
     let steps = fan_in_steps(nodes, bodies);
-    // **The staged producers are the ones whose value no address re-derives**, so the
-    // composition keeps their stores and the body that reads them reads the store back.
+    // **The staged producers are the ones whose value no address re-derives**.
     let staged = carried_producers(&steps);
     let fragment = compose_fan_in_staged(&steps, &staged)
         .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
@@ -1404,12 +1403,8 @@ fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRef
                 .map(|ordinal| (body, ordinal)),
         );
     }
-    // **The staged producers' outputs are written, so they are no longer deleted**: the merged
-    // fragment holds them, in the order it writes them.
-    let mut writes: Vec<usize> = staged
-        .iter()
-        .map(|&producer| bodies[producer])
-        .collect();
+    // **The staged producers' outputs are written, so they are no longer deleted**.
+    let mut writes: Vec<usize> = staged.iter().map(|&producer| bodies[producer]).collect();
     writes.push(
         *bodies
             .last()

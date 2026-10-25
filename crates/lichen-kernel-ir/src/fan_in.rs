@@ -58,15 +58,10 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
 /// decision it cannot make.
 ///
 /// # Invariant
-/// **A staged producer keeps its store, and the body that reads it reads the store back**: the
-/// producer's output buffers are written by the merged body, the read that would have answered
-/// them becomes an `OutputReadCall` at the producer's output ordinal, and a barrier names the
-/// write with the read that observes it. A producer the caller did not name is recomputed, as
-/// [`compose_fan_in`] does.
-///
-/// **Only a value no address re-derives is staged**: a staged producer's value is a loop-carried
-/// accumulation, and a producer whose value another lane's read or a callee's own index decides
-/// is refused rather than staged, because a store would carry it where it does not belong.
+/// **A staged producer keeps its store and the body that reads it reads it back**: the merged
+/// body writes the producer's output buffers, the read becomes an `OutputReadCall` at the
+/// producer's output ordinal, and a barrier names the write with the read. Only a carried
+/// accumulation is staged; a producer the caller did not name is recomputed.
 pub fn compose_fan_in_staged(
     producers: &[Producer<'_>],
     staged: &[usize],
@@ -179,9 +174,7 @@ pub fn compose_fan_in_staged(
         }
         forwards.push(Some(forward));
     }
-    // **One way per producer, asked of its own body**: the cone a read copies, or the store the
-    // body keeps. A producer the caller named is staged, and a producer whose value no address
-    // re-derives is refused unless the caller named it.
+    // **One way per producer**: the cone a read copies, or the store the body keeps.
     let mut cones: Vec<Option<Cone>> = (0..edges.len()).map(|_| None).collect();
     // **The output ordinal each staged producer's store fills**, in the merged output space.
     let mut staged_ordinals: Vec<Option<u64>> = vec![None; edges.len()];
@@ -207,8 +200,7 @@ pub fn compose_fan_in_staged(
                 }
             }
             Err(blocker) => {
-                // **Only a carried accumulation is staged**: the others name another lane's
-                // value or an index of the callee's own, which a store would carry wrongly.
+                // **Only a carried accumulation is staged**: the others are another lane's or a callee's.
                 if !is_staged[body] || !matches!(blocker, NotIndexLocal::Carried { .. }) {
                     return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
                         value: forward.forwarded,
@@ -222,9 +214,7 @@ pub fn compose_fan_in_staged(
         output_base[body] = staged_outputs;
         staged_outputs += producers[body].fragment.outputs;
     }
-    // **A staged producer's output is read back, and a recomputed producer's cone is not**: a
-    // copy of that cone would read the staged buffer at an input ordinal, and that ordinal names
-    // another buffer in the merged fragment.
+    // **A staged producer's output is read back, never copied**: a copy reads it as an input.
     for (body, edge) in edges.iter().enumerate() {
         if body + 1 == edges.len() || is_staged[body] {
             continue;
@@ -314,8 +304,7 @@ pub fn compose_fan_in_staged(
         // **Every surviving read takes the union's position for it**, the absorbed ones dropped.
         let absorbed: Vec<usize> = edge.absorbed.iter().map(|(_, ordinal)| *ordinal).collect();
         let shifted = shifted_past(&mut body, &edge.reads, unions[index], &absorbed);
-        // **The merged body's output space**: the staged producers' own outputs come first, and
-        // the consumer's fill what they leave.
+        // **The merged body's output space**: the staged producers' own outputs come first.
         let writes = if index + 1 == edges.len() {
             shifted_write_positions(&mut body, &consumer.body, staged_outputs)
         } else if is_staged[index] {
@@ -471,12 +460,8 @@ pub fn compose_fan_in_staged(
             if staged_ordinals[from].is_none() {
                 continue;
             }
-            let write = forwards[from]
-                .as_ref()
-                .expect("a producer forwards")
-                .write;
-            // **The first body's values are the merged body's own**, and every later body's are
-            // read through the map that landed them.
+            let write = forwards[from].as_ref().expect("a producer forwards").write;
+            // **The first body's values are the merged body's own**, the rest through their map.
             let merged_write = renumbers[from]
                 .as_ref()
                 .map_or(write, |renumber| renumber.resolve(write));

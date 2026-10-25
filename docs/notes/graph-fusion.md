@@ -883,11 +883,34 @@ program — `fuse_class_probe` printed `answer 0: … equal: false` where the un
 the merged one had agreed — while the same merge over one group is ordered. So the store-keeping
 path serves a region narrower than one lane group, and the pre-attention's chains (1 024 and
 2 048 lanes) are not one. **The qnorm chain (nodes 7, 8, 9) is not a chain at all**: `scale`
-reads `matvec`'s output *and* `squares`' output, so the region is a **fan-in**, and the fan-in has
-no store-keeping path yet — its own refusal (`ForwardedValueIsLaneDependent`) stands. Making the
-wide chains merge is the mechanism that tiles a reduction across the group
-([shared-memory-and-barriers](shared-memory-and-barriers.md) §9's staging, roadmap axis C), not
-this path.
+reads `matvec`'s output *and* `squares`' output, so the region is a **fan-in**.
+
+**And the fan-in has a store-keeping path too — beside the pinned `compose_fan_in`, which keeps
+its semantics.** `compose_fan_in_staged` takes the producers whose values were staged: the
+composition keeps their stores — the producer's output buffers are written by the merged body,
+the reads that would have answered them become `OutputReadCall`s at the producers' output
+ordinals, and a barrier names each write with the read that observes it. Three facts keep it a
+licence and not a waiver, and each is a rule at the code: **only a carried accumulation is
+staged** (a value another lane's read or a callee's own index decides is refused, because a store
+would carry it where it does not belong); **a staged producer's output is read back, never
+copied** (a copy of a recomputed producer's cone would read that store at an input ordinal, which
+names another buffer in the merged fragment, so the composition refuses the mix by name); and the
+**merged output space** is the staged producers' own outputs and then the consumer's, so the
+graph's value table keeps the store and `written_and_deleted` no longer deletes it.
+
+**Measured: the path serves a fan-in over one lane group, and the qnorm fan-in is refused by a
+second limit.** `fan_in_probe` is two reductions and one consumer over 64 lanes, the consumer
+reading at `i / 2` so that it reads what another lane of the same group wrote — the read the
+barrier orders. The region merges into one node of **three** outputs (the two staged producers'
+and the consumer's), and the device's answer equals the unmerged program's and the host's own
+(`answer 0: merged 64 element(s), plain 64 element(s), equal: true`, over five runs). The qnorm
+fan-in (region 4) is refused, and the refusal is **not** the group width this paragraph is about:
+the merged body's own gate fires first, because the barrier's read — `squares` reading `matvec`'s
+output — sits in the **reduction's own loop**, and a barrier in divergent control flow is invalid
+(`MergedBodyIsRefused`). So the store-keeping fan-in has **two** limits: the group width, and the
+read's own control flow. Making the wide chains merge is the mechanism that tiles a reduction
+across the group ([shared-memory-and-barriers](shared-memory-and-barriers.md) §9's staging,
+roadmap axis C), not this path.
 
 **Recomputation is a trade, and that is why the machine decides it.** Copies are made per **(address,
 block)**, not hoisted out of a consumer's loop body, so the growth is O(reads × cone size) per block where

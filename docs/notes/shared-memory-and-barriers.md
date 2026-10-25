@@ -1236,6 +1236,15 @@ that crosses a group needs a **grid** synchronisation, which no `OpControlBarrie
 execution scope is `Workgroup` or `Subgroup` — so the wider case waits for the mechanism that
 tiles a reduction across the group (§9's staging, roadmap axis C).
 
+**The fan-in's store-keeping path has the same two limits, and its own measurement.** The
+composition is `compose_fan_in_staged` ([graph-fusion](graph-fusion.md) §5), and it is measured
+over one lane group: two reductions and one consumer, the consumer reading at `i / 2` so that it
+reads what another lane of the same group wrote. The region merges into one node of three
+outputs, and the device's answer equals the unmerged program's and the host's own. The second
+limit is the uniform-control-flow rule below: the qnorm fan-in's barrier would sit in the
+reduction's own loop, so that region is refused (`MergedBodyIsRefused`) before the group width is
+even asked.
+
 **What step 3 landed of that, and what the check is worth.** `KernelBody::validate` refuses a
 recorded expr whose read does not dominate **every reachable `Return`** — so every path that ends
 passes through the barrier, which is the uniform-control-flow condition read statically. That

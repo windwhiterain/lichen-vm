@@ -1,13 +1,12 @@
 //! The staged fan-in over one lane group: the merged node's answer, beside the unmerged one's.
 //!
 //! # Invariant
-//! **The two preparations differ in one thing only**: the same program, the same host inputs and
-//! the same device, and the merge is what the first one has — the second asks for a budget of
-//! one node, so every region is refused and the program runs unmerged.
+//! **The two preparations differ in one thing only**: the same program, the same inputs and the
+//! same device — the first has the merge; the second asks for a one-node budget, so every
+//! region is refused and the program runs unmerged.
 //!
-//! **The fan-in is two producers and one consumer over one group of 64 lanes**: each producer is
-//! a reduction whose value no address re-derives, so its store answers the consumer, and the
-//! consumer reads both stores back.
+//! **Two producers and one consumer over one 64-lane group**, and the consumer reads at `i / 2`,
+//! so it reads what another lane of the group wrote.
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_compute::fusion_file::{Budget, FusionPlan, Strategy};
@@ -158,7 +157,10 @@ fn main() {
     let plain = session
         .prepare_with_plan(FAN_IN, &[], &one_node_plan())
         .expect("the barred plan prepares");
-    println!("=== the fan-in, every region refused: {} node(s)", plain.nodes());
+    println!(
+        "=== the fan-in, every region refused: {} node(s)",
+        plain.nodes()
+    );
     for line in plain.report() {
         println!("{line}");
     }
@@ -181,6 +183,8 @@ fn main() {
     }
     println!(
         "the host's own answer: equal: {}",
-        merged_answers.first().is_some_and(|answer| *answer == expected())
+        merged_answers
+            .first()
+            .is_some_and(|answer| *answer == expected())
     );
 }
