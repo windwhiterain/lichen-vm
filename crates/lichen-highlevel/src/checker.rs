@@ -652,6 +652,11 @@ where
         for &s in &stmt_roots {
             checker.check_expr(s);
         }
+        // A statement's shallow element types are available to the root's reads.
+        for &func_node in &checker.lambda_value_nodes {
+            checker.module.evaluate_node_deep(func_node, None);
+        }
+        checker.resolve_shallow_types();
         let root_term = checker.check_expr(root);
         let root_ty = checker.state[root]
             .ty
@@ -674,11 +679,7 @@ where
             }
         }
         // A `@shallow` mark is on the value; its element's type is applied here, and an open tail then closes.
-        let shallow_types = std::mem::take(&mut checker.shallow_types);
-        for (type_apply, tail, inner) in shallow_types {
-            checker.module.evaluate_node_deep(type_apply, None);
-            checker.close_shallow_tail(tail, inner);
-        }
+        checker.resolve_shallow_types();
         // The definition pass: run the program so the apply-time checks fire.
         if mode == Mode::Evaluate && !checker.check_failed() {
             // Its order is user-visible, so functions are sorted by the IR

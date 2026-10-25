@@ -424,6 +424,19 @@ where
         expr
     }
 
+    /// Resolve pending shallow element types before a dependent read or the
+    /// definition pass. An unresolved entry stays pending for the later pass.
+    pub(super) fn resolve_shallow_types(&mut self) {
+        let shallow_types = std::mem::take(&mut self.shallow_types);
+        for (type_apply, tail, inner) in shallow_types {
+            self.module.evaluate_node_deep(type_apply, None);
+            self.close_shallow_tail(tail, inner);
+            if self.module.node_value(AnyNodeId::Dynamic(tail)).is_none() {
+                self.shallow_types.push((type_apply, tail, inner));
+            }
+        }
+    }
+
     /// Close an open `@shallow` tail on the type its application decided.
     /// See `docs/notes/index-read-unify.md` §7.
     ///
