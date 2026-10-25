@@ -861,10 +861,64 @@ impl KernelBody {
     }
 
     /// The block whose instruction list defines `value`, or `None` for one it does not.
-    fn block_of(&self, value: ValueId) -> Option<usize> {
+    pub(crate) fn block_of(&self, value: ValueId) -> Option<usize> {
         self.blocks
             .iter()
             .position(|block| block.instrs.contains(&value))
+    }
+
+    /// The blocks every lane reaches, as a flag per block.
+    ///
+    /// # Invariant
+    /// The same answer [`Self::validate`] reads for a barrier's read: a block qualifies when it
+    /// dominates every reachable `Return`, so every path that ends passes through it.
+    pub(crate) fn every_lane_reaches(&self) -> Vec<bool> {
+        let dominance = self.dominance();
+        self.unavoidable_blocks(&dominance)
+    }
+
+    /// Whether every path from the entry to `block` passes through `candidate`.
+    pub(crate) fn dominates_block(&self, block: usize, candidate: usize) -> bool {
+        self.dominance().dominates(block, candidate)
+    }
+
+    /// Whether `value` is in scope at `block`: its own block dominates it, or it is one of
+    /// that block's parameters.
+    ///
+    /// # Invariant
+    /// The same rule [`Self::validate`] reads for a use: a value defined in a dominating block,
+    /// or a parameter of the block itself.
+    pub(crate) fn value_dominates(&self, block: usize, value: ValueId) -> bool {
+        let dominance = self.dominance();
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::BlockParam {
+                block: defined_in, ..
+            }) => *defined_in == block || dominance.dominates(block, *defined_in),
+            Some(ValueDef::Instr { .. }) => match self.definition_site(value) {
+                Some((defined_in, _)) => {
+                    defined_in == block || dominance.dominates(block, defined_in)
+                }
+                None => false,
+            },
+            None => false,
+        }
+    }
+
+    /// The block and position `value` is defined at, or `None` for one no block defines.
+    pub(crate) fn definition_site(&self, value: ValueId) -> Option<(usize, usize)> {
+        self.definition_sites()
+            .get(value.0 as usize)
+            .copied()
+            .flatten()
+    }
+
+    /// The invocation index this body's entry block receives.
+    ///
+    /// # Invariant
+    /// **The last parameter of the entry block**: a domain's leaves are the extent, the runtime
+    /// scalars and the index, and the index is the last of them.
+    pub(crate) fn index_parameter(&self) -> Option<ValueId> {
+        self.blocks[self.entry].params.last().copied()
     }
 
     /// The dominator sets over the reachable CFG, computed once for both rules that read them.

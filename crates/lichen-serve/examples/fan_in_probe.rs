@@ -1,12 +1,11 @@
 //! The staged fan-in over one lane group: the merged node's answer, beside the unmerged one's.
 //!
 //! # Invariant
-//! **The two preparations differ in one thing only**: the same program, the same inputs and the
-//! same device — the first has the merge; the second asks for a one-node budget, so every
-//! region is refused and the program runs unmerged.
+//! **The two preparations differ in one thing only**: the same program, inputs and device —
+//! the first has the merge; the second asks for a one-node budget, so every region is refused.
 //!
-//! **Two producers and one consumer over one 64-lane group**, and the consumer reads at `i / 2`,
-//! so it reads what another lane of the group wrote.
+//! **Two producers and one consumer over one 64-lane group**, and the consumer reads at `i / 2`
+//! **inside its own loop**, so the barrier that orders the read stands in the pre-header.
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_compute::fusion_file::{Budget, FusionPlan, Strategy};
@@ -21,6 +20,9 @@ const LANES: usize = 64;
 /// # Invariant
 /// **The two producers are independent and the consumer reads both**: a node that reads several
 /// producers is a fan-in, and the region is two producers and one consumer.
+///
+/// **The consumer's reads sit in its own loop**, so a barrier that ordered them could not stand
+/// at the read — the block a lane can skip — and the merged body's gate would refuse the body.
 const FAN_IN: &str = r#"
 --- compute = import "compute.lichen" ---
 In  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
@@ -40,10 +42,9 @@ BothArg = struct{.n Int, .I Both}
 sum_raw = (k : BothPar) => {
   i = compute.range k.n
   head = i / 2
-  a = (compute.read ((compute.Read _)(.from k.in.a, .at head)) : Float)
-  b = (compute.read ((compute.Read _)(.from k.in.b, .at head)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at head)) : Float) + (compute.read ((compute.Read _)(.from k.in.b, .at head)) : Float))) ~ "element"))
   b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Out)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value ((a + b) ~ "element"))))))
+  ((Out)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (1, 0.0)))))))
 }
 sum = compute.parallel (sum_raw ~ "claim:Elementwise(element)") "gpu" Out
 GArg = struct{.in Both}

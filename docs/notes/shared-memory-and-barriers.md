@@ -1210,7 +1210,15 @@ question at all. **What is not well defined is a read under divergent control fl
 requires `OpControlBarrier` in uniform control flow, so a barrier placed with the read
 inside a branch that not every lane takes is not imprecise, it is invalid. The honest
 answers are to place it in the divergent region's immediate post-dominator, where every
-lane passes, or to refuse — and which of those is right is **not settled here**. Note the
+lane passes, or to refuse — and **the first one has landed** for the barrier a staged
+pair records: a read in a block a lane can skip is ordered by a **pre-header observation**
+of the producer's staged output, in the block the reading body landed on, which is
+between the producer's loop and the consumer's and which every lane reaches
+(`crates/lichen-kernel-ir/src/compose.rs`, `staged_barrier`;
+[merging-the-wide-norm-chains](merging-the-wide-norm-chains.md) §5.1). The pre-header orders
+the producer's store only where that store is written before it; a producer that writes its
+store **inside its own loop** is still refused, because the IR cannot name the loop a
+write belongs to. Note the
 asymmetry this puts on the refusal: a block-local terminator check finds a barrier in a
 block that branches and **misses one in the branch's target**, which was measured while
 proving the refusal computable, and is why it needs dominance rather than a look at one
@@ -1259,8 +1267,11 @@ catches the branch arm and the dead read, and the expr must be well formed besid
 condition is *uniform* is refused, because only `UP` ([§4](#4-what-decides-a-barrier-and-it-is-three-facts),
 step 9) can see that it is uniform; and a lane that can loop forever without reaching the read is
 **not** caught, because a path that never returns is not an exit — so a body with no reachable
-`Return` passes the check vacuously. Whether a divergent read is refused or moved to its region's
-immediate post-dominator is still **not settled here**; what landed is the refusal.
+`Return` passes the check vacuously. Whether a divergent read is refused or moved is **settled for
+the barrier a staged pair records**: it moves, to the pre-header between the two bodies
+([merging-the-wide-norm-chains](merging-the-wide-norm-chains.md) §5.1); a slice pair keeps the
+refusal, because a slice's read carries the version of the write it observes and the two stand
+together.
 
 **Where the mechanism lives, and who owes what.**
 [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5

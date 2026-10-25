@@ -10,10 +10,10 @@
 use std::collections::HashMap;
 
 use crate::compose::{
-    Renumber, ScalarUnion, branch_targeting, buffer_reads, compact, copy_cone, duplicated_mark,
-    first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator, position_constant,
-    read_address, same_lane, shapes_differ, shifted_past, shifted_write_positions,
-    splice_runtime_scalars, write_edge, write_sites,
+    Renumber, ScalarUnion, StagedPair, branch_targeting, buffer_reads, compact, copy_cone,
+    duplicated_mark, first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator,
+    position_constant, read_address, shapes_differ, shifted_past, shifted_write_positions,
+    splice_runtime_scalars, staged_barrier, write_edge, write_sites,
 };
 use crate::{
     Barrier, BasicBlock, ComposeRefusal, Cone, KernelFragment, KernelInstr, KernelMark,
@@ -461,21 +461,29 @@ pub fn compose_fan_in_staged(
         }
         // **The staged path's barrier**: the store and the read that observes it.
         for &(read, from, _) in &edge.reads_absorbed {
-            if staged_ordinals[from].is_none() {
+            let Some(ordinal) = staged_ordinals[from] else {
                 continue;
-            }
-            let write = forwards[from].as_ref().expect("a producer forwards").write;
+            };
+            let forward = forwards[from].as_ref().expect("a producer forwards");
+            let write = forward.write;
             // **The first body's values are the merged body's own**, the rest through their map.
             let merged_write = renumbers[from]
                 .as_ref()
                 .map_or(write, |renumber| renumber.resolve(write));
             let read = resolve(read);
-            // **A same-lane pair records no barrier**: one lane sees its own store.
-            if !same_lane(&body, merged_write, read) {
-                body.barriers.push(Barrier {
+            // **The pre-header is the block the reading body landed on**: the block the
+            // body before it returns from.
+            if let Some(barrier) = staged_barrier(
+                &mut body,
+                &StagedPair {
                     write: merged_write,
                     read,
-                });
+                    pre_header: landing,
+                    class: forward.produced,
+                    ordinal: output_base[from] as u64 + ordinal,
+                },
+            ) {
+                body.barriers.push(barrier);
             }
         }
         // Only the consumer's marks are kept: a merged node carries no claim to read them.

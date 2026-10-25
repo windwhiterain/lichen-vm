@@ -431,11 +431,21 @@ pub fn compose_fan_out(
         }
         // **The staged path's barrier**: the store and the read that observes it.
         for &(read, _) in &edge.absorbed_reads {
-            if staged_ordinal.is_some() {
+            if let Some(ordinal) = staged_ordinal {
                 let read = resolve(read);
-                // **A same-lane pair records no barrier**: one lane sees its own store.
-                if !same_lane(&body, write, read) {
-                    body.barriers.push(Barrier { write, read });
+                // **The pre-header is the producer's return block**, where the consumer's
+                // own body lands.
+                if let Some(barrier) = staged_barrier(
+                    &mut body,
+                    &StagedPair {
+                        write,
+                        read,
+                        pre_header: return_block,
+                        class: produced,
+                        ordinal,
+                    },
+                ) {
+                    body.barriers.push(barrier);
                 }
             }
         }
@@ -606,6 +616,97 @@ pub(crate) fn same_lane(body: &KernelBody, write: ValueId, read: ValueId) -> boo
         (Some(write_index), Some(read_index)) => write_index == read_index,
         _ => false,
     }
+}
+
+/// A staged pair: the producer's store, the read that observes it, and where a barrier may stand.
+///
+/// # Invariant
+/// **The store, the read, and the block between the two bodies**: the pre-header is the block
+/// the reading body landed on — after the producer's own loop and before the consumer's — so a
+/// barrier standing there is between the two bodies and not inside either loop.
+pub(crate) struct StagedPair {
+    /// The producer's store: the write the barrier orders.
+    pub write: ValueId,
+    /// The read that observes the store.
+    pub read: ValueId,
+    /// The block the reading body landed on: the consumer loop's pre-header.
+    pub pre_header: usize,
+    /// The class the producer's staged output holds.
+    pub class: ScalarClass,
+    /// The output ordinal the producer's store fills, in the merged output space.
+    pub ordinal: u64,
+}
+
+/// The barrier a staged pair records, or `None` when the pair needs none.
+///
+/// # Invariant
+/// **A same-lane pair records no barrier**, and **a barrier stands where every lane passes**:
+/// a read in a block a lane can skip is ordered by a **pre-header observation** — an
+/// `OutputReadCall` in the block the reading body landed on, which every lane reaches. The
+/// store must be written before that block; when it is not, the read keeps the barrier and
+/// the gate refuses the body.
+pub(crate) fn staged_barrier(body: &mut KernelBody, pair: &StagedPair) -> Option<Barrier> {
+    if same_lane(body, pair.write, pair.read) {
+        return None;
+    }
+    let every_lane = body.every_lane_reaches();
+    if body
+        .block_of(pair.read)
+        .is_some_and(|block| every_lane.get(block).copied().unwrap_or(false))
+    {
+        return Some(Barrier {
+            write: pair.write,
+            read: pair.read,
+        });
+    }
+    // **The producer's store stands before the pre-header**, or the observation cannot
+    // order it.
+    let written = body.definition_site(pair.write).is_some_and(|(block, _)| {
+        block == pair.pre_header || body.dominates_block(pair.pre_header, block)
+    });
+    if !written {
+        return Some(Barrier {
+            write: pair.write,
+            read: pair.read,
+        });
+    }
+    // **The observation reads the slot the producer wrote**, so it is in bounds by the
+    // producer's own store.
+    let address = body
+        .values
+        .get(pair.write.0 as usize)
+        .and_then(|definition| match definition {
+            ValueDef::Instr { args, .. } => args.get(1).copied(),
+            _ => None,
+        })
+        .filter(|&address| body.value_dominates(pair.pre_header, address))
+        .or_else(|| body.index_parameter());
+    let Some(address) = address else {
+        return Some(Barrier {
+            write: pair.write,
+            read: pair.read,
+        });
+    };
+    let position = position_constant(body, pair.ordinal as i64);
+    let observation = ValueId(body.values.len() as u32);
+    body.values.push(ValueDef::Instr {
+        op: KernelInstr::OutputReadCall(pair.class),
+        args: vec![position, address],
+        classes: vec![pair.class],
+    });
+    // **The observation stands after the producer's store**, and before the consumer's own
+    // instructions in that block.
+    let at = body.blocks[pair.pre_header]
+        .instrs
+        .iter()
+        .position(|&value| value == pair.write)
+        .map_or(0, |at| at + 1);
+    body.blocks[pair.pre_header].instrs.insert(at, observation);
+    body.blocks[pair.pre_header].instrs.insert(at, position);
+    Some(Barrier {
+        write: pair.write,
+        read: observation,
+    })
 }
 
 /// The merged parameter a body's `slot`-th entry parameter lands on.

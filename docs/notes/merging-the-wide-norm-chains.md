@@ -243,8 +243,60 @@ If the barrier-placement rule is judged out of scope, **10 → 8 is the sound fl
 last node is axis-C's, not this composite's.
 
 **Landed**: the 10 → 8 rung, and the composite measures 8 nodes under the sibling
-strategy (§7). The 10 → 7 rung is untouched: the barrier-placement rule for a
-loop-resident staged read is still open, and `query1` stays wide.
+strategy (§7). The barrier-placement rule for a loop-resident staged read has since
+landed (§5.1), and the 10 → 7 rung is still open: `query1` stays wide, and three
+things stand between the composite and the merge (§5.2).
+
+### 5.1 The barrier placement: the pre-header, and what it needs
+
+**The rule, at the code** (`crates/lichen-kernel-ir/src/compose.rs`, `staged_barrier`): a staged
+pair's barrier stands **where every lane passes**. A read whose block every lane reaches keeps the
+barrier at the read. A read in a block a lane can skip — a read inside the consumer's own loop — is
+ordered by a **pre-header observation**: an `OutputReadCall` of the producer's staged output in the
+block the reading body landed on, which is after the producer's loop and before the consumer's, and
+which every lane reaches. The observation's value is read by nobody; its position is what the
+barrier is for. The same-lane elision (C.1) and the group-width guard (`StagedReadIsNotOrdered`) are
+untouched, and `KernelBody::validate`'s uniform obligation still decides whether the block the
+observation stands in is one every lane reaches.
+
+**Measured** (`fan_in_probe`, at this slice's tip): the consumer's reads moved into its own loop, so
+the barrier could not stand at the read. The fan-in merges into one node of three outputs, the merged
+node runs on the device, and its answer is the unmerged program's and the host's own (`answer 0:
+merged 64 element(s), plain 64 element(s), equal: true`, and the host's own answer: equal: true).
+Before the rule, that body was refused by name (`MergedBodyIsRefused`: the barrier's read sits in a
+block a lane can skip).
+
+**And the wide query chain's refusal moves one step on** (measured with the query chain in the
+pre-B2 shape §1 describes): region 4 — nodes 7, 8, 9 — composes, and the refusal is the group
+width's own (`StagedReadIsNotOrdered`: the merged node dispatches over 2048 element(s), so the read
+crosses a group and no barrier reaches it). The composition's own gate no longer fires first.
+
+**The limit the rule carries**: the pre-header can order the producer's store only where the store is
+written before that block. A producer that writes its store **inside its own loop** is still refused
+by name, and the merged body's gate says so (§5.2's second fact).
+
+### 5.2 What stands between the composite and the merge
+
+Three facts; the ladder's row above names the first and the last:
+
+1. **The region is cut before it is attempted.** B2 put the query's norm chains at 16 heads while
+   `query1` stays at 2048, and the ordinary rule cuts a chain at a data edge whose ends dispatch
+   over different extents (§4's C.3) — so region 4 is node 7 alone and region 5 is nodes 8 and 9,
+   merged. The query *fan-in* is not attempted at all, and no barrier placement changes that.
+2. **A per-head `query1` writes its store in a loop**, so the pre-header cannot order it: the
+   store's write does not dominate the block after that loop, and `KernelBody::validate` refuses a
+   barrier whose write does not precede its read. The CFG expresses the loop's completion — the
+   loop's exit dominates the pre-header — but the IR cannot **name** the loop a write belongs to,
+   the loop structure being implicit in the CFG, so the relation cannot be stated. **The minimal IR
+   addition is that name**: the body must say which loop a write is in (or the barrier must name the
+   loop's completion), so the gate can accept "the write is in the loop that completes before the
+   observation". The other reading is the SPIR-V one — a barrier in a loop body is valid when the
+   loop is dynamically uniform, which a runtime-scalar trip count is — and the IR states no loop's
+   uniformity either.
+3. **A merged node that records a buffer barrier must dispatch over whole workgroups** (C.2's launch
+   rule): the surplus lanes leave the body before the barrier, so a barrier in a merged node of 16
+   lanes is in divergent control flow. The query chain's per-head form would have to be one
+   workgroup wide (64 heads of 32), not 16.
 
 ## 6. Risks, and what not to attempt
 
@@ -258,6 +310,9 @@ Risks of the recommended slice:
   is dead and unsound). Do not widen it to "equal-looking" expressions.
 - **B2 depends on writes in a loop staying emitted** (`spirv.rs:4-7`) and on the surplus-lane
   branch never wrapping a recorded barrier — which is why C.2 comes first.
+- **The pre-header placement reaches only the stores it can order**: a producer whose store is
+  written inside its own loop is still refused by name, because the IR cannot name the loop a
+  write belongs to (§5.1's limit, §5.2's second fact).
 - Unverified here (no new probe was written): that a per-head `scale`/`matvec` rewrite
   composes through the staged path with no further refusal. The shapes are the ones
   `fan_in_probe` already runs at 64 lanes; the difference is extent 8/16, which is what C.1
