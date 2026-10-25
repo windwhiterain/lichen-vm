@@ -114,11 +114,11 @@ impl<P: Program> Module<P> {
     /// Instantiate the template rooted at `root`.
     ///
     /// # Invariant
-    /// The root is always cloned: an instantiation is an instance. A cell the caller
+    /// The root is cloned, so an instantiation is an instance — unless the caller
+    /// marked the root itself, which shares the whole template. A cell the caller
     /// did not mark is cloned, so the template keeps its own open cells; a marked
-    /// cell is referenced in place, so a template that depends on an outer binding
-    /// keeps depending on it. `None` answers a walk a budget stopped: a budget is
-    /// not a success, so there is no instance to hand back.
+    /// cell is referenced in place, so the dependency on an outer binding is kept.
+    /// `None` answers a walk a budget stopped: a budget is not a success.
     pub fn clone_template(
         &mut self,
         root: NodeId,
@@ -167,9 +167,9 @@ impl<P: Program> Module<P> {
     /// instance's own cells are fresh where the template's are open.
     fn template_closure_map(&mut self, root: NodeId, ctx: &mut TemplateCtx<'_>) {
         // The payload graph: the cells a value's payload names, and their owners.
-        let mut payload: HashMap<NodeId, Vec<AnyNodeId>> = HashMap::new();
         let mut parents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut open: HashSet<NodeId> = HashSet::new();
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
@@ -181,8 +181,18 @@ impl<P: Program> Module<P> {
             }
             let children = self.template_payload_children(node);
             for child in &children {
-                if let Dyn(child) = child {
-                    parents.entry(*child).or_default().push(node);
+                match child {
+                    Dyn(child) => {
+                        parents.entry(*child).or_default().push(node);
+                        stack.push(*child);
+                    }
+                    // A frozen cell that holds nothing cannot be written, so the
+                    // cell naming it is open.
+                    AnyNodeId::Static(sref) => {
+                        if !self.template_static_closed(*sref, ctx) {
+                            open.insert(node);
+                        }
+                    }
                 }
             }
             // The operator's operand is a cell of the template.
@@ -191,28 +201,12 @@ impl<P: Program> Module<P> {
             {
                 stack.push(operand);
             }
-            for child in &children {
-                if let Dyn(child) = child {
-                    stack.push(*child);
-                }
-            }
-            payload.insert(node, children);
         }
         // The open cells: the leaves open by their own account, and every cell whose
         // payload reaches one.
-        let mut open: HashSet<NodeId> = HashSet::new();
         for &node in &seen {
             if self.template_cell_is_open(node) {
                 open.insert(node);
-            }
-            // A frozen cell that holds nothing cannot be written, so the cell
-            // naming it is open.
-            for child in payload.get(&node).into_iter().flatten() {
-                if let AnyNodeId::Static(sref) = child
-                    && !self.template_static_closed(*sref, ctx)
-                {
-                    open.insert(node);
-                }
             }
         }
         // The reach runs upward, so a cycle among the open cells is open as a
