@@ -655,14 +655,16 @@ where
         let root = checker.ir.root;
         // Type-check every user-written top-level statement, then the final root.
         let stmt_roots = checker.ir.stmt_roots.clone();
+        let mut evaluated_lambdas = 0;
         for &s in &stmt_roots {
             checker.check_expr(s);
+            // Later statements read the shallow types their predecessors decide.
+            for &func_node in &checker.lambda_value_nodes[evaluated_lambdas..] {
+                checker.module.evaluate_node_deep(func_node, None);
+            }
+            evaluated_lambdas = checker.lambda_value_nodes.len();
+            checker.resolve_shallow_types();
         }
-        // A statement's shallow element types are available to the root's reads.
-        for &func_node in &checker.lambda_value_nodes {
-            checker.module.evaluate_node_deep(func_node, None);
-        }
-        checker.resolve_shallow_types();
         let root_term = checker.check_expr(root);
         let root_ty = checker.state[root]
             .ty
