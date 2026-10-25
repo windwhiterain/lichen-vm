@@ -1194,9 +1194,9 @@ checkable, two lengths are two digests, and the bound and the declared array can
 **A length of zero is refused by the fragment's own gate now** —
 `KernelFragment::validate`, the answer to §10 item 4 — because a zero-length `OpTypeArray` has no
 type to declare and no index it could bound; `barrier_scan` runs that gate before it reads the
-count as a bound. And the launch carries the other half of §8: a launch set that stages, at a count
-that is not a whole multiple of `target.lane_width`, is refused by name at the dispatch rather than
-run with a surplus lane in it.
+count as a bound. And the launch carries the other half of §8: a launch set that records a barrier — a slice's
+or a buffer's — at a count that is not a whole multiple of `target.lane_width`, is refused by
+name at the dispatch rather than run with a surplus lane in it.
 
 **Where a recorded expr becomes a barrier, and the one place it cannot go.** The expr is
 data; the barrier is a position in the emitted code, and that position is *immediately
