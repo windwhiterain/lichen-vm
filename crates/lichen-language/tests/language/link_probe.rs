@@ -99,9 +99,9 @@ static PROBE_OPS: [(&str, &dyn NativeOp<HostProgram>); 1] = [("probe_sample", &P
 
 /// The wrapper is generic over a type argument refined to the declared instances.
 const WRAPPER: &str = "{\n\
-    scalars = set(Float, Int)\n\
-    probe_kind = t => t @in scalars\n\
-    sample = (t ! probe_kind) => (x : t) => { r = $probe_sample(t, x); r : t; r }\n\
+    scalars := set(Float, Int)\n\
+    probe_kind := t => t @in scalars\n\
+    sample := (t ! probe_kind) => (x : t) => { r := $probe_sample(t, x); r : t; r }\n\
 }\n";
 
 fn new_store() -> PackageStore<HostProgram> {

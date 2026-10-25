@@ -1898,7 +1898,7 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
     );
     assert_eq!(d[1].span, Some((1, 20)), "the body's read names its value");
     let body = d[1].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(body.kind, DiagKind::RuntimeIndexTarget);
+    assert_eq!(body.kind, DiagKind::Runtime);
 }
 
 #[test]
