@@ -1,7 +1,8 @@
 //! A lowlevel node names the expression it lowered from; see
 //! docs/notes/lowering-map.md.
 
-use lichen_highlevel::program::ProgramImpl;
+use lichen_highlevel::ir::ExprKind;
+use lichen_highlevel::program::{AnyLit, HighProgramLiteral, ProgramImpl};
 use lichen_lowlevel::NodeId;
 use lichen_testkit::{Probe, Writer};
 
@@ -128,10 +129,15 @@ fn a_node_read_out_of_an_array_names_its_expression() {
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let three = w.int("three", 3);
-    let arr = w.array("arr", &[one, two, three]);
+    // The instance's value is the element template and then the elements.
+    let literal = w.hole("element_value");
+    w.fill(literal, ExprKind::Literal(HighProgramLiteral::from(AnyLit)));
+    let element = w.annotate("element", literal, w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[one, two, three]);
     let mut probe: Probe<ProgramImpl> = Probe::build(w.finish(arr));
     let elements = probe.array_of("arr");
-    assert_eq!(elements.len(), 3);
+    assert_eq!(elements.len(), 4, "the element template and three elements");
     let second = probe.node_of("two");
     assert!(
         probe.explain(second).contains("`two`"),
