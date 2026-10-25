@@ -11,9 +11,12 @@ use lichen_compute::compute::{
 use lichen_compute::fusion_claim::{
     Instance, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id,
 };
+use lichen_compute::fusion_file::{Budget, FusionPlan, Strategy};
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_compute::placement_pack::{PlacementPack, read_placement_pack};
-use lichen_compute::region_merge::{install_region_merge_with_packs, region_merge_pass_with_packs};
+use lichen_compute::region_merge::{
+    install_region_merge_with_plan, region_merge_pass_with_packs, region_merge_pass_with_plan,
+};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, compose_fan_out,
@@ -246,6 +249,20 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
         .collect()
 }
 
+/// The plain component derivation: a shared producer is copied into each consumer.
+///
+/// # Invariant
+/// The fan-out region exists only under this strategy; the default derivation is the sibling
+/// one, which keeps the producer materialized and merges the consumers beside it.
+fn component_plan() -> FusionPlan {
+    FusionPlan {
+        strategy: Strategy::Component,
+        budget: Budget::unlimited(),
+        overrides: Vec::new(),
+        barriers: Vec::new(),
+    }
+}
+
 /// Hand the recorded graph to the pass with `packs` installed, and answer what it decided.
 fn consulted(
     module: &Module<LangProgram>,
@@ -253,9 +270,12 @@ fn consulted(
     packs: &[PlacementPack],
 ) -> (Option<Graph>, Vec<String>) {
     clear_graph_pass();
-    install_region_merge_with_packs(module, packs);
+    install_region_merge_with_plan(module, packs, &component_plan());
     let rewritten = consult_graph_pass(graph, &|_node| Some(COUNT));
-    let lines = take_graph_pass_lines();
+    let lines: Vec<String> = take_graph_pass_lines()
+        .into_iter()
+        .filter(|line| !line.starts_with("strategy \""))
+        .collect();
     clear_graph_pass();
     (rewritten, lines)
 }
@@ -479,7 +499,7 @@ fn device_triple(test: &str) {
     let (_module, _instances, schema, _graph) = derived(&recording());
     let packs = [pack(&schema.hash.to_string(), PACK)];
 
-    install_region_merge_with_packs(&base_module, &packs);
+    install_region_merge_with_plan(&base_module, &packs, &component_plan());
     let before = stub.calls().len();
     let (merged_module, _merged_value, _root) = common::run(&running());
     let merged = stub.calls()[before..].to_vec();
@@ -500,9 +520,10 @@ fn device_triple(test: &str) {
     }
 
     // **The counterfactual**: the second consumer's constant is part of the composed body.
-    set_graph_pass(Box::new(MovedBias(region_merge_pass_with_packs(
+    set_graph_pass(Box::new(MovedBias(region_merge_pass_with_plan(
         &base_module,
         &packs,
+        &component_plan(),
     ))));
     let before = stub.calls().len();
     let (_moved_module, _moved_value, _root) = common::run(&running());

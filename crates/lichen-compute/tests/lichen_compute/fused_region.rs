@@ -10,8 +10,11 @@ use lichen_compute::compute::{
 };
 use lichen_compute::floor::{floor_pass_with_packs, install_floor};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
+use lichen_compute::fusion_file::{Budget, FusionPlan, Strategy};
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute::region_merge::{install_region_merge, region_merge_pass};
+use lichen_compute::region_merge::{
+    install_region_merge, install_region_merge_with_plan, region_merge_pass,
+};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
     KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, ScalarClass, ValueDef,
@@ -261,6 +264,16 @@ fn digest_of(graph: &Graph, node: usize) -> u64 {
     fragment_digest(&kernel.fragment)
 }
 
+/// The plain component derivation: the fan-out region exists only under it.
+fn component_plan() -> FusionPlan {
+    FusionPlan {
+        strategy: Strategy::Component,
+        budget: Budget::unlimited(),
+        overrides: Vec::new(),
+        barriers: Vec::new(),
+    }
+}
+
 /// The one-instance refusals name both nodes and the check, and change nothing.
 fn refuses_by_name(graph: &Graph, expected: &str) -> Vec<String> {
     let lines = consulted(graph);
@@ -274,7 +287,10 @@ fn refuses_by_name(graph: &Graph, expected: &str) -> Vec<String> {
 /// Hand `graph` to the installed pass and answer the lines it reported.
 fn consulted(graph: &Graph) -> Vec<String> {
     let rewritten = consult_graph_pass(graph, &|_node| Some(COUNT));
-    let lines = take_graph_pass_lines();
+    let lines: Vec<String> = take_graph_pass_lines()
+        .into_iter()
+        .filter(|line| !line.starts_with("strategy \""))
+        .collect();
     assert!(
         rewritten.is_none(),
         "a refused region changes nothing, so the pass answers no graph: {lines:?}"
@@ -603,7 +619,7 @@ fn a_fan_out_region_with_no_pack_is_refused_by_name() {
     let (module, value, _root) = common::run(&fan_out());
     let graph = recorded(&module, &value);
     assert_eq!(graph.len(), 3, "the producer feeds two consumers");
-    install_region_merge(&module);
+    install_region_merge_with_plan(&module, &[], &component_plan());
     let lines = refuses_by_name(&graph, "ConsumerEntryDoesNotReturn");
     let expected = "region 0 (nodes 0, 1, 2): refused: ConsumerEntryDoesNotReturn: consumer 0 does not return from its entry block, and the next consumer's body is appended where that block leaves the merged body, so it would run on a path this consumer never takes".to_string();
     assert_eq!(
