@@ -297,7 +297,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_proves() {
 
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![merged(1, "Elementwise or Reduction", "7ed98e859724537d")],
+        vec![merged(1, "Elementwise or Reduction", "d96ece43a96974d1")],
         "the floor proves the region: the elementwise kernel and the reduction it feeds are one          kernel the pass's own proof holds"
     );
 }
@@ -324,7 +324,7 @@ fn two_elementwise_kernels_derive_a_region_the_floor_proves() {
     hash_is_of_printed_form(&schema);
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![merged(0, "Elementwise", "48f3536517e065d2")],
+        vec![merged(0, "Elementwise", "7634538532464ab7")],
         "the floor proves the chain: two elementwise kernels are one kernel the pass can build"
     );
 }

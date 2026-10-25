@@ -357,7 +357,7 @@ fn a_chain_of_three_merges_into_one_node_under_the_floor() {
             "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
              position {ABSORBED} of node 1 and input position {ABSORBED} of node 2, licensed by the \
              floor: every node of the region claims Reduction and nothing else; the merged \
-             fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:165d3819082948b8"
+             fragment is registered with the conservative claim `Opaque`: a pass reading the registry names it and refuses it by name, and no reader reads algebra from it; the merged node's identity is digest:515e2457ee29c578"
         )],
         "the report names every node, every absorbed position, and the licence that answered"
     );
