@@ -36,10 +36,9 @@ this note records the migration decisions and the reasons for them.
 - Binary operators take a tuple `(left, right)`. The old `[left, right]` spelling
   now denotes an array template and cannot keep its former meaning.
 - A compound domain in a function arrow uses template matching. Scalar domains
-  keep their ordinary type semantics. Detailed signatures and generic I/O
-  template inference are required; the signature implementation is reviewed
-  separately below rather than replacing compound templates with layout-only
-  types.
+  and the ordinary `:` stay unchanged. Generic hole I/O inference is required:
+  a whole bare hole in a domain or a codomain captures the actual parameter's
+  value and type, or the actual return's type and value.
 - A single comma-free `a[i]` is an array read. `T[x,]` is a one-element
   instance; `T[]` and `T[x, y]` are the zero- and multi-element forms.
 
@@ -92,6 +91,82 @@ The `show_struct_ids` switch and the `struct_type_named_fields` reader are gone
 with the type that carried the names; `struct_value_named_fields` reads the
 value's table instead.
 
+## The arrow's two sides
+
+A written arrow `A -> B` is a **signature**: a real function whose parameter
+states the domain and whose return states the codomain. The two sides do not
+take the same kind of statement, and the difference is the difference between
+`:` and `<:`.
+
+### The domain
+
+The domain is classified after a deep evaluation, and the class decides what
+the signature's parameter holds.
+
+- A **scalar or type-valued** domain — `Int`, `Type`, the bare `Struct`, a
+  nested scalar function type — states a *type*. It fills the parameter's
+  **type slot**, as it always did.
+- A **bare open hole** — `_`, or a name bound to one (`I := _`) — states
+  *nothing*. It fills the **whole** parameter, so the actual parameter's value
+  and type are captured in the hole's own cells. No clone is taken: the hole is
+  the capture.
+- A **compound template** — a tuple, an array or a struct value, whose type is
+  the shared `Tuple`/`Array`/`Struct` layout — states a *value*. It is
+  **cloned** with the ordinary template instantiation, and the whole parameter
+  unifies with the clone, exactly `<:`. The clone's holes are fresh, so a
+  match writes into the clone and never into the written template; a *named*
+  template's holes are not shared either, because the clone boundary shares
+  only the enclosing lambda's parameters.
+- An **operation that has not decided** is cloned and whole-unified as well, so
+  the parameter decides with it. This is the one place where a scalar domain
+  behaves like a value: an operation domain that later decides to a scalar
+  leaves the parameter's *value* bound to the operation's answer instead of the
+  type slot. It is a limitation, not a rule.
+
+The apply's function-ness guard has no written sides at all: its two cells are
+fresh, so the pattern states nothing and stays harmless.
+
+### The codomain
+
+The codomain's **type half** is the signature's return type when the codomain
+is a hole or a compound template — a hole's type half captures the actual
+function's return type, and a compound template's is the layout. A scalar
+codomain is a type value and keeps its whole denotation, as before.
+
+### The directed value capture
+
+The generic function equality compares **type cells**, so it never carries a
+return *value*. Where the check knows both the arrow's syntax and the actual
+function — an annotation `f : A -> B` — the codomain is therefore directed at
+the function's return:
+
+- a **bare hole** takes the return's value, while its type half stays the
+  layout;
+- a **compound codomain** is cloned and the whole return is matched against
+  the clone.
+
+The return is never forced: an undecided answer states nothing, so there is
+nothing to take and nothing to match, and a scalar return keeps the ordinary
+type behaviour.
+
+Two limits are deliberate. A **frozen** callee is not captured: its return
+lives in another module, and reading it would need lowlevel metadata this
+slice does not add. A parameter whose type is an arrow (`x : A -> B`) cannot
+be captured locally either: the parameter's value is bound at the apply, in
+the lowlevel's generic function equality, which compares type cells only. The
+codomain hole's **type** half is captured there; its **value** half is not,
+and no local capture reaches it.
+
+### The poison channel
+
+A captured compound input or output is a **value**, not a type. It must be
+consumed with `<:` — which clones it — and never with `:` — which would pin the
+captured value into the place that uses it.
+
+Only a **whole** bare hole captures. A hole *inside* a concrete template is a
+match position: the template is cloned and the hole is cloned with it, so the
+match fills it and never shares it with the written template.
+
 ## Open details
 
 - An array template's length may be unevaluated. Its representation must not force
@@ -107,6 +182,9 @@ value's table instead.
 - Compound arrow domains require template-aware signature unification, including
   inference when the written domain or codomain is still a hole. The design must
   preserve frozen functions and scalar signatures, not only concrete examples.
+  The signature now reads a compound domain as a template and a bare hole as a
+  capture; a frozen callee's return value and a parameter-typed arrow's
+  codomain value stay uncaptured, as **The arrow's two sides** above records.
 
 ## Verification boundary
 
