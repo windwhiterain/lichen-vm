@@ -129,6 +129,8 @@ mod op {
     pub const ATOMIC_F_ADD: u16 = 6035;
     /// The workgroup barrier: no invocation of the workgroup passes before every one arrives.
     pub const CONTROL_BARRIER: u16 = 224;
+    /// The memory barrier: the memory accesses of the scope are ordered against each other.
+    pub const MEMORY_BARRIER: u16 = 225;
     /// The read of another lane's value through the exchange network, at subgroup scope.
     pub const GROUP_NON_UNIFORM_SHUFFLE: u16 = 345;
 }
@@ -222,6 +224,14 @@ const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
 /// memory scope because that must not be *narrower* than the execution scope, and `Subgroup` is
 /// narrower than it.
 const MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY: u32 = 0x108;
+/// `AcquireRelease`, the semantics a staged **store**'s barrier is ordered at.
+///
+/// # Invariant
+/// **Acquire and release, and no memory class**: the store a staged body keeps is a storage
+/// buffer's, and `WorkgroupMemory` orders the shared memory only — so the barrier names every
+/// class, and the scope that carries it is the workgroup's, because a device-scope fence needs a
+/// memory model this module does not declare.
+const MEMORY_SEMANTICS_ACQUIRE_RELEASE: u32 = 0x8;
 /// `GLSLstd450Fma`, the one extended instruction this emitter writes.
 const GLSL_STD_450_FMA: u32 = 50;
 /// The extension `OpAtomicFAddEXT` is registered under in the Khronos grammar.
@@ -856,6 +866,8 @@ struct Ids {
     /// The semantics that order a register rather than a memory.
     subgroup_semantics: u32,
     barrier_semantics: u32,
+    /// The semantics a staged **store**'s barrier is ordered at.
+    acquire_release: u32,
     /// The push-constant block's struct, its variable, and a pointer to each class's
     /// member within it.
     ///
@@ -1328,6 +1340,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let subgroup_scope = take(1);
     let subgroup_semantics = take(1);
     let barrier_semantics = take(1);
+    let acquire_release = take(1);
     // The push-constant block's ids: struct, pointer, variable, per-class
     // pointers, and one member index per leaf.
     let push_members = root.scalar_leaves();
@@ -1370,6 +1383,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         subgroup_scope,
         subgroup_semantics,
         barrier_semantics,
+        acquire_release,
         push_block,
         push_block_ptr,
         push_var,
@@ -2073,6 +2087,73 @@ fn emit_function(
                             };
                             slots.insert(definition, scalar(id, read_as));
                         }
+                        KernelInstr::OutputReadCall(_) => {
+                            // **The barrier between the store and the read**: the write is a
+                            // storage buffer's, so the fence is over every class.
+                            if barrier_reads.contains(&definition) {
+                                code.push(Inst::new(
+                                    op::CONTROL_BARRIER,
+                                    vec![
+                                        ids.barrier_scope,
+                                        ids.barrier_scope,
+                                        ids.barrier_semantics,
+                                    ],
+                                ));
+                                code.push(Inst::new(
+                                    op::MEMORY_BARRIER,
+                                    vec![ids.barrier_scope, ids.acquire_release],
+                                ));
+                            }
+                            let element = operand(1)?;
+                            let position = operand(0)?;
+                            let element = as_class(
+                                element,
+                                ScalarClass::Int,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            // **The output space**: the slot an output ordinal names, past
+                            // the inputs.
+                            let slot = buffer_slot(
+                                position,
+                                at,
+                                binding.inputs,
+                                binding.outputs,
+                                "output",
+                            )?;
+                            let element_class = buffer_class_of(root, slot, ids.class);
+                            let chain = ids.chain_of(element_class);
+                            let pointer = next;
+                            next += 1;
+                            let loaded = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::ACCESS_CHAIN,
+                                vec![
+                                    chain.ptr_elem,
+                                    pointer,
+                                    ids.buffers + slot as u32,
+                                    ids.zero,
+                                    element.id,
+                                    ids.zero,
+                                ],
+                            ));
+                            code.push(Inst::new(
+                                op::LOAD,
+                                vec![ids.storage_type_of(element_class), loaded, pointer],
+                            ));
+                            let (id, read_as) = match element_class {
+                                ScalarClass::BFloat16 => (
+                                    widen_a_half(&ids, loaded, &mut code, &mut next),
+                                    ScalarClass::Float,
+                                ),
+                                _ => (loaded, element_class),
+                            };
+                            slots.insert(definition, scalar(id, read_as));
+                        }
                         KernelInstr::BufferAtomicAddCall(class) => {
                             if class == ScalarClass::BFloat16 {
                                 return Err(SpirvRefusal::AtomicAddNotAHardwarePrimitive {
@@ -2735,6 +2816,8 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
         // **A `Select` arm**: a fact about the value in the position, not the op.
         KernelInstr::Select => None,
         KernelInstr::BufferReadCall(_) => (position == 0).then_some(ScalarClass::Int),
+        // **An output read's position is an output ordinal**, and an ordinal is an index.
+        KernelInstr::OutputReadCall(_) => (position == 0).then_some(ScalarClass::Int),
         KernelInstr::SliceReadCall(_) => matches!(position, 0 | 1).then_some(ScalarClass::Int),
         KernelInstr::BufferWriteCall(class) | KernelInstr::BufferAtomicAddCall(class) => {
             (position == 2).then_some(class)
@@ -3973,7 +4056,7 @@ fn assemble(
     }
     // The barrier's scope and semantics: the ids its operands name, at each of the two scopes
     // a staged expr is ordered at.
-    if !shared.is_empty() || warp {
+    if !shared.is_empty() || warp || holds_a_staged_store(launch.ordered()) {
         constants.extend([
             Inst::new(
                 op::CONSTANT,
@@ -4000,6 +4083,17 @@ fn assemble(
                 ],
             ),
         ]);
+    }
+    // **A staged store's barrier** is over a storage buffer, not the shared memory.
+    if holds_a_staged_store(launch.ordered()) {
+        constants.push(Inst::new(
+            op::CONSTANT,
+            vec![
+                ids.uint,
+                ids.acquire_release,
+                MEMORY_SEMANTICS_ACQUIRE_RELEASE,
+            ],
+        ));
     }
     emit_all(&mut out, &constants);
 
@@ -4186,6 +4280,26 @@ fn as_condition(
             condition(result)
         }
     }
+}
+
+/// Whether a launch set's bodies hold a **staged store**: a barrier over a buffer.
+///
+/// # Invariant
+/// **The read names it**: a staged store is a recorded barrier whose read is an
+/// [`KernelInstr::OutputReadCall`], and the module declares the barrier's constants only when
+/// one is there — so a module without one does not carry a semantics constant nothing names.
+fn holds_a_staged_store(ordered: &[&KernelFragment]) -> bool {
+    ordered.iter().any(|fragment| {
+        fragment.body.barriers.iter().any(|expr| {
+            matches!(
+                fragment.body.values.get(expr.read.0 as usize),
+                Some(ValueDef::Instr {
+                    op: KernelInstr::OutputReadCall(_),
+                    ..
+                })
+            )
+        })
+    })
 }
 
 /// Resolve a buffer position into a slot in the module's buffer list.

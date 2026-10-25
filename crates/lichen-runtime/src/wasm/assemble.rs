@@ -203,6 +203,7 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
         for instruction in fragment.body.instrs() {
             let class = match instruction {
                 lichen_kernel_ir::KernelInstr::BufferReadCall(class)
+                | lichen_kernel_ir::KernelInstr::OutputReadCall(class)
                 | lichen_kernel_ir::KernelInstr::BufferWriteCall(class)
                 | lichen_kernel_ir::KernelInstr::BufferAtomicAddCall(class) => *class,
                 _ => continue,

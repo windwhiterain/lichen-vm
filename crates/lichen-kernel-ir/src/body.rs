@@ -81,9 +81,10 @@ pub struct Br {
 /// A separated `(write, read)` expr: the data a barrier is, before it is a position.
 ///
 /// # Invariant
-/// `write` names a [`KernelInstr::SliceWriteCall`] and `read` the [`KernelInstr::SliceReadCall`]
-/// that observes it. Both are [`ValueId`]s and never positions, because the one restructuring in
-/// the tree moves an instruction between blocks and a value edge survives it
+/// `write` names the write that must happen and `read` the read that observes it: a slice
+/// write with the slice read that names it, or a buffer write with the output read of it.
+/// Both are [`ValueId`]s and never positions, because the one restructuring in the tree moves
+/// an instruction between blocks and a value edge survives it
 /// (`docs/notes/shared-memory-and-barriers.md` §9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Barrier {
@@ -91,6 +92,19 @@ pub struct Barrier {
     pub write: ValueId,
     /// The read that must observe it.
     pub read: ValueId,
+}
+
+/// The kind of write a recorded barrier separates a read from.
+///
+/// # Invariant
+/// **One arm per kind of pair the barrier vocabulary has**: a slice write with the slice read
+/// that names it, and a buffer write with the output read that reads the same buffer back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteKind {
+    /// A slice write, and the slice read whose version operand names it.
+    Slice,
+    /// A buffer write, and the output read of the same output buffer.
+    Buffer,
 }
 
 /// A fragment's body: SSA values, blocks, and where control starts.
@@ -726,34 +740,94 @@ impl KernelBody {
         // A recorded barrier is an expr this body really holds, and one no lane can skip.
         let unavoidable = self.unavoidable_blocks(&dominance);
         for expr in &self.barriers {
-            if !matches!(
-                self.values.get(expr.write.0 as usize),
+            // **A barrier names a pair**: the write, and the read that observes it.
+            let write_kind = match self.values.get(expr.write.0 as usize) {
                 Some(ValueDef::Instr {
                     op: KernelInstr::SliceWriteCall(_),
                     ..
-                })
-            ) {
-                return Err(format!(
-                    "the barrier ({:?}, {:?}) does not name a slice write",
-                    expr.write, expr.read
-                ));
-            }
-            let Some(ValueDef::Instr {
-                op: KernelInstr::SliceReadCall(_),
-                args,
-                ..
-            }) = self.values.get(expr.read.0 as usize)
+                }) => WriteKind::Slice,
+                Some(ValueDef::Instr {
+                    op: KernelInstr::BufferWriteCall(_),
+                    ..
+                }) => WriteKind::Buffer,
+                _ => {
+                    return Err(format!(
+                        "the barrier ({:?}, {:?}) does not name a slice write or a buffer write",
+                        expr.write, expr.read
+                    ));
+                }
+            };
+            let Some(ValueDef::Instr { op, args, .. }) = self.values.get(expr.read.0 as usize)
             else {
                 return Err(format!(
-                    "the barrier ({:?}, {:?}) does not name a slice read",
+                    "the barrier ({:?}, {:?}) does not name a read of this body",
                     expr.write, expr.read
                 ));
             };
-            if args.get(2) != Some(&expr.write) {
-                return Err(format!(
-                    "the barrier's read {:?} does not observe the write {:?} it is paired with",
-                    expr.read, expr.write
-                ));
+            match write_kind {
+                WriteKind::Slice => {
+                    if !matches!(op, KernelInstr::SliceReadCall(_)) {
+                        return Err(format!(
+                            "the barrier ({:?}, {:?}) does not name a slice read",
+                            expr.write, expr.read
+                        ));
+                    }
+                    if args.get(2) != Some(&expr.write) {
+                        return Err(format!(
+                            "the barrier's read {:?} does not observe the write {:?} it is paired \
+                             with",
+                            expr.read, expr.write
+                        ));
+                    }
+                }
+                WriteKind::Buffer => {
+                    if !matches!(op, KernelInstr::OutputReadCall(_)) {
+                        return Err(format!(
+                            "the barrier ({:?}, {:?}) does not name an output read",
+                            expr.write, expr.read
+                        ));
+                    }
+                    // **The pair names one buffer**: the two ordinals are one number.
+                    let written = self.output_ordinal(expr.write);
+                    let read_at = self.output_ordinal(expr.read);
+                    if written.is_none() || written != read_at {
+                        return Err(format!(
+                            "the barrier's read {:?} reads the output buffer {read_at:?} and the \
+                             write {:?} fills the output buffer {written:?}, so the barrier does \
+                             not separate one write from one read",
+                            expr.read, expr.write
+                        ));
+                    }
+                    // **The write precedes the read**: a buffer pair has no data edge.
+                    let Some((write_block, write_at)) =
+                        sites.get(expr.write.0 as usize).copied().flatten()
+                    else {
+                        return Err(format!(
+                            "the barrier's write {:?} is not an instruction of this body",
+                            expr.write
+                        ));
+                    };
+                    let Some((read_block, read_at)) =
+                        sites.get(expr.read.0 as usize).copied().flatten()
+                    else {
+                        return Err(format!(
+                            "the barrier's read {:?} is not an instruction of this body",
+                            expr.read
+                        ));
+                    };
+                    let precedes = if write_block == read_block {
+                        write_at < read_at
+                    } else {
+                        dominance.dominates(read_block, write_block)
+                    };
+                    if !precedes {
+                        return Err(format!(
+                            "the barrier's write {:?} does not precede its read {:?}, so the \
+                             barrier separates nothing",
+                            expr.write, expr.read
+                        ));
+                    }
+                }
             }
             let Some(block) = self.block_of(expr.read) else {
                 return Err(format!(
@@ -771,6 +845,19 @@ impl KernelBody {
             }
         }
         Ok(())
+    }
+
+    /// The output ordinal an access names, when its position is an integer constant.
+    ///
+    /// # Invariant
+    /// **An output ordinal, not an input one**: a buffer write and an output read both name
+    /// their buffer by an output ordinal, and a position that is not a constant names no buffer
+    /// at all — which a caller must not read as "the buffer at ordinal zero".
+    fn output_ordinal(&self, value: ValueId) -> Option<u64> {
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::Instr { args, .. }) => self.constant(args.first().copied()),
+            _ => None,
+        }
     }
 
     /// The block whose instruction list defines `value`, or `None` for one it does not.

@@ -177,6 +177,12 @@ pub enum KernelInstr {
         /// The buffer's element class.
         class: ScalarClass,
     },
+    /// Read one element of one output buffer of this same fragment.
+    #[facet(rename = "output_read_call")]
+    OutputReadCall {
+        /// The buffer's element class.
+        class: ScalarClass,
+    },
     /// Atomically add one element of one output buffer.
     #[facet(rename = "buffer_atomic_add_call")]
     BufferAtomicAddCall {

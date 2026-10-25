@@ -999,6 +999,15 @@ pub enum KernelInstr {
     /// position and the index are `Int` regardless: one is a compile-time ordinal, the other
     /// a lane number. So this instruction names two classes at once.
     BufferReadCall(ScalarClass),
+    /// Read one element of one **output** buffer of this same fragment: the stack holds
+    /// `[position, index]`.
+    ///
+    /// # Invariant
+    /// The class is the element class and the position is an **output** ordinal, where
+    /// [`Self::BufferReadCall`]'s is an input ordinal: a merged fragment reads back the buffer
+    /// its producer wrote, and the input space cannot name that buffer
+    /// (`docs/notes/graph-fusion.md` §5).
+    OutputReadCall(ScalarClass),
     /// Write one element of one output buffer: `[position, index, value]`.
     ///
     /// # Invariant
@@ -1116,6 +1125,7 @@ impl KernelInstr {
         Some(match self {
             KernelInstr::Const(..) => 0,
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
+            KernelInstr::OutputReadCall(_) => 2,
             KernelInstr::I32WrapI64
             | KernelInstr::Conv { .. }
             | KernelInstr::Negate
@@ -1152,6 +1162,7 @@ impl KernelInstr {
             KernelInstr::Negate => Some(ScalarClass::Float),
             KernelInstr::Fma => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class)
+            | KernelInstr::OutputReadCall(class)
             | KernelInstr::BufferWriteCall(class)
             | KernelInstr::BufferAtomicAddCall(class) => Some(*class),
             KernelInstr::SliceReadCall(class) | KernelInstr::SliceWriteCall(class) => Some(*class),

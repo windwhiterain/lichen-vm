@@ -421,6 +421,9 @@ fn instruction(at: &str, instr: &schema::KernelInstr) -> Result<ir::KernelInstr,
         schema::KernelInstr::BufferWriteCall { class } => {
             ir::KernelInstr::BufferWriteCall(class.into())
         }
+        schema::KernelInstr::OutputReadCall { class } => {
+            ir::KernelInstr::OutputReadCall(class.into())
+        }
         schema::KernelInstr::BufferAtomicAddCall { class } => {
             ir::KernelInstr::BufferAtomicAddCall(class.into())
         }
@@ -465,6 +468,9 @@ impl From<ir::KernelInstr> for schema::KernelInstr {
                 class: class.into(),
             },
             ir::KernelInstr::BufferWriteCall(class) => schema::KernelInstr::BufferWriteCall {
+                class: class.into(),
+            },
+            ir::KernelInstr::OutputReadCall(class) => schema::KernelInstr::OutputReadCall {
                 class: class.into(),
             },
             ir::KernelInstr::BufferAtomicAddCall(class) => {

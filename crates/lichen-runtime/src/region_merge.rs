@@ -520,6 +520,20 @@ pub enum MergeRefusal {
         /// The node that reads it.
         node: usize,
     },
+    /// A staged read no barrier reaches, because the merged dispatch is wider than one lane group.
+    ///
+    /// # Invariant
+    /// A distinct arm from the legality refusals because it is about the **staged body**: the
+    /// merged node keeps the producer's store and the consumer reads it back, and the barrier
+    /// that separates them orders the lanes of **one** group — a dispatch that spans several
+    /// groups has a read that no barrier reaches, and the merged node would answer another
+    /// program's value.
+    StagedReadIsNotOrdered {
+        /// How many lanes the merged node dispatches over, when the extent is a number.
+        elements: Option<usize>,
+        /// How many lanes one group holds.
+        lanes: usize,
+    },
 }
 
 impl MergeRefusal {
@@ -549,6 +563,7 @@ impl MergeRefusal {
             MergeRefusal::TheProducerIsNotRead { .. } => "TheProducerIsNotRead",
             MergeRefusal::InputIsProducedAfterTheMerge { .. } => "InputIsProducedAfterTheMerge",
             MergeRefusal::OutputIsReadBeforeTheMerge { .. } => "OutputIsReadBeforeTheMerge",
+            MergeRefusal::StagedReadIsNotOrdered { .. } => "StagedReadIsNotOrdered",
         }
     }
 
@@ -674,6 +689,17 @@ impl fmt::Display for MergeRefusal {
                 formatter,
                 "graph value {value} is read by node {node}, which the merged node would stand \
                  after, so it would be read before it was written"
+            ),
+            MergeRefusal::StagedReadIsNotOrdered { elements, lanes } => write!(
+                formatter,
+                "the merged node keeps the producer's store and the consumer reads it back, and \
+                 the barrier that separates them orders the lanes of one group of {lanes} — but \
+                 the merged node dispatches over {extent}, so the read crosses a group and no \
+                 barrier reaches it",
+                extent = match elements {
+                    Some(count) => format!("{count} element(s)"),
+                    None => "an extent this reader cannot name".to_string(),
+                }
             ),
         }
     }
@@ -853,6 +879,18 @@ fn merge_region(
         });
     };
     let folded = composed(graph, starts, positions, &links, shape)?;
+    // **A staged store is legal only where one lane group holds every lane**: the barrier
+    // orders one group's lanes.
+    if keeps_a_store(graph, positions, &folded.fragment, shape) {
+        let lanes = folded.fragment.target.lane_width.lanes() as usize;
+        let elements = match region_extent(graph, positions)? {
+            Count::Constant(count) => Some(count),
+            _ => None,
+        };
+        if elements.is_none_or(|count| count > lanes) {
+            return Err(MergeRefusal::StagedReadIsNotOrdered { elements, lanes });
+        }
+    }
     // The values the merged fragment fills: the region's sinks, in the fold's own order.
     let (outputs, deleted) = written_and_deleted(graph, starts, positions, &folded.writes);
     if let Some(value) = deleted.iter().find(|value| returns.contains(value)) {
@@ -985,6 +1023,29 @@ fn merge_region(
         inputs,
         scalars: folded.scalars,
     })
+}
+
+/// Whether the merged fragment keeps a producer's store, so the consumer reads it back.
+///
+/// # Invariant
+/// **The fragment's own output count is the fact**: the staged path keeps the store, so the
+/// merged fragment writes one buffer per region node, where the recomputing path writes only the
+/// consumer's. A sibling region's branches stand beside one another and keep no store, so the
+/// question is not asked of one.
+fn keeps_a_store(
+    graph: &Graph,
+    positions: &[usize],
+    fragment: &KernelFragment,
+    shape: &RegionShape,
+) -> bool {
+    let RegionShape::Ordinary = shape else {
+        return false;
+    };
+    let written: usize = positions
+        .iter()
+        .map(|position| fragment_at(graph, *position).outputs)
+        .sum();
+    fragment.outputs == written
 }
 
 /// The node that produced `value`, when one of the graph's nodes did.
@@ -1288,13 +1349,25 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                 writes: vec![local],
                 scalars: own_scalars(node),
             },
-            Some(producer) => Folded {
-                fragment: compose(&producer.fragment, node.fragment, input as u32)
-                    .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?,
-                ports: chained_ports(&producer, local, node, input),
-                writes: vec![local],
-                scalars: chained_scalars(&producer, node),
-            },
+            Some(producer) => {
+                let fragment = compose(&producer.fragment, node.fragment, input as u32)
+                    .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
+                // **The staged path keeps the producer's store**: the producer's outputs,
+                // then the consumer's.
+                let writes = if fragment.outputs > node.fragment.outputs {
+                    let mut writes = producer.writes.clone();
+                    writes.push(local);
+                    writes
+                } else {
+                    vec![local]
+                };
+                Folded {
+                    fragment,
+                    ports: chained_ports(&producer, local, node, input),
+                    writes,
+                    scalars: chained_scalars(&producer, node),
+                }
+            }
         });
     }
     merged.ok_or(MergeRefusal::RegionIsNotAPair { nodes: steps.len() })
@@ -1358,7 +1431,17 @@ fn fan_out(
     let fragment = compose_fan_out(&producer.fragment, &inlined)
         .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
     let mut ports = producer.ports.clone();
-    let mut writes = Vec::new();
+    // **The staged path keeps the producer's store**, so the merged fragment writes it too.
+    let kept = fragment.outputs
+        > folded
+            .iter()
+            .map(|branch| branch.fragment.outputs)
+            .sum::<usize>();
+    let mut writes = if kept {
+        producer.writes.clone()
+    } else {
+        Vec::new()
+    };
     for ((input, members), branch) in branches.iter().zip(folded.iter()) {
         let root = members
             .first()

@@ -253,6 +253,10 @@ impl Walk<'_> {
                     position: self.read_position(args)?,
                 })
             }
+            // **The store a staged body keeps**: the merged fragment's own output, read back.
+            KernelInstr::OutputReadCall(_) => Err(BridgeRefusal::OutputRead {
+                position: self.read_position(args)?,
+            }),
             KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => {
                 Err(BridgeRefusal::SliceAccess {
                     slice: self.read_position(args)?,

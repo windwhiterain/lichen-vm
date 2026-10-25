@@ -159,6 +159,11 @@ fn check(
             as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
             Ok(OperandClass::Scalar(class))
         }
+        KernelInstr::OutputReadCall(class) => {
+            // An access chain's index is an integer, as for a buffer read.
+            as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
+            Ok(OperandClass::Scalar(class))
+        }
         KernelInstr::BufferWriteCall(class) | KernelInstr::BufferAtomicAddCall(class) => {
             // This is where a mix is caught: the other class stored into a buffer.
             as_operand_class(class_of(&args[2]), class, at)?;

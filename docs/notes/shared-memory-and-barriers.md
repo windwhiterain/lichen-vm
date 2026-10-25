@@ -1215,6 +1215,27 @@ block that branches and **misses one in the branch's target**, which was measure
 proving the refusal computable, and is why it needs dominance rather than a look at one
 terminator.
 
+**And the barrier has a second kind: the store a merged body keeps.** A slice is a *staging*
+space, but a merged fragment can also keep a **producer's store** — the merged body writes the
+producer's output buffer as well, and the consumer reads that buffer back, so the value reaches
+the consumer without being re-derived ([graph-fusion](graph-fusion.md) §5's store-keeping path).
+That pair is a **buffer write and an output read**, not a slice write and a slice read, and the
+IR's `Barrier` now names both kinds: `KernelBody::validate` checks that a recorded expr's write
+and read name **one buffer** (the two output ordinals are one number) and that the **write
+precedes the read** — a buffer pair has no data edge, so the order is the barrier's own
+obligation, where the slice pair's version operand already carried it. The GPU emits that pair
+as a workgroup `OpControlBarrier` **and** a workgroup `OpMemoryBarrier` over `AcquireRelease`:
+the store is a storage buffer's, and `WorkgroupMemory` semantics order the shared memory only.
+
+**And the scope is the whole limit.** A barrier orders the lanes of **one** group, so a staged
+read is only sound where one group holds every lane — the reading lane and the writing lane.
+The merge pass refuses the wider case by name (`StagedReadIsNotOrdered`), and the measurement
+behind it is in the fusion note: with the guard lifted, a merged `squares` → `scale` over 1 024
+lanes changed the step's answer, because the consumer read another group's store. A staged read
+that crosses a group needs a **grid** synchronisation, which no `OpControlBarrier` offers — its
+execution scope is `Workgroup` or `Subgroup` — so the wider case waits for the mechanism that
+tiles a reduction across the group (§9's staging, roadmap axis C).
+
 **What step 3 landed of that, and what the check is worth.** `KernelBody::validate` refuses a
 recorded expr whose read does not dominate **every reachable `Return`** — so every path that ends
 passes through the barrier, which is the uniform-control-flow condition read statically. That

@@ -322,6 +322,8 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
                 .map(super::assemble::value_type)
         }
         KernelInstr::BufferReadCall(class) => Some(super::assemble::value_type(class)),
+        // **Refused at the instruction walk**: the store a staged body keeps has no host read.
+        KernelInstr::OutputReadCall(class) => Some(super::assemble::value_type(class)),
         // A write leaves nothing, so it has no type to decide.
         KernelInstr::BufferWriteCall(_) | KernelInstr::BufferAtomicAddCall(_) => None,
         // Refused at the instruction walk; the version's class is the element class the IR states.
@@ -546,6 +548,10 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
         KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => {
             return Err(staging_refusal(instr));
         }
+        // **The store a staged body keeps**: the host has no read of the output it wrote.
+        KernelInstr::OutputReadCall(_) => {
+            return Err(staged_store_refusal(instr));
+        }
     }
     Ok(())
 }
@@ -573,6 +579,20 @@ fn staging_refusal(access: ValueId) -> String {
         "compute.wasm: {access:?} accesses a slice, and this backend calls a kernel body \
          once per index rather than once per workgroup, so a barrier has no lanes to synchronise \
          and the slice no lifetime to hold (`docs/notes/shared-memory-and-barriers.md` §7)"
+    )
+}
+
+/// The reason this backend refuses a body that reads back the store it kept.
+///
+/// # Invariant
+/// **The same reason as the slice, and one more**: the host's imports read an *input* buffer
+/// and write an *output* one, and a run that fans out over workers has no barrier to order one
+/// lane's write against another's read (`docs/notes/shared-memory-and-barriers.md` §7).
+fn staged_store_refusal(access: ValueId) -> String {
+    format!(
+        "compute.wasm: {access:?} reads an output buffer of its own kernel, and this backend \
+         reads input buffers and writes output ones, with no barrier to order the write against \
+         the read (`docs/notes/shared-memory-and-barriers.md` §7)"
     )
 }
 

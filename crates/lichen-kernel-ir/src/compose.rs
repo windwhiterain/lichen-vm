@@ -14,9 +14,13 @@ use crate::{
 /// # Invariant
 /// **The merged inputs are the union: the producer's inputs, then the consumer's surviving ones**,
 /// the absorbed one left out — so a surviving consumer read moves up by the producer's input
-/// count, and `input_classes` follows the same order. The producer's store and marks go.
+/// count, and `input_classes` follows the same order. The producer's marks go.
 ///
 /// One name is [`compose_fan_out`] with one consumer, so a chain is not a second mechanism's.
+///
+/// # Invariant
+/// **The producer's store goes, unless it answers the consumer**: then the store is kept, the
+/// consumer's read of that buffer stays a read, and a barrier separates the write from the read.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
@@ -142,23 +146,63 @@ pub fn compose_fan_out(
             returns: returns.len(),
         });
     };
-    // Every absorbed read becomes one copy of the cone, at that read's own address.
-    let cone = match producer.body.index_local_cone(
+    // Every absorbed read is a copy of the cone at its own address — **or the producer's
+    // store answers it**.
+    let forwarding = match producer.body.index_local_cone(
         forwarded,
         written_at,
         producer_parameters.last().copied(),
     ) {
-        Ok(cone) => cone,
+        Ok(cone) => Forwarding::Recomputed(cone),
         // A value that never reaches the invocation index is the same in every lane.
         Err(_) if !lane_dependent(&producer.body, forwarded, &producer_parameters) => {
-            Cone::reused(forwarded)
+            Forwarding::Recomputed(Cone::reused(forwarded))
         }
         Err(blocker) => {
-            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
-                value: forwarded,
-                read: edges[0].absorbed_reads[0].0,
-                blocker,
-            });
+            // **The staged path**: the producer's store answers the consumer.
+            if !matches!(blocker, NotIndexLocal::Carried { .. }) {
+                return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
+                    value: forwarded,
+                    read: edges[0].absorbed_reads[0].0,
+                    blocker,
+                });
+            }
+            Forwarding::Staged
+        }
+    };
+    // **The staged path copies nothing**, so the cone it would have copied is not read.
+    let live = Cone::reused(forwarded);
+    let cone = match &forwarding {
+        Forwarding::Recomputed(cone) => cone,
+        Forwarding::Staged => &live,
+    };
+    // **The staged path's own answer**: the output ordinal the producer's store fills, and
+    // the class it stages.
+    let staged_ordinal = match forwarding {
+        Forwarding::Recomputed(_) => None,
+        Forwarding::Staged => {
+            let Some(ValueDef::Instr { args, .. }) = producer.body.values.get(write.0 as usize)
+            else {
+                return Err(ComposeRefusal::ProducerIsNotWellFormed {
+                    cause: format!("the buffer write {write:?} is not an instruction"),
+                });
+            };
+            let Some(position) = args.first().copied() else {
+                return Err(ComposeRefusal::ProducerIsNotWellFormed {
+                    cause: format!("the buffer write {write:?} names no output position"),
+                });
+            };
+            match producer.body.constant(Some(position)) {
+                Some(ordinal) => Some(ordinal),
+                None => {
+                    return Err(ComposeRefusal::ProducerIsNotWellFormed {
+                        cause: format!(
+                            "the buffer write {write:?} names its output position {position:?}, which \
+                             is not an integer constant"
+                        ),
+                    });
+                }
+            }
         }
     };
 
@@ -168,20 +212,32 @@ pub fn compose_fan_out(
     splice_runtime_scalars(&mut body, scalars.own(0), total - scalars.own(0));
     // **The merged body's own parameter list**, which each consumer binds to position for position.
     let merged_parameters = body.blocks[body.entry].params.clone();
-    // The producer's store goes: its buffer is not an output of the merged fragment.
-    for block in &mut body.blocks {
-        block.instrs.retain(|&value| value != write);
+    // **The producer's store goes** — unless it answers the consumer, in which case it stays.
+    if matches!(forwarding, Forwarding::Recomputed(_)) {
+        for block in &mut body.blocks {
+            block.instrs.retain(|&value| value != write);
+        }
     }
     // The block and the port each consumer's own body lands at, both counted forward.
     let mut blocks_base = body.blocks.len();
     let mut union = producer.inputs;
     // **The merged inputs are the union**, and `input_classes` is that same union.
     let mut input_classes = producer.input_classes.clone();
-    let mut output_classes = Vec::new();
-    let mut outputs = 0;
+    // **The staged path keeps the producer's store**, so its buffer is an output too.
+    let mut output_classes = if staged_ordinal.is_some() {
+        producer.output_classes.clone()
+    } else {
+        Vec::new()
+    };
+    let mut outputs = if staged_ordinal.is_some() {
+        producer.outputs
+    } else {
+        0
+    };
     let mut result_classes = Vec::new();
     let mut slices = producer.slices.clone();
-    // The producer's marks go with its store: they name a role of an interface the merge drops.
+    // The producer's marks go with the interface the merge drops: a role of a struct the
+    // merged fragment has not.
     let mut marks: Vec<KernelMark> = Vec::new();
     for (index, edge) in edges.iter().enumerate() {
         let consumer = edge.fragment;
@@ -198,9 +254,37 @@ pub fn compose_fan_out(
                 )],
             );
         }
-        for &(read, _) in &edge.absorbed_reads {
-            // The read's own id until the copy below replaces it, so it reserves no value of its own.
-            renumber.bind(read, read);
+        // **The staged read**: the consumer's read of the absorbed buffer is a read of
+        // the producer's output buffer.
+        let mut staged_reads: HashMap<ValueId, ValueId> = HashMap::new();
+        if let Some(ordinal) = staged_ordinal {
+            for &(read, _) in &edge.absorbed_reads {
+                // **The read states the buffer's class**, as the write does.
+                let stated = match consumer.body.values.get(read.0 as usize) {
+                    Some(ValueDef::Instr {
+                        op: KernelInstr::BufferReadCall(class),
+                        ..
+                    }) => *class,
+                    _ => {
+                        return Err(ComposeRefusal::ConsumerIsNotWellFormed {
+                            cause: format!("the absorbed read {read:?} is not a buffer read"),
+                        });
+                    }
+                };
+                if stated != produced {
+                    return Err(ComposeRefusal::ClassesDiffer {
+                        produced,
+                        expected: stated,
+                    });
+                }
+                // The read's position is the producer's output ordinal, a **value**.
+                staged_reads.insert(read, position_constant(&mut body, ordinal as i64));
+            }
+        } else {
+            for &(read, _) in &edge.absorbed_reads {
+                // The read's own id until the copy below replaces it, so it reserves no value of its own.
+                renumber.bind(read, read);
+            }
         }
         let landed: Vec<Option<ValueId>> = (0..consumer.body.values.len())
             .map(|value| renumber.reserve(ValueId(value as u32), &mut body))
@@ -219,8 +303,11 @@ pub fn compose_fan_out(
             }
         };
         // One copy of the cone per read, at that read's own address, spliced in where it stood.
-        let absorbed_at_address: HashMap<ValueId, ValueId> =
-            edge.absorbed_reads.iter().copied().collect();
+        let absorbed_at_address: HashMap<ValueId, ValueId> = if staged_ordinal.is_some() {
+            HashMap::new()
+        } else {
+            edge.absorbed_reads.iter().copied().collect()
+        };
         let mut shared: HashMap<(usize, ValueId), (usize, ValueId)> = HashMap::new();
         let mut sequences: Vec<Vec<ValueId>> = Vec::with_capacity(consumer.body.blocks.len());
         for (block_index, block) in consumer.body.blocks.iter().enumerate() {
@@ -229,7 +316,11 @@ pub fn compose_fan_out(
             for &value in &block.instrs {
                 let Some(&address) = absorbed_at_address.get(&value) else {
                     // The position is a constant **value**, so it stands before the read that uses it.
-                    if let Some(&constant) = shifted.get(&value).or_else(|| writes.get(&value)) {
+                    if let Some(&constant) = staged_reads
+                        .get(&value)
+                        .or_else(|| shifted.get(&value))
+                        .or_else(|| writes.get(&value))
+                    {
                         sequence.push(constant);
                     }
                     sequence.push(renumber.resolve(value));
@@ -275,15 +366,26 @@ pub fn compose_fan_out(
                 ValueDef::Instr { op, args, classes } => {
                     let mut args: Vec<ValueId> =
                         args.iter().map(|&arg| renumber.resolve(arg)).collect();
-                    if let Some(&constant) = shifted
+                    // **The staged read names an output buffer**: the producer's own.
+                    let op = match staged_reads.get(&ValueId(value as u32)) {
+                        Some(_) => match op {
+                            KernelInstr::BufferReadCall(class) => {
+                                KernelInstr::OutputReadCall(*class)
+                            }
+                            other => *other,
+                        },
+                        None => *op,
+                    };
+                    if let Some(&constant) = staged_reads
                         .get(&ValueId(value as u32))
+                        .or_else(|| shifted.get(&ValueId(value as u32)))
                         .or_else(|| writes.get(&ValueId(value as u32)))
                         && let Some(first) = args.first_mut()
                     {
                         *first = constant;
                     }
                     ValueDef::Instr {
-                        op: *op,
+                        op,
                         args,
                         classes: classes.clone(),
                     }
@@ -314,6 +416,15 @@ pub fn compose_fan_out(
                 write: resolve(expr.write),
                 read: resolve(expr.read),
             });
+        }
+        // **The staged path's barrier**: the store and the read that observes it.
+        for &(read, _) in &edge.absorbed_reads {
+            if staged_ordinal.is_some() {
+                body.barriers.push(Barrier {
+                    write,
+                    read: resolve(read),
+                });
+            }
         }
         // Only the first consumer's marks are kept: a merged node carries no claim to read them.
         if index == 0 {
@@ -1043,6 +1154,20 @@ impl std::fmt::Display for ComposeRefusal {
             ),
         }
     }
+}
+
+/// How the producer's value reaches the consumer.
+///
+/// # Invariant
+/// **One way or the other, never both**: the producer's cone is copied at the read's own
+/// address, or the producer's store is kept and the consumer reads it back — and the second
+/// is a *staged* body, which a barrier orders rather than a copy. The staged way writes the
+/// producer's output too, and the consumer's read names that output.
+enum Forwarding {
+    /// The producer's cone, copied at each read's own address.
+    Recomputed(Cone),
+    /// The producer's store, kept and read back.
+    Staged,
 }
 
 /// The consumer's values as the merged body holds them.

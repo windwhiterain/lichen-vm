@@ -60,6 +60,16 @@ pub enum BridgeRefusal {
         /// The write's element position.
         position: usize,
     },
+    /// The marked value reads an output buffer of its own fragment.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::BufferWrite`]: that one is a side effect, this one is a
+    /// **read of the store a staged body keeps** — the merged fragment's producer wrote that
+    /// buffer and this lane reads it back, which no symbolic expression can stand for.
+    OutputRead {
+        /// The read's element position.
+        position: usize,
+    },
     /// The marked value reaches a slice, which a symbolic expression cannot stage.
     SliceAccess {
         /// The slice's ordinal in the fragment's slice set.
@@ -167,6 +177,13 @@ impl fmt::Display for BridgeRefusal {
                 formatter,
                 "the projection writes output buffer {position}, and a symbolic expression has \
                  no side effects"
+            ),
+            BridgeRefusal::OutputRead { position } => write!(
+                formatter,
+                "the projection reads output buffer {position} of its own fragment, and a \
+                 symbolic expression has no store to read back: the value a staged body keeps \
+                 for another lane is not a term it can carry \
+                 (`docs/notes/shared-memory-and-barriers.md` §5)"
             ),
             BridgeRefusal::SliceAccess { slice } => write!(
                 formatter,

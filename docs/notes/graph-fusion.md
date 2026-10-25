@@ -859,6 +859,36 @@ counterfactual: `e[i] = d[i]·2` feeding a *reduction* consumer that reads `e` a
 (recorded `80`, mutated `152`), `z[i] = e[i + 1] + 1` (recorded `5 7 9 …`, mutated `14 … 26`), and
 `78131b5a`'s expr.
 
+**And the store-keeping path landed beside it: the producer's store answers the consumer.** A
+producer whose value is a **loop-carried accumulation** cannot be re-derived at another address —
+the accumulator is state a loop handed forward, and no address re-derives it — so the merge
+**keeps the store**: the merged body writes the producer's output buffer as well, the consumer's
+read of that buffer stays a read, and a **barrier** separates the write from the read. The rule
+lives at the code: `lichen_kernel_ir::compose`'s second `# Invariant` and the `Forwarding` enum
+beside it, and `KernelBody::validate`'s barrier check. Three facts make it a licence and not a
+waiver: the merged fragment's **output** buffer is what the consumer reads — an input ordinal
+cannot name it, so the IR grew `KernelInstr::OutputReadCall` — the barrier is a **pair** over one
+buffer (the IR's `Barrier` now names a buffer write with the output read that observes it, and
+`validate` checks that the pair names one buffer and that the write precedes the read), and the
+merged node's **outputs** include the producer's, so the graph's value table keeps it and
+`written_and_deleted` sees the store the merged body holds.
+
+**And the store is only kept where a barrier reaches the read — which is the whole limit.** A
+barrier orders the lanes of **one** group, so a merged node that dispatches over more than one
+group has a read no barrier reaches: the consumer reads another lane's store, and the lane that
+wrote it is in another group. The merge pass refuses that by name (`StagedReadIsNotOrdered`), and
+**the measurement is the reason**: with the guard lifted, the pre-attention's `squares` → `scale`
+merge (1 024 lanes, 16 groups of 64) changed the step's **key** answer against the unmerged
+program — `fuse_class_probe` printed `answer 0: … equal: false` where the unmerged program and
+the merged one had agreed — while the same merge over one group is ordered. So the store-keeping
+path serves a region narrower than one lane group, and the pre-attention's chains (1 024 and
+2 048 lanes) are not one. **The qnorm chain (nodes 7, 8, 9) is not a chain at all**: `scale`
+reads `matvec`'s output *and* `squares`' output, so the region is a **fan-in**, and the fan-in has
+no store-keeping path yet — its own refusal (`ForwardedValueIsLaneDependent`) stands. Making the
+wide chains merge is the mechanism that tiles a reduction across the group
+([shared-memory-and-barriers](shared-memory-and-barriers.md) §9's staging, roadmap axis C), not
+this path.
+
 **Recomputation is a trade, and that is why the machine decides it.** Copies are made per **(address,
 block)**, not hoisted out of a consumer's loop body, so the growth is O(reads × cone size) per block where
 binding was O(1) — a real cost, and one nothing bounds. It is not paid at all when the cone is
