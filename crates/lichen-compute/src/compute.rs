@@ -2040,10 +2040,7 @@ where
 /// The names come from the value's own table and the count from the value's own
 /// length, so a name whose position is outside the field list is dropped rather
 /// than growing it.
-fn struct_field_names<P>(
-    module: &Module<P>,
-    value: AnyNodeId,
-) -> Option<Vec<Option<&'static str>>>
+fn struct_field_names<P>(module: &Module<P>, value: AnyNodeId) -> Option<Vec<Option<&'static str>>>
 where
     P: Program,
     P::Value: ValueType,
@@ -2084,17 +2081,90 @@ where
 }
 
 /// A field's **value**: the cell the field's own expression holds.
-fn struct_field_value<P>(
-    module: &Module<P>,
-    value: AnyNodeId,
-    index: usize,
-) -> Option<AnyNodeId>
+fn struct_field_value<P>(module: &Module<P>, value: AnyNodeId, index: usize) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: ValueType,
 {
     let field = shape::value_item(module, value, shape::STRUCT_VALUE_FIELD_BASE + index)?;
     shape::value_item(module, field, shape::EXPR_VALUE_SLOT)
+}
+
+/// A value's leaves: itself, or a compound's elements.
+///
+/// # Invariant
+/// A struct value's leaves are its **fields**: the name table and the nominal id
+/// are the value's header, not fields, so they are skipped. Every other element
+/// is read through its own value position, so a leaf is the value a slot holds.
+fn value_leaves_of<P>(module: &Module<P>, value: NodeId) -> Result<Vec<NodeId>, String>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    // SAFETY: `value` is a live node of `module`.
+    let Some(items) = (unsafe { module.array_items(value) }) else {
+        return Ok(vec![value]);
+    };
+    let skip = if struct_field_names(module, AnyNodeId::Dynamic(value)).is_some() {
+        shape::STRUCT_VALUE_FIELD_BASE
+    } else {
+        0
+    };
+    items
+        .iter()
+        .skip(skip)
+        .map(|item| match item.node {
+            AnyNodeId::Dynamic(node) => module
+                .element_value_node(AnyNodeId::Dynamic(node))
+                .and_then(|node| node.dynamic())
+                .ok_or_else(|| {
+                    "a body reads a static reference into a frozen module, which has no node in \
+                     this graph"
+                        .to_string()
+                }),
+            AnyNodeId::Static(_) => Err(
+                "a body reads a static reference into a frozen module, which has no node in this \
+                 graph"
+                    .to_string(),
+            ),
+        })
+        .collect()
+}
+
+/// The name table of a struct value the compute crate builds itself.
+///
+/// # Invariant
+/// The names are the fields' own, in field order, and the table holds each
+/// name's **relative** position — the shape the checker's own table has
+/// (`docs/notes/value-templates.md`).
+fn struct_names_node<P>(module: &mut Module<P>, block: BlockId, names: &[&'static str]) -> NodeId
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    let entries: Vec<(AnyNodeId, AnyNodeId)> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let key = module.add_node(
+                block,
+                None,
+                Some(<P::Value as From<LowValue>>::from(LowValue::Str(name))),
+            );
+            let value = module.add_node(
+                block,
+                None,
+                Some(<P::Value as From<LowValue>>::from(LowValue::USize(index))),
+            );
+            (AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))
+        })
+        .collect();
+    let handle = module.build_table(&entries, block);
+    module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Table(handle))),
+    )
 }
 
 /// The **type** the field at `path` states.
@@ -2308,6 +2378,17 @@ enum LeafRole {
 /// The `.native` field of the `Buf` wrapper — the payload a body's `$read`/`$write` names.
 const BUF_NATIVE_FIELD: &str = "native";
 
+/// The `.element` field of the `Buf` wrapper — the element's own type.
+const BUF_ELEMENT_FIELD: &str = "element";
+
+/// The nominal id the compute crate gives the `Buf` wrappers it builds itself.
+///
+/// # Invariant
+/// The wrapper is host-owned and carries no written occurrence, so one id names
+/// them all; nothing reads a nominal id but the renderer
+/// (`docs/notes/value-templates.md`).
+const BUF_NOMINAL_ID: usize = 0;
+
 /// Whether a struct's field names are the `Buf` wrapper's.
 fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
     // The payload is the first field in both wrappers.
@@ -2402,8 +2483,8 @@ where
         }
         return Ok(());
     }
-    let shape = struct_field_type_of_expr(module, field)
-        .and_then(|ty| low_type_of_slot(module, ty));
+    let shape =
+        struct_field_type_of_expr(module, field).and_then(|ty| low_type_of_slot(module, ty));
     match (role, &shape) {
         // An output is produced by a write, and a write produces a buffer: any
         // other output type has no mechanism.
@@ -3647,7 +3728,11 @@ where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
-    items_of(module, node)?.first().map(|item| item.node)
+    // The payload is the wrapper's first **field**: a struct value's fields start
+    // after the name table and the nominal id.
+    items_of(module, node)?
+        .get(shape::STRUCT_VALUE_FIELD_BASE)
+        .map(|item| item.node)
 }
 
 /// The items of `node`'s array value, whichever side of the freeze the node sits on.
@@ -3732,8 +3817,16 @@ where
         None,
         Some(<P::Value as From<TypeValue>>::from(element_type(class))),
     );
+    // A struct value carries its header: the name table, the nominal id, and
+    // then the fields' own expressions.
+    let names = struct_names_node::<P>(module, block, &[BUF_NATIVE_FIELD, BUF_ELEMENT_FIELD]);
+    let id = module.add_node(block, None, Some(P::Value::type_id_value(BUF_NOMINAL_ID)));
+    let native = element_slot(module, block, dyn_node(payload).ok()?)?;
+    let element = element_slot(module, block, element)?;
     let items = [
-        ArrayItem::new(payload),
+        ArrayItem::new(AnyNodeId::Dynamic(names)),
+        ArrayItem::new(AnyNodeId::Dynamic(id)),
+        ArrayItem::new(AnyNodeId::Dynamic(native)),
         ArrayItem::new(AnyNodeId::Dynamic(element)),
     ];
     let handle = module.alloc_array(&items, block);
@@ -6068,7 +6161,14 @@ fn flatten_leaves_at<P>(
         let nodes: Vec<AnyNodeId> = if array.layout() != 0 {
             items.first().map(|item| item.node).into_iter().collect()
         } else {
-            items.iter().map(|item| item.node).collect()
+            // A struct value's header is not a field: the name table and the
+            // nominal id are the value's own bookkeeping.
+            let skip = if struct_field_names(module, node).is_some() {
+                shape::STRUCT_VALUE_FIELD_BASE
+            } else {
+                0
+            };
+            items.iter().skip(skip).map(|item| item.node).collect()
         };
         for item in nodes {
             flatten_leaves_at::<P>(module, item, out, depth + 1);

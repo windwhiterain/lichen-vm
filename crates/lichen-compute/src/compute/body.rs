@@ -733,12 +733,12 @@ where
 
     /// The domain's leaves, flattened — the ABI's argument list.
     fn domain_leaves(&self) -> Result<Vec<NodeId>, String> {
-        self.module.value_leaves(self.domain)
+        super::value_leaves_of(self.module, self.domain)
     }
 
     /// A value's leaves: itself, or an array's items. A codomain is at most a tuple of scalars.
     fn leaves_of(&self, value: NodeId) -> Result<Vec<NodeId>, String> {
-        self.module.value_leaves(value)
+        super::value_leaves_of(self.module, value)
     }
 
     /// The ABI slot the domain's `leaf`-th leaf takes.
