@@ -1,5 +1,5 @@
-//! The function **signature**: the arrow's domain and codomain, and the shape
-//! each side takes. See `docs/notes/value-templates.md`.
+//! The function **signature**: the arrow's two sides and their shapes.
+//! See `docs/notes/value-templates.md`.
 
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
 use lichen_utils::extend::AsEnum;
@@ -15,15 +15,16 @@ use crate::program::{HighProgram, TypeOperator, ValueType};
 /// # Invariant
 /// A scalar domain states a **type**, so it fills the parameter's type slot; a
 /// hole and a compound template state a **value**, so they fill the whole
-/// parameter. The hole is the inference case and the template the match case.
+/// parameter. The hole is the inference case and the template the match case:
+/// a template is cloned, so a match writes into the clone and never into the
+/// template.
 pub(super) enum Domain {
     /// A scalar or type-valued domain: the parameter's **type slot** takes it.
     TypeValued(NodeId),
-    /// A bare open hole: the **whole** parameter takes the hole's expr, so the
-    /// actual parameter's value and type are captured.
+    /// A bare open hole: the **whole** parameter takes the hole's expr, so
+    /// the actual value and type are captured.
     Hole(NodeId),
-    /// A compound template: the **whole** parameter takes a **clone** of it, so
-    /// the match writes into the clone and never into the template.
+    /// A compound template: the **whole** parameter takes a **clone** of it.
     Template(ExprId),
 }
 
