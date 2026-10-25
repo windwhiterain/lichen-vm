@@ -151,17 +151,23 @@ fn array_values(module: &Module<HostProgram>, value: &LangValue) -> Vec<LangValu
 }
 
 /// The `usize` elements of an array value, in order.
+///
+/// # Invariant
+/// An array value's first slot holds the element template, which names the
+/// layout and is never user data, so the elements are the rest.
 fn usize_array(module: &Module<HostProgram>, value: &LangValue) -> Vec<usize> {
-    array_values(module, value).iter().map(usize_of).collect()
+    let mut values = array_values(module, value);
+    values.remove(0);
+    values.iter().map(usize_of).collect()
 }
 
 #[test]
 fn std_sort_sorts_a_usize_array() {
     let (module, value, _) = run(r#"
 ---
-  std := import "std.lichen"
+  std = import "std.lichen"
 ---
-std.sort [3, 1, 2]
+std.sort [@any : Int, 3][3, 1, 2]
 "#);
     assert_eq!(
         usize_array(&module, &value),
@@ -176,9 +182,9 @@ fn std_sort_is_reusable_and_length_preserving() {
     // each apply.
     let (module, value, _) = run(r#"
 ---
-  std := import "std.lichen"
+  std = import "std.lichen"
 ---
-(std.sort [4, 1, 3, 2], std.sort [9, 7])
+(std.sort [@any, 4][4, 1, 3, 2], std.sort [@any, 2][9, 7])
 "#);
     let expr = array_values(&module, &value);
     assert_eq!(
@@ -199,7 +205,7 @@ fn std_sort_rejects_a_non_array() {
     let diags = fail(
         r#"
 ---
-  std := import "std.lichen"
+  std = import "std.lichen"
 ---
 std.sort 5
 "#,
@@ -216,9 +222,9 @@ fn std_sort_rejects_a_non_int_array() {
     let diags = fail(
         r#"
 ---
-  std := import "std.lichen"
+  std = import "std.lichen"
 ---
-std.sort ["a", "b"]
+std.sort [@any, 2]["a", "b"]
 "#,
     );
     assert!(

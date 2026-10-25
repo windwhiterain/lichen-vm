@@ -244,7 +244,7 @@ fn build_frozen(
     String,
 > {
     let mut store = new_store(families);
-    let source = format!("--- p := import \"arity.lichen\" ---\n({body})");
+    let source = format!("--- p = import \"arity.lichen\" ---\n({body})");
     let (preprocessed, diags) = lichen_language::preprocess::preprocess(&source, None, &mut store);
     if !diags.is_empty() {
         return Err(diags

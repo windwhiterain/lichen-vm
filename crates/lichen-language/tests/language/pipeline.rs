@@ -1791,14 +1791,18 @@ fn a_dependent_array_length_pins_the_parameter() {
     // The check resolves the length read to a pure reference of `n`'s cell and
     // pins it, so the parameter is monomorphized.
     assert_eq!(
-        array_ids(evaluate("(((n => [@any : Int, n][1, 2, 3]) 3) : Array)")).len(),
+        array_element_ids(evaluate("(((n => [@any : Int, n][1, 2, 3]) 3) : Array)")).len(),
         3
     );
 }
 
 #[test]
 fn a_dependent_array_length_rejects_other_lengths() {
-    // `n` is pinned to 3 by the annotation; applying 5 clashes at the apply.
+    // `n` is pinned to 3 by the instance's own count; applying 5 clashes at the
+    // apply. The expectation stays the strong one: a *runtime* refusal that
+    // names the pinned length and the argument. The checker answers a `Guard`
+    // today — the template's length is not decidable where the instance is
+    // checked — and the test says so rather than accepting the weaker kind.
     let d = diags("((n => [@any : Int, n][1, 2, 3]) 5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
