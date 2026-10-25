@@ -230,6 +230,12 @@ pub fn compose_fan_out(
     } else {
         Vec::new()
     };
+    // **The merged node's outputs keep their declared extents**, each the length its own declaration states.
+    let mut output_extents = if staged_ordinal.is_some() {
+        producer.roles.output_extents.clone()
+    } else {
+        Vec::new()
+    };
     let mut outputs = if staged_ordinal.is_some() {
         producer.outputs
     } else {
@@ -448,6 +454,7 @@ pub fn compose_fan_out(
                 .map(|(_, class)| *class),
         );
         output_classes.extend(consumer.output_classes.iter().copied());
+        output_extents.extend(consumer.roles.output_extents.iter().copied());
         outputs += consumer.outputs;
         // The last consumer's terminator is the merged body's, so its results are the merged ones.
         result_classes.clone_from(&consumer.result_classes);
@@ -461,7 +468,10 @@ pub fn compose_fan_out(
     compact(&mut body, &mut marks);
     let fragment = KernelFragment {
         param_shape: scalars.shape(),
-        roles: KernelRoles::default(),
+        roles: KernelRoles {
+            output_extents,
+            ..KernelRoles::default()
+        },
         body,
         inputs: ports,
         outputs,

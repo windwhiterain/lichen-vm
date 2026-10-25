@@ -208,10 +208,13 @@ impl<'backend> Value<'backend> {
     /// # Invariant
     /// `classes` is the fragment's declared class per ordinal; a shorter list falls back
     /// to the ABI's integer default rather than panicking in a result path.
+    ///
+    /// **Each output counts the elements its own buffer holds**: `counts` is that length per
+    /// ordinal, one entry per output, and an output the list does not name counts nothing.
     pub(crate) fn pending_all(
         submission: Box<dyn Pending + 'backend>,
         ids: Vec<ResidentId>,
-        count: usize,
+        counts: &[usize],
         classes: &[ScalarClass],
     ) -> Vec<Self> {
         let shared: Shared<'backend> = Arc::new(Mutex::new(Some(submission)));
@@ -220,23 +223,27 @@ impl<'backend> Value<'backend> {
             .map(|(ordinal, id)| Value::Pending {
                 submission: Arc::clone(&shared),
                 id,
-                count,
+                count: counts.get(ordinal).copied().unwrap_or_default(),
                 class: classes.get(ordinal).copied().unwrap_or(ScalarClass::Int),
             })
             .collect()
     }
 
     /// The outputs of one run that was already waited for.
+    ///
+    /// # Invariant
+    /// **Each output counts the elements its own buffer holds**: `counts` is that length per
+    /// ordinal, one entry per output, and an output the list does not name counts nothing.
     pub(crate) fn device_all(
         ids: Vec<ResidentId>,
-        count: usize,
+        counts: &[usize],
         classes: &[ScalarClass],
     ) -> Vec<Self> {
         ids.into_iter()
             .enumerate()
             .map(|(ordinal, id)| Value::Device {
                 id,
-                count,
+                count: counts.get(ordinal).copied().unwrap_or_default(),
                 class: classes.get(ordinal).copied().unwrap_or(ScalarClass::Int),
             })
             .collect()

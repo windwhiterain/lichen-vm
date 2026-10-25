@@ -1666,13 +1666,23 @@ impl GpuContext {
         };
         // Each output is allocated and recorded at its own class, the width a fetch reads it at.
         let mut outputs = Vec::with_capacity(binding.outputs);
-        for buffer_class in &output_classes {
-            let buffer = self.allocate(padded, *buffer_class, Tag::Output)?;
+        for (ordinal, buffer_class) in output_classes.iter().enumerate() {
+            // **A declared extent is the allocation**: the launch count counts lanes, not elements.
+            let declared = fragment
+                .roles
+                .output_extents
+                .get(ordinal)
+                .copied()
+                .flatten()
+                .map(|extent| extent as usize)
+                .unwrap_or(0);
+            let size = padded.max(declared);
+            let buffer = self.allocate(size, *buffer_class, Tag::Output)?;
             descriptors.push(buffer.descriptor());
             outputs.push(DeviceBuffer {
                 handle: buffer.handle,
                 memory: buffer.memory,
-                padded,
+                padded: size,
                 // The class this output's element type was emitted for, so a fetch reads
                 // it back at the width it was written at.
                 class: *buffer_class,

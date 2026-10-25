@@ -1,9 +1,12 @@
 # Merging the pre-attention's two norm chains: the cross-group read, and three paths
 
-> Status: **an investigation, not a plan in flight.** The question: the pre-attention composite
-> is 11 nodes, 10 after the sibling merge, and the goal is 7 — both remaining chain regions
-> merged, soundly, with no wrong answers. This note records where the refusal comes from
-> (measured, not read off prose), prices the three ways past it, and names the minimal slice.
+> Status: **B2 has landed** (the composite's norm chains dispatch over heads, and the pre-attention
+> composite is **8 nodes** under the sibling strategy — the ladder's 10 → 8 rung). What it measured
+> is in **§7**, including the obstacle §3 did not foresee (an output buffer's length is not the
+> launch count) and the limits the merge carries (a merged node is not bit-identical to the
+> unmerged pair, and the report's extent numbers go stale after a rewrite).
+> The rest of the note is the investigation as it was written: the question, the measured
+> refusals, and the three paths.
 > Written against `serve-frontier@1b93532d`; while it was being written the branch moved to
 > `a1b68c28` (the fan-in's store-keeping path landed, `1fee3679`), which changes region 4's
 > refusal — both states are recorded. The working tree carried the parallel session's
@@ -150,6 +153,8 @@ merges at **any** width. Two variants:
   stops looking like a wide GPU program (a 16-lane `scale` writing 128 slots per lane), which
   is a real loss for a *test vehicle* — it then demonstrates the one-group staged path, and
   the wide-merge capability (axis C) stays open by construction.
+  **Landed**: §7 measures it, and names the obstacle this bullet did not foresee
+  (a buffer's length is not the launch count) and the limits the merge carries.
 
 Both are composite-level changes plus one small framework move; neither touches the IR. Under
 either, region 3 merges. **Region 4's last node is a different question** (§5).
@@ -235,6 +240,10 @@ answers) plus the report lines showing regions 3 and 4 merged.
 If the barrier-placement rule is judged out of scope, **10 → 8 is the sound floor** and the
 last node is axis-C's, not this composite's.
 
+**Landed**: the 10 → 8 rung, and the composite measures 8 nodes under the sibling
+strategy (§7). The 10 → 7 rung is untouched: the barrier-placement rule for a
+loop-resident staged read is still open, and `query1` stays wide.
+
 ## 6. Risks, and what not to attempt
 
 Risks of the recommended slice:
@@ -266,3 +275,87 @@ Do **not** attempt:
 - **Paying Path A for this goal** — it is the axis-C roadmap item, it changes the numerics
   the acceptance harness reads as correctness, and its minimal cut is the whole mechanism.
   Build it when the wide merge is the goal, not when the node count is.
+
+## 7. What B2 measured
+
+**The slice landed on `serve-frontier`.** The pre-attention composite's norm chains dispatch over
+**heads** now, and the composite is **8 nodes** under the sibling strategy — the ladder's 10 -> 8
+rung. The measurements below come from `fuse_class_probe`, `fuse_probe` and `fusion_file_probe`
+on the RTX 3060 Laptop GPU, at this slice's tip.
+
+### 7.1 What the composite says now
+
+`squares` and `scale` keep their shape and change their **lane map**: the squares kernel writes
+one head's sum at its own lane, and the scale kernel reads it at **that same lane** and writes
+its head's row in a loop of its own. The three chains are per-head: the hidden chain one head of
+2048, the key chain eight heads of 128, the query chain sixteen heads of 128. `query1` stays wide
+(2048 lanes), as the 10 -> 8 rung says.
+
+**The latent out-of-bounds reads of section 1 are gone with it**: a squares kernel over heads
+reads only its own heads' rows, so the key chain's eight lanes read `key1.y[0..1023]` of a
+1024-element buffer and the query chain's sixteen read `query1.y[0..2047]` of a 2048-element one.
+The hidden chain, which section 1 did not name, had the same defect (2048 lanes over a
+2048-element buffer) and has it no more: its one lane reads `hidden[0..2047]`.
+
+**The same-lane pair is what makes the merge sound.** The producer's write index and the
+consumer's read index are the *same* `ValueId` in the merged body — both bodies' `compute.range`
+lower to the merged body's own index parameter — so C.1's elision records **no barrier**, the
+merged node stages nothing, and C.2's whole-workgroup rule has nothing to refuse.
+
+### 7.2 The node arithmetic, measured
+
+| | before | after |
+|---|---|---|
+| the sibling plan | 10 nodes | **8 nodes** |
+| region 3, the key chain | refused: `StagedReadIsNotOrdered` | **merged**: nodes 3 and 4 into one node at 4 |
+| region 4, the query chain | refused: `MergedBodyIsRefused` | cut at the extent change: region 4 is node 7 alone, and **region 5 is nodes 8 and 9, merged** |
+| `query1`'s gather | refused | still refused: the matvec dispatches over 2048 and the squares over 16, so C.3 cuts the chain there |
+
+`fuse_class_probe`'s differential: **equal: true** on all three answers (1024, 1024 and 2048
+elements). The rewrite itself is bit-identical: the unmerged program of the new composite and the
+unmerged program of the old one agree on **every element's bits**.
+
+### 7.3 The obstacle this note did not foresee: a buffer's length is not the launch count
+
+Section 3's B2 has the scale kernel write 128 slots per lane. A lane count and a buffer length
+are two numbers, and the framework had only the first: an output buffer was allocated at the
+launch count, so an 8-lane scale writing 1024 elements wrote past a 64-element allocation. Three
+small moves carry the second number:
+
+- `KernelRoles::output_extents` already said what it is — "the allocation the run owes that
+  output" — but **nothing ever filled it for a source literal**: the lowering read the length's
+  *compound* node, whose value is a one-element array, so the read answered `None` and every
+  declaration fell back to the launch count. The lowering now reads the length at its element
+  slot (`crates/lichen-compute/src/compute/body.rs`).
+- the **GPU backend** allocated each output at the launch count; it allocates it at the declared
+  extent when there is one (`crates/lichen-compute-gpu/src/dispatch.rs`).
+- the **merged fragment** carried no output extents at all, so a merged node's own wide output
+  would have been allocated at the launch count; the composition now carries the bodies' own
+  declared extents, in the outputs' order (`crates/lichen-kernel-ir/src/compose.rs`).
+
+The **value's count** followed: a count is what a fetch reads, so it is the buffer's own length
+now, and not the number of lanes that wrote it (`crates/lichen-graph-ir`).
+
+### 7.4 The limits, measured
+
+- **A merged node is not bit-identical to the unmerged pair.** On a two-node program (eight heads
+  of 128) the producer's sums are equal to the bit, but 100 of the 1024 elements of **one** head
+  differ by one ULP from the unmerged program's — deterministically (three runs, the same 100
+  elements). That head's divisor differs by one ULP; the sums do not. The cause is not localised.
+  **The probe's differential cannot see it**: both of its preparations merge the same chains now
+  (the `component` strategy folds the whole component, and the component's chains are mergeable),
+  so it compares two merged programs.
+- **The report's extent numbers go stale after a rewrite.** The launch-extent closure the
+  automatic-tiling pass reads is built over the graph it was handed, so a merged node's "covers N
+  element(s)" is the *old* graph's node at that position. The key chain's merged node (8 lanes) is
+  reported as `MergedWorkgroupIsPartial` (the old graph's node 3 is the squares, 8 lanes), while
+  the query chain's (16 lanes) passes the same check on the old graph's node 6 (1024 elements).
+  That check is the report's own rule, not the launch rule: C.2's rule is enforced at the
+  dispatch, where the merged node records no barrier and so is not refused.
+- **The vehicle measures less.** The hidden chain's norm now runs on **one** lane (2048 elements
+  written in a loop), and the key chain's scale writes 1024 elements into a buffer declared at
+  2048 — the widest chain's length, so that one kernel serves all three. The wide-merge
+  question is deferred, not answered.
+- **The key chain's region hash changed** (the scale kernel is another kernel), so `fuse_probe`'s
+  fuse pack names no region any more and the floor's licence merges the region instead. The
+  **sibling** region's hash is unchanged, so `fuse_class_probe`'s classed pack still names it.

@@ -1063,11 +1063,12 @@ where
             );
         };
         let count_node = dynamic(count.node)?;
-        // A literal length is the allocation; a runtime one leaves the launch count.
-        let extent = self
+        // A literal length is the allocation; a runtime one leaves the launch count. It is read at its element slot.
+        let literal = self
             .module
-            .usize_value(count_node)
-            .map(|value| value as u32);
+            .element_value_node(AnyNodeId::Dynamic(count_node))
+            .unwrap_or(AnyNodeId::Dynamic(count_node));
+        let extent = self.module.usize_value(literal).map(|value| value as u32);
         // The length is read, not lowered: the template has no value for a runtime count.
         let ordinal = self.tally.output_extents.len();
         self.tally.output_extents.push(extent);

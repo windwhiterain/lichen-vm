@@ -1,8 +1,8 @@
 //! Running a graph, and the one thing a graph is allowed to decide.
 
 use lichen_kernel_ir::{
-    BatchExtent, BatchInput, BatchRefusal, BufferSlot, DeviceExtent, Dispatch, LaunchSet,
-    ParallelBackend, ResidentId, ScalarClass, ScalarLeaf,
+    BatchExtent, BatchInput, BatchRefusal, BufferSlot, DeviceExtent, Dispatch, KernelFragment,
+    LaunchSet, ParallelBackend, ResidentId, ScalarClass, ScalarLeaf,
 };
 
 use crate::graph::{Count, Graph, KernelNode, Node, Scalar};
@@ -68,6 +68,8 @@ struct Planned<'a> {
     inputs: Vec<BatchInput<'a>>,
     extent: BatchExtent,
     classes: &'a [ScalarClass],
+    /// The element count each output of the node holds.
+    counts: Vec<usize>,
 }
 
 /// Runs a graph against a backend, under one policy.
@@ -211,7 +213,7 @@ impl<'backend> Runner<'backend> {
                     plan.classes.len(),
                     "a dispatch answers with one id per output its fragment declares"
                 );
-                Value::device_all(ids.clone(), plan.extent.allocated(), plan.classes)
+                Value::device_all(ids.clone(), &plan.counts, plan.classes)
             })
             .collect();
         values.extend(produced.into_iter().flatten());
@@ -331,6 +333,7 @@ impl<'backend> Runner<'backend> {
             inputs,
             extent,
             classes: &kernel.fragment.output_classes,
+            counts: output_counts(&kernel.fragment, extent.allocated()),
         })
     }
 
@@ -392,7 +395,7 @@ impl<'backend> Runner<'backend> {
                     })?,
                 };
                 Ok((
-                    Value::device_all(ids.clone(), planned.extent.allocated(), classes),
+                    Value::device_all(ids.clone(), &planned.counts, classes),
                     ids,
                 ))
             }
@@ -409,12 +412,30 @@ impl<'backend> Runner<'backend> {
                         })?;
                 let ids = submission.outputs().to_vec();
                 Ok((
-                    Value::pending_all(submission, ids.clone(), count, classes),
+                    Value::pending_all(submission, ids.clone(), &planned.counts, classes),
                     ids,
                 ))
             }
         }
     }
+}
+
+/// The element count each output of a node holds.
+///
+/// # Invariant
+/// **A declared extent is the length, and the launch count is the length when the declaration
+/// states none**: a count is what a fetch reads, so it must be the buffer's own length and not
+/// the number of lanes that wrote it — a kernel that writes a whole row per lane holds more
+/// elements than it has lanes.
+fn output_counts(fragment: &KernelFragment, launch: usize) -> Vec<usize> {
+    let mut counts: Vec<usize> = fragment
+        .roles
+        .output_extents
+        .iter()
+        .map(|extent| extent.map(|extent| extent as usize).unwrap_or(launch))
+        .collect();
+    counts.resize(fragment.outputs, launch);
+    counts
 }
 
 /// The runtime scalars a node fixes beside its extent, resolved against the value table.
