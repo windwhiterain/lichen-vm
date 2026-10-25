@@ -136,16 +136,13 @@ pub enum Expr {
         expected: Box<Expr>,
         span: Span,
     },
-    /// `actual <: template` — a template match: the actual value is unified
-    /// with a **clone** of the template, so the template keeps its own holes
-    /// (`docs/notes/value-templates.md`).
+    /// `actual <: template` — unify actual with a fresh clone of template.
     TemplateUnify {
         actual: Box<Expr>,
         template: Box<Expr>,
         span: Span,
     },
-    /// `@clone e` — a clone of `e`; the clone is a fresh instantiation of the
-    /// expression's holes, and nothing else in the program shares them.
+    /// `@clone e` — instantiate `e` with fresh holes.
     Clone { value: Box<Expr>, span: Span },
     /// `a op b` — a binary integer operation.
     BinOp {
@@ -191,8 +188,7 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `a.name` — a named field read; the name resolves through the struct
-    /// type's name table to a positional index.
+    /// `a.name` — a named field read through the struct value's name table.
     NamedFieldRead {
         container: Box<Expr>,
         name: String,
@@ -237,8 +233,7 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
-    /// `S{.a 1, .b 2}` — a struct instance: the callee is the struct's value
-    /// or template, and the fields are the values it is filled with.
+    /// `S{…}` — fill a struct value or template with field values.
     StructInst {
         callee: Box<Expr>,
         fields: Vec<StructFieldValue>,
@@ -295,15 +290,14 @@ pub enum Expr {
 /// separately).
 #[derive(Clone, Debug)]
 pub enum Stmt {
-    /// `name = value` — a graph-sharing binding.
+    /// `name := value` — a graph-sharing binding.
     Binding(Binding),
     /// A bare expression — evaluated for its type checks, its value
     /// discarded.
     Expr(Expr),
 }
 
-/// One statement binding: `name := value` (block-wide visible), or
-/// `let name := value` (visible only to later statements).
+/// A binding: `name := value`, or restrictive `let name := value`.
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub name: String,
@@ -312,8 +306,7 @@ pub struct Binding {
     /// The binding's own `BinderId`; unset by the parser.
     pub binder: Option<BinderId>,
     pub value: Expr,
-    /// `let` — the name is visible only to later statements (so `let a = a`
-    /// resolves the outer `a`).
+    /// `let` — visible only to later statements (`let a := a` uses outer `a`).
     pub restrictive: bool,
     /// `@cache` — a retained cell, whose identity is the binding's occurrence
     /// path (`docs/notes/incremental-update.md` §3).

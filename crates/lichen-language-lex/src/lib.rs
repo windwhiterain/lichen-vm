@@ -36,8 +36,7 @@ pub enum TokenKind {
     KwString,
     /// The Type type constant -- the universe.
     KwType,
-    /// The `Tuple` template constant — the builtin tuple template, a value
-    /// like `Int` and `Type` (`docs/language-spec.md` §Type).
+    /// The built-in `Tuple` template constant.
     KwTuple,
     /// The `Array` template constant — the builtin array template.
     KwArray,
@@ -71,8 +70,7 @@ pub enum TokenKind {
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
-    /// `@clone` — the clone marker: `@clone e` clones `e` before it is
-    /// unified with anything (`docs/notes/value-templates.md`).
+    /// `@clone e` — clone an expression before unification.
     KwClone,
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).

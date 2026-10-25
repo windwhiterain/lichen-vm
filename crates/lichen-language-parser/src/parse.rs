@@ -568,8 +568,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                 span: span_at(tokens, me.span().start),
             })
             .or(gc_marked(tokens, application.clone()))
-            // `@clone e` — the clone marker, at the assert's level: it takes a
-            // whole application, so `@clone f x` clones the application.
+            // `@clone` has the assert marker's precedence.
             .or(clone_marked(tokens, application.clone()))
             // The prefix keyword operators, at the assert's level: operands by
             // juxtaposition, no infix token, so no new rung.
@@ -761,9 +760,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                 })
             });
 
-        // `=` and `<:`, one level, left-associative.  The level sits outside the
-        // comparison operators and inside the annotations: a unify binds looser
-        // than a comparison and tighter than `:` / `#` / `!` / `?`.
+        // `=` and `<:` are left-associative, between comparisons and annotations.
         let unify = term3
             .clone()
             .foldl(
@@ -889,10 +886,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                         span,
                     } => match *actual {
                         Expr::Name(parameter, parameter_span, _) => {
-                            // A parameter template desugars to `x => { x <: T; e }`
-                            // (`docs/notes/value-templates.md`): the match is a
-                            // statement of the body, not a second parameter
-                            // channel.
+                            // Desugar into a body statement, not a parameter channel.
                             let parameter_value =
                                 Expr::Name(parameter.clone(), parameter_span, None);
                             let r#return = Box::new(Expr::Block {
@@ -1244,10 +1238,7 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
             array_template(tokens, expr.clone()),
-            // The struct value comes before the block: a block's body never
-            // starts with a `.`, so the two are told apart by their first
-            // token, and the block's recovery would otherwise swallow a
-            // struct value whole.
+            // Try a struct value before a block; a leading `.name` distinguishes them.
             struct_value(tokens, expr.clone()),
             block(tokens, expr.clone()),
             if_expr(tokens, expr.clone()),
@@ -1370,8 +1361,7 @@ fn native_call<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// `[template, length]` — the array template: the element template and the
-/// array's length, where either may carry the `@shallow` marker.
+/// `[template, length]` — an array template's two operands.
 ///
 /// # Invariant
 /// The template has exactly two parts: the element template and the length.
@@ -1543,9 +1533,7 @@ fn gc_marked<'a, Er: GrammarError<'a>>(
         .map_with(|inner, me| Expr::Gc(Box::new(inner), span_at(tokens, me.span().start)))
 }
 
-/// `@clone e` — a clone of `e`: the expression's holes become fresh, and
-/// nothing else in the program shares them
-/// (`docs/notes/value-templates.md`).
+/// `@clone e` — instantiate `e` with fresh holes.
 fn clone_marked<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,

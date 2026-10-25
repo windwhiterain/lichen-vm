@@ -106,8 +106,7 @@ fn the_type_constants_are_keywords_but_not_prefixes() {
             TokenKind::Eof,
         ]
     );
-    // The builtin templates are constants too: `Tuple`, `Array` and `Struct`
-    // are keywords, and a longer name keeps its own spelling.
+    // Builtin templates are keywords; longer names stay names.
     assert_eq!(
         kinds("Tuple Array Struct Tuple2"),
         vec![
@@ -224,8 +223,7 @@ fn operators_and_keywords_lex() {
             TokenKind::Eof,
         ]
     );
-    // The core binding is its own token: `:=` keeps the annotation's `:` from
-    // winning, and the unify's `=` from splitting off.
+    // `:=` is one token, distinct from `:` and `=`.
     assert_eq!(
         kinds("a := 1"),
         vec![
@@ -261,8 +259,7 @@ fn angle_brackets_lex_as_their_own_tokens() {
             TokenKind::Eof,
         ]
     );
-    // The template match is its own token: `<:` keeps the comparison's `<`
-    // from winning, and the table read's `<==` keeps its own.
+    // `<:` is one token, distinct from `<` and `<==`.
     assert_eq!(
         kinds("a <: b"),
         vec![

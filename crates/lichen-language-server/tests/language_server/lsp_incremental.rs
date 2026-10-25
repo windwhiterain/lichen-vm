@@ -296,8 +296,7 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
 #[test]
 fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
     let dir = temp_dir("prelude");
-    // The argument is a pair of strings: the prelude's `add` takes a tuple of
-    // two numbers, so the refinement inside the built-in fails.
+    // The prelude expects numeric operands; a pair of strings fails in it.
     let main = write(&dir, "main.lichen", "add (\"a\", \"b\")\n");
     let uri = Url::from_file_path(&main).unwrap().to_string();
 
