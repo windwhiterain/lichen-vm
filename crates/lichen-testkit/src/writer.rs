@@ -503,7 +503,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(
             name,
             ExprKind::Instantiate {
-                type_expr,
+                template: type_expr,
                 value,
                 names: name_range,
             },
