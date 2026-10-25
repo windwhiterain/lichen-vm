@@ -380,12 +380,12 @@ fn a_statement_program_with_an_out_of_bounds_index_is_rejected() {
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
     assert_eq!(
         check.value_a,
-        Some(LangValue::LowValue(LowValue::USize(6))),
-        "the element index"
+        Some(LangValue::LowValue(LowValue::USize(5))),
+        "the index"
     );
     assert_eq!(
         check.value_b,
-        Some(LangValue::LowValue(LowValue::USize(3))),
+        Some(LangValue::LowValue(LowValue::USize(2))),
         "the length"
     );
 }
@@ -1983,15 +1983,15 @@ fn an_out_of_bounds_index_is_rejected() {
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
     assert_eq!(
         check.value_a,
-        Some(LangValue::LowValue(LowValue::USize(6))),
-        "the element index"
+        Some(LangValue::LowValue(LowValue::USize(5))),
+        "the index"
     );
     assert_eq!(
         check.value_b,
-        Some(LangValue::LowValue(LowValue::USize(4))),
+        Some(LangValue::LowValue(LowValue::USize(3))),
         "the length"
     );
-    assert_eq!(d[0].span, None, "the index carries no span of its own");
+    assert_eq!(d[0].span, Some((1, 28)), "the index's span");
 }
 
 // --- the frontend -----------------------------------------------------------

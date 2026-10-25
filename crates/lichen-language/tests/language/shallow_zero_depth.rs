@@ -49,7 +49,7 @@ fn a_shallow_depth_of_one_is_still_accepted() {
 /// The bare mark carries no depth, so the bound does not reach it.
 #[test]
 fn a_bare_shallow_mark_is_still_accepted() {
-    let report = compile("[@any, 2][@shallow (x => x) 1, 2]");
+    let report = compile("[@any, 2][@shallow 1, 2]");
     assert!(
         report.ok(),
         "the bare mark checks: {:?}",
