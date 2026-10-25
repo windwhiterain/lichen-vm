@@ -565,6 +565,26 @@ where
                     else {
                         continue;
                     };
+                    let ty = match build.state[eid].ty {
+                        Some(t) => print_type_lang(&build.module, t),
+                        None => String::new(),
+                    };
+                    let value = build.state[eid].val.and_then(|vn| {
+                        // An empty slot is a deferred binding: type only.
+                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
+                            print_value_lang(
+                                &build.module,
+                                v,
+                                build.state[eid].ty.unwrap_or_default(),
+                            )
+                        })
+                    });
+                    let snapshot = StatementValue {
+                        span: (0, 0),
+                        ty,
+                        value,
+                    };
+                    field_types.insert(name.to_string(), snapshot.clone());
                     let lichen_highlevel::ir::ExprKind::Static { .. } = build.ir[container].kind
                     else {
                         continue;
@@ -578,28 +598,8 @@ where
                     let Some(&module_name) = import_name_by_span.get(&container_span) else {
                         continue;
                     };
-                    let ty = import_ty
-                        .get(&container_span)
-                        .and_then(|mty| field_type_in_struct(mty, name))
-                        .unwrap_or_default();
-                    let value = build.state[eid].val.and_then(|vn| {
-                        // An empty slot is a deferred binding: type only.
-                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
-                            print_value_lang(
-                                &build.module,
-                                v,
-                                build.state[eid].ty.unwrap_or_default(),
-                            )
-                        })
-                    });
-                    module_field_types.insert(
-                        (module_name.to_string(), name.to_string()),
-                        StatementValue {
-                            span: (0, 0),
-                            ty,
-                            value,
-                        },
-                    );
+                    module_field_types
+                        .insert((module_name.to_string(), name.to_string()), snapshot);
                 }
                 (
                     statements,
@@ -1409,79 +1409,6 @@ fn source_name(source: &PackageSource) -> String {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| source.path.display().to_string())
-}
-
-/// The type of the named field `field` inside a rendered `struct{...}` type.
-///
-/// # Invariant
-/// A field-access IR node's own type slot is a lazy cell, so an access on an
-/// imported module resolves its type from the module's rendered type instead.
-fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
-    let inner = struct_ty.strip_prefix("struct{")?;
-    // Find the matching `}` for the opening `{` (ignoring the `>` of `->`),
-    // then split the interior on top-level commas.
-    let body = match_close(inner)?;
-    for seg in split_top_level(body, ',') {
-        let seg = seg.trim();
-        let Some(rest) = seg.strip_prefix('.') else {
-            continue; // positional field, not named.
-        };
-        // A well-formed named field is `.name type`; skip a malformed segment.
-        let Some(name_end) = rest.find(|c: char| c.is_whitespace()) else {
-            continue;
-        };
-        if &rest[..name_end] == field {
-            return Some(rest[name_end..].trim().to_string());
-        }
-    }
-    None
-}
-
-/// The substring up to the `}` that closes an already-stripped `struct{...}`.
-/// The `>` of an arrow `->` is not a close.
-fn match_close(inner: &str) -> Option<&str> {
-    let bytes = inner.as_bytes();
-    let mut depth = 1;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' | b'<' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 {
-            return Some(&inner[..i]);
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Split `s` on `sep` at bracket depth 0 (over `()[]{}<>`, with the `>` of `->`
-/// ignored), returning the segments.
-fn split_top_level(s: &str, sep: char) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut depth = 0i32;
-    let bytes = s.as_bytes();
-    let mut start = 0;
-    let mut i = 0;
-    while i < s.len() {
-        let c = bytes[i] as char;
-        match c {
-            '(' | '[' | '{' | '<' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            '>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
-            _ if c == sep && depth == 0 => {
-                out.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    out.push(&s[start..]);
-    out
 }
 
 /// The token kinds needing no AST context; `classify_names` disambiguates the
