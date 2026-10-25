@@ -165,14 +165,14 @@ fn an_at_assert_prefix_compiles_to_an_assert() {
 
 #[test]
 fn a_block_compiles_to_its_final_expression() {
-    // {a = 1; a} — the block is its final expression's own node; the
+    // {a := 1; a} — the block is its final expression's own node; the
     // binding is pure sharing, not a new IR form.
     let ir = compile_ok("{a := 1; a}");
     assert!(matches!(
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // The same holds through a lambda body: x => {y = x; y} is the
+    // The same holds through a lambda body: x => {y := x; y} is the
     // identity function, whose return is the parameter itself.
     let ir = compile_ok("x => {y := x; y}");
     let ExprKind::Function {
@@ -195,7 +195,7 @@ fn a_block_scopes_its_bindings() {
         kind(&ir, wrapped(&ir)),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // After the `}`, the block's bindings are gone: `{a = 1; a} a` applies the
+    // After the `}`, the block's bindings are gone: `{a := 1; a} a` applies the
     // block to the outer `a`.
     let ir = compile_ok("a := 2; {a := 1; a} a");
     let ExprKind::Apply { function, argument } = kind(&ir, wrapped(&ir)) else {
