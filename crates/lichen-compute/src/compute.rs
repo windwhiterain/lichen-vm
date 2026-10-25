@@ -4075,9 +4075,9 @@ struct DeclaredGroup {
 /// # Invariant
 /// The layout is the group's **type** where the type names one; a group whose
 /// type names none is read by its own shape, where a struct value's header
-/// holds the two slots before the first field and every other compound value's
-/// elements are its own items (`docs/notes/value-templates.md`).
-fn declared_layout<P>(module: &Module<P>, declared: DeclaredGroup) -> CompoundLayout
+/// holds two slots before the first field and an array value's element
+/// template one (`docs/notes/value-templates.md`).
+fn declared_layout<P>(module: &Module<P>, declared: DeclaredGroup, arity: usize) -> CompoundLayout
 where
     P: Program,
     P::Value: ValueType,
@@ -4088,9 +4088,13 @@ where
         return layout;
     }
     if is_struct_value(module, declared.value) {
-        CompoundLayout::Struct
-    } else {
-        CompoundLayout::Tuple
+        return CompoundLayout::Struct;
+    }
+    // The slots the group's own elements do not cover are the layout's own.
+    let own = shape::value_len(module, declared.value).map_or(0, |len| len.saturating_sub(arity));
+    match own {
+        1 => CompoundLayout::Array,
+        _ => CompoundLayout::Tuple,
     }
 }
 
@@ -4165,7 +4169,7 @@ where
         .filter_map(|(path, _)| path.get(depth))
         .max()
         .map(|highest| highest + 1)?;
-    let layout = declared.map(|declared| declared_layout::<P>(module, declared));
+    let layout = declared.map(|declared| declared_layout::<P>(module, declared, arity));
     let mut items: Vec<ArrayItem> = Vec::with_capacity(arity);
     for at in 0..arity {
         let leaf = outputs
