@@ -816,3 +816,319 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
         "the masked position is never walked"
     );
 }
+
+// --- the template instantiation ---------------------------------------
+
+/// The items of an array value, dynamic and frozen alike.
+fn template_items(value: impl Into<Option<TestValue>>) -> Vec<AnyNodeId> {
+    let TestValue::LowValue(LowValue::Array(array)) = value.into().expect("expected an array")
+    else {
+        panic!("expected an array value")
+    };
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
+        .iter()
+        .map(|item| item.node)
+        .collect()
+}
+
+#[test]
+fn template_clone_makes_the_template_cells_fresh() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    // T = (_, _): two open cells under one template.
+    let left = undecided_node(&mut m, template);
+    let right = undecided_node(&mut m, template);
+    let t = array_node(&mut m, template, &[left, right], None);
+
+    let instance = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .expect("the template instantiates");
+
+    assert_ne!(instance.root, t, "the root is the instance's own cell");
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], left);
+    assert_ne!(ids[1], right);
+    assert_ne!(ids[0], ids[1]);
+    // The template keeps its own open cells: the instance's are fresh.
+    assert!(m.node_value(AnyNodeId::Dynamic(left)).is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(right)).is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(ids[0])).is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(ids[1])).is_none());
+    // The map names one instance cell per template cell.
+    assert_eq!(instance.node_of(t), instance.root);
+    assert_eq!(instance.node_of(left), ids[0]);
+    assert_eq!(instance.node_of(right), ids[1]);
+}
+
+#[test]
+fn template_clone_shares_the_marked_boundary() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    // The template names an outer binding: the caller's own open cell.
+    let outer = undecided_node(&mut m, root);
+    let hole = undecided_node(&mut m, template);
+    let t = array_node(&mut m, template, &[outer, hole], None);
+
+    // Unmarked, the outer binding is cloned like any other cell.
+    let instance = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_ne!(ids[0], outer, "an unmarked outer cell is cloned");
+
+    // Marked, it is the caller's own: the instance references it in place.
+    let mut boundary = lichen_lowlevel::TemplateBoundary::new();
+    boundary.share(outer);
+    let instance = m.clone_template(t, root, None, &boundary).unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids[0], outer, "the marked cell is referenced in place");
+    assert_ne!(ids[1], hole, "the template's own cell is still fresh");
+    assert!(instance.shared.contains(&outer));
+    assert!(m.node_value(AnyNodeId::Dynamic(hole)).is_none());
+}
+
+#[test]
+fn template_clone_keeps_internal_sharing_and_cycles() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    // T = (h, h): one cell named twice.
+    let shared = undecided_node(&mut m, template);
+    let t = array_node(&mut m, template, &[shared, shared], None);
+    let instance = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids[0], ids[1], "one template cell has one instance cell");
+
+    // A cycle: the cell's own payload names the cell.
+    let cyclic = m.add_node(template, None, None);
+    let cyclic_hole = undecided_node(&mut m, template);
+    let items = [item(cyclic), item(cyclic_hole)];
+    m.write_node_value(
+        cyclic,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, template).into(),
+        ))),
+    );
+    let instance = m
+        .clone_template(
+            cyclic,
+            root,
+            None,
+            &lichen_lowlevel::TemplateBoundary::new(),
+        )
+        .unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(
+        ids[0], instance.root,
+        "the cycle names the instance's own cell"
+    );
+    assert_ne!(ids[1], cyclic_hole, "the open cell beside it is fresh");
+}
+
+#[test]
+fn template_clone_rebuilds_the_equality_classes() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let a = undecided_node(&mut m, template);
+    let b = undecided_node(&mut m, template);
+    // The template states that its two cells are one expression.
+    m.unify(a, b);
+    let t = array_node(&mut m, template, &[a, b], None);
+
+    let instance = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_ne!(ids[0], ids[1], "the instance has its own cells");
+    assert_eq!(
+        m.equality_representative(ids[0]),
+        m.equality_representative(ids[1]),
+        "the template's class topology is rebuilt among the clones"
+    );
+    assert_ne!(
+        m.equality_representative(ids[0]),
+        m.equality_representative(a),
+        "the instance's class is not the template's"
+    );
+}
+
+#[test]
+fn template_clone_keeps_the_operator_and_clones_the_operand() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let operand = undecided_node(&mut m, template);
+    let cell = op_node(&mut m, template, TestOperator::Id, Some(operand));
+
+    let instance = m
+        .clone_template(cell, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    let operation = m.node_operation(instance.root).unwrap();
+    assert_eq!(operation.operator, TestOperator::Id);
+    let cloned_operand = operation.operand.unwrap();
+    assert_ne!(cloned_operand, operand);
+    assert_eq!(instance.node_of(operand), cloned_operand);
+    // The instance's operator runs on the instance's own operand.
+    assert!(m.node_value(AnyNodeId::Dynamic(cloned_operand)).is_none());
+}
+
+#[test]
+fn template_clone_shares_a_closed_value_and_clones_an_open_interior() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let one = u128_node(&mut m, template, 1);
+    let two = u128_node(&mut m, template, 2);
+    // Every element decided: the tuple is closed.
+    let closed = array_node(&mut m, template, &[one, two], None);
+    // One element open: the tuple's interior is open.
+    let hole = undecided_node(&mut m, template);
+    let opened = array_node(&mut m, template, &[one, hole], None);
+
+    let instance = m
+        .clone_template(
+            closed,
+            root,
+            None,
+            &lichen_lowlevel::TemplateBoundary::new(),
+        )
+        .unwrap();
+    assert_ne!(
+        instance.root, closed,
+        "the root is always the instance's own"
+    );
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids[0], one, "a decided element is shared");
+    assert_eq!(ids[1], two);
+    assert!(instance.shared.contains(&one));
+
+    let instance = m
+        .clone_template(
+            opened,
+            root,
+            None,
+            &lichen_lowlevel::TemplateBoundary::new(),
+        )
+        .unwrap();
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids[0], one, "a decided element is still shared");
+    assert_ne!(ids[1], hole, "an open element is fresh");
+    assert!(m.node_value(AnyNodeId::Dynamic(hole)).is_none());
+}
+
+#[test]
+fn template_clone_leaves_the_wildcard_uncarried() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let wildcard = m.add_node(template, None, Some(TestValue::LowValue(LowValue::Any)));
+    let instance = m
+        .clone_template(
+            wildcard,
+            root,
+            None,
+            &lichen_lowlevel::TemplateBoundary::new(),
+        )
+        .unwrap();
+    assert_ne!(instance.root, wildcard);
+    assert!(
+        m.node_value(AnyNodeId::Dynamic(instance.root)).is_none(),
+        "the wildcard is decided but never carried: the instance's own cell replaces it"
+    );
+}
+
+#[test]
+fn template_clone_registers_the_clones_with_the_owner() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let hole = undecided_node(&mut m, template);
+    let t = array_node(&mut m, template, &[hole], None);
+    let owner = m.begin_function(root, None);
+
+    let instance = m
+        .clone_template(
+            t,
+            root,
+            Some(owner),
+            &lichen_lowlevel::TemplateBoundary::new(),
+        )
+        .unwrap();
+    assert_eq!(m.node_function(instance.root), Some(owner));
+    assert!(m.functions[owner].nodes.contains(&instance.root));
+    let hole_clone = instance.node_of(hole);
+    assert!(m.functions[owner].nodes.contains(&hole_clone));
+}
+
+#[test]
+fn template_clone_refuses_a_budget_it_cannot_pay() {
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let template = m.add_block(None);
+    let hole = undecided_node(&mut m, template);
+    let t = array_node(&mut m, template, &[hole], None);
+    m.apply_depth_limit = 0;
+
+    assert!(
+        m.clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+            .is_none(),
+        "a budget is not a success"
+    );
+}
+
+#[test]
+fn template_clone_makes_an_open_frozen_cell_dynamic_and_keeps_a_closed_one_frozen() {
+    use lichen_lowlevel::{ModuleKey, StaticNodeId};
+
+    let mut source = Module::new();
+    let body = source.add_block(None);
+    let open = undecided_node(&mut source, body);
+    let closed = u128_node(&mut source, body, 42);
+
+    let mut m: Module<TestProgram> = Module::new();
+    let root = m.add_block(None);
+    let frozen = m.freeze_mapped(&source, ModuleKey::from_raw(1), [0; 32]);
+    let open_ref = StaticNodeId {
+        module: frozen.key,
+        index: frozen.node_map[&open],
+    };
+    let closed_ref = StaticNodeId {
+        module: frozen.key,
+        index: frozen.node_map[&closed],
+    };
+    // The template names one open frozen cell and one decided one.
+    let items = [
+        ArrayItem::new(AnyNodeId::Static(open_ref)),
+        ArrayItem::new(AnyNodeId::Static(closed_ref)),
+    ];
+    let t = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, root).into(),
+        ))),
+    );
+
+    let instance = m
+        .clone_template(t, root, None, &lichen_lowlevel::TemplateBoundary::new())
+        .unwrap();
+    let ids = template_items(m.node_value(AnyNodeId::Dynamic(instance.root)).unwrap());
+    assert_eq!(ids.len(), 2);
+    assert!(
+        matches!(ids[0], AnyNodeId::Dynamic(_)),
+        "an open frozen cell cannot be written, so it becomes the instance's own"
+    );
+    assert_eq!(
+        ids[1],
+        AnyNodeId::Static(closed_ref),
+        "a decided frozen cell is read in place"
+    );
+}

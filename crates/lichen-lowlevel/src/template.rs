@@ -1,33 +1,19 @@
-//! The template instantiation: one walk that clones a template's value graph.
+//! The template instantiation: the walk that clones a template's value graph.
 //!
-//! An instantiation is the graph operation `@clone` names: the template's own
-//! cells become **fresh**, the cells the caller marked become **shared**, and the
-//! graph's shape — internal sharing, cycles, equality classes — is rebuilt in the
-//! instance. It is the apply's clone walk with the apply's two decisions replaced:
-//! the apply asks *is this cell the callee's, and does it depend on the
-//! argument*, the template asks *is this cell closed, and did the caller mark it
-//! shared*. Everything else — one clone per source cell, the operator travelling
-//! with its operand, the class topology rebuilt by the shared regroup — is the
-//! apply's own machinery, reused rather than restated.
+//! # Invariant
+//! The walk is the apply's own clone walk with two decisions replaced: membership
+//! is reachability from the root, and freshness is the cell's own closure. Every
+//! other rule — one clone per source cell, the operator travelling with its
+//! operand, the class topology rebuilt by the shared regroup — is the apply's.
+//! See `docs/notes/template-instantiation.md`.
 
 use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId,
-    AnyNodeId::Dynamic as Dyn,
-    ArrayItem,
-    ArrayValue,
-    BlockId,
-    FunctionId,
-    LowValue,
-    Module,
-    NodeId,
-    Operation,
-    Program,
-    StaticNodeId,
-    TableItem,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LowValue,
+    Module, NodeId, Operation, Program, StaticNodeId, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -37,7 +23,7 @@ use lichen_utils::extend::AsEnum;
 /// # Invariant
 /// A marked cell is referenced in place: the instance's graph names the caller's
 /// own cell, so the dependency the template states on it is kept, and the
-/// instance's own cells stay the instance's.
+/// marked cell's own content is the caller's, not the instance's.
 #[derive(Debug, Clone, Default)]
 pub struct TemplateBoundary {
     shared: HashSet<NodeId>,
@@ -127,15 +113,12 @@ struct TemplateCtx<'a> {
 impl<P: Program> Module<P> {
     /// Instantiate the template rooted at `root`.
     ///
-    /// The instance's cells are the template's own cells, made fresh: a cell the
-    /// caller did not mark is cloned, so the template keeps its open cells and a
-    /// unify never writes into them. The cells the caller marked are referenced in
-    /// place, so a template that depends on an outer binding keeps depending on it.
-    ///
     /// # Invariant
-    /// The root is always cloned: an instantiation is an instance, and the root's own
-    /// class may hold the template's internal cells. `None` answers a walk a budget
-    /// stopped — a budget is not a success, so there is no instance to hand back.
+    /// The root is always cloned: an instantiation is an instance. A cell the caller
+    /// did not mark is cloned, so the template keeps its own open cells; a marked
+    /// cell is referenced in place, so a template that depends on an outer binding
+    /// keeps depending on it. `None` answers a walk a budget stopped: a budget is
+    /// not a success, so there is no instance to hand back.
     pub fn clone_template(
         &mut self,
         root: NodeId,
@@ -157,8 +140,8 @@ impl<P: Program> Module<P> {
             static_closed: HashMap::new(),
             exhausted: false,
         };
-        // The closure map is computed over the whole template first: whether a cell
-        // may be shared is a property of its own content, not of the walk's order.
+        // The closure map comes first: a cell's shareability is a property of its
+        // own content, not of the walk's order.
         self.template_closure_map(root, &mut ctx);
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(root) + 1;
@@ -179,13 +162,11 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// A cell is **open** when its own content is not closed: it holds no value, it
-    /// holds the wildcard, it has an operator, or its value's payload reaches an open
-    /// cell. A closed cell may be shared; an open one is cloned, so the instance's
-    /// own cells are fresh where the template's are open.
+    /// holds the wildcard, it has an operator, or its value's payload reaches an
+    /// open cell. A closed cell may be shared; an open one is cloned, so the
+    /// instance's own cells are fresh where the template's are open.
     fn template_closure_map(&mut self, root: NodeId, ctx: &mut TemplateCtx<'_>) {
-        // The payload graph: the cells a value's payload names, and the cells that
-        // name them. The operator's operand is part of the template but not of the
-        // payload graph: an operator's cell is open by its own account.
+        // The payload graph: the cells a value's payload names, and their owners.
         let mut payload: HashMap<NodeId, Vec<AnyNodeId>> = HashMap::new();
         let mut parents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         let mut seen: HashSet<NodeId> = HashSet::new();
@@ -217,17 +198,15 @@ impl<P: Program> Module<P> {
             }
             payload.insert(node, children);
         }
-        // The open cells: the leaves that are open by their own account, and every
-        // cell whose payload reaches one. The reach runs upward, so a cycle among
-        // the open cells is open as a whole — the graph is a graph, not a tree.
+        // The open cells: the leaves open by their own account, and every cell whose
+        // payload reaches one.
         let mut open: HashSet<NodeId> = HashSet::new();
         for &node in &seen {
             if self.template_cell_is_open(node) {
                 open.insert(node);
             }
-            // A frozen cell that holds nothing cannot be written: the cell that
-            // names it is open, so it is cloned and the frozen cell becomes the
-            // instance's own.
+            // A frozen cell that holds nothing cannot be written, so the cell
+            // naming it is open.
             for child in payload.get(&node).into_iter().flatten() {
                 if let AnyNodeId::Static(sref) = child
                     && !self.template_static_closed(*sref, ctx)
@@ -236,6 +215,8 @@ impl<P: Program> Module<P> {
                 }
             }
         }
+        // The reach runs upward, so a cycle among the open cells is open as a
+        // whole: the graph is a graph, not a tree.
         let mut queue: Vec<NodeId> = open.iter().copied().collect();
         while let Some(node) = queue.pop() {
             let Some(owners) = parents.get(&node) else {
@@ -260,11 +241,12 @@ impl<P: Program> Module<P> {
         if cell.operation.is_some() {
             return true;
         }
-        match cell.value.and_then(|value| value.as_enum()) {
-            None => true,
-            Some(LowValue::Any) => true,
-            Some(_) => false,
-        }
+        let Some(value) = cell.value else {
+            return true;
+        };
+        // A value that is not structural is decided all the same; only the
+        // wildcard is decided and never carried.
+        matches!(value.as_enum(), Some(LowValue::Any))
     }
 
     /// The references a cell's own value names: an array's elements, a table's
@@ -277,7 +259,10 @@ impl<P: Program> Module<P> {
             Some(LowValue::Array(array)) => {
                 // SAFETY: `array` is the payload of a live cell of this module, so
                 // its home block has not been dropped.
-                unsafe { array.items() }.iter().map(|item| item.node).collect()
+                unsafe { array.items() }
+                    .iter()
+                    .map(|item| item.node)
+                    .collect()
             }
             Some(LowValue::Table(table)) => {
                 // SAFETY: as above — `table` is a live cell's payload.
@@ -295,9 +280,9 @@ impl<P: Program> Module<P> {
     /// Whether a frozen cell is closed: it holds a decided value.
     ///
     /// # Invariant
-    /// The frozen module's own rule governs the cell's interior — an open cell lives
-    /// only inside a function (`docs/notes/attribute-isomorphism.md`) — so the cell's
-    /// own value decides it.
+    /// The frozen module's own rule governs the cell's interior — an open cell
+    /// lives only inside a function (`docs/notes/attribute-isomorphism.md`) — so the
+    /// cell's own value decides it.
     fn template_static_closed(&self, sref: StaticNodeId, ctx: &mut TemplateCtx<'_>) -> bool {
         if let Some(&closed) = ctx.static_closed.get(&sref) {
             return closed;
@@ -324,7 +309,7 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&source) {
             return clone;
         }
-        // The caller marked this cell: it is the caller's own, and its content with it.
+        // The caller marked this cell: it is the caller's own, and its content too.
         if ctx.boundary.shares(source) {
             ctx.shared.insert(source);
             return source;
@@ -343,8 +328,8 @@ impl<P: Program> Module<P> {
             let cell = &self.nodes[source];
             (cell.value, cell.operation)
         };
-        // The instance's cell is reserved before the walk descends: a diamond then
-        // names one cell, and a cycle names the instance's own.
+        // The instance's cell is reserved before the walk descends: a diamond names
+        // one cell, a cycle the instance's own.
         let clone = self.add_node(ctx.target, None, None);
         ctx.remap.insert(source, clone);
         self.nodes[clone].origin = Some(source);
@@ -365,8 +350,8 @@ impl<P: Program> Module<P> {
         let carried = match &operation {
             None => !wildcard,
             Some(_) => {
-                // A computed answer is a fact of the template only when the deep pass
-                // ran on it; otherwise the instance's operator computes it again.
+                // A computed answer travels only when the deep pass ran on it: a
+                // fact of the template, not of the last call.
                 self.nodes[source].evaluated_deep.is_some() && !wildcard
             }
         };
@@ -474,9 +459,8 @@ impl<P: Program> Module<P> {
         }
         let clone = self.add_node(ctx.target, None, None);
         ctx.static_remap.insert(sref, clone);
-        self.nodes[clone].origin = None;
         // The frozen value's payload: the instance's own cells where the frozen ones
-        // are open, the frozen references where they are closed.
+        // are open.
         let value = self.static_read(sref);
         let mapped = value.map(|value| self.template_map_value(value, ctx, true));
         self.write_node_value(clone, mapped);
@@ -488,9 +472,8 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// The groups are the template's own classes, so the instance's topology is the
     /// template's: two template cells that are one expression are one instance cell.
-    /// A shared cell joins the group of its own class, because the instance's cell
-    /// for a template cell that is one expression with it must be one expression
-    /// with it too.
+    /// A shared cell joins its own class's group, so the instance's cell for a cell
+    /// that is one expression with it is one expression with it too.
     fn template_rebuild_classes(&mut self, ctx: &TemplateCtx<'_>) {
         let mut entries: Vec<(NodeId, NodeId)> = ctx
             .remap

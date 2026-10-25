@@ -39,11 +39,14 @@ table, and the nominal id move into the value. A read therefore checks the layou
 template in the type position, then decodes the value at that template's offsets.
 
 `@clone` must be the same instantiation operation as function application, not a
-second graph walk with different freshness rules. One candidate is a hygienic
-immediate application of a synthetic function whose body is the cloned expression:
-local holes are instantiated while captured expressions stay shared. This candidate
-must be checked for nested application, internal sharing, dependent templates, and
-nominal-id preservation before it becomes the implementation contract.
+second graph walk with different freshness rules. The lowlevel base is
+[the template instantiation](template-instantiation.md): one walk that clones a
+template's value graph with the apply's own clone rules and the apply's own
+regroup. The first candidate — a hygienic immediate application of a synthetic
+function whose body is the cloned expression — does not hold: a synthetic lambda
+that captures the template **by name** shares the template's internal holes, so
+the unify that follows writes back into the template. The walk keeps the
+template's own cells fresh and shares only the cells the caller marks.
 
 ## Open details
 
