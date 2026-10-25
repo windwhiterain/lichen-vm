@@ -134,6 +134,9 @@ where
                 self.loc(parameter_type, 1),
                 DiagKind::Annotation,
             );
+            // An arrow's codomain takes the parameter's own return value, when
+            // the parameter's value is already a function.
+            self.capture_codomain_value(parameter_type, parameter);
         }
         // Invariant: the attribute cell stays undecided — a bound declared
         // value would be baked by the deep pass.

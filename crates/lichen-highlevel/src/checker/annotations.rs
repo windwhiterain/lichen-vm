@@ -577,6 +577,8 @@ where
                 let found = self.state[value].ty.unwrap();
                 self.compute_operands(found, denotation);
                 self.check_unify(found, denotation, self.loc(value, 1), DiagKind::Annotation);
+                // An arrow's codomain takes the actual function's return value.
+                self.capture_codomain_value(type_expr, value);
                 denotation
             }
             None => self.state[value].ty.unwrap(),

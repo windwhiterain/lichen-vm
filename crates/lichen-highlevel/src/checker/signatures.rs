@@ -2,6 +2,7 @@
 //! each side takes. See `docs/notes/value-templates.md`.
 
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
+use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
@@ -274,5 +275,102 @@ where
         };
         self.module.node_operation(term).is_some()
             && self.module.node_value(AnyNodeId::Dynamic(term)).is_none()
+    }
+
+    /// The **codomain value capture**: the actual function's return value, taken
+    /// by the arrow's codomain.
+    ///
+    /// # Invariant
+    /// The capture is **directed**: the codomain is the expected side and the
+    /// return the found one, so a hole takes the return's value and a compound
+    /// codomain is matched against the whole return. The return is never
+    /// forced — an undecided answer states nothing, so there is nothing to take.
+    pub(super) fn capture_codomain_value(&mut self, type_expr: ExprId, value: ExprId) {
+        let Some(codomain) = self.arrow_codomain(type_expr) else {
+            return;
+        };
+        let Some(function) = self.actual_function(value) else {
+            return;
+        };
+        let Some((r#return, return_value)) = self.compound_return(function) else {
+            return;
+        };
+        let codomain_term = self.state[codomain].term.expect("the codomain is compiled");
+        if self.is_bare_hole(codomain) {
+            // The hole takes the return's value; its type half stays the layout.
+            let Some(hole_value) = self.module.expr_value_half(codomain_term) else {
+                return;
+            };
+            self.module.unify(return_value, hole_value);
+            return;
+        }
+        if !self.is_compound_template(codomain) {
+            return;
+        }
+        // A concrete codomain is a template: it is cloned, and the whole return
+        // is matched against the clone.
+        let Some(instance) = self.clone_instance(codomain) else {
+            return;
+        };
+        self.check_unify(
+            r#return,
+            instance.root,
+            self.loc(value, 1),
+            DiagKind::Annotation,
+        );
+    }
+
+    /// The arrow's **codomain** expression, when the type expression is an arrow.
+    ///
+    /// # Invariant
+    /// The arrow's own expr is the type function; an annotation around it
+    /// states a type about the function, not about the arrow, so it is peeled.
+    fn arrow_codomain(&self, type_expr: ExprId) -> Option<ExprId> {
+        let mut expr = type_expr;
+        while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
+            expr = value;
+        }
+        let ExprKind::TypeFunction { return_type, .. } = self.ir[expr].kind else {
+            return None;
+        };
+        Some(return_type)
+    }
+
+    /// The **actual function** an expression denotes, when it is one.
+    ///
+    /// # Invariant
+    /// The value is read where it is held: a frozen function is named by a
+    /// static ref, which no local capture may read.
+    fn actual_function(&mut self, value: ExprId) -> Option<AnyFunctionId> {
+        let node = self.state[value].val?;
+        let held = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        match held.as_enum() {
+            Some(LowValue::Function(function)) => Some(function),
+            _ => None,
+        }
+    }
+
+    /// The actual function's **return** and its value, when the return is a
+    /// decided compound.
+    ///
+    /// # Invariant
+    /// The return is never forced: an undecided answer states nothing, so there
+    /// is nothing to capture and nothing to match.
+    fn compound_return(&self, function: AnyFunctionId) -> Option<(NodeId, NodeId)> {
+        let AnyFunctionId::Dynamic(fid) = function else {
+            return None;
+        };
+        let r#return = self.module.functions[fid].r#return;
+        let value = self.module.expr_value_half(r#return)?;
+        let held = self.module.node_value(AnyNodeId::Dynamic(value))?;
+        if !matches!(held.as_enum(), Some(LowValue::Array(_))) {
+            return None;
+        }
+        let ty = self.module.expr_type_half(r#return)?;
+        let ty = self.module.class_root(ty);
+        let layout = ty == self.module.class_root(self.tuple_template())
+            || ty == self.module.class_root(self.array_template())
+            || ty == self.module.class_root(self.struct_template());
+        layout.then_some((r#return, value))
     }
 }
