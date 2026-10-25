@@ -51,7 +51,8 @@ semantics; this one is the apply's walk with two decisions swapped.
 ## 3. The rules
 
 - **The root is always cloned.** An instantiation is an instance, and the root's
-  own class may hold the template's internal cells.
+  own class may hold the template's internal cells. (The caller's marking wins
+  over this: a marked root shares the whole template.)
 - **A template's own open cells are fresh.** The instance's cell for an open
   cell is a new empty cell, so a unify that fills it writes into the instance
   and not into the template. The template keeps its own open cells; nothing the
@@ -66,17 +67,23 @@ semantics; this one is the apply's walk with two decisions swapped.
   content is the caller's, not the instance's.
 - **A decided and fully closed cell may be shared; a cell with an open interior
   may not.** A cell is **closed** when it holds a decided value, has no
-  operator, and every cell its value's payload reaches is closed too. The
-  top-level value alone does not decide it: a tuple whose second element is an
-  open hole is not closed, however decided the tuple itself is.
+  operator, and every cell its content reaches is closed too. The top-level
+  value alone does not decide it: a tuple whose second element is an open hole
+  is not closed, however decided the tuple itself is. The reach runs upward, so
+  a cycle among the open cells is open as a whole — the graph is a graph, not a
+  tree.
 - **The wildcard is decided but never carried.** `LowValue::Any` is a value, not
   an open hole; the instance's cell replaces it, so the caller's value can fill
   it — a class holding the wildcard neither merges nor writes, so sharing the
   template's wildcard cell would lose the value.
 - **A frozen cell is read in place when it is closed, and becomes the
-  instance's own when it is open.** A frozen cell is readable and not writable,
-  so an open one cannot be the instance's cell: it is materialized into the
-  instance's block. A closed one crosses as the reference it is.
+  instance's own when it is open.** The closure test is the deep one, over the
+  frozen module's own payload graph: a frozen cell that holds a decided array
+  whose element is an open cell is **not** closed, and must not be shared. A
+  frozen cell cannot be written, so an open one has to become the instance's
+  own cell. The instance's cell for it is the instance's own in every respect:
+  homed in the target block, owned by the owner, shaped by the frozen cell, and
+  its origin the cell that named the frozen one.
 - **The class topology is rebuilt among the instance's cells**, by the apply's
   own regroup: the template's classes are the instance's classes. A shared cell
   joins the group of its own class, because the instance's cell for a template
@@ -84,33 +91,52 @@ semantics; this one is the apply's walk with two decisions swapped.
 - **An operator travels with the instance; its operand is the instance's own.**
   A computed answer travels only when the deep pass ran on it — a fact of the
   template; otherwise the instance's operator computes it again.
+- **An operator's operand gets no parent edge.** An operator's input is not the
+  cell's content, so it does not carry openness upward; the cell that holds the
+  operator is open by its own account, so the operand cannot make it more open.
+  The operand's own closure decides whether it is copied.
 
-## 4. What it does not do
+## 4. The graph has two edge kinds
+
+- A **payload edge** names a cell the value holds: an array's element, a
+  table's entry. The walk clones it, and the instance's value points at the
+  instance's cell.
+- A **trace edge** names a cell a plugin value keeps alive — the edge the GC
+  follows that the graph does not name (`ValueExt::traced`). It decides
+  closure: a value that keeps an open cell alive is **open**, so the cell
+  holding it is cloned rather than shared. It is not cloned itself, because
+  `P::Value` is opaque and `ValueExt` has no hook to rewrite a plugin value's
+  internals — the cells a plugin holds stay the template's, the same rule the
+  apply's `copy_ext` follows.
+
+## 5. What it does not do
 
 - **A closure captured by the template is shared, not re-homed.** The apply
   re-homes a closure because it mints one per call; the template walk mints
   none, so a captured closure's body is the template's. A template that
   captures a closure therefore shares that closure's cells — the one case where
   the instance's cells are not the instance's own.
+- **The cells a plugin value keeps alive stay the template's.** See §4: the
+  lowlevel can read the edge but not rewrite it.
 - **Every clone lands in the target block.** The apply maps a scope's content
   to a fresh child block; the template walk does not, because the caller names
   the block the instance lives in.
 
-## 5. The readings
+## 6. The readings
 
-`lichen-lowlevel`'s own lines, on this branch:
+The standing reading is the crate's own suite, unchanged by this slice:
 
 ```text
 cargo test -p lichen-lowlevel --test basic
-test result: ok. 174 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
-
-cargo test -p lichen-lowlevel --lib
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 164 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
 ```
 
-The ten `template_clone_*` tests in `crates/lichen-lowlevel/tests/basic/function.rs`
-cover the rules above: the fresh cells, the shared boundary, the internal
+The walk's own rules were measured with **probes** during the slice: ten
+`template_clone_*` cases over the fresh cells, the shared boundary, the internal
 sharing and the cycle, the rebuilt classes, the operator and its operand, the
 closed and the open interior, the wildcard, the owner's registration, the
-budget's refusal, and the frozen cell that is open beside the one that is
-decided.
+budget's refusal, the frozen cell that is open beside the one that is decided,
+the frozen cell whose *interior* is open, and the plugin value that keeps an
+open cell alive. They were removed from the tree on the maintainer's
+instruction — this workspace does not admit new tests without it — so they are
+recorded here and not kept as standing verification.

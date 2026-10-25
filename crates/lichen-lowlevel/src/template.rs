@@ -13,7 +13,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LowValue,
-    Module, NodeId, Operation, Program, StaticNodeId, TableItem,
+    Module, NodeId, Operation, Program, StaticNodeId, TableItem, ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -104,7 +104,7 @@ struct TemplateCtx<'a> {
     static_remap: HashMap<StaticNodeId, NodeId>,
     /// Whether a template cell's own content is closed.
     closed: HashMap<NodeId, bool>,
-    /// Whether a frozen cell holds a decided value.
+    /// Whether a frozen cell's own content is closed.
     static_closed: HashMap<StaticNodeId, bool>,
     /// Whether a budget stopped the walk.
     exhausted: bool,
@@ -162,11 +162,12 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// A cell is **open** when its own content is not closed: it holds no value, it
-    /// holds the wildcard, it has an operator, or its value's payload reaches an
-    /// open cell. A closed cell may be shared; an open one is cloned, so the
-    /// instance's own cells are fresh where the template's are open.
+    /// holds the wildcard, it has an operator, or its content reaches an open cell.
+    /// A closed cell may be shared; an open one is cloned, so the instance's own
+    /// cells are fresh where the template's are open. A **trace edge** — a cell a
+    /// plugin value keeps alive — decides closure, but is not cloned.
     fn template_closure_map(&mut self, root: NodeId, ctx: &mut TemplateCtx<'_>) {
-        // The payload graph: the cells a value's payload names, and their owners.
+        // A **payload edge** names a cell the value holds; the walk clones it.
         let mut parents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         let mut seen: HashSet<NodeId> = HashSet::new();
         let mut open: HashSet<NodeId> = HashSet::new();
@@ -179,23 +180,17 @@ impl<P: Program> Module<P> {
             if ctx.boundary.shares(node) {
                 continue;
             }
-            let children = self.template_payload_children(node);
-            for child in &children {
-                match child {
-                    Dyn(child) => {
-                        parents.entry(*child).or_default().push(node);
-                        stack.push(*child);
-                    }
-                    // A frozen cell that holds nothing cannot be written, so the
-                    // cell naming it is open.
-                    AnyNodeId::Static(sref) => {
-                        if !self.template_static_closed(*sref, ctx) {
-                            open.insert(node);
-                        }
-                    }
+            for child in self.template_payload_children(node) {
+                if let Dyn(child) = child {
+                    parents.entry(child).or_default().push(node);
+                    stack.push(child);
                 }
             }
-            // The operator's operand is a cell of the template.
+            for child in self.template_traced_children(node) {
+                parents.entry(child).or_default().push(node);
+                stack.push(child);
+            } // The operator's operand is a cell of the template, with no parent
+            // edge: an operator's input is not the cell's content.
             if let Some(operation) = self.nodes[node].operation
                 && let Some(operand) = operation.operand
             {
@@ -203,7 +198,7 @@ impl<P: Program> Module<P> {
             }
         }
         // The open cells: the leaves open by their own account, and every cell whose
-        // payload reaches one.
+        // content reaches one.
         for &node in &seen {
             if self.template_cell_is_open(node) {
                 open.insert(node);
@@ -271,21 +266,114 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether a frozen cell is closed: it holds a decided value.
+    /// The cells a cell's own value keeps alive: the edges the GC follows that the
+    /// graph does not name.
+    fn template_traced_children(&self, node: NodeId) -> Vec<NodeId> {
+        let Some(value) = self.nodes[node].value else {
+            return Vec::new();
+        };
+        let mut traced = Vec::new();
+        value.traced(&*self, &mut traced);
+        traced
+    }
+
+    /// Whether a frozen cell is closed: it holds a decided value whose own content
+    /// is closed too.
     ///
     /// # Invariant
-    /// The frozen module's own rule governs the cell's interior — an open cell
-    /// lives only inside a function (`docs/notes/attribute-isomorphism.md`) — so the
-    /// cell's own value decides it.
+    /// A frozen cell is read in its own module and written by nobody, so an open
+    /// cell inside it can never be filled: the cell that names it must be the
+    /// instance's own, and the frozen one must not be shared.
     fn template_static_closed(&self, sref: StaticNodeId, ctx: &mut TemplateCtx<'_>) -> bool {
         if let Some(&closed) = ctx.static_closed.get(&sref) {
             return closed;
         }
-        let closed = self
-            .static_read(sref)
-            .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)));
-        ctx.static_closed.insert(sref, closed);
-        closed
+        // The frozen payload graph: the cells a frozen value names, and their owners.
+        let mut parents: HashMap<StaticNodeId, Vec<StaticNodeId>> = HashMap::new();
+        let mut seen: HashSet<StaticNodeId> = HashSet::new();
+        let mut stack = vec![sref];
+        while let Some(cell) = stack.pop() {
+            if !seen.insert(cell) {
+                continue;
+            }
+            for child in self.template_static_children(cell) {
+                parents.entry(child).or_default().push(cell);
+                stack.push(child);
+            }
+        }
+        // The open frozen cells: no value, the wildcard, or an operator that re-runs.
+        let mut open: HashSet<StaticNodeId> = HashSet::new();
+        for &cell in &seen {
+            if self.template_static_cell_is_open(cell) {
+                open.insert(cell);
+            }
+        }
+        // The reach runs upward, so a cycle among the open frozen cells is open as
+        // a whole: the graph is a graph, not a tree.
+        let mut queue: Vec<StaticNodeId> = open.iter().copied().collect();
+        while let Some(cell) = queue.pop() {
+            let Some(owners) = parents.get(&cell) else {
+                continue;
+            };
+            for &owner in owners {
+                if open.insert(owner) {
+                    queue.push(owner);
+                }
+            }
+        }
+        for cell in seen {
+            let closed = !open.contains(&cell);
+            ctx.static_closed.insert(cell, closed);
+        }
+        ctx.static_closed[&sref]
+    }
+
+    /// Whether a frozen cell is open by its own account.
+    fn template_static_cell_is_open(&self, sref: StaticNodeId) -> bool {
+        let module = self.static_module(sref.module);
+        let Some(cell) = module.nodes.get(sref.index.index) else {
+            return true;
+        };
+        if cell.operation.is_some() {
+            return true;
+        }
+        let Some(value) = cell.value else {
+            return true;
+        };
+        matches!(value.as_enum(), Some(LowValue::Any))
+    }
+
+    /// The frozen cells a frozen cell's own value names.
+    fn template_static_children(&self, sref: StaticNodeId) -> Vec<StaticNodeId> {
+        let Some(value) = self.static_read(sref) else {
+            return Vec::new();
+        };
+        let children = match value.as_enum() {
+            // SAFETY: the payload is a frozen module's arena, which its
+            // registration holds alive for as long as the ref can be read.
+            Some(LowValue::Array(array)) => unsafe { array.items() }
+                .iter()
+                .map(|item| item.node)
+                .collect(),
+            Some(LowValue::Table(table)) => {
+                let mut children = Vec::new();
+                for item in unsafe { table.items() } {
+                    children.push(item.key);
+                    children.push(item.value);
+                }
+                children
+            }
+            _ => Vec::new(),
+        };
+        children
+            .into_iter()
+            .filter_map(|child| match child {
+                AnyNodeId::Static(child) => Some(child),
+                // A frozen value names only frozen cells; a dynamic one is not a
+                // cell of the frozen module and cannot be inspected.
+                AnyNodeId::Dynamic(_) => None,
+            })
+            .collect()
     }
 
     /// The instance's cell for the template's `source`.
@@ -350,7 +438,7 @@ impl<P: Program> Module<P> {
             }
         };
         let mapped = if carried {
-            value.map(|value| self.template_map_value(value, ctx, false))
+            value.map(|value| self.template_map_value(value, source, ctx, false))
         } else {
             None
         };
@@ -374,14 +462,15 @@ impl<P: Program> Module<P> {
     /// the instance's cell.
     ///
     /// # Invariant
-    /// A frozen element that holds a value stays a frozen reference — it is read in
-    /// its own module and written by nobody (`docs/notes/attribute-isomorphism.md`);
-    /// a frozen element that holds nothing becomes the instance's own cell, because
-    /// a frozen cell cannot be written.
+    /// A frozen element that holds a decided value and is closed stays a frozen
+    /// reference — it is read in its own module and written by nobody
+    /// (`docs/notes/attribute-isomorphism.md`); a frozen element that is open
+    /// becomes the instance's own cell, because a frozen cell cannot be written.
     #[stacksafe]
     fn template_map_value(
         &mut self,
         value: P::Value,
+        named_by: NodeId,
         ctx: &mut TemplateCtx<'_>,
         frozen: bool,
     ) -> P::Value {
@@ -392,7 +481,7 @@ impl<P: Program> Module<P> {
                 // the walk releases no block.
                 for &item in unsafe { array.items() } {
                     items.push(ArrayItem {
-                        node: self.template_map_ref(item.node, ctx, frozen),
+                        node: self.template_map_ref(item.node, named_by, ctx, frozen),
                         ..item
                     });
                 }
@@ -406,8 +495,8 @@ impl<P: Program> Module<P> {
                 let items: Vec<TableItem> = unsafe { table.items() }
                     .iter()
                     .map(|item| TableItem {
-                        key: self.template_map_ref(item.key, ctx, frozen),
-                        value: self.template_map_ref(item.value, ctx, frozen),
+                        key: self.template_map_ref(item.key, named_by, ctx, frozen),
+                        value: self.template_map_ref(item.value, named_by, ctx, frozen),
                         hash: item.hash,
                     })
                     .collect();
@@ -424,6 +513,7 @@ impl<P: Program> Module<P> {
     fn template_map_ref(
         &mut self,
         reference: AnyNodeId,
+        named_by: NodeId,
         ctx: &mut TemplateCtx<'_>,
         frozen: bool,
     ) -> AnyNodeId {
@@ -431,21 +521,29 @@ impl<P: Program> Module<P> {
             Dyn(_) if frozen => reference,
             Dyn(node) => Dyn(self.template_clone(node, ctx, false)),
             AnyNodeId::Static(sref) => {
-                // A frozen cell that holds a value is read in place: it is closed.
+                // A frozen cell that is closed is read in place: it holds a value
+                // nothing can write into.
                 if self.template_static_closed(sref, ctx) {
                     return reference;
                 }
-                // An open frozen cell cannot be written: it becomes this instance's own.
-                Dyn(self.template_materialize_static(sref, ctx))
+                // An open frozen cell cannot be written: it becomes this instance's
+                // own cell.
+                Dyn(self.template_materialize_static(sref, named_by, ctx))
             }
         }
     }
 
-    /// The instance's own cell for a frozen cell that holds nothing.
+    /// The instance's own cell for a frozen cell that is open.
+    ///
+    /// # Invariant
+    /// The clone is the instance's own cell: it is homed in the target block, owned
+    /// by the owner, shaped by the frozen cell, and its origin is the cell that
+    /// named the frozen one — a frozen cell has no dynamic node of its own.
     #[stacksafe]
     fn template_materialize_static(
         &mut self,
         sref: StaticNodeId,
+        named_by: NodeId,
         ctx: &mut TemplateCtx<'_>,
     ) -> NodeId {
         if let Some(&clone) = ctx.static_remap.get(&sref) {
@@ -453,10 +551,21 @@ impl<P: Program> Module<P> {
         }
         let clone = self.add_node(ctx.target, None, None);
         ctx.static_remap.insert(sref, clone);
+        self.nodes[clone].origin = Some(named_by);
+        // The frozen cell's own shape is the clone's shape.
+        let shape = self.static_module(sref.module).nodes[sref.index.index]
+            .low_shape
+            .clone();
+        if let Some(shape) = shape {
+            self.seed_class_low_type(clone, shape);
+        }
+        if let Some(owner) = ctx.owner {
+            self.register_in_function(owner, clone);
+        }
         // The frozen value's payload: the instance's own cells where the frozen ones
         // are open.
         let value = self.static_read(sref);
-        let mapped = value.map(|value| self.template_map_value(value, ctx, true));
+        let mapped = value.map(|value| self.template_map_value(value, clone, ctx, true));
         self.write_node_value(clone, mapped);
         clone
     }
