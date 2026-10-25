@@ -573,12 +573,12 @@ impl Compiler {
             } => {
                 let actual = self.compile_expr(actual);
                 let expected = self.compile_expr(expected);
-                self.alloc(ExprKind::Unify { actual, expected }, span)
+                self.alloc_unify(actual, expected, span)
             }
             // `@clone e`: the value's own holes become fresh.
             Expr::Clone { value, span } => {
                 let value = self.compile_expr(value);
-                self.alloc(ExprKind::Clone { value }, span)
+                self.alloc_clone(value, span)
             }
             // `actual <: template`: the actual is unified with a clone of the
             // template, so the template keeps its own holes.
@@ -589,8 +589,8 @@ impl Compiler {
             } => {
                 let actual = self.compile_expr(actual);
                 let template = self.compile_expr(template);
-                let expected = self.alloc(ExprKind::Clone { value: template }, span);
-                self.alloc(ExprKind::Unify { actual, expected }, span)
+                let expected = self.alloc_clone(template, span);
+                self.alloc_unify(actual, expected, span)
             }
             // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
             Expr::StructInst {
@@ -629,7 +629,7 @@ impl Compiler {
             } => {
                 let template = self.compile_expr(template);
                 let length = self.compile_expr(length);
-                self.alloc(ExprKind::Array { template, length }, span)
+                self.alloc_array(template, length, span)
             }
             // `template[e1, …, en]`: the array instance, its template and its
             // elements.

@@ -29,47 +29,30 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    /// Allocate a struct template: the field expressions and their names.
+    /// Allocate a struct value: the field expressions and their names.
     ///
     /// # Invariant
     ///
-    /// The two ranges are written here and are index-aligned: `names[i]` is the
-    /// name of `fields[i]`, so the checker reads a field by name against the
-    /// same position.
+    /// The two ranges are aligned by the allocator: `names[i]` is the name of
+    /// `fields[i]`, so the checker reads a field by name against the same
+    /// position.
     pub(super) fn alloc_struct(
         &mut self,
         fields: &[(ExprId, Option<&'static str>)],
         span: &Span,
     ) -> ExprId {
-        let fields_start = self.ir.children.len();
-        self.ir
-            .children
-            .extend(fields.iter().map(|&(field, _)| field));
-        let names_start = self.ir.struct_names.len();
-        self.ir
-            .struct_names
-            .extend(fields.iter().map(|&(_, name)| name));
-        let id = self.ir.alloc(ExprKind::Struct {
-            fields: ChildRange {
-                start: fields_start as u32,
-                end: self.ir.children.len() as u32,
-            },
-            names: ChildRange {
-                start: names_start as u32,
-                end: self.ir.struct_names.len() as u32,
-            },
-        });
+        let id = self.ir.alloc_struct(fields);
         self.spans.push(Some(*span));
         id
     }
     pub(super) fn alloc_instantiate(
         &mut self,
-        type_expr: ExprId,
+        template: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
         span: &Span,
     ) -> ExprId {
-        let id = self.ir.alloc_instantiate(type_expr, value, names);
+        let id = self.ir.alloc_instantiate(template, value, names);
         self.spans.push(Some(*span));
         id
     }
@@ -80,6 +63,12 @@ impl Compiler {
         span: &Span,
     ) -> ExprId {
         let id = self.ir.alloc_record(value, names);
+        self.spans.push(Some(*span));
+        id
+    }
+    /// Allocate an array template: the element template and the length.
+    pub(super) fn alloc_array(&mut self, template: ExprId, length: ExprId, span: &Span) -> ExprId {
+        let id = self.ir.alloc_array(template, length);
         self.spans.push(Some(*span));
         id
     }
@@ -97,21 +86,19 @@ impl Compiler {
         depths: &[usize],
         span: &Span,
     ) -> ExprId {
-        let elements_start = self.ir.children.len();
-        self.ir.children.extend_from_slice(elements);
-        let depths_start = self.ir.depths.len();
-        self.ir.depths.extend_from_slice(depths);
-        let id = self.ir.alloc(ExprKind::ArrayInst {
-            template,
-            elements: ChildRange {
-                start: elements_start as u32,
-                end: self.ir.children.len() as u32,
-            },
-            depths: ChildRange {
-                start: depths_start as u32,
-                end: self.ir.depths.len() as u32,
-            },
-        });
+        let id = self.ir.alloc_array_inst(template, elements, depths);
+        self.spans.push(Some(*span));
+        id
+    }
+    /// Allocate a clone: the value whose holes become fresh.
+    pub(super) fn alloc_clone(&mut self, value: ExprId, span: &Span) -> ExprId {
+        let id = self.ir.alloc_clone(value);
+        self.spans.push(Some(*span));
+        id
+    }
+    /// Allocate a unify: the actual value and the expected one.
+    pub(super) fn alloc_unify(&mut self, actual: ExprId, expected: ExprId, span: &Span) -> ExprId {
+        let id = self.ir.alloc_unify(actual, expected);
         self.spans.push(Some(*span));
         id
     }
