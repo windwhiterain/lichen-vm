@@ -490,6 +490,26 @@ where
             self.state[e].ty = Some(template_ty);
             return expr;
         }
+        if !shape::is_struct_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(template_ty),
+        ) {
+            // A non-struct template is a diagnostic, never a runtime panic.
+            self.record_guard(
+                template_ty,
+                template_ty,
+                self.loc(template, 1),
+                DiagKind::InstantiateCallee,
+                None,
+            );
+            let value_node = self.value_of(value);
+            let expr = self.expr_of(value_node, template_ty);
+            self.state[e].term = Some(expr);
+            self.state[e].val = Some(value_node);
+            self.state[e].ty = Some(template_ty);
+            return expr;
+        }
         self.check_unify(
             template_ty,
             self.struct_template(),

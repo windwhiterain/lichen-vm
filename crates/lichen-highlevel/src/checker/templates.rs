@@ -31,13 +31,8 @@ where
         self.check_expr(value);
         let Some(instance) = self.clone_instance(value) else {
             // A budget stopped the walk: a partial instance is worse than none.
-            self.record_guard(
-                self.type_expr,
-                self.type_expr,
-                self.loc(value, 0),
-                DiagKind::Guard,
-                None,
-            );
+            let term = self.state[value].term.unwrap_or(self.type_expr);
+            self.record_guard(term, term, self.loc(value, 0), DiagKind::Guard, None);
             return self.refused_expr(e);
         };
         let term = instance.root;
