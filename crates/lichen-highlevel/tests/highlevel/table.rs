@@ -33,8 +33,8 @@ fn value_of(build: impl FnOnce(&Writer) -> ExprId, what: &str) -> usize {
 /// the one `Array` layout.
 ///
 /// The instance's own content holds that wildcard, so the instance is
-/// **undecided** as a whole: a table key that must be hashed is a tuple, and
-/// this helper is for the keys whose *type* is what the test reads.
+/// **undecided** as a whole: a table drops such a key rather than hashing it,
+/// and this helper is for the keys whose *type* is what the test reads.
 fn int_array(w: &Writer, name: &str, values: &[usize]) -> ExprId {
     let literal = w.hole(&format!("{name}_element_value"));
     w.fill(literal, ExprKind::Literal(HighProgramLiteral::from(AnyLit)));
@@ -132,9 +132,8 @@ fn an_undecided_key_is_dropped_with_an_error() {
 
 #[test]
 fn table_keys_share_one_type() {
-    // An array's length is no longer part of its type — every array shares the
-    // one `Array` layout — so the two keys differ by their **layout**: an
-    // array and a tuple.
+    // An array's length is no longer part of its type, so the two keys
+    // differ by their **layout**: an array and a tuple.
     let found = kinds(|w| {
         let three = w.int("three", 3);
         let four = w.int("four", 4);

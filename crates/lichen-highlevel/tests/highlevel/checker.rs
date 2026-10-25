@@ -444,8 +444,8 @@ fn a_lambda_against_an_array_template_conflicts() {
 
 #[test]
 fn an_array_instance_is_typed_by_the_shared_array_template() {
-    // [@any : int, 2][1, 2] — the instance's type is the shared `Array`
-    // template and its value is the element template and the elements.
+    // [@any : int, 2][1, 2] — the type is the shared `Array` template; the
+    // value is the element template and the elements.
     let w = Writer::new();
     let element = any_of(&w, "element", w.int_type("int_ty"));
     let template = w.array_template("template", element, w.int("len", 2));
@@ -929,7 +929,7 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
     // The element types are the calls' lazy result cells, synced with their
-    // return exprs; the tuple's value holds the elements' own terms.
+    // return exprs; the value holds the elements.
     let e0 = b.state[c0].ty.unwrap();
     assert!(is_int_type(&b, e0), "element 0's cell syncs to int");
     let e1 = b.state[c1].ty.unwrap();
@@ -1225,7 +1225,7 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
     // The diagnostic is source-level: the subscript the program wrote and the
-    // element count the program wrote, never the value's internal slots.
+    // element count, not the value's own slots.
     assert_eq!(diags[0].index, Some(5));
     assert_eq!(diags[0].length, Some(3));
     assert_eq!(
@@ -1264,15 +1264,15 @@ fn array_index_out_of_bounds_against_a_bound_length() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
     // The diagnostic is source-level: the subscript the program wrote and the
-    // element count the bound states, never the value's internal slots.
+    // element count, not the value's own slots.
     assert_eq!(diags[0].index, Some(3));
     assert_eq!(diags[0].length, Some(2));
 }
 
 // --- struct values ----------------------------------------------------------
 
-// A struct value is [name table, nominal id, the fields' own terms…] and its
-// type is the shared `Struct` template; see `lichen_highlevel::shape`.
+// A struct value is [name table, nominal id, the fields' terms…]; see
+// `lichen_highlevel::shape`.
 
 #[test]
 fn a_struct_value_carries_a_name_table_and_a_fresh_nominal_id() {
@@ -1389,6 +1389,16 @@ fn a_named_struct_carries_a_name_to_index_table() {
         .collect();
     found.sort_by_key(|&(_, i)| i);
     assert_eq!(found, vec![("a", 0), ("b", 1)]);
+    // The fields follow in the definition's order, so the table's index is the
+    // field's own position.
+    let value_ids = array_ids(&b, b.state[s].val.unwrap());
+    assert_eq!(
+        value_ids.len(),
+        4,
+        "the name table, the id and the two fields"
+    );
+    assert_eq!(value_ids[2], b.state[t1].term.unwrap(), "the first field");
+    assert_eq!(value_ids[3], b.state[t2].term.unwrap(), "the second field");
 }
 
 #[test]
@@ -1530,9 +1540,8 @@ fn two_struct_values_conflict_on_their_name_tables() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // The conflict is inside the value layout, and the name table comes first:
-    // two tables are never one handle, so the nominal id behind it is not what
-    // the diagnostic names.
+    // The conflict is inside the value layout, and the name table comes
+    // first: two tables are never one handle.
     assert!(
         matches!(
             (&diags[0].value_a, &diags[0].value_b),
@@ -1656,6 +1665,14 @@ fn a_struct_instantiation_checks_its_fields() {
         !b.ok,
         "S{{.f 1, .t 2}} against struct{{.f Type, .t Type}} must fail (fields)"
     );
+    // a literal is not a positional value
+    let w = Writer::new();
+    let five = w.int("five", 5);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
+    let inst = w.instantiate("inst", s, five, &[]);
+    let b = build(inst, w);
+    assert!(!b.ok, "S(5) must fail — a literal is not a struct value");
     // an unknown field name is refused
     let w = Writer::new();
     let one = w.int("one", 1);
@@ -1700,9 +1717,8 @@ fn instances_of_different_struct_occurrences_conflict() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::ArrayElement);
-    // The conflict is inside the value layout, and the name table comes first:
-    // two tables are never one handle, so the nominal id behind it is not what
-    // the diagnostic names.
+    // The conflict is inside the value layout, and the name table comes
+    // first: two tables are never one handle.
     assert!(
         matches!(
             (&diags[0].value_a, &diags[0].value_b),
@@ -1744,8 +1760,8 @@ fn an_instantiation_through_a_call_result_callee_checks() {
         "a call-result callee resolves to its struct layout: {:?}",
         b.diagnostics()
     );
-    // The instance's type is the struct layout the callee returns: the shared
-    // `Struct` template the callee's own struct value carries.
+    // The instance's type is the struct layout the callee returns: the
+    // shared `Struct` template.
     assert_eq!(
         b.state[inst].ty, b.state[s].ty,
         "the instance's type is the callee's struct layout"
@@ -1905,8 +1921,8 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_undecidable_array_template_length_is_guarded() {
-    // [@any : int, _][1] — the length is a value now, so a placeholder there
-    // leaves the template undecidable and the instance is guarded.
+    // [@any : int, _][1] — the length is a value now, so a placeholder
+    // leaves the template undecidable.
     let w = Writer::new();
     let element = any_of(&w, "element", w.int_type("int_ty"));
     let template = w.array_template("template", element, w.hole("len"));
@@ -1940,8 +1956,8 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 
 #[test]
 fn a_shallow_array_element_is_masked() {
-    // [@any : int, 2][1, @shallow(1) 2] — the marker masks the element's value
-    // slot; the type is the shared `Array` template.
+    // [@any : int, 2][1, @shallow(1) 2] — the marker masks the element's
+    // value slot; the type is the `Array` template.
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
@@ -2005,7 +2021,7 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
         "the element's own value is under the mask"
     );
     // The marked position is **lazy**: the apply under the mask has not run,
-    // so its answer is undecided until a read forces it.
+    // so its answer is undecided.
     let answer = b
         .module
         .element_value_node(AnyNodeId::Dynamic(masked[0]))
@@ -2356,9 +2372,8 @@ fn an_open_struct_template_lets_its_field_be_read() {
     // `F = t => { t <: A; t.I }` with `A = {.I _, .O _}` — the template names
     // the fields, leaving their types open.
 
-    // The parameter is matched against a **clone** of the template before the
-    // body compiles, so the body's `t.I` reads a field the template already
-    // named, and applying `F` to an instance closes it.
+    // The parameter is matched against a **clone** of the template, so the
+    // body's `t.I` reads a field the template named.
     let w = Writer::new();
     let t = w.param("t");
     let open_i = w.hole("open_i");
@@ -2410,7 +2425,7 @@ fn an_open_struct_template_lets_its_field_be_read() {
 #[test]
 fn a_tuple_template_parameter_function_reads_an_element() {
     // The regression `f = p => { p <: (@any : int, @any : int); p(0) }`;
-    // `f (1, 2)` failed with `expected raw[?a, Int], found raw[?a, Int]`.
+    // `f (1, 2)` failed with `expected raw[?a, Int]`.
     let w = Writer::new();
     let p = w.param("p");
     let int1 = any_of(&w, "int1", w.int_type("int_ty"));
