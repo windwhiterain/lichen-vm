@@ -55,6 +55,14 @@ fold identity is exact at bf16 because a reduction states `0`, `1` or `-inf` and
 exact halves; the lowering refuses a bf16 instruction **by name**
 (`BridgeRefusal::UnsupportedClass`) until the emitter can carry one.
 
+**A bf16 *read* is carried now.** The emitter's slice landed the half buffer, and a body that reads
+one holds the float the emitter widens it to — so the bridge reads a brain-float buffer as the real
+it holds, the way the emitter does, and a **bf16 computation** is still refused (SPIR-V has no
+brain-float arithmetic, and the emitter refuses it too). This was not a nicety: a class pack
+narrows a buffer, so a branch whose weight is bf16 reads one, and a bridge that refused the read
+could not derive the region's schema at all — every region holding such a node was refused by name
+(`ProjectionNotBridged`). See [automatic-fusion](automatic-fusion.md) § "The class pass".
+
 ## What the compiler named, once the mirrors were in
 
 `cargo check --workspace --all-targets` after the mirrors: **37 arms across five library files and

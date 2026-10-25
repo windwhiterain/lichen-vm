@@ -14,13 +14,10 @@ use lichen_fusion::{Reduction, normalize};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    KernelClaim, KernelFragment, KernelId, Plan, ScalarClass, Slice, Space, Staging,
-    fragment_digest,
+    KernelClaim, KernelFragment, KernelId, Plan, Slice, Space, Staging, fragment_digest,
 };
 
-use crate::fused::{
-    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, write_fused_kernel,
-};
+use crate::fused::{FusedKernel, land_fused_kernel, landing_reason, write_fused_kernel};
 use crate::fusion_claim::{
     DeclaredFold, REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, marked_value,
 };
@@ -172,83 +169,7 @@ impl GraphPass for AutomaticTiling {
                 &self.packs,
             ));
         }
-        // A class constraint lands on any kernel node: its node list and input slots are the key.
-        let mut pending: Vec<(
-            usize,
-            Option<Instance>,
-            Option<ScalarClass>,
-            Vec<(usize, ScalarClass)>,
-        )> = Vec::new();
-        for (position, node) in rewritten.nodes().iter().enumerate() {
-            let Node::Kernel(kernel) = node;
-            let digest = fragment_digest(&kernel.fragment);
-            let instance = match instances.get(&digest) {
-                Some(Ok(instance)) => Some(instance.clone()),
-                _ => None,
-            };
-            let schema = instance.as_ref().map(|instance| instance.schema.hash());
-            let Some(pack) = self.packs.iter().find(|pack| {
-                let node_match = pack.nodes().is_empty() || pack.nodes().contains(&position);
-                let schema_match = match pack.schema() {
-                    None => true,
-                    Some(hash) => schema.as_ref() == Some(hash),
-                };
-                node_match && schema_match && (pack.class().is_some() || !pack.classes().is_empty())
-            }) else {
-                continue;
-            };
-            pending.push((position, instance, pack.class(), pack.classes().to_vec()));
-        }
-        for (position, instance, single, classes) in pending {
-            lines.push(classed(
-                &mut rewritten,
-                position,
-                instance.as_ref(),
-                single,
-                &classes,
-            ));
-        }
         Some(rewritten)
-    }
-}
-
-/// Land a node at the classes its pack states: a whole-node class, or named input slots.
-///
-/// # Invariant
-/// The body is the program's and only the precision is the pack's; a node with no claim carries
-/// none, which is what lets a class pack reach a composed graph the claim join refuses.
-fn classed(
-    graph: &mut Graph,
-    position: usize,
-    instance: Option<&Instance>,
-    single: Option<ScalarClass>,
-    classes: &[(usize, ScalarClass)],
-) -> String {
-    let Node::Kernel(node) = &graph.nodes()[position];
-    let mut fragment = node.fragment.clone();
-    if let Some(class) = single {
-        fragment.states_the_class(class);
-    }
-    for (slot, class) in classes {
-        fragment.states_input_class(*slot, *class);
-    }
-    let artifact = write_fused_kernel(&FusedKernel {
-        fragment,
-        claim: instance.map(|instance| instance.claim.clone()),
-        plan: Plan::default(),
-    });
-    match land_fused_kernel(graph, position, &artifact) {
-        Ok(_) => {
-            let stated: Vec<String> = match single {
-                Some(class) => vec![format!("{class:?}")],
-                None => classes
-                    .iter()
-                    .map(|(slot, class)| format!("slot {slot}: {class:?}"))
-                    .collect(),
-            };
-            format!("node {position}: the pack states {}", stated.join(", "))
-        }
-        Err(refusal) => format!("node {position}: refused: {}", landing_reason(&refusal)),
     }
 }
 
@@ -476,20 +397,6 @@ fn seeded(reduction: &Reduction, lane_width: u32) -> String {
     )
 }
 
-/// Why a tiled body did not land, with the plan check's own name where one refused it.
-///
-/// # Invariant
-/// A plan refusal is named as well as described, because the report is the only place a runner
-/// reads which check refused a pack: a sentence alone could not be matched to the variant.
-fn landing_reason(refusal: &LandingRefusal) -> String {
-    match refusal {
-        LandingRefusal::Read(FusedRefusal::PlanRefused { refusal }) => {
-            format!("{}: {}", refusal.name(), refusal.message())
-        }
-        other => format!("the tiled body did not land: {}", other.message()),
-    }
-}
-
 /// One node's line, for a tiling the pass declined to build or to land.
 ///
 /// # Invariant
@@ -554,35 +461,51 @@ fn insert(
 /// The algebra a fragment's own marks declare, or why the node-local reading is not its algebra.
 ///
 /// # Invariant
+/// The schema is the node's own and the algebra is the schema's: a schema that derives none
+/// states no algebra, so the row is refused by the same name the schema refused it by.
+fn derive(kernel: &Kernel) -> Row {
+    let schema = schema_of(kernel.id, &kernel.claim, &kernel.fragment)?;
+    let reduction = schema.reduction()?;
+    Ok(Instance {
+        claim: kernel.claim.clone(),
+        schema,
+        reduction,
+    })
+}
+
+/// The schema a claim and a fragment derive, or the refusal that names why they derive none.
+///
+/// # Invariant
 /// The projections are the fragment's own, as §6's engine reads them: a role the body does not
 /// mark is refused by name, and a marked subexpression the bridge cannot read carries its cause.
 ///
 /// The refusal's `node` is the kernel **id**; the run report prepends the graph node. A role
 /// outside [`NODE_LOCAL_ROLES`] is beyond a node, and another interface is not read at all.
-fn derive(kernel: &Kernel) -> Row {
-    if kernel.claim.interface != REDUCTION {
+pub(crate) fn schema_of(
+    kernel: KernelId,
+    claim: &KernelClaim,
+    fragment: &KernelFragment,
+) -> Result<SchemaNode, SchemaRefusal> {
+    if claim.interface != REDUCTION {
         return Err(SchemaRefusal::UnknownInterface {
-            node: kernel.id,
-            interface: kernel.claim.interface.clone(),
+            node: kernel,
+            interface: claim.interface.clone(),
         });
     }
-    let roles = roles(&kernel.claim);
+    let roles = roles(claim);
     let mut projections = Vec::with_capacity(roles.len());
     for role in roles.iter().cloned() {
-        let marked = match marked_value(&kernel.fragment, &kernel.claim.interface, &role) {
+        let marked = match marked_value(fragment, &claim.interface, &role) {
             Ok(marked) => marked,
             Err(_) => {
-                return Err(SchemaRefusal::RoleNotMarked {
-                    node: kernel.id,
-                    role,
-                });
+                return Err(SchemaRefusal::RoleNotMarked { node: kernel, role });
             }
         };
-        let expression = match projection(&kernel.fragment, marked, ReadRoles::DATUM_ONLY) {
+        let expression = match projection(fragment, marked, ReadRoles::DATUM_ONLY) {
             Ok(expression) => expression,
             Err(cause) => {
                 return Err(SchemaRefusal::ProjectionNotBridged {
-                    node: kernel.id,
+                    node: kernel,
                     role,
                     cause,
                 });
@@ -592,7 +515,7 @@ fn derive(kernel: &Kernel) -> Row {
             Some(canonical) => canonical,
             None => {
                 return Err(SchemaRefusal::NotCanonical {
-                    node: kernel.id,
+                    node: kernel,
                     role,
                     budget: lichen_fusion::NORMALIZATION_BUDGET,
                 });
@@ -612,21 +535,15 @@ fn derive(kernel: &Kernel) -> Row {
         .collect();
     if !beyond.is_empty() {
         return Err(SchemaRefusal::BeyondANode {
-            node: kernel.id,
+            node: kernel,
             roles: beyond,
         });
     }
-    let schema = SchemaNode {
-        position: kernel.id,
-        kernel: kernel.id,
-        interface: kernel.claim.interface.clone(),
+    Ok(SchemaNode {
+        position: kernel,
+        kernel,
+        interface: claim.interface.clone(),
         projections,
-    };
-    let reduction = schema.reduction()?;
-    Ok(Instance {
-        claim: kernel.claim.clone(),
-        schema,
-        reduction,
     })
 }
 

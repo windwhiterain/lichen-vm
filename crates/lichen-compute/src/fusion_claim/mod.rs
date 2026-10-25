@@ -6,6 +6,8 @@
 //! What is left here is the one reader that needs the language: walking a `Module` to find
 //! which node holds which kernel id.
 
+use std::collections::HashSet;
+
 use crate::compute::{ComputeValue, KernelId};
 use lichen_kernel_ir::ClaimRefusal;
 use lichen_lowlevel::{AnyNodeId, Module, NodeId};
@@ -18,6 +20,34 @@ pub use lichen_runtime::fusion_claim::{
     SchemaHash, SchemaNode, SchemaRefusal, claim_of, derive_regions, fragment_of, marked_value,
     region_positions,
 };
+
+/// The claimed kernels a module's own nodes name, as the passes read them.
+///
+/// # Invariant
+/// The id is read from a node whose own value names a kernel, never re-derived from the source: a
+/// kernel *value* is a `Copy` id, so the fragment the registry holds beside it is the only
+/// compiled body there is.
+pub fn instances(module: &Module<LangProgram>) -> Vec<Instance> {
+    let mut instances = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for (id, _node) in module.nodes.iter() {
+        let Ok(kernel) = kernel_id(module, id) else {
+            continue;
+        };
+        if !seen.insert(kernel) {
+            continue;
+        }
+        let (Some(claim), Ok(fragment)) = (claim_of(kernel), fragment_of(kernel)) else {
+            continue;
+        };
+        instances.push(Instance {
+            kernel,
+            claim,
+            fragment,
+        });
+    }
+    instances
+}
 
 /// The kernel id a value names, or the refusal that names what the value is.
 ///

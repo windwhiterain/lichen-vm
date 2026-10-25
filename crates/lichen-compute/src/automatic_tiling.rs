@@ -6,13 +6,11 @@
 //! the kernel identities a module's own values name and hands the pass the kernels it finds. The
 //! pass itself is `lichen_runtime::automatic_tiling`, which takes no `Module`.
 
-use std::collections::HashSet;
-
 use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId};
 use lichen_lowlevel::Module;
 
 use crate::compute::{GraphPass, set_graph_pass};
-use crate::fusion_claim::{claim_of, fragment_of, kernel_id};
+use crate::fusion_claim::instances;
 use crate::language::LangProgram;
 use crate::placement_pack::PlacementPack;
 
@@ -46,7 +44,7 @@ pub fn tiling_pass_with_packs(
     module: &Module<LangProgram>,
     packs: &[PlacementPack],
 ) -> Box<dyn GraphPass> {
-    lichen_runtime::automatic_tiling::tiling_pass(instances(module), packs)
+    lichen_runtime::automatic_tiling::tiling_pass(kernels(module), packs)
 }
 
 /// The kernels a module's own nodes name, as the derivation reads them.
@@ -55,20 +53,9 @@ pub fn tiling_pass_with_packs(
 /// The id is read from a node whose own value names a kernel, never re-derived from the source:
 /// a kernel *value* is a `Copy` id, so the fragment the registry holds beside it is the only
 /// compiled body there is.
-fn instances(module: &Module<LangProgram>) -> Vec<(KernelId, KernelClaim, KernelFragment)> {
-    let mut kernels = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
-    for (id, _node) in module.nodes.iter() {
-        let Ok(kernel) = kernel_id(module, id) else {
-            continue;
-        };
-        if !seen.insert(kernel) {
-            continue;
-        }
-        let (Some(claim), Ok(fragment)) = (claim_of(kernel), fragment_of(kernel)) else {
-            continue;
-        };
-        kernels.push((kernel, claim, fragment));
-    }
-    kernels
+fn kernels(module: &Module<LangProgram>) -> Vec<(KernelId, KernelClaim, KernelFragment)> {
+    instances(module)
+        .into_iter()
+        .map(|instance| (instance.kernel, instance.claim, instance.fragment))
+        .collect()
 }

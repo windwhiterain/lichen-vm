@@ -193,12 +193,9 @@ impl Walk<'_> {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
             KernelInstr::Const(ScalarClass::BFloat16, _)
-            | KernelInstr::Bin(ScalarClass::BFloat16, _)
-            | KernelInstr::BufferReadCall(ScalarClass::BFloat16) => {
-                Err(BridgeRefusal::UnsupportedClass {
-                    class: ScalarClass::BFloat16,
-                })
-            }
+            | KernelInstr::Bin(ScalarClass::BFloat16, _) => Err(BridgeRefusal::UnsupportedClass {
+                class: ScalarClass::BFloat16,
+            }),
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
             KernelInstr::Fma => Err(BridgeRefusal::FusedMultiplyAdd),
             KernelInstr::Negate => {
@@ -235,7 +232,9 @@ impl Walk<'_> {
             KernelInstr::Conv { from, to } => self.conversion(args, from, to),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),
-            KernelInstr::BufferReadCall(ScalarClass::Float) => {
+            // **A brain float is the real it holds**: a bf16 buffer reads as the float it widens to.
+            KernelInstr::BufferReadCall(ScalarClass::Float)
+            | KernelInstr::BufferReadCall(ScalarClass::BFloat16) => {
                 let position = self.read_position(args)?;
                 if self.reads.parameter_leaves.is_some() {
                     return Err(BridgeRefusal::ReadsABuffer);

@@ -1256,8 +1256,10 @@ the bridge's manifest already stated. The seam's own properties:
   tiling pass gets no merge — while a pack may carry **both** a `plan` and a `fuse`, and could therefore
   only half apply, silently. The **floor** (`crates/lichen-compute/src/floor.rs`,
   `install_floor`/`install_floor_with_packs`, and the wrap-able `floor_pass_with_packs`) is the chain
-  that honours both: **[region merge, then tiling]** in one `set_graph_pass`, merge first because it
-  leaves fewer nodes for the tiling pass to look at, both stages' lines in the one report in stage order.
+  that honours both: **[the classes, then the region merge, then the tiling]** in one `set_graph_pass`,
+  merge before tiling because it leaves fewer nodes for the tiling pass to look at, and the classes
+  before both because a merged node's ports are the classes its branches were given — all three
+  stages' lines in the one report in stage order.
   A merged node has no claim, so the tiling stage meets it and refuses it **by name** (`NotClaimed`,
   `9a944661`) rather than passing over it — the chain is only honest because that silence was already
   removed. `pass_chain` (`lichen-compute`) is the mechanism; the floor is the order a machine installs.

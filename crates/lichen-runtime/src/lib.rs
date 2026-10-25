@@ -8,6 +8,7 @@
 //! lichen-runtime` naming no language crate *is* the check.
 
 pub mod automatic_tiling;
+pub mod class_pass;
 pub mod device;
 pub mod fused;
 pub mod fusion_claim;
@@ -23,6 +24,7 @@ pub mod region_merge;
 pub mod wasm;
 
 pub use automatic_tiling::tiling_pass;
+pub use class_pass::class_pass;
 pub use device::{DeviceFacts, DeviceFactsSource, DeviceRefusal};
 pub use fused::schema::FORMAT_VERSION as ARTIFACT_FORMAT_VERSION;
 pub use fused::{

@@ -228,6 +228,15 @@ impl Prepared<'_> {
     pub fn nodes(&self) -> usize {
         self.graph.nodes().len()
     }
+
+    /// The graph the step will run, as the passes left it.
+    ///
+    /// # Invariant
+    /// The graph is the one the step dispatches, so a caller that reads a node's fragment reads
+    /// the body that will run — what a pack's class landed on included.
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
 }
 
 /// The step a program recorded, and what the passes said while it was recorded.

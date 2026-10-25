@@ -2,6 +2,7 @@
 //! See docs/notes/plugin-taxonomy.md §5.
 
 pub mod automatic_tiling;
+pub mod class_pass;
 pub mod compute;
 pub mod floor;
 pub mod fusion_claim;

@@ -259,11 +259,58 @@ same limit the pre-attention region has always had, now inside a branch instead 
 producer. H4 moves the shared producer out of the merge; it does not lift the reduction's limit
 behind a consumer.
 
+### The class pass, and the classes a merged node inherits
+
+**The class application is a pass of its own, and it runs first.** It was in the tiling pass,
+which runs after the merge — so a merged node's ports never took the classes its branches were
+given, and the fused step read the bf16 residents as floats. The pass is
+`crates/lichen-runtime/src/class_pass.rs` (the compute-side `crates/lichen-compute/src/class_pass.rs`
+is the language wrapper), and the floor's chain is now **[the classes, then the region merge, then
+the tiling]**. A caller with no class pack sees no change: the pass lands nothing and answers no
+graph.
+
+**The landed kernel is registered under the claim it was compiled for.** A node's fragment is the
+only thing a graph holds — no kernel id — so a class that changes it is a *new* kernel, and the
+merge's join (the registry) would not find the node without it. The class pass interns the landed
+fragment with the node's own claim, so the merge composes the branches it was given and the merged
+fragment inherits their classes. A pack never answers a legality check: the class pass rewrites
+classes by name and the merge's checks run after, as they always did.
+
+**Measured** (`crates/lichen-serve/examples/fuse_class_probe.rs`, the pre-attention composite, the
+class pack naming nodes 2, 6, 7 at slot 1, the sibling strategy):
+
+- the merged node at position 2 reads **`[Float, BFloat16, BFloat16]`** — the norm's output as a
+  float and **both** weight buffers as brain floats, which is what the branches were given;
+- the fused step runs and its **three answers equal** the same step prepared without the merge
+  (1024, 1024 and 2048 elements), and both differ from the same step with no class pack at all —
+  the brain-float truncation of the weights is visible in the numbers.
+
+**The wall this slice met was the symbolic bridge, and it is now past.** A class pack narrows a
+buffer, so the branch's body reads a `BFloat16` — and the bridge refused a brain-float read by name
+(`UnsupportedClass`), so the region's schema could not be derived and every region holding a
+class-landed node was refused (`ProjectionNotBridged`). The bridge now reads a brain-float buffer as
+the real it holds, which is what the emitter has always done with one (it widens on the way in and
+narrows on the way out, so no body holds a half). **A bf16 *computation* is still refused** — SPIR-V
+has no brain-float arithmetic, and the emitter refuses it too.
+
+**A class pack moves the region's hash, because the region's ports' classes are in its canonical
+form.** The pre-attention's sibling region is `sha256:820a91…` before the classes land and
+`sha256:ff1d97…` after them, so a `fuse` pack that named the region names the *pre-class* region
+and no longer names it. The merge still fires — under the floor's own proof, which a sibling region
+holds — and the report says so. **The floor's licence line names no hash** (its wording is pinned
+by the compute tests), so the emitted file no longer carries that region's override: a human who
+wants it named has to learn the hash another way.
+
+**The module-scoped join does not see a class-landed kernel.** The floor installed on a module
+that has already run joins the graph's nodes against the kernels *that module names*, and a landed
+kernel is one the module does not name. The registry-scoped paths — the compiler's `--pack` and the
+serve's `install_floor_for_run` — read the registry and do see it.
+
 ### What is not true yet
 
 - **The file is read, not emitted.** The pass does not write a plan back.
-- **`passes` is parsed and the floor runs one merge.** The chain is one region merge and one
-  tiling pass, and the plan's pass count is carried, not spent.
+- **`passes` is parsed and the floor runs one merge.** The chain is one class pass, one region merge
+  and one tiling pass, and the plan's pass count is carried, not spent.
 - **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
   staging is checked against the budget.
 - **The strategy steers the regions' shape and nothing else.** `sibling` derives the sibling

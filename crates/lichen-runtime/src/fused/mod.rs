@@ -206,6 +206,20 @@ impl std::fmt::Display for LandingRefusal {
     }
 }
 
+/// Why a landed body did not land, with the plan check's own name where one refused it.
+///
+/// # Invariant
+/// A plan refusal is named as well as described, because the report is the only place a runner
+/// reads which check refused a pack: a sentence alone could not be matched to the variant.
+pub fn landing_reason(refusal: &LandingRefusal) -> String {
+    match refusal {
+        LandingRefusal::Read(FusedRefusal::PlanRefused { refusal }) => {
+            format!("{}: {}", refusal.name(), refusal.message())
+        }
+        other => format!("the tiled body did not land: {}", other.message()),
+    }
+}
+
 /// Read `text` as a fused kernel and put its fragment into `graph`'s node.
 ///
 /// # Invariant
