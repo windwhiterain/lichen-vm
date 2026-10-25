@@ -20,7 +20,8 @@ use crate::{
 ///
 /// # Invariant
 /// **The producer's store goes, unless it answers the consumer**: then the store is kept, the
-/// consumer's read of that buffer stays a read, and a barrier separates the write from the read.
+/// consumer's read of that buffer stays a read, and a barrier separates the write from the read
+/// — unless the two are one lane, which observes its own store and needs no barrier.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
@@ -420,10 +421,11 @@ pub fn compose_fan_out(
         // **The staged path's barrier**: the store and the read that observes it.
         for &(read, _) in &edge.absorbed_reads {
             if staged_ordinal.is_some() {
-                body.barriers.push(Barrier {
-                    write,
-                    read: resolve(read),
-                });
+                let read = resolve(read);
+                // **A same-lane pair records no barrier**: one lane sees its own store.
+                if !same_lane(&body, write, read) {
+                    body.barriers.push(Barrier { write, read });
+                }
             }
         }
         // Only the first consumer's marks are kept: a merged node carries no claim to read them.
@@ -558,6 +560,37 @@ impl ScalarUnion {
 /// stands — so the merged list would answer one number where the body asked for another.
 pub fn binds_its_domain(fragment: &KernelFragment) -> bool {
     fragment.body.parameters().len() == fragment.param_shape.flat_arity()
+}
+
+/// Whether a staged pair's write and its read address the same lane.
+///
+/// # Invariant
+/// **The same `ValueId` and nothing else**: the write's and the read's index operands are one
+/// value, so one lane observes its own store in program order, and no barrier is needed. The
+/// write precedes the read — the producer's body comes first. Two index expressions that
+/// differ are two lanes' slots, and the barrier stays: below one workgroup it would be
+/// non-uniform.
+pub(crate) fn same_lane(body: &KernelBody, write: ValueId, read: ValueId) -> bool {
+    let write_index = match body.values.get(write.0 as usize) {
+        Some(ValueDef::Instr {
+            op: KernelInstr::BufferWriteCall(_),
+            args,
+            ..
+        }) => args.get(1).copied(),
+        _ => None,
+    };
+    let read_index = match body.values.get(read.0 as usize) {
+        Some(ValueDef::Instr {
+            op: KernelInstr::OutputReadCall(_),
+            args,
+            ..
+        }) => args.get(1).copied(),
+        _ => None,
+    };
+    match (write_index, read_index) {
+        (Some(write_index), Some(read_index)) => write_index == read_index,
+        _ => false,
+    }
 }
 
 /// The merged parameter a body's `slot`-th entry parameter lands on.

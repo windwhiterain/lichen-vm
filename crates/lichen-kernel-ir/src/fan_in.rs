@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use crate::compose::{
     Renumber, ScalarUnion, branch_targeting, buffer_reads, compact, copy_cone, duplicated_mark,
     first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator, position_constant,
-    read_address, shapes_differ, shifted_past, shifted_write_positions, splice_runtime_scalars,
-    write_edge, write_sites,
+    read_address, same_lane, shapes_differ, shifted_past, shifted_write_positions,
+    splice_runtime_scalars, write_edge, write_sites,
 };
 use crate::{
     Barrier, BasicBlock, ComposeRefusal, Cone, KernelFragment, KernelInstr, KernelMark,
@@ -59,9 +59,9 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
 ///
 /// # Invariant
 /// **A staged producer keeps its store and the body that reads it reads it back**: the merged
-/// body writes the producer's output buffers, the read becomes an `OutputReadCall` at the
-/// producer's output ordinal, and a barrier names the write with the read. Only a carried
-/// accumulation is staged; a producer the caller did not name is recomputed.
+/// body writes the producer's outputs, the read becomes an `OutputReadCall` at the producer's
+/// output ordinal, and a barrier names the write with the read, unless one lane holds both.
+/// Only a carried accumulation is staged; a producer the caller did not name is recomputed.
 pub fn compose_fan_in_staged(
     producers: &[Producer<'_>],
     staged: &[usize],
@@ -465,10 +465,14 @@ pub fn compose_fan_in_staged(
             let merged_write = renumbers[from]
                 .as_ref()
                 .map_or(write, |renumber| renumber.resolve(write));
-            body.barriers.push(Barrier {
-                write: merged_write,
-                read: resolve(read),
-            });
+            let read = resolve(read);
+            // **A same-lane pair records no barrier**: one lane sees its own store.
+            if !same_lane(&body, merged_write, read) {
+                body.barriers.push(Barrier {
+                    write: merged_write,
+                    read,
+                });
+            }
         }
         // Only the consumer's marks are kept: a merged node carries no claim to read them.
         if index + 1 == edges.len() {
