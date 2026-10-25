@@ -14,8 +14,8 @@ use lichen_graph_ir::{
     Count, Graph, KernelNode, Node, Scalar as GraphScalar, ValueId as GraphValueId,
 };
 use lichen_kernel_ir::{
-    ComposeRefusal, KernelFragment, Producer, ScalarClass, Sibling, compose, compose_fan_in,
-    compose_fan_out, compose_siblings,
+    ComposeRefusal, KernelFragment, Producer, ScalarClass, Sibling, carried_producers, compose,
+    compose_fan_out, compose_fan_in_staged, compose_siblings,
 };
 
 use crate::fusion_claim::{
@@ -178,6 +178,13 @@ struct Folded {
     writes: Vec<usize>,
     /// The runtime scalars the merged node binds, in the merged fragment's own order.
     scalars: Vec<GraphScalar>,
+    /// Whether the merged fragment keeps a store a body reads back.
+    ///
+    /// # Invariant
+    /// **The composition's own answer is the fact**: the recomputing path copies the producer's
+    /// value and keeps no store, and the staged path keeps the producer's store — so this is
+    /// what says the merged node's read needs a barrier to reach it.
+    keeps_store: bool,
 }
 
 impl GraphPass for RegionMerge {
@@ -881,7 +888,7 @@ fn merge_region(
     let folded = composed(graph, starts, positions, &links, shape)?;
     // **A staged store is legal only where one lane group holds every lane**: the barrier
     // orders one group's lanes.
-    if keeps_a_store(graph, positions, &folded.fragment, shape) {
+    if keeps_a_store(shape, &folded) {
         let lanes = folded.fragment.target.lane_width.lanes() as usize;
         let elements = match region_extent(graph, positions)? {
             Count::Constant(count) => Some(count),
@@ -1028,24 +1035,15 @@ fn merge_region(
 /// Whether the merged fragment keeps a producer's store, so the consumer reads it back.
 ///
 /// # Invariant
-/// **The fragment's own output count is the fact**: the staged path keeps the store, so the
-/// merged fragment writes one buffer per region node, where the recomputing path writes only the
-/// consumer's. A sibling region's branches stand beside one another and keep no store, so the
-/// question is not asked of one.
-fn keeps_a_store(
-    graph: &Graph,
-    positions: &[usize],
-    fragment: &KernelFragment,
-    shape: &RegionShape,
-) -> bool {
+/// **The composition's own answer is the fact**: the staged path keeps the store and the
+/// recomputing path does not, so the merged fragment's own answer is what says its read needs a
+/// barrier to reach it. A sibling region's branches stand beside one another and keep no store,
+/// so the question is not asked of one.
+fn keeps_a_store(shape: &RegionShape, folded: &Folded) -> bool {
     let RegionShape::Ordinary = shape else {
         return false;
     };
-    let written: usize = positions
-        .iter()
-        .map(|position| fragment_at(graph, *position).outputs)
-        .sum();
-    fragment.outputs == written
+    folded.keeps_store
 }
 
 /// The node that produced `value`, when one of the graph's nodes did.
@@ -1170,6 +1168,7 @@ fn sibling_fold(
         ports,
         writes,
         scalars,
+        keeps_store: false,
     })
 }
 
@@ -1329,6 +1328,7 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                     ports: own_ports(*local, &nodes[*local]),
                     writes: vec![*local],
                     scalars: own_scalars(&nodes[*local]),
+                    keeps_store: false,
                 });
                 pending.clear();
             }
@@ -1348,13 +1348,15 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                 ports: own_ports(local, node),
                 writes: vec![local],
                 scalars: own_scalars(node),
+                keeps_store: false,
             },
             Some(producer) => {
                 let fragment = compose(&producer.fragment, node.fragment, input as u32)
                     .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
                 // **The staged path keeps the producer's store**: the producer's outputs,
                 // then the consumer's.
-                let writes = if fragment.outputs > node.fragment.outputs {
+                let staged = fragment.outputs > node.fragment.outputs;
+                let writes = if staged {
                     let mut writes = producer.writes.clone();
                     writes.push(local);
                     writes
@@ -1366,6 +1368,7 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
                     ports: chained_ports(&producer, local, node, input),
                     writes,
                     scalars: chained_scalars(&producer, node),
+                    keeps_store: staged || producer.keeps_store,
                 }
             }
         });
@@ -1378,10 +1381,16 @@ fn compose_steps(nodes: &[RegionNode<'_>], steps: &[Step]) -> Result<Folded, Mer
 /// # Invariant
 /// **The bodies are the branch's own, in evaluation order**: each names the producers it
 /// absorbs, so the composition is not told an order it would have to take on trust.
+///
+/// **A producer whose value no address re-derives is staged**: its store answers the body that
+/// reads it, so the merged fragment writes it too and the value is no longer deleted.
 fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRefusal> {
     let steps = fan_in_steps(nodes, bodies);
-    let fragment =
-        compose_fan_in(&steps).map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
+    // **The staged producers are the ones whose value no address re-derives**, so the
+    // composition keeps their stores and the body that reads them reads the store back.
+    let staged = carried_producers(&steps);
+    let fragment = compose_fan_in_staged(&steps, &staged)
+        .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
     let mut ports = Vec::new();
     for (index, &body) in bodies.iter().enumerate() {
         let absorbed: Vec<usize> = steps[index]
@@ -1395,11 +1404,17 @@ fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRef
                 .map(|ordinal| (body, ordinal)),
         );
     }
-    let writes = vec![
+    // **The staged producers' outputs are written, so they are no longer deleted**: the merged
+    // fragment holds them, in the order it writes them.
+    let mut writes: Vec<usize> = staged
+        .iter()
+        .map(|&producer| bodies[producer])
+        .collect();
+    writes.push(
         *bodies
             .last()
             .expect("a fan-in holds the body that reads them"),
-    ];
+    );
     let scalars: Vec<GraphScalar> = bodies
         .iter()
         .flat_map(|body| own_scalars(&nodes[*body]))
@@ -1409,6 +1424,7 @@ fn fan_in(nodes: &[RegionNode<'_>], bodies: &[usize]) -> Result<Folded, MergeRef
         ports,
         writes,
         scalars,
+        keeps_store: !staged.is_empty(),
     })
 }
 
@@ -1464,6 +1480,7 @@ fn fan_out(
         ports,
         writes,
         scalars,
+        keeps_store: kept || producer.keeps_store,
     })
 }
 

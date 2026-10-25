@@ -26,7 +26,7 @@ pub use body::{
 };
 pub(crate) use body::{Cone, ConeOrigin};
 pub use compose::{ComposeRefusal, compose, compose_fan_out};
-pub use fan_in::{Producer, compose_fan_in};
+pub use fan_in::{Producer, carried_producers, compose_fan_in, compose_fan_in_staged};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use siblings::{Sibling, compose_siblings};

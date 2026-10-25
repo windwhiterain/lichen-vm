@@ -913,6 +913,28 @@ pub enum ComposeRefusal {
         /// What stops the cone being recomputed at that address.
         blocker: NotIndexLocal,
     },
+    /// The caller named a producer this fan-in does not have, or named one twice.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::OneBodyIsNotAFanIn`] because it is a distinct fact: that one
+    /// says the fan-in holds no producer at all, this one says the caller's list names one the
+    /// fan-in has not — the consumer stages nothing, and a producer is staged once.
+    StagedProducerIsNotAProducer {
+        /// The index the caller named.
+        producer: usize,
+    },
+    /// A staged producer's output is read by a producer that is recomputed.
+    ///
+    /// # Invariant
+    /// A distinct arm because it is a distinct fact: a staged producer's value reaches the body
+    /// that reads it through the store, and a copy of a recomputed producer's cone would read
+    /// that store at an input ordinal — which names another buffer in the merged fragment.
+    StagedOutputIsReadByARecomputedProducer {
+        /// The staged producer whose output is read.
+        staged: usize,
+        /// The producer that reads it and is recomputed.
+        producer: usize,
+    },
     /// Two of the marks a merged fragment keeps carry one text.
     DuplicatedMark {
         /// The text both marks carry.
@@ -977,6 +999,10 @@ impl ComposeRefusal {
             ComposeRefusal::ConsumerEntryIsABranchTarget { .. } => "ConsumerEntryIsABranchTarget",
             ComposeRefusal::ConsumerEntryDoesNotReturn { .. } => "ConsumerEntryDoesNotReturn",
             ComposeRefusal::ForwardedValueIsLaneDependent { .. } => "ForwardedValueIsLaneDependent",
+            ComposeRefusal::StagedProducerIsNotAProducer { .. } => "StagedProducerIsNotAProducer",
+            ComposeRefusal::StagedOutputIsReadByARecomputedProducer { .. } => {
+                "StagedOutputIsReadByARecomputedProducer"
+            }
             ComposeRefusal::DuplicatedMark { .. } => "DuplicatedMark",
             ComposeRefusal::SlicesCollide { .. } => "SlicesCollide",
             ComposeRefusal::MergedBodyIsRefused { .. } => "MergedBodyIsRefused",
@@ -1132,6 +1158,21 @@ impl std::fmt::Display for ComposeRefusal {
                  answer for: {blocker} — which is what a copy of the cone per read needs and \
                  cannot take (`docs/notes/graph-fusion.md` §5)"
             ),
+            ComposeRefusal::StagedProducerIsNotAProducer { producer } => write!(
+                formatter,
+                "the caller names producer {producer} as staged, and it is not a producer of this \
+                 fan-in that is staged once: the consumer stages nothing, and a producer is \
+                 staged once"
+            ),
+            ComposeRefusal::StagedOutputIsReadByARecomputedProducer { staged, producer } => {
+                write!(
+                    formatter,
+                    "producer {producer} is recomputed and reads producer {staged}'s output, and a \
+                     copy of a recomputed producer's cone reads that output at an input ordinal — \
+                     which names another buffer in the merged fragment, so the copy would answer \
+                     another program's value"
+                )
+            }
             ComposeRefusal::DuplicatedMark { text } => write!(
                 formatter,
                 "two of the marks a merged fragment keeps carry `{text}`, and a name two marks carry \
