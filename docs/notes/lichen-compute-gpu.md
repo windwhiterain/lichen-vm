@@ -673,7 +673,8 @@ the barrier" is exactly what `OpControlBarrier` needs: a barrier one lane of the
 group does not arrive at is a hang, and a `count` that is not a multiple of 64
 would hang the last workgroup now that the surplus lanes do exit early. They do not
 exit there, because such a launch is refused by name: `launch_workgroups` admits a
-launch that stages only at a whole number of its root's lane width, so every
+launch that records a barrier — a slice's or a buffer's — only at a whole number of
+its root's lane width, so every
 workgroup is full, `index < extent` is true for all 64 of its lanes, and the branch
 does not divide one. What remains a hang is a barrier under **divergent** control
 flow, which is a refusal and not a tail-lane question — see

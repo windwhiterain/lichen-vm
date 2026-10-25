@@ -889,7 +889,8 @@ reads `matvec`'s output *and* `squares`' output, so the region is a **fan-in**.
 its semantics.** `compose_fan_in_staged` takes the producers whose values were staged: the
 composition keeps their stores — the producer's output buffers are written by the merged body,
 the reads that would have answered them become `OutputReadCall`s at the producers' output
-ordinals, and a barrier names each write with the read that observes it. Three facts keep it a
+ordinals, and a barrier names each write with the read that observes it — unless the two are one
+lane, which observes its own store in program order and needs no barrier. Three facts keep it a
 licence and not a waiver, and each is a rule at the code: **only a carried accumulation is
 staged** (a value another lane's read or a callee's own index decides is refused, because a store
 would carry it where it does not belong); **a staged producer's output is read back, never

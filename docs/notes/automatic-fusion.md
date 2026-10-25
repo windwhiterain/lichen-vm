@@ -289,7 +289,7 @@ pack alone and no file at all):
 
 | | before | now |
 |---|---|---|
-| the class pack alone | 11 nodes, the ordinary region refused by `ExtentsDiffer` | **10 nodes**, the sibling region merged under the floor |
+| the class pack alone | 11 nodes, the ordinary region refused by `ExtentsDiffer` | **10 nodes**, the sibling region merged under the floor (the ordinary rule now cuts that region at its extent changes, so the class pack alone reports three regions) |
 | the class pack and the fuse pack | 11 nodes, the fuse pack naming no region | 10 nodes, the same merge, the pack still inert |
 
 The region lines are the sibling one: `region 2: nodes 6, 2 merged into one node at 2 (the

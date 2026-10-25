@@ -1096,8 +1096,9 @@ hang risk. `LOCAL_SIZE_X` is 64 and "a run of `count` indices is
 surplus lanes address padding rather than memory past the end" (`dispatch.rs`).
 
 **A staged launch still runs the whole shader on every lane, and that is the case
-this section is about**: `launch_workgroups` refuses a staged count that is not a
-whole number of workgroups, so no surplus lane exists, the guard is uniformly true
+this section is about**: `launch_workgroups` refuses a count that is not a whole
+number of workgroups when the launch records a barrier — a slice's or a buffer's —
+so no surplus lane exists, the guard is uniformly true
 and the branch never diverges — so **every lane reaches every barrier**, and a
 `count` that is not a multiple of 64 does not hang. The padding that exists for an
 unrelated reason is exactly what a convergent barrier needs. What remains is the
@@ -1226,6 +1227,10 @@ precedes the read** — a buffer pair has no data edge, so the order is the barr
 obligation, where the slice pair's version operand already carried it. The GPU emits that pair
 as a workgroup `OpControlBarrier` **and** a workgroup `OpMemoryBarrier` over `AcquireRelease`:
 the store is a storage buffer's, and `WorkgroupMemory` semantics order the shared memory only.
+**A pair of one lane is emitted as neither**: the write's and the read's index operands are the
+same `ValueId` (§4's fact 2), so one lane observes its own store in program order and no barrier
+reaches it — at an extent below one workgroup a barrier would sit in the `index < extent` branch
+and be non-uniform.
 
 **And the scope is the whole limit.** A barrier orders the lanes of **one** group, so a staged
 read is only sound where one group holds every lane — the reading lane and the writing lane.

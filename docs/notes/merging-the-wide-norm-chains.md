@@ -84,15 +84,17 @@ dispatch:
   `dispatch.rs:1619-1624`; no robust-access feature anywhere in `lichen-compute-gpu`). The
   answers stand only because `scale` never reads `s[8..]`. Path B below removes this as a
   side effect.
-- The whole-workgroup launch rule covers **slices only** (`launch_workgroups`,
+- The whole-workgroup launch rule covered **slices only** (`launch_workgroups`,
   `dispatch.rs:389-399`: `stages = any(!fragment.slices.is_empty())`). A store-keeping merge
   records a **buffer** barrier, declares it through `holds_a_staged_store`
-  (`spirv.rs:4291-4300`), and is not in that check. Since the entry point's body branches on
+  (`spirv.rs:4291-4300`), and was not in that check. Since the entry point's body branches on
   `index < extent` before any instruction (`spirv.rs:273-276`), a staged merge at an extent
   below 64 would put its `OpControlBarrier` in the surplus-lane branch — non-uniform control
   flow, undefined. Latent today: the only landed staged merge runs at exactly 64
   (`fan_in_probe`, `a1b68c28`). It becomes **live the moment a narrow merge is attempted**,
-  which is exactly what Path B does.
+  which is exactly what Path B does. **The gap is closed** (`c6ac567d`): the launch rule now
+  asks `holds_a_staged_store` too, so a launch that records a buffer barrier is refused by
+  name unless the count is a whole number of workgroups.
 
 ## 2. Path A — cross-group reduction tiling (the axis-C answer)
 
@@ -164,16 +166,25 @@ Three small moves, each independent, each sound:
    At extents below one workgroup it is worse than dead: it lands inside the
    `index < extent` branch and is **non-uniform** (§1's latent gap goes live). Elision is a
    same-`ValueId` comparison at recording time, and it is **required, not optional**, for any
-   narrow staged merge.
+   narrow staged merge. **Landed** (`f9d707f1`): the comparison is `same_lane`, in
+   `lichen-kernel-ir/src/compose.rs`, and both the chain and the fan-in path use it. On the
+   pre-attention's qnorm fan-in it removes the `matvec → scale` barrier (the read is at the
+   consumer's own lane) and leaves the gather's — the one the reduction's own loop holds.
 2. **Extend the whole-workgroup launch rule to buffer barriers** (`dispatch.rs:389-399`:
    `stages` should also be true of `holds_a_staged_store`). A soundness fix regardless of
    Path B: today a staged merge at extent < 64 would run a barrier part of the workgroup
    never reaches. Land this *before* elision enables narrow merges, or the gap ships.
+   **Landed** (`c6ac567d`), ahead of the elision.
 3. **Extent-aware chain derivation.** The sibling rule already groups branches by extent
    (`schema.rs:877-878`); the ordinary rule keeps a whole component as one region, so after
    B2-with-a-wide-matvec the region `(7,8,9)` is `ExtentsDiffer` and the mergeable sub-chain
    `(8,9)` is never derived. Splitting a chain region where the extent changes is the same
    rule one level down, and it is what turns region 3's fix into region 4's partial one.
+   **Landed** (`72019d28`): the ordinary rule cuts a chain at a data edge whose ends dispatch
+   over different extents, and the sibling rule's own component is the run's connectivity and
+   not the ordinary rule's regions — cutting it would lose the sibling merge. The refusal
+   `ExtentsDiffer` now names the region whose consumer's extent another node inside it
+   computes.
 
 A fourth candidate was examined and rejected: a **grid-scope synchronisation** (a device-wide
 barrier or cooperative launch) would order the cross-group read directly — and no
