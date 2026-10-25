@@ -1,8 +1,9 @@
-//! The pre-attention region under a pack that names it: the class pack beside a fuse pack.
+//! The pre-attention region under the floor's own derivation: the class pack beside a fuse pack.
 //!
 //! # Invariant
-//! **The fuse pack's region is the pre-attention region's own hash**: a pack naming another
-//! region steers nothing, so the merge is declined by name and the graph is the recording.
+//! **The fuse pack names a region the floor does not derive**: the sibling derivation splits the
+//! shared producer out of the component, so the pack steers nothing, and the merge is the floor's
+//! own — one kernel reading the shared producer's output once.
 
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::placement_pack::read_placement_pack;

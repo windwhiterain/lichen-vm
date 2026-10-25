@@ -34,6 +34,9 @@ use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
 /// The one spelling of the construction, and it takes only what a pass reads: a caller that
 /// has a [`Instance`] list — from its own module, or from the registry — installs exactly this
 /// pass, so a caller that wraps it wraps what the installer runs.
+///
+/// **The sibling derivation is the floor's own answer**: the shared producer stays materialized
+/// and its consumers merge.
 pub fn region_merge_pass(instances: Vec<Instance>, packs: &[PlacementPack]) -> Box<dyn GraphPass> {
     Box::new(RegionMerge {
         instances,
@@ -73,7 +76,7 @@ struct RegionMerge {
     instances: Vec<Instance>,
     /// The installed packs, in the order they are consulted.
     packs: Vec<PlacementPack>,
-    /// The strategy the pass reports, when a plan named one.
+    /// The strategy a plan named, when one did; the floor's own answer otherwise.
     strategy: Option<Strategy>,
     /// The bounds the gate reads.
     budget: Budget,
@@ -202,10 +205,11 @@ impl GraphPass for RegionMerge {
             lines.push(format!("strategy \"{}\"", strategy.as_str()));
         }
         let starts = offsets(graph);
-        // **The strategy shapes the regions**: one groups, the other splits.
-        let regions: Vec<Region> = match self.strategy {
-            Some(Strategy::Sibling) => sibling_regions(graph, instances),
-            _ => ordinary_regions(graph, instances),
+        // **The strategy shapes the regions**: one groups, the other splits, and the floor's own
+        // answer is the one that splits.
+        let regions: Vec<Region> = match self.strategy.unwrap_or_default() {
+            Strategy::Component => ordinary_regions(graph, instances),
+            Strategy::Sibling => sibling_regions(graph, instances),
         };
         // A node no region holds is named too: "no fusible region" and "no claim" are two answers.
         for position in skipped(graph, &regions) {

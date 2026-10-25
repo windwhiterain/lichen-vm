@@ -43,25 +43,43 @@ pub struct FusionFile {
 /// (`docs/notes/automatic-fusion.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
-    /// The greedy sibling pass: the chain fold alone.
-    GreedySibling,
-    /// The sibling merge pass: the chain fold and the sibling merge beside it.
+    /// The component derivation: the whole component is one body, and a shared producer's cone is
+    /// copied per consumer.
+    Component,
+    /// The sibling derivation: a shared producer stays materialized and its consumers fold into
+    /// one body that reads it once.
     Sibling,
+}
+
+impl Default for Strategy {
+    /// The floor's own answer: the sibling derivation.
+    ///
+    /// # Invariant
+    /// **The sibling derivation is the floor's own answer**: a file that names no strategy and a
+    /// pass no plan installed both run under it.
+    fn default() -> Strategy {
+        Strategy::Sibling
+    }
 }
 
 impl Strategy {
     /// The name a report prints for this strategy.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Strategy::GreedySibling => "greedy_sibling",
+            Strategy::Component => "component",
             Strategy::Sibling => "sibling",
         }
     }
 
     /// The strategy the name spells, or `None` when it spells none.
+    ///
+    /// # Invariant
+    /// **The old spelling still reads**: `greedy_sibling` was the component derivation's name, so
+    /// a file that names it means the component derivation still, and answers the plan it
+    /// answered then.
     pub fn parse(text: &str) -> Option<Strategy> {
         match text {
-            "greedy_sibling" => Some(Strategy::GreedySibling),
+            "component" | "greedy_sibling" => Some(Strategy::Component),
             "sibling" => Some(Strategy::Sibling),
             _ => None,
         }
@@ -241,7 +259,7 @@ impl fmt::Display for FusionFileRefusal {
             FusionFileRefusal::UnknownStrategy { found } => write!(
                 formatter,
                 "the file names the strategy `{found}`, which is not one the pass runs under: the \
-                 ones are `greedy_sibling` and `sibling` (`docs/notes/automatic-fusion.md`)"
+                 ones are `sibling` and `component` (`docs/notes/automatic-fusion.md`)"
             ),
             FusionFileRefusal::BadRegionHash { found } => write!(
                 formatter,
@@ -270,7 +288,7 @@ impl fmt::Display for FusionFileRefusal {
 pub fn read_fusion_file(text: &str) -> Result<FusionFile, FusionFileRefusal> {
     let file: artifact::File = facet_json::from_str(text).map_err(malformed)?;
     let strategy = match file.strategy.as_deref() {
-        None => Strategy::GreedySibling,
+        None => Strategy::default(),
         Some(found) => {
             Strategy::parse(found).ok_or_else(|| FusionFileRefusal::UnknownStrategy {
                 found: found.to_string(),

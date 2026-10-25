@@ -3,10 +3,11 @@
 //!
 //! # Invariant
 //! **The two preparations differ in one thing only**: the same program, the same class pack and
-//! the same host inputs, and the merge is what the second one has.
+//! the same host inputs, and the merge is what the first one has — the second asks the file's
+//! `component` strategy, so the floor folds the whole component and merges nothing.
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
-use lichen_compute::fusion_file::{FusionPlan, read_fusion_file};
+use lichen_compute::fusion_file::{FusionPlan, Strategy, read_fusion_file};
 use lichen_compute::placement_pack::read_placement_pack;
 use lichen_graph_ir::Node;
 use lichen_kernel_ir::ScalarClass;
@@ -32,6 +33,19 @@ fn plan() -> FusionPlan {
         .expect("the fusion file reads")
         .plan()
         .expect("the file answers a plan")
+}
+
+/// The plan that asks for the **plain component derivation**: the whole component is one body.
+///
+/// # Invariant
+/// **The file's `component` strategy, and no override beside it**: the pre-attention's component
+/// spans two extents, so the plain rule merges nothing and the step stays unmerged.
+fn component_plan() -> FusionPlan {
+    FusionPlan {
+        strategy: Strategy::Component,
+        overrides: Vec::new(),
+        ..plan()
+    }
 }
 
 /// The numbers the buffers hold.
@@ -175,11 +189,11 @@ fn main() {
         None => println!("no merged node"),
     }
 
-    // The unmerged step: the class pack alone.
+    // The unmerged step: the class pack beside the plain component derivation.
     lichen_compute::compute::clear_graph_pass();
     let plain = session
-        .prepare_with_packs(PRE_STEP, &[class_pack.clone()])
-        .expect("the class pack alone prepares");
+        .prepare_with_plan(PRE_STEP, &[class_pack.clone()], &component_plan())
+        .expect("the class pack and the component strategy prepare");
     println!("=== the class pack alone: {} node(s)", plain.nodes());
     for line in plain.report() {
         println!("{line}");

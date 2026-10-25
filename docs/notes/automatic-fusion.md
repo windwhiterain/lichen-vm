@@ -67,7 +67,7 @@ the region as the named unit:
 
 ```json
 {
-  "strategy": "greedy_sibling",
+  "strategy": "sibling",
   "budget": {
     "max_region_nodes": 32,
     "max_region_depth": 8,
@@ -139,7 +139,7 @@ declines a region, and it never accepts one.
 
 | field | what it says | what spends it |
 |---|---|---|
-| `strategy` | the family the pass runs under | `greedy_sibling` folds the chains; `sibling` also derives the sibling regions |
+| `strategy` | the family the pass runs under | `sibling` derives the sibling regions; `component` folds the whole component into one body |
 | `budget.max_region_nodes` | the most nodes a region may hold and still be attempted | the gate |
 | `budget.max_region_depth` | the deepest a region's own DAG may be | the gate |
 | `budget.compute_tolerance` | the recomputation the plan tolerates | carried |
@@ -181,7 +181,9 @@ prints the file and reads it back, and `fusion_file_emit` prints the report it c
 The merge pass reads the plan's policy before any legality check: a barred region is refused
 by name (`RegionIsBarrier`), and a region over the budget is left alone by name
 (`RegionOverBudget`, carrying the region's own node count and depth beside the budget's two
-bounds). The strategy is reported once, as `strategy "greedy_sibling"` or `strategy "sibling"`.
+bounds). The strategy a plan named is reported once, as `strategy "sibling"` or
+`strategy "component"`; a pass no plan installed names no strategy, because the floor's own
+answer is the one it runs under.
 
 The pre-attention region is **9 nodes and 5 deep** (measured by `fusion_file_probe`), which is
 why the sketch budget above admits it; the sibling region beside it is **2 nodes and 1 deep**.
@@ -270,6 +272,44 @@ same limit the pre-attention region has always had, now inside a branch instead 
 producer. H4 moves the shared producer out of the merge; it does not lift the reduction's limit
 behind a consumer.
 
+### The default derivation is the sibling one
+
+**The floor's own answer is the sibling derivation, and no file is needed for it.** The merge
+pass with no plan installed derives its regions with `sibling_regions`: a shared producer whose
+consumers share an extent becomes a **sibling region**, and the ordinary component rule holds
+everywhere else. The file's `strategy` names the derivation instead: `sibling` asks for the
+floor's own answer, and **`component` asks for the plain component derivation** — the whole
+claimed component as one region, in which a producer two consumers read has its cone **copied
+into each of them**, the duplication the survey warns about. The name the component derivation
+had before — `greedy_sibling` — still reads, and still means the component derivation, so a file
+written before the rename answers the plan it answered then.
+
+**Measured** (`crates/lichen-serve/examples/fuse_probe.rs`, the pre-attention composite, the class
+pack alone and no file at all):
+
+| | before | now |
+|---|---|---|
+| the class pack alone | 11 nodes, the ordinary region refused by `ExtentsDiffer` | **10 nodes**, the sibling region merged under the floor |
+| the class pack and the fuse pack | 11 nodes, the fuse pack naming no region | 10 nodes, the same merge, the pack still inert |
+
+The region lines are the sibling one: `region 2: nodes 6, 2 merged into one node at 2 (the
+survivor), the branches of node 1 reading its value at one port, licensed by the floor: every
+node of the region claims Reduction and nothing else`.
+
+**The ordinary fan-out is no longer a region under the default.** The three-node diamond the
+compute suite records (`fan_out_merge`) is now two regions — the producer alone, refused by
+`RegionIsNotAPair`, and the **sibling region** holding the two consumers — so the graph answers
+**2 nodes instead of 1**, with the producer still materialized. A pack that names the old
+three-node region's hash names no region at all, and the merge is licensed by the floor instead.
+**That is the point**: the duplicated cone is gone, and what is left reads the producer's value
+once.
+
+**What the sibling derivation cannot split.** A fan-out whose consumers do **not** share an
+extent is not a sibling set: one kernel dispatches over one extent, so the consumers are grouped
+by the extent they dispatch over and a group of one keeps the ordinary rule. And the branches
+are the **direct consumers** only — a consumer's own chain is not pulled into the sibling region,
+because the reduction's own limit refuses it there (`ForwardedValueIsLaneDependent`, above).
+
 ### The class pass, and the classes a merged node inherits
 
 **The class application is a pass of its own, and it runs first.** It was in the tiling pass,
@@ -295,6 +335,10 @@ class pack naming nodes 2, 6, 7 at slot 1, the sibling strategy):
 - the fused step runs and its **three answers equal** the same step prepared without the merge
   (1024, 1024 and 2048 elements), and both differ from the same step with no class pack at all —
   the brain-float truncation of the weights is visible in the numbers.
+
+**The unmerged leg of that probe asks for the `component` strategy**, because the floor's own
+answer is now the sibling one: with no file at all the step merges, so the step the merged one is
+compared against is the one the plain component derivation leaves alone.
 
 **The wall this slice met was the symbolic bridge, and it is now past.** A class pack narrows a
 buffer, so the branch's body reads a `BFloat16` — and the bridge refused a brain-float read by name
@@ -379,7 +423,9 @@ instead, because the composite dispatches over 2048 lanes and over 1024.
 - **`compute_tolerance` and `staging_bytes` are carried.** No recomputation is counted and no
   staging is checked against the budget.
 - **The strategy steers the regions' shape and nothing else.** `sibling` derives the sibling
-  regions beside the ordinary ones; the regions are still attempted in the graph's own order.
+  regions beside the ordinary ones, and it is the floor's own answer; `component` asks for the
+  plain component derivation, in which a shared producer's cone is copied into each consumer.
+  The regions are still attempted in the graph's own order.
 - **The file's `refuse` booleans are carried.** The engine's own refusals — `NotAReductionChain`
   for a shape the fold does not build, `InterfacesAreNotProved` for an interface the bridge does not
   compose — stand whatever the file says.
