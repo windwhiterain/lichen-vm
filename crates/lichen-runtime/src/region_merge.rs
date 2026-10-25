@@ -20,11 +20,11 @@ use lichen_kernel_ir::{
 
 use crate::fusion_claim::{
     Instance, PortKind, REDUCTION, Region, RegionSchema, RegionShape, SchemaHash, SchemaRefusal,
-    offsets, ordinary_regions, producer_ordinal, sibling_regions,
+    merged_claim, offsets, ordinary_regions, producer_ordinal, sibling_regions,
 };
 use crate::fusion_file::{Budget, FusionPlan, Strategy};
 use crate::graph_pass::{GraphPass, LaunchExtent};
-use crate::kernel_registry::claimed_kernels;
+use crate::kernel_registry::{claimed_kernels, intern_kernel};
 use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
 
 /// The pass that merges the regions `instances` names, under `packs`.
@@ -1658,7 +1658,8 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
             continue;
         }
         let Node::Kernel(kernel) = node;
-        let (fragment, reads, outputs, scalars) = match merges.get(&position) {
+        let merged = merges.get(&position);
+        let (fragment, reads, outputs, scalars) = match merged {
             Some(merge) => (
                 merge.fragment.clone(),
                 &merge.inputs,
@@ -1692,6 +1693,10 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
                 fragment.outputs,
             )
             .ok()?;
+        // **A merged fragment is registered with the conservative claim**, where it lands.
+        if merged.is_some() {
+            intern_kernel(fragment.clone(), Some(merged_claim()));
+        }
         for (ordinal, value) in outputs.iter().copied().enumerate() {
             map[value] = Some(first + ordinal);
         }
@@ -1735,8 +1740,7 @@ fn licensed_by(licensed: &Licence<'_>, region: &SchemaHash) -> String {
     }
 }
 
-/// One merged region's line, naming both nodes, the absorbed input, the licence and the
-/// unregistered survivor.
+/// One merged region's line: the nodes, the absorbed input, the licence and the survivor's claim.
 ///
 /// # Invariant
 /// The licence is named in the line and not left to the graph: a runner reading a report has to
@@ -1751,14 +1755,15 @@ fn merged_line(
     shape: &RegionShape,
 ) -> String {
     let licence = licensed_by(licensed, region);
-    let unregistered = "the merged fragment is unregistered, so it carries no claim and a later \
-                        digest-keyed pass cannot name it";
+    let registered = "the merged fragment is registered with the conservative claim `Opaque`: a \
+                      pass reading the registry names it and refuses it by name, and no reader \
+                      reads algebra from it";
     // **A sibling merge absorbs no input position**: its branches stand beside one another.
     if let RegionShape::Sibling { producer, .. } = shape {
         let nodes = merge.absorbed.iter().copied().chain([merge.survivor]);
         return format!(
             "region {index}: nodes {} merged into one node at {} (the survivor), the branches of \
-             node {producer} reading its value at one port, {licence}; {unregistered}",
+             node {producer} reading its value at one port, {licence}; {registered}",
             join(nodes),
             merge.survivor,
         );
@@ -1766,7 +1771,7 @@ fn merged_line(
     if merge.absorbed.len() == 1 && merge.links.len() == 1 {
         return format!(
             "region {index}: nodes {} and {} merged into one node at {} (the survivor), absorbing \
-             input position {} of node {}, {licence}; {unregistered}",
+             input position {} of node {}, {licence}; {registered}",
             merge.absorbed[0], merge.survivor, merge.survivor, merge.links[0].input, merge.survivor,
         );
     }
@@ -1779,7 +1784,7 @@ fn merged_line(
         .join(" and ");
     format!(
         "region {index}: nodes {} merged into one node at {} (the survivor), absorbing \
-         {absorbing}, {licence}; {unregistered}",
+         {absorbing}, {licence}; {registered}",
         join(nodes),
         merge.survivor,
     )

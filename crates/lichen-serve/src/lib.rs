@@ -286,6 +286,11 @@ pub fn record_with_plan(
 }
 
 /// The recording both entry points make, with the plan's policy or without one.
+///
+/// # Invariant
+/// The floor is installed on a **seed module**, so both stages answer from the process-global
+/// kernel registry: a module's own join names the kernels it has already evaluated, and a merged
+/// fragment is registered in the registry with no module value naming it.
 fn record_with(
     source: &str,
     packs: &[lichen_compute::placement_pack::PlacementPack],
@@ -306,9 +311,9 @@ fn record_with(
     let build = lichen_language::testing::compile_at(source, None, &mut store);
     match plan {
         // The floor is the region merge **then** the tiling pass: a merge leaves fewer nodes.
-        Some(plan) => lichen_compute::floor::install_floor_with_plan(&build.module, packs, plan),
+        Some(plan) => lichen_compute::floor::install_floor_for_run_with_plan(packs, plan),
         None if !packs.is_empty() => {
-            lichen_compute::floor::install_floor_with_packs(&build.module, packs);
+            lichen_compute::floor::install_floor_for_run(packs);
         }
         None => {}
     }

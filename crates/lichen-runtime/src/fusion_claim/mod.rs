@@ -14,9 +14,9 @@ use crate::kernel_registry::{kernel_claim, kernel_fragment};
 mod schema;
 
 pub use schema::{
-    Between, DeclaredFold, ELEMENTWISE, Instance, Port, PortKind, REDUCTION, Region, RegionSchema,
-    RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, derive_regions,
-    ordinary_regions, region_positions, sibling_regions,
+    Between, DeclaredFold, ELEMENTWISE, Instance, OPAQUE, Port, PortKind, REDUCTION, Region,
+    RegionSchema, RegionShape, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal,
+    derive_regions, ordinary_regions, region_positions, sibling_regions,
 };
 pub(crate) use schema::{offsets, producer_ordinal};
 
@@ -60,4 +60,17 @@ pub fn marked_value(
             interface: interface.to_string(),
             role: role.to_string(),
         })
+}
+
+/// The claim a merged fragment is registered with: the opaque interface, and no roles.
+///
+/// # Invariant
+/// **A merged fragment is registered with this claim and no other**: the passes name it and
+/// refuse it by name, and they read no algebra from it — so no pass can take a merged node for
+/// a reduction to compose again.
+pub fn merged_claim() -> KernelClaim {
+    KernelClaim {
+        interface: OPAQUE.to_string(),
+        roles: Vec::new(),
+    }
 }

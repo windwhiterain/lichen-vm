@@ -759,6 +759,12 @@ impl fmt::Display for SchemaRefusal {
 pub const ELEMENTWISE: &str = "Elementwise";
 /// The reduction interface's name.
 pub const REDUCTION: &str = "Reduction";
+/// The opaque interface's name: a merged fragment claims it, and no reader has algebra for it.
+///
+/// # Invariant
+/// The name is one no reader can derive algebra from, so a fragment that claims it is **named and
+/// refused** rather than read.
+pub const OPAQUE: &str = "Opaque";
 /// The reduction's combine role.
 const COMBINE: &str = "combine";
 /// The reduction's identity role.

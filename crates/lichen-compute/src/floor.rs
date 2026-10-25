@@ -50,6 +50,16 @@ pub fn install_floor_for_run(packs: &[PlacementPack]) {
     install_floor_with_packs(&Module::new(), packs);
 }
 
+/// Install the floor for a run, with the packs and the plan a runner installed there.
+///
+/// # Invariant
+/// The same seed module as [`install_floor_for_run`], and the plan rides the **region merge**
+/// alone: a plan states which regions are attempted and how large they may be, and the tiling
+/// pass tiles what the merge left.
+pub fn install_floor_for_run_with_plan(packs: &[PlacementPack], plan: &FusionPlan) {
+    install_floor_with_plan(&Module::new(), packs, plan);
+}
+
 /// The pass `install_floor_with_packs` installs, for a caller that wants to wrap it.
 ///
 /// # Invariant
