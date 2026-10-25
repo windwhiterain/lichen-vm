@@ -93,11 +93,14 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
     // Check decides `k_double`'s cells; `k_outer`'s `.O` stays open (`raw none`).
-    for (sv, value) in vals.iter().zip(["(raw none, Int, Int)", "(raw none, Int, raw none)"]) {
+    for (sv, value) in vals
+        .iter()
+        .zip(["(raw none, Int, Int)", "(raw none, Int, raw none)"])
+    {
         // The two field values are type constants, so their own types name them.
         assert_eq!(sv.value.as_deref(), Some(value), "value = {:?}", sv.value);
-        // The type is the shared `Struct` layout: a compound's type is its
-        // template, and the field types live in the fields' own values.
+        // The type is the shared `Struct` layout; the field types live in
+        // the fields' own values.
         assert_eq!(sv.ty, "Struct", "type = {:?}", sv.ty);
     }
 

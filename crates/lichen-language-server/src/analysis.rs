@@ -2702,11 +2702,10 @@ mod tests {
         assert_eq!(range.start.line, 2, "`add` is on line 3 of core.lichen");
 
         // A failure *inside* the built-in belongs to its file, not the document
-        // (`docs/notes/core-prelude.md` §4). The prelude states its class
-        // contract as a template match, so the refusal the built-in carries is
-        // the operator's own class domain.
+        // (`docs/notes/core-prelude.md` §4).
         let failing = doc("add (\"a\", \"b\")\n");
         let files = failing.file_diagnostics();
+        // The prelude's refusal is the operator's own class domain.
         assert!(
             files.iter().any(|file| {
                 file.path.file_name().is_some_and(|n| n == "core.lichen")
@@ -3001,9 +3000,8 @@ mod tests {
             })
             .expect("hover on `math`");
         assert!(msg.contains("imported module"), "module hover msg = {msg}");
-        // The module's **type** is the shared `Struct` layout: the field names
-        // and their types live in the module's own value, and the field hover
-        // below reads them there.
+        // The module's **type** is the shared `Struct` layout; the field
+        // types live in the module's own value.
         assert_eq!(
             msg, "`math` — imported module : Struct",
             "the module's type is the layout template"
