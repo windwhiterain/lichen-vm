@@ -15,6 +15,15 @@ that greedy region formation leaves performance on the table (Jangda & Bondhugul
 4.32× over PolyMage's model and 2.46× over Halide's automatic scheduler; Korch reports up to 1.7×
 over rule-based compilers) — which is an argument for an editable plan, not against a greedy pass.
 
+## Automatic first, agentic for the rest
+
+The pass pushes every merge **its own derivation can prove**: a region whose interfaces the
+bridge composes and whose shape the fold builds is licensed by that evidence, not by a file
+entry. The fusion file exists for what an algorithm **cannot see** — an interface that does not
+bridge, a budget the plan wants tighter, numerics a merge would change, a strategy the machine
+cannot choose. A file entry for a region the pass can prove is a refinement, never a
+requirement.
+
 ## The families, and the one lichen adopts
 
 Four families were surveyed, in the order of what they buy:
