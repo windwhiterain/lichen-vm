@@ -2456,7 +2456,7 @@ mod tests {
 
     #[test]
     fn unresolved_name_is_reported() {
-        let d = doc("a = 1\nb = unknown\nb");
+        let d = doc("a := 1\nb := unknown\nb");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2471,7 +2471,7 @@ mod tests {
     #[test]
     fn unresolved_name_with_a_close_candidate_suggests_it() {
         // The block-wide binding `unknown` is in scope at the `unkown` use.
-        let d = doc("unknown = 1\nunkown");
+        let d = doc("unknown := 1\nunkown");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2503,7 +2503,7 @@ mod tests {
     fn completion_offers_in_scope_names_filtered_by_the_prefix() {
         // Typing `a` at the tail offers the block-wide `aa` (in scope) but not
         // `bb` (different prefix).
-        let d = doc("aa = 1\nbb = 2\na");
+        let d = doc("aa := 1\nbb := 2\na");
         let items = d.completion_at(Position {
             line: 2,
             character: 0,
@@ -2522,7 +2522,7 @@ mod tests {
     #[test]
     fn completion_is_scope_aware_a_block_local_is_not_offered_outside() {
         // Inside the block, `inner` is in scope and completes.
-        let d = doc("a = 1\n{inner = 2; inner}\ninner");
+        let d = doc("a := 1\n{inner := 2; inner}\ninner");
         let inside = d.completion_at(Position {
             line: 1,
             character: 12,
@@ -2546,9 +2546,9 @@ mod tests {
 
     #[test]
     fn completion_items_carry_a_worked_type_detail() {
-        // The binding `x = 3` has a concrete type `Int`, which the completion
+        // The binding `x := 3` has a concrete type `Int`, which the completion
         // surfaces as `detail`.
-        let d = doc("x = 3\nx");
+        let d = doc("x := 3\nx");
         let items = d.completion_at(Position {
             line: 1,
             character: 0,
@@ -2655,7 +2655,7 @@ mod tests {
 
     #[test]
     fn clean_source_has_no_diagnostics_and_one_binding() {
-        let d = doc("a = 1\n(a, a)");
+        let d = doc("a := 1\n(a, a)");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 1, "one binding");
         // The prelude's names are in scope but are **not** this document's
@@ -2721,16 +2721,16 @@ mod tests {
     fn preprocessor_block_is_cut_out() {
         // A real lichen file opens with an `---…---` block; it must not leak into
         // the lexer or parser as code.
-        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na := 1\nb := 2\na + b\n");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 2, "two bindings (a, b)");
     }
 
     #[test]
     fn hover_resolves_a_use_to_its_binding() {
-        let d = doc("a = 1\nb = a + 1\nb");
+        let d = doc("a := 1\nb := a + 1\nb");
         // A use of `a` resolves to the binding; its hover shows the bound
-        // expr's `value : type` (a = 1 → 1 : Int).
+        // expr's `value : type` (a := 1 → 1 : Int).
         let (msg, _range) = d
             .hover_at(Position {
                 line: 1,
@@ -2758,7 +2758,7 @@ mod tests {
     fn hover_renders_a_binding_value_and_type() {
         // A binding hover shows the bound expr's `value : type` — for the
         // binding's own name and for any use of it.
-        let d = doc("x = 3\ny = x + 4\nx + y\n");
+        let d = doc("x := 3\ny = x + 4\nx + y\n");
         // On the definition site of `x`: value 3 : Int.
         let (msg, _) = d
             .hover_at(Position {
@@ -2780,7 +2780,7 @@ mod tests {
 
     #[test]
     fn hover_on_unresolved_name_says_so() {
-        let d = doc("a = 1\nb = unknown");
+        let d = doc("a := 1\nb := unknown");
         let (msg, _) = d
             .hover_at(Position {
                 line: 1,
@@ -2792,7 +2792,7 @@ mod tests {
 
     #[test]
     fn definition_jumps_to_the_binding() {
-        let d = doc("a = 1\nb = a + 1\nb");
+        let d = doc("a := 1\nb := a + 1\nb");
         let def = d
             .definition_at(Position {
                 line: 2,
@@ -2812,7 +2812,7 @@ mod tests {
 
     #[test]
     fn definition_is_none_on_a_non_name() {
-        let d = doc("a = 1\na + 1\n");
+        let d = doc("a := 1\na + 1\n");
         // Cursor on the `1` literal in `a + 1` (line index 1, char 4).
         assert!(
             d.definition_at(Position {
@@ -2825,7 +2825,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_cover_the_source_and_stay_in_bounds() {
-        let d = doc("a = 1\nb = 2\na + b\n");
+        let d = doc("a := 1\nb := 2\na + b\n");
         let toks = d.semantic_tokens();
         assert!(!toks.is_empty(), "expected some semantic tokens");
         for t in &toks {
@@ -2877,7 +2877,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_comment_the_preprocess_block() {
-        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na := 1\nb := 2\na + b\n");
         let toks = d.semantic_tokens();
         let comments: Vec<_> = toks
             .iter()
