@@ -510,25 +510,36 @@ where
                     index,
                     index_value,
                     length,
-                } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*index),
-                    kind: DiagKind::IndexOutOfBounds,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: Some(P::Value::from(LowValue::USize(*index_value))),
-                    value_b: Some(P::Value::from(LowValue::USize(*length))),
-                    assert_value: None,
-                    assert_spelling: None,
-                    index: Some(*index_value),
-                    length: Some(*length),
-                    field: None,
-                    supplied_names: None,
-                    table_key: None,
-                    error_index: None,
-                    static_template: None,
-                    clone: None,
-                }),
+                } => {
+                    let source = index
+                        .dynamic()
+                        .and_then(|node| self.array_subscripts.get(&node).copied());
+                    let reported_index = source.map_or(*index_value, |_| {
+                        index_value.saturating_sub(crate::shape::ARRAY_VALUE_ELEMENT_BASE)
+                    });
+                    let reported_length = source.map_or(*length, |_| {
+                        length.saturating_sub(crate::shape::ARRAY_VALUE_ELEMENT_BASE)
+                    });
+                    out.push(Diag {
+                        budget: None,
+                        loc: self.node_loc(source.map_or(*index, AnyNodeId::Dynamic)),
+                        kind: DiagKind::IndexOutOfBounds,
+                        a: NodeId::default(),
+                        b: NodeId::default(),
+                        value_a: Some(P::Value::from(LowValue::USize(reported_index))),
+                        value_b: Some(P::Value::from(LowValue::USize(reported_length))),
+                        assert_value: None,
+                        assert_spelling: None,
+                        index: Some(reported_index),
+                        length: Some(reported_length),
+                        field: None,
+                        supplied_names: None,
+                        table_key: None,
+                        error_index: None,
+                        static_template: None,
+                        clone: None,
+                    });
+                }
                 EvalError::TableMiss { key, .. } => out.push(Diag {
                     table_key: self.module.node_value(*key),
                     ..Diag::factual(DiagKind::TableMiss, self.node_loc(*key))

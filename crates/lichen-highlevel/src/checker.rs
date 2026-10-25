@@ -218,6 +218,8 @@ where
     /// # Invariant
     /// No span is stored on a node, which is what lets the graph be shared.
     node_edges: HashMap<NodeId, Loc>,
+    /// An array read's internal `i + 1` subscript, mapped to the source `i`.
+    array_subscripts: HashMap<NodeId, NodeId>,
     /// The read whose derived nodes are being built.
     ///
     /// # Invariant
@@ -409,6 +411,8 @@ where
     pub apply_edges: HashMap<NodeId, ApplyEdge>,
     /// The runtime-attribution edges (see [`Checker::node_edges`]).
     pub node_edges: HashMap<NodeId, Loc>,
+    /// An array read's internal subscript, mapped to its source subscript.
+    pub array_subscripts: HashMap<NodeId, NodeId>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
     /// How a failed assert of each registered condition should read (see
@@ -603,6 +607,7 @@ where
             shallow_types: Vec::new(),
             shallow_regions: HashSet::new(),
             node_edges: HashMap::new(),
+            array_subscripts: HashMap::new(),
             read_site: None,
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
@@ -833,6 +838,7 @@ where
             arrows: checker.arrows,
             apply_edges: checker.apply_edges,
             node_edges: checker.node_edges,
+            array_subscripts: checker.array_subscripts,
             user_asserts: checker.user_asserts,
             assert_spellings: checker.assert_spellings,
 
@@ -861,6 +867,8 @@ where
         }
         self.arrows.retain(|&node| live(node));
         self.node_edges.retain(|&node, _| live(node));
+        self.array_subscripts
+            .retain(|&node, source| live(node) && live(*source));
         self.apply_edges.retain(|&node, _| live(node));
         self.user_asserts.retain(|&node| live(node));
         self.assert_spellings.retain(|&node, _| live(node));

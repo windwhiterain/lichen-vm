@@ -48,6 +48,7 @@ where
         self.node_edges.insert(index_value, self.loc(index, 0));
         // The element sits one slot past the template.
         let element_index = self.plus(index_value);
+        self.array_subscripts.insert(element_index, index_value);
         let position = self.constant_position(index).map(|at| at + 1);
         let (element, value_node, ty_node) =
             self.value_slot_read(array_value, element_index, position);
