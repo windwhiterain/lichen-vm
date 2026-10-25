@@ -1,6 +1,8 @@
 //! Arrays: the array **template**, the array **instance**, and the element
 //! read with its bounds.
 
+use std::collections::HashSet;
+
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId, TemplateInstance};
 
 use lichen_utils::extend::AsEnum;
@@ -251,23 +253,24 @@ where
             return self.refused_expr(e);
         };
         let mut values = Vec::with_capacity(element_ids.len());
+        let mut marked = Vec::with_capacity(element_ids.len());
         for (index, &el) in element_ids.iter().enumerate() {
             self.check_expr(el);
             let depth = element_depths.get(index).copied().unwrap_or(0);
             let element = self.state[el].term.expect("an element is compiled");
-            let element = match depth {
-                0 => element,
-                // A marked element's value stays lazy: the wrap is the
-                // element's value.
-                _ => {
-                    let wrapped = self.wrap_shallow(el, depth);
-                    let ty = self.fresh_cell();
-                    // The tail closes on the element's own type.
-                    if let Some(&type_apply) = self.type_applies.get(&el) {
-                        self.shallow_types
-                            .push((type_apply, ty, self.state[el].ty.unwrap()));
-                    }
-                    self.element_expr(wrapped, ty, element)
+            let (element, is_marked) = match depth {
+                0 => (element, false),
+                // The **bare** mark: the element's own value, held lazy, and the
+                // element's own type as the position's type.
+                usize::MAX => {
+                    let value = self.value_of(el);
+                    (self.marked_element(el, value, element), true)
+                }
+                // The **depth** form: the first `depth` levels of the element's
+                // type spine are masked.
+                depth => {
+                    let value = self.wrap_shallow(el, depth);
+                    (self.marked_element(el, value, element), true)
                 }
             };
             // Every element but the first gets its own clone, so the
@@ -302,6 +305,7 @@ where
                 DiagKind::ArrayElement,
             );
             values.push(element);
+            marked.push(is_marked);
         }
         // The count is the template's own length: a directed unify, so a
         // mismatch is a diagnostic, not a bounds failure.
@@ -324,13 +328,35 @@ where
         let first = self.index_of(template_value, self.zero());
         let mut items = vec![first];
         items.extend(values);
-        let value = self.array_node(self.current_block, &items);
+        // A marked element is a masked item: the deep pass skips the position,
+        // so its value stays lazy until a read asks for it.
+        let mut mask = vec![false];
+        mask.extend(marked);
+        let value = self.array_node_masked(self.current_block, &items, &mask);
         let ty_node = self.array_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// A marked element's expr: its own value slot, and a type cell that
+    /// closes on the element's own type.
+    ///
+    /// # Invariant
+    /// The type cell is fresh and undecided, so the position states no type of
+    /// its own until the closure decides it. The value slot is the element's
+    /// own value, so a read of the position reads the element and not a
+    /// wrapper around it.
+    fn marked_element(&mut self, el: ExprId, value: NodeId, element: NodeId) -> NodeId {
+        let ty = self.fresh_cell();
+        let inner = self.state[el].ty.expect("an element is compiled");
+        // A call's own type application is what decides the element's type;
+        // an element that is not a call has nothing to apply.
+        let type_apply = self.type_applies.get(&el).copied();
+        self.shallow_types.push((type_apply, ty, inner));
+        self.element_expr(value, ty, element)
     }
 
     /// A set `set(a, b, …)` typed by the **set kind**, not by `array{T, n}`.
@@ -426,10 +452,17 @@ where
 
     /// Resolve pending shallow element types before a dependent read or the
     /// definition pass. An unresolved entry stays pending for the later pass.
+    ///
+    /// # Invariant
+    /// The type application is evaluated first, so the element's own type is
+    /// decided before the tail closes on it; an element that is not a call has
+    /// no application, and its own type is decided already.
     pub(super) fn resolve_shallow_types(&mut self) {
         let shallow_types = std::mem::take(&mut self.shallow_types);
         for (type_apply, tail, inner) in shallow_types {
-            self.module.evaluate_node_deep(type_apply, None);
+            if let Some(type_apply) = type_apply {
+                self.module.evaluate_node_deep(type_apply, None);
+            }
             self.close_shallow_tail(tail, inner);
             if self.module.node_value(AnyNodeId::Dynamic(tail)).is_none() {
                 self.shallow_types.push((type_apply, tail, inner));
@@ -462,6 +495,11 @@ where
     /// a shared subexpression is never itself marked. The descent follows slot
     /// 1 only while the spine is a concrete expr at check time; an undecided
     /// slot ends it, and the wraps above the stop still apply.
+    ///
+    /// The descent also stops at a spine node it has already walked: the
+    /// universe and a function's own expr are self-referential, so a spine
+    /// that repeats itself is a cycle, not a deeper level. The set holds the
+    /// spine's own nodes, so it is as long as the spine and no longer.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
         // Level 1 is the element's own expr; a call's is built from the
         // extracted value and type, the apply expr being virtual.
@@ -474,7 +512,8 @@ where
             // expr a read dereferences.
             levels.push((current, self.state[e].ty.unwrap()));
         } else {
-            while levels.len() < depth {
+            let mut walked: HashSet<NodeId> = HashSet::new();
+            while levels.len() < depth && walked.insert(current) {
                 // SAFETY: `current` is a live node of this module (a checked
                 // expression's term).
                 let Some(items) = (unsafe { self.module.array_items(current) }) else {

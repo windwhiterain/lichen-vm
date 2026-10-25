@@ -205,8 +205,14 @@ where
     apply_edges: HashMap<NodeId, ApplyEdge>,
     /// Each apply's **type-only** application, keyed by the apply's expression.
     type_applies: HashMap<ExprId, NodeId>,
-    /// Each bare `@shallow` position's `(type application, result type cell)`.
-    shallow_types: Vec<(NodeId, NodeId, NodeId)>,
+    /// Each marked position's `(type application, tail cell, inner type)`.
+    ///
+    /// # Invariant
+    /// The type application is the marked call's own, and it is `None` for an
+    /// element that is not a call. The tail cell is the position's declared
+    /// type, and the inner type is the element's own: the tail closes on the
+    /// inner one once the application has decided it.
+    shallow_types: Vec<(Option<NodeId>, NodeId, NodeId)>,
     /// The wrapper nodes this checker builds for `@shallow(n)` elements.
     ///
     /// # Invariant
@@ -1131,6 +1137,35 @@ where
 
     pub fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
         self.array_node_with_layout(block, ids, 0)
+    }
+
+    /// An array value whose items carry their own **shallow** flags.
+    ///
+    /// # Invariant
+    /// The flags are the items' own, so a marked position is the item a deep
+    /// pass skips: the mask is on the item, not on the node that holds it.
+    pub(super) fn array_node_masked(
+        &mut self,
+        block: BlockId,
+        ids: &[NodeId],
+        mask: &[bool],
+    ) -> NodeId {
+        let items: Vec<ArrayItem> = ids
+            .iter()
+            .zip(mask.iter())
+            .map(|(&node, &shallow)| ArrayItem {
+                node: AnyNodeId::Dynamic(node),
+                shallow,
+            })
+            .collect();
+        self.alloc_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                self.module.alloc_array(&items, block),
+                0,
+            )))),
+        )
     }
 
     /// [`Self::array_node`] with the array's **attribute layout**.
