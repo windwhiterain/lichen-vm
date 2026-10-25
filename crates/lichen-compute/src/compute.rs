@@ -2375,13 +2375,12 @@ impl From<&str> for RoleUnread {
 /// parameter's **value**.
 ///
 /// # Invariant
-/// A struct's layout lives in its value, so the parameter's own value is what
-/// carries the fields: the names come from that value's name table and the
-/// fields from its own field expressions. `Undecided` when the parameter's value
-/// is not a struct value yet (the older `cfg = (n, (buffers…))` shape, or a
-/// template match not yet resolved). A parameter that *is* a struct value and
-/// names a field the ABI cannot hold is `Refusal`, so a caller cannot mistake a
-/// mistake for a "not yet" and read the struct as the old shape.
+/// A struct's layout lives in its value, so the parameter's own value carries
+/// the fields: the names from its table, the fields from its own expressions.
+/// `Undecided` when the value is not a struct value yet (the retired tuple
+/// `cfg`, or an unresolved template match); `Refusal` when it is one and names
+/// a field the ABI cannot hold, so a caller cannot mistake a mistake for a
+/// "not yet".
 fn parallel_roles<P>(module: &mut Module<P>, cfg_expr: NodeId) -> Result<KernelRoles, RoleUnread>
 where
     P: Program,
@@ -2439,9 +2438,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // A struct value is what carries a field list; a value that is not one —
-    // the retired tuple `cfg`, or a template match not yet resolved — states
-    // no roles at all.
+    // A value that is not a struct value states no roles at all.
     if !is_struct_value(module, value) {
         return Err(RoleUnread::Undecided);
     }
@@ -2513,9 +2510,6 @@ fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
 /// A buffer is a `Buf`-shaped struct and its path ends at the `.native` slot; any
 /// other struct is a group, walked in field order. An unresolvable leaf is
 /// refused by name with its path.
-///
-/// The field is the field's own **expression**: its value says whether it holds
-/// a group, and its type says what a leaf is.
 ///
 /// **The role decides what a leaf the field cannot read is, never the shape**:
 /// under `.in` it is the buffer the parameter declares, because a body reading
@@ -2749,10 +2743,8 @@ where
     let domain = shape::kernel_parameter_domain(module, function);
     // The body's operand classes are the interface's business, prepared once here.
     shape::prepare_template_low_types(module, fid);
-    // What the parameter states — the fact the domain check needs and the
-    // decoded shape cannot supply. A struct's layout is in its value, so a
-    // struct parameter is recognised by the value it holds; a tuple parameter is
-    // a structure, and its positions are what the refusal names.
+    // What the parameter's value states — the fact the domain check needs and
+    // the decoded shape cannot supply.
     let statement = if is_struct_value(module, AnyNodeId::Dynamic(param_value)) {
         DomainStatement::Struct
     } else if is_tuple_value(module, param_value) {
@@ -4131,14 +4123,12 @@ where
 /// value and the role paths.
 ///
 /// # Invariant
-/// A parameter that declares a group with no members still builds a placeholder
-/// for it: the descent is driven by the declaration's own field list, so a
-/// position no role path reaches is an empty group rather than a hole, while a
-/// leaf the walk did not number is a hole the caller refuses.
+/// The descent is driven by the declaration's own field list, so a group with no
+/// members still builds a placeholder and a position no role path reaches is
+/// an empty group; a leaf the walk did not number is a hole the caller refuses.
 ///
 /// The placeholder is a **struct value**: a body's named read goes through the
-/// value's own name table (`docs/notes/value-templates.md`), so a placeholder
-/// that was a bare tuple would leave the read with no field to name.
+/// value's own name table (`docs/notes/value-templates.md`).
 fn assemble_parameter<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -5009,14 +4999,13 @@ where
         return Some(kid);
     }
     // A kernel struct value reached by value: its first **field** is the bare
-    // artifact, and a struct value's fields start after the two header slots.
+    // artifact.
     if let Some(first) = first_field_value::<P>(module, node)
         && let Some(kid) = kernel_id_of(module, first)
     {
         return Some(kid);
     }
-    // A kernel struct `.native` read: `Index(struct, 2)`, the bare artifact — the
-    // first field, past the name table and the nominal id.
+    // A kernel struct `.native` read: `Index(struct, 2)`, the bare artifact.
     if let Some(operation) = module.node_operation(node)
         && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
         && let Ok((target, index)) = operand_expr(module, operation.operand)
