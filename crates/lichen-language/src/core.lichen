@@ -1,10 +1,10 @@
-Num = set(Int, Float)
-in_num = t => t @in Num
-add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
-sub = operands => { operands : array{(_ ! in_num), 2}; operands[0] - operands[1] }
-mul = operands => { operands : array{(_ ! in_num), 2}; operands[0] * operands[1] }
-div = operands => { operands : array{(_ ! in_num), 2}; operands[0] / operands[1] }
-less = operands => { operands : array{(_ ! in_num), 2}; operands[0] < operands[1] }
-greater = operands => { operands : array{(_ ! in_num), 2}; operands[0] > operands[1] }
-less_or_equal = operands => { operands : array{(_ ! in_num), 2}; operands[0] <= operands[1] }
-greater_or_equal = operands => { operands : array{(_ ! in_num), 2}; operands[0] >= operands[1] }
+Num := set(Int, Float)
+in_num := t => t @in Num
+add := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) + operands(1) }
+sub := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) - operands(1) }
+mul := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) * operands(1) }
+div := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) / operands(1) }
+less := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) < operands(1) }
+greater := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) > operands(1) }
+less_or_equal := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) <= operands(1) }
+greater_or_equal := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) >= operands(1) }

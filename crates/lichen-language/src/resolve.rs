@@ -392,6 +392,22 @@ impl Resolver {
                 self.resolve_expr(left);
                 self.resolve_expr(right);
             }
+            // `a = b`: the actual value and the expected one.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.resolve_expr(actual);
+                self.resolve_expr(expected);
+            }
+            // `actual <: template`: the actual and the template it is matched against.
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.resolve_expr(actual);
+                self.resolve_expr(template);
+            }
+            // `@clone e`: the value whose holes become fresh.
+            Expr::Clone { value, .. } => self.resolve_expr(value),
             Expr::If {
                 condition,
                 then_branch,
@@ -456,23 +472,48 @@ impl Resolver {
                 self.resolve_expr(parameter_type);
                 self.resolve_expr(return_type);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.resolve_expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `{.a e1, …}`: the struct template's fields.
+            Expr::StructValue { fields, .. } => {
                 for f in fields {
-                    self.resolve_expr(&mut f.ty);
+                    self.resolve_expr(&mut f.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
                 self.resolve_expr(callee);
                 for f in fields {
                     self.resolve_expr(&mut f.value);
+                }
+            }
+            // `[template, length]`: the array template and its length.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.resolve_expr(template);
+                self.resolve_expr(length);
+                // An `@shallow` mark has no carrier in a template: only an
+                // instance's element carries a depth.
+                for marked in [template, length] {
+                    if let Expr::Shallow(_, _, span) = marked.as_ref() {
+                        self.diagnostics.push(Diag::new(
+                            Stage::Resolve,
+                            *span,
+                            SHALLOW_IN_ARRAY_TEMPLATE,
+                        ));
+                    }
+                }
+            }
+            // `template[e1, …]`: the array instance's template and its elements.
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.resolve_expr(template);
+                for el in elements {
+                    self.resolve_expr(el);
                 }
             }
             Expr::Table(entries, _) => {
@@ -493,14 +534,6 @@ impl Resolver {
                         .push(Diag::new(Stage::Resolve, *span, SHALLOW_ZERO_DEPTH));
                 }
                 self.resolve_expr(inner);
-            }
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.resolve_expr(element_type);
-                self.resolve_expr(length);
             }
             Expr::Block {
                 statements, expr, ..
@@ -536,16 +569,32 @@ const UNRESOLVED: u64 = u64::MAX;
 /// The `@shallow(0)` refusal; docs/language-spec.md §"Shallow markers" states the bound.
 const SHALLOW_ZERO_DEPTH: &str = "a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely";
 
+/// The `@shallow`-in-an-array-template refusal: a template carries no depth.
+///
+/// # Invariant
+///
+/// A depth belongs to an **instance's element** — the position a value sits in.
+/// An array template names the layout an instance is filled against, so a mark
+/// written there has no carrier and is refused rather than dropped.
+const SHALLOW_IN_ARRAY_TEMPLATE: &str = "an `@shallow` mark has no place in an array template — the template names the layout an instance is filled against, and only an instance's element carries a depth — write the mark on the instance's element (`template[@shallow e]`), or drop it";
+
 /// Whether `e` is a struct or type tree, whose cycles the deep pass cuts.
+///
+/// # Invariant
+///
+/// The compound **templates** are trees: a tuple, an array template and a
+/// struct template are layouts a value is written against, so a cycle among
+/// them is the deep pass's to cut. An instance is a value, so its cycles are
+/// refused like any other value's.
 fn is_tree_expr(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::StructType(..)
+        Expr::StructValue { .. }
             | Expr::StructInst { .. }
-            | Expr::TypeTuple(..)
+            | Expr::Tuple(..)
+            | Expr::Array { .. }
             | Expr::TypeSet(..)
             | Expr::TypeTable { .. }
-            | Expr::TypeArray { .. }
             | Expr::TypeConst(..)
             | Expr::Arrow { .. }
     )

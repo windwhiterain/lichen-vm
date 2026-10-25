@@ -19,11 +19,6 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    pub(super) fn alloc_type_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_type_tuple(elements);
-        self.spans.push(Some(*span));
-        id
-    }
     pub(super) fn alloc_type_set(&mut self, element: ExprId, span: &Span) -> ExprId {
         let id = self.ir.alloc_type_set(element);
         self.spans.push(Some(*span));
@@ -34,12 +29,36 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    pub(super) fn alloc_type_struct(
+    /// Allocate a struct template: the field expressions and their names.
+    ///
+    /// # Invariant
+    ///
+    /// The two ranges are written here and are index-aligned: `names[i]` is the
+    /// name of `fields[i]`, so the checker reads a field by name against the
+    /// same position.
+    pub(super) fn alloc_struct(
         &mut self,
         fields: &[(ExprId, Option<&'static str>)],
         span: &Span,
     ) -> ExprId {
-        let id = self.ir.alloc_type_struct(fields);
+        let fields_start = self.ir.children.len();
+        self.ir
+            .children
+            .extend(fields.iter().map(|&(field, _)| field));
+        let names_start = self.ir.struct_names.len();
+        self.ir
+            .struct_names
+            .extend(fields.iter().map(|&(_, name)| name));
+        let id = self.ir.alloc(ExprKind::Struct {
+            fields: ChildRange {
+                start: fields_start as u32,
+                end: self.ir.children.len() as u32,
+            },
+            names: ChildRange {
+                start: names_start as u32,
+                end: self.ir.struct_names.len() as u32,
+            },
+        });
         self.spans.push(Some(*span));
         id
     }
@@ -64,8 +83,35 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    pub(super) fn alloc_array(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_array(elements);
+    /// Allocate an array instance: its template, its elements and their depths.
+    ///
+    /// # Invariant
+    ///
+    /// The depths range is **empty** when no element is marked, and otherwise
+    /// one entry per element, aligned with the element ids. See
+    /// `docs/notes/shallow-depth-mechanism.md`.
+    pub(super) fn alloc_array_inst(
+        &mut self,
+        template: ExprId,
+        elements: &[ExprId],
+        depths: &[usize],
+        span: &Span,
+    ) -> ExprId {
+        let elements_start = self.ir.children.len();
+        self.ir.children.extend_from_slice(elements);
+        let depths_start = self.ir.depths.len();
+        self.ir.depths.extend_from_slice(depths);
+        let id = self.ir.alloc(ExprKind::ArrayInst {
+            template,
+            elements: ChildRange {
+                start: elements_start as u32,
+                end: self.ir.children.len() as u32,
+            },
+            depths: ChildRange {
+                start: depths_start as u32,
+                end: self.ir.depths.len() as u32,
+            },
+        });
         self.spans.push(Some(*span));
         id
     }
@@ -76,15 +122,6 @@ impl Compiler {
     }
     pub(super) fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: &Span) -> ExprId {
         let id = self.ir.alloc_table(entries);
-        self.spans.push(Some(*span));
-        id
-    }
-    pub(super) fn alloc_shallow_array(
-        &mut self,
-        elements: &[(ExprId, usize)],
-        span: &Span,
-    ) -> ExprId {
-        let id = self.ir.alloc_shallow_array(elements);
         self.spans.push(Some(*span));
         id
     }

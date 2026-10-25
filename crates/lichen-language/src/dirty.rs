@@ -169,6 +169,22 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(left, deps);
             walk(right, deps);
         }
+        // `a = b`: the actual value and the expected one.
+        Expr::Unify {
+            actual, expected, ..
+        } => {
+            walk(actual, deps);
+            walk(expected, deps);
+        }
+        // `actual <: template`: the actual and the template it is matched against.
+        Expr::TemplateUnify {
+            actual, template, ..
+        } => {
+            walk(actual, deps);
+            walk(template, deps);
+        }
+        // `@clone e`: the value whose holes become fresh.
+        Expr::Clone { value, .. } => walk(value, deps),
         Expr::If {
             condition,
             then_branch,
@@ -226,23 +242,37 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(parameter_type, deps);
             walk(return_type, deps);
         }
-        Expr::Tuple(elements, _)
-        | Expr::TypeTuple(elements, _)
-        | Expr::Array(elements, _)
-        | Expr::Set(elements, _) => {
+        Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
             for element in elements {
                 walk(element, deps);
             }
         }
-        Expr::StructType(fields, _) => {
+        // `{.a e1, …}`: the struct template's fields.
+        Expr::StructValue { fields, .. } => {
             for field in fields {
-                walk(&field.ty, deps);
+                walk(&field.value, deps);
             }
         }
         Expr::StructInst { callee, fields, .. } => {
             walk(callee, deps);
             for field in fields {
                 walk(&field.value, deps);
+            }
+        }
+        // `[template, length]`: the array template and its length.
+        Expr::Array {
+            template, length, ..
+        } => {
+            walk(template, deps);
+            walk(length, deps);
+        }
+        // `template[e1, …]`: the array instance's template and its elements.
+        Expr::ArrayInst {
+            template, elements, ..
+        } => {
+            walk(template, deps);
+            for element in elements {
+                walk(element, deps);
             }
         }
         Expr::Table(entries, _) => {
@@ -257,14 +287,6 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(value, deps);
         }
         Expr::Shallow(inner, _, _) => walk(inner, deps),
-        Expr::TypeArray {
-            element_type,
-            length,
-            ..
-        } => {
-            walk(element_type, deps);
-            walk(length, deps);
-        }
         Expr::Block {
             statements, expr, ..
         } => {
