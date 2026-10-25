@@ -66,8 +66,7 @@ impl GraphPass for PassChain {
     ) -> Option<Graph> {
         let mut current: Option<Graph> = None;
         for stage in &self.stages {
-            // **The extent a stage reads is the one its own graph holds**: a rewrite renumbers
-            // the nodes, so the caller's closure answers about another node.
+            // **A stage reads its own graph's extent**: a rewrite renumbers the nodes.
             let rewritten = {
                 let seen = current.as_ref().unwrap_or(graph);
                 stage.apply(seen, &stage_extent(seen, extent), lines)
