@@ -25,6 +25,7 @@ use crate::fusion_claim::{
 use crate::fusion_file::{Budget, FusionPlan, Strategy};
 use crate::graph_pass::{GraphPass, LaunchExtent};
 use crate::kernel_registry::{claimed_kernels, intern_kernel};
+use crate::merged_node;
 use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
 
 /// The pass that merges the regions `instances` names, under `packs`.
@@ -1798,12 +1799,17 @@ fn merged_line(
     let registered = "the merged fragment is registered with the conservative claim `Opaque`: a \
                       pass reading the registry names it and refuses it by name, and no reader \
                       reads algebra from it";
+    // **The digest is on the line**: the position is one run's, and the digest is the identity.
+    let identity = format!(
+        "the merged node's identity is {digest}",
+        digest = merged_node::digest_of(&merge.fragment)
+    );
     // **A sibling merge absorbs no input position**: its branches stand beside one another.
     if let RegionShape::Sibling { producer, .. } = shape {
         let nodes = merge.absorbed.iter().copied().chain([merge.survivor]);
         return format!(
             "region {index}: nodes {} merged into one node at {} (the survivor), the branches of \
-             node {producer} reading its value at one port, {licence}; {registered}",
+             node {producer} reading its value at one port, {licence}; {registered}; {identity}",
             join(nodes),
             merge.survivor,
         );
@@ -1811,7 +1817,7 @@ fn merged_line(
     if merge.absorbed.len() == 1 && merge.links.len() == 1 {
         return format!(
             "region {index}: nodes {} and {} merged into one node at {} (the survivor), absorbing \
-             input position {} of node {}, {licence}; {registered}",
+             input position {} of node {}, {licence}; {registered}; {identity}",
             merge.absorbed[0], merge.survivor, merge.survivor, merge.links[0].input, merge.survivor,
         );
     }
@@ -1824,7 +1830,7 @@ fn merged_line(
         .join(" and ");
     format!(
         "region {index}: nodes {} merged into one node at {} (the survivor), absorbing \
-         {absorbing}, {licence}; {registered}",
+         {absorbing}, {licence}; {registered}; {identity}",
         join(nodes),
         merge.survivor,
     )

@@ -19,10 +19,12 @@ use lichen_kernel_ir::{
 
 use crate::fused::{FusedKernel, land_fused_kernel, landing_reason, write_fused_kernel};
 use crate::fusion_claim::{
-    DeclaredFold, REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, marked_value,
+    DeclaredFold, OPAQUE, REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal,
+    marked_value,
 };
 use crate::graph_pass::{GraphPass, LaunchExtent};
 use crate::kernel_registry::claimed_kernels;
+use crate::merged_node;
 use crate::placement_pack::{ConstraintRefusal, PlacementPack};
 
 /// The roles a node whose algebra this pass can derive for itself declares.
@@ -38,7 +40,20 @@ const NODE_LOCAL_ROLES: [&str; 2] = ["combine", "identity"];
 /// # Invariant
 /// The refusal is **stored**, not recomputed, so one node's marks are read once and a graph run
 /// reports what the derivation found rather than re-deriving it every time.
-type Row = Result<Instance, SchemaRefusal>;
+///
+/// **The claim is carried with the refusal**, because the interface a kernel claims is what
+/// tells a merged node from any other kernel this pass has no algebra for.
+enum Row {
+    /// The algebra the kernel's own marks declare.
+    Derived(Instance),
+    /// The kernel is refused, and this is the interface it claims.
+    Refused {
+        /// The refusal the derivation gave.
+        refusal: SchemaRefusal,
+        /// The interface the kernel claims.
+        claim: KernelClaim,
+    },
+}
 
 /// The pass that tiles the nodes `kernels` names, under `packs`.
 ///
@@ -141,22 +156,29 @@ impl GraphPass for AutomaticTiling {
                 continue;
             };
             match row {
-                Ok(instance) => match beyond_a_node(kernel.inputs.iter().copied(), inputs) {
-                    Some(value) => lines.push(format!(
-                        "node {position}: refused: {}",
-                        SchemaRefusal::ReadsAnotherNode {
-                            node: position,
-                            value,
-                        }
-                        .message()
-                    )),
-                    // The row is the node's own algebra; folding it is what the claim must license.
-                    None => match instance.schema.the_fold() {
-                        Ok(fold) => tiled.push((position, instance.clone(), fold)),
-                        Err(refusal) => lines.push(named(position, &refusal)),
-                    },
-                },
-                Err(refusal) => lines.push(named(position, &refusal)),
+                Row::Derived(instance) => {
+                    match beyond_a_node(kernel.inputs.iter().copied(), inputs) {
+                        Some(value) => lines.push(format!(
+                            "node {position}: refused: {}",
+                            SchemaRefusal::ReadsAnotherNode {
+                                node: position,
+                                value,
+                            }
+                            .message()
+                        )),
+                        // The row is the node's own algebra; folding it is what the claim must
+                        // license.
+                        None => match instance.schema.the_fold() {
+                            Ok(fold) => tiled.push((position, instance.clone(), fold)),
+                            Err(refusal) => lines.push(named(position, &refusal)),
+                        },
+                    }
+                }
+                // **A merged node is checked, not tiled**: it is held to the checks that need none.
+                Row::Refused { claim, .. } if claim.interface == OPAQUE => lines.push(
+                    merged_node::line(position, &kernel.fragment, kernel.count, extent(position)),
+                ),
+                Row::Refused { refusal, .. } => lines.push(named(position, &refusal)),
             }
         }
         for (position, instance, fold) in tiled {
@@ -463,10 +485,23 @@ fn insert(
 /// # Invariant
 /// The schema is the node's own and the algebra is the schema's: a schema that derives none
 /// states no algebra, so the row is refused by the same name the schema refused it by.
+///
+/// **The claim rides with the refusal**, so a reader of the row knows which interface the
+/// kernel claims — the one fact that tells a merged node from any other kernel.
 fn derive(kernel: &Kernel) -> Row {
-    let schema = schema_of(kernel.id, &kernel.claim, &kernel.fragment)?;
-    let reduction = schema.reduction()?;
-    Ok(Instance {
+    let refused = |refusal| Row::Refused {
+        refusal,
+        claim: kernel.claim.clone(),
+    };
+    let schema = match schema_of(kernel.id, &kernel.claim, &kernel.fragment) {
+        Ok(schema) => schema,
+        Err(refusal) => return refused(refusal),
+    };
+    let reduction = match schema.reduction() {
+        Ok(reduction) => reduction,
+        Err(refusal) => return refused(refusal),
+    };
+    Row::Derived(Instance {
         claim: kernel.claim.clone(),
         schema,
         reduction,

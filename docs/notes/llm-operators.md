@@ -39,8 +39,12 @@ denominator, `y = x / s * w` merges **with no pack** —
 region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input position 2 of
 node 1, licensed by the floor: every node of the region claims Reduction and nothing else; the
 merged fragment is registered with the conservative claim `Opaque`: a pass reading the registry
-names it and refuses it by name, and no reader reads algebra from it
+names it and refuses it by name, and no reader reads algebra from it; the merged node's identity
+is digest:…
 ```
+
+— the digest is the merged fragment's own, and its value is this program's
+([graph-fusion](graph-fusion.md) §5).
 
 — while `s / int2float k.n` is refused (`Conversion`) and `sqrt (s / int2float k.n + 0.25)` is refused
 (`Select`). **Two ordinary pieces of RMSNorm arithmetic stand between the operator and its own

@@ -16,6 +16,7 @@ pub mod fusion_file;
 pub mod graph_pass;
 pub mod kernel_registry;
 pub mod load;
+pub mod merged_node;
 pub mod module_cache;
 pub mod packs;
 pub mod placement_pack;

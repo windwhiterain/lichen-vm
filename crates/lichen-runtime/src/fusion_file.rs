@@ -470,10 +470,10 @@ fn overrides_of(report: &[String]) -> Vec<artifact::Override> {
 /// The override one line of a report states, or `None` when the line states none.
 ///
 /// # Invariant
-/// **Only a region line is read**, and only the two facts such a line carries: the
-/// `sha256:` hash it names and whether the region merged or was refused. A line that is not a
-/// region line, a region line that names no hash, and a region line that neither merged nor was
-/// refused are all skipped — the emitter reads a report, it does not guess.
+/// **Only a region line is read**, and only the facts such a line carries: the `sha256:` hash
+/// it names, whether the region merged or was refused, and the merged node's digest. A line
+/// that is not a region line, a region line that names no hash, and a region line that neither
+/// merged nor was refused are all skipped — the emitter reads a report, it does not guess.
 fn region_line(line: &str) -> Option<(String, artifact::Action, Option<String>)> {
     let rest = line.strip_prefix("region ")?;
     let digits = rest.chars().take_while(char::is_ascii_digit).count();
@@ -487,14 +487,28 @@ fn region_line(line: &str) -> Option<(String, artifact::Action, Option<String>)>
     }
     let region = schema_hash(rest)?;
     if rest.contains("merged into one node") {
-        return Some((
-            region,
-            artifact::Action::ForceMerge,
-            Some("the region merged".to_string()),
-        ));
+        // **The digest rides with the reason**: the file names the node, not the region alone.
+        let reason = match digest_of(rest) {
+            Some(digest) => format!("the region merged; the merged node is {digest}"),
+            None => "the region merged".to_string(),
+        };
+        return Some((region, artifact::Action::ForceMerge, Some(reason)));
     }
     let check = refusal_of(rest)?;
     Some((region, artifact::Action::Barrier, Some(check)))
+}
+
+/// The `digest:<16 hex>` a text names, or `None` when it names none.
+///
+/// # Invariant
+/// **One spelling**: `digest:` and sixteen hex digits, the shape a merged node's line prints.
+fn digest_of(text: &str) -> Option<String> {
+    let start = text.find("digest:")?;
+    let digits = text.get(start + "digest:".len()..)?.get(..16)?;
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("digest:{digits}"))
 }
 
 /// The `sha256:<hex>` a text names, or `None` when it names none.
