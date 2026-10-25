@@ -122,6 +122,10 @@ pub fn compose_siblings(branches: &[Sibling<'_>]) -> Result<KernelFragment, Comp
     let shared_port = edges[0].shared;
 
     let mut body = first.body.clone();
+    // **A composed body is as exact as the bodies it composes**: it carries their definitions.
+    body.exact_float_arithmetic = branches
+        .iter()
+        .any(|branch| branch.fragment.body.exact_float_arithmetic);
     // **The runtime scalars are spliced into the merged body's own domain.**
     let total = scalars.total();
     splice_runtime_scalars(&mut body, scalars.own(0), total - scalars.own(0));

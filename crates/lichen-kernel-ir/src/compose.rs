@@ -208,6 +208,11 @@ pub fn compose_fan_out(
     };
 
     let mut body = producer.body.clone();
+    // **A composed body is as exact as the bodies it composes**: it carries their definitions.
+    body.exact_float_arithmetic = producer.body.exact_float_arithmetic
+        || consumers
+            .iter()
+            .any(|(consumer, _)| consumer.body.exact_float_arithmetic);
     // **The runtime scalars are spliced into the merged body's own domain.**
     let total = scalars.total();
     splice_runtime_scalars(&mut body, scalars.own(0), total - scalars.own(0));

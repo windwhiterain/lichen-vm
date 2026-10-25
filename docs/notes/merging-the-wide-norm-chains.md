@@ -4,7 +4,9 @@
 > composite is **8 nodes** under the sibling strategy — the ladder's 10 → 8 rung). What it measured
 > is in **§7**, including the obstacle §3 did not foresee (an output buffer's length is not the
 > launch count) and the limits the merge carries (a merged node is not bit-identical to the
-> unmerged pair, and the report's extent numbers go stale after a rewrite).
+> unmerged pair, and the report's extent numbers go stale after a rewrite). **§7.5 localises the
+> first limit** — the composition had dropped the exactness the consumer's own body carries —
+> **and fixes the cause**; what is left open is the *scope* of that protection.
 > The rest of the note is the investigation as it was written: the question, the measured
 > refusals, and the three paths.
 > Written against `serve-frontier@1b93532d`; while it was being written the branch moved to
@@ -341,10 +343,10 @@ now, and not the number of lanes that wrote it (`crates/lichen-graph-ir`).
 - **A merged node is not bit-identical to the unmerged pair.** On a two-node program (eight heads
   of 128) the producer's sums are equal to the bit, but 100 of the 1024 elements of **one** head
   differ by one ULP from the unmerged program's — deterministically (three runs, the same 100
-  elements). That head's divisor differs by one ULP; the sums do not. The cause is not localised.
-  **The probe's differential cannot see it**: both of its preparations merge the same chains now
-  (the `component` strategy folds the whole component, and the component's chains are mergeable),
-  so it compares two merged programs.
+  elements). That head's divisor differs by one ULP; the sums do not. **The cause is localised in
+  §7.5.** **The probe's differential cannot see it**: both of its preparations merge the same
+  chains now (the `component` strategy folds the whole component, and the component's chains are
+  mergeable), so it compares two merged programs.
 - **The report's extent numbers go stale after a rewrite.** The launch-extent closure the
   automatic-tiling pass reads is built over the graph it was handed, so a merged node's "covers N
   element(s)" is the *old* graph's node at that position. The key chain's merged node (8 lanes) is
@@ -359,3 +361,51 @@ now, and not the number of lanes that wrote it (`crates/lichen-graph-ir`).
 - **The key chain's region hash changed** (the scale kernel is another kernel), so `fuse_probe`'s
   fuse pack names no region any more and the floor's licence merges the region instead. The
   **sibling** region's hash is unchanged, so `fuse_class_probe`'s classed pack still names it.
+
+### 7.5 The cause: the composition dropped the exactness the consumer's body carries
+
+**Measured, on the RTX 3060 Ti, with `crates/lichen-serve/examples/norm_ulp_probe.rs`** (a
+two-node program — the squares kernel and the scale kernel — over eight heads of 128, read as
+bits). Three runs, the same host inputs:
+
+| run | the sums | the divisors | the scaled elements |
+|---|---|---|---|
+| the **wide** chain (the composite's old lane map), unmerged | — | — | **every bit equal** to the per-head chain's |
+| the **per-head** chain, unmerged | the host's own plain sum, bit for bit | the IR's definition, bit for bit | — |
+| the per-head chain, **merged** | the same bits | **one head one ULP away** | **100 of that head's 128 elements one ULP away** |
+
+**So the per-head rewrite is bit-identical to the old lane map, and the difference is the
+merge's.** Not the association: the fold's order is the same in both programs (the counter runs
+from `DIM` down to one). Not the extent machinery: the sums are the same bits and the divisor's
+input is the same sum. Not the kernel bodies: the two programs' bodies are the composite's own.
+
+**The cause is the composition's own.** A body that inlined a transcendental's definition carries
+`exact_float_arithmetic`, and the emitter writes one `NoContraction` per float result of such a
+body ([contraction-control](contraction-control.md) §9.1). The composition copied the consumer's
+*instructions* and not the consumer's *decision*: the merged body answered `false` where the
+consumer's own kernel answered `true`, and the merged module carried **no** `NoContraction` where
+the consumer's module carried **113**.
+
+**What the missing decoration buys the driver.** The IR's square root is a Newton iteration whose
+`reduced / root` is a division, and an undecorated division is the driver's reciprocal-multiply
+rather than the division the IR wrote ([division-rounding-gap](division-rounding-gap.md) §4). So
+the merged node's square root is not the definition the kernel computes, that head's divisor
+moves by one ULP, and the head's elements move with it.
+
+**Fixed**: a composed body is as exact as the bodies it composes
+(`crates/lichen-kernel-ir/src/compose.rs`, `.../fan_in.rs`, `.../siblings.rs`). The merged body is
+marked when any composed body was, the merged module carries the decorations the consumer's
+kernel had (113 → 115), and the merged node's answers are the pair's again — **the divisors, the
+sums and every scaled element agree on every bit** in the probe.
+
+**What the fix does not settle, and what is left for the maintainer.** The protection is per body
+(the emitter's whole-module rule is [contraction-control](contraction-control.md) §6's decision),
+and the *producer's* own kernel is not marked: the driver is free to contract the producer's fold
+(`acc + x*x` into an FMA), and the probe measures it doing so, while the merged body — marked
+whole — computes the fold as the IR wrote it. So a merged node and its pair still differ where
+that contraction bites, and there the **merged node is the one that answers the IR's arithmetic**.
+Making the two agree is a question of *scope*, not of this defect: either the protection becomes
+per value (a narrower set than §6's whole-module rule, which the note says "was not measured"), or
+every float body is marked (§6's scope decision), or the difference is accepted and recorded.
+Each of those is a change to a recorded decision, and the maintainer's call.
+
