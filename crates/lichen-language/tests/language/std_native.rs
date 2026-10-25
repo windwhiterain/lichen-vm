@@ -69,9 +69,30 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
             LangOperator::SortOp(op) => op.run(operand, block, module),
         }
     }
-}
 
-// The store's program carries its own codec, so `HostProgram` binds `NoPersist`.
+    // Mirror the composition's deferred dispatch to each leaf.
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: lichen_lowlevel::BlockId,
+        module: &mut lichen_lowlevel::Module<HostProgram>,
+    ) -> Option<LangValue> {
+        match self {
+            LangOperator::LowOperator(op) => {
+                <lichen_lowlevel::LowOperator as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::TypeOperator(op) => {
+                <lichen_highlevel::program::TypeOperator as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::GcdOp(op) => {
+                <lichen_perspective::GcdOp as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::SortOp(op) => {
+                <lichen_std_native::SortOp as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+        }
+    }
+}
 impl ProgramCodecOf for HostProgram {
     type Codec = NoPersist;
 }
