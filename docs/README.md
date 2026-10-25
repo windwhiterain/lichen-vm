@@ -91,6 +91,7 @@ authority, and this table only names the state.
 | [A nested apply loses the parameter it consumed](notes/nested-apply-none.md) | `lichen-lowlevel` (`evaluation`/`apply`/`function`), `lichen-highlevel` (`checker`) | current |
 | [Array attribute view](notes/array-attribute-view.md) | `lichen-lowlevel` (`lib`/`module`/`codec`/`static_module`), `lichen-highlevel` (`shape`/`checker`) | current |
 | [Compound element slots](notes/compound-element-slots.md) | `lichen-lowlevel` (`equality`/`evaluation`), `lichen-highlevel` (`checker`/`shape`), `lichen-compute`, `lichen-render`, `tree-sitter-lichen` | current |
+| [Value templates](notes/value-templates.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel`, `lichen-lowlevel` | in progress |
 | [Operator polymorphism](notes/operator-polymorphism.md) | `lichen-highlevel`, `lichen-lowlevel` (`assert`), `lichen-language`, `lichen-compute`, `lichen-std` | current |
 | [`core`: the built-in prelude](notes/core-prelude.md) | `lichen-language` (`core.lichen`), `lichen-registry` | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`), `lichen-language`, `lichen-doc` | current |
