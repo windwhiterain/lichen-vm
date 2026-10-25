@@ -301,7 +301,7 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// # Invariant
     /// One `usize` per element: 0 unmarked, `usize::MAX` the bare `~`, n the value
     /// slot at the first n levels of the element's type spine. It is index-aligned
-    /// with the elements of [`ExprKind::ArrayInst`] and [`ExprKind::ShallowArray`].
+    /// with the elements of [`ExprKind::ArrayInst`].
     pub depths: Vec<usize>,
     pub root: ExprId,
     /// The block-wide binding placeholder ids — the only `ExprId`s whose subtree
@@ -555,16 +555,6 @@ pub enum ExprKind<L> {
     /// builds the table eagerly — keys must be deep-evaluated to hash them — and
     /// drops an entry whose key is not concrete.
     Table(ChildRange),
-    /// An array instance with `@shallow`-marked positions — `[v1, @shallow v2,
-    /// @shallow(2) v3]`.
-    ///
-    /// # Invariant
-    /// Typed like a tuple, not an [`Self::ArrayInst`]: a homogeneous element type
-    /// would reject `[x, @shallow f(x+1)]` with an `Int` head and a `Stream` tail.
-    ShallowArray {
-        range: ChildRange,
-        depths: ChildRange,
-    },
     /// `_` — an inference placeholder hole, usable in any position.
     ///
     /// # Invariant
@@ -706,7 +696,6 @@ impl<L> ExprKind<L> {
             | ExprKind::TypeTable(range)
             | ExprKind::Set(range)
             | ExprKind::Table(range)
-            | ExprKind::ShallowArray { range, .. }
             | ExprKind::Struct { fields: range, .. }
             | ExprKind::NativeCall { args: range, .. }
             | ExprKind::Prefix {
@@ -746,7 +735,6 @@ impl<L> ExprKind<L> {
             | ExprKind::Struct { .. }
             | ExprKind::Set(_)
             | ExprKind::Table(_)
-            | ExprKind::ShallowArray { .. }
             | ExprKind::NativeCall { .. }
             | ExprKind::Prefix { .. } => {}
             ExprKind::Function {
@@ -1013,16 +1001,6 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc(ExprKind::Table(range))
     }
 
-    /// Allocate a shallow-marked array, each element carrying its `~` depth.
-    pub fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)]) -> ExprId {
-        let range = extend_range(
-            &mut self.children,
-            elements.iter().map(|&(element, _)| element),
-        );
-        let depths = extend_range(&mut self.depths, elements.iter().map(|&(_, depth)| depth));
-        self.alloc(ExprKind::ShallowArray { range, depths })
-    }
-
     fn alloc_variadic(
         &mut self,
         elements: &[ExprId],
@@ -1045,7 +1023,6 @@ impl<A: AttrSpec, L> IR<A, L> {
             | ExprKind::TypeSet(range)
             | ExprKind::TypeTable(range)
             | ExprKind::Set(range)
-            | ExprKind::ShallowArray { range, .. }
             | ExprKind::Table(range) => range,
             ExprKind::Struct { fields, .. } => fields,
             ExprKind::ArrayInst { elements, .. } => elements,
