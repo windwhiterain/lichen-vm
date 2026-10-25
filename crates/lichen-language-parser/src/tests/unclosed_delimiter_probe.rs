@@ -38,5 +38,5 @@ fn unclosed_delimiter_probe() {
 
     // The same shape in miniature, so the probe does not depend on the
     // example's other contents.
-    print_diagnostics("miniature", "x = .at (s(0) - 1\n");
+    print_diagnostics("miniature", "x := f (s(0) - 1\n");
 }

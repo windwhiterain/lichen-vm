@@ -36,7 +36,12 @@ pub enum TokenKind {
     KwString,
     /// The Type type constant -- the universe.
     KwType,
-    /// The struct keyword -- a nominal struct type.
+    /// The `Tuple` template constant — the builtin tuple template, a value
+    /// like `Int` and `Type` (`docs/language-spec.md` §Type).
+    KwTuple,
+    /// The `Array` template constant — the builtin array template.
+    KwArray,
+    /// The `Struct` template constant — the builtin struct template.
     KwStruct,
     /// The `table` keyword — the table value `table(k ==> v)` and the table
     /// type `table{K, V}` (`docs/language-spec.md` §2).
@@ -66,6 +71,9 @@ pub enum TokenKind {
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
+    /// `@clone` — the clone marker: `@clone e` clones `e` before it is
+    /// unified with anything (`docs/notes/value-templates.md`).
+    KwClone,
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).
     Any,
@@ -77,10 +85,6 @@ pub enum TokenKind {
     /// `@cache` — a retained cell, at the `@` sigil beside `@loop`
     /// (`docs/notes/incremental-update.md` §3).
     KwCache,
-    /// The `array` keyword — a keyword-led array type, `array{T, n}`.
-    KwArray,
-    /// The `tuple` keyword — the spelled-out tuple type, `tuple{slot, …}`.
-    KwTuple,
     /// The `int2float` keyword — the prefix `Int` to `Float` conversion, at the
     /// prefix level beside `!`.
     KwInt2Float,
@@ -116,6 +120,10 @@ pub enum TokenKind {
     FatArrow,
     /// ':' -- an annotation.
     Colon,
+    /// ':=' -- the core binding: `name := expr`.
+    ColonEquals,
+    /// '<:' -- the template match: `actual <: template`.
+    TemplateUnify,
     /// '==>' -- the table entry's key/value separator (`table(k ==> v)`).
     TableArrow,
     /// '<==' -- the table read's container/key separator (`t <== k`).
@@ -129,7 +137,7 @@ pub enum TokenKind {
     Bang,
     /// '$' — a native-operator call prefix, `$jit(f)`, for a plugin's own source.
     Dollar,
-    /// '=' -- a statement binding.
+    /// '=' -- an expression-level unify: `actual = expected`.
     Equals,
     /// '==' -- equality.
     Eq,
@@ -202,7 +210,9 @@ impl TokenKind {
             TokenKind::KwFloat => "'Float'",
             TokenKind::KwString => "'string'",
             TokenKind::KwType => "'Type'",
-            TokenKind::KwStruct => "'struct'",
+            TokenKind::KwTuple => "'Tuple'",
+            TokenKind::KwArray => "'Array'",
+            TokenKind::KwStruct => "'Struct'",
             TokenKind::KwTable => "'table'",
             TokenKind::KwSet => "'set'",
             TokenKind::KwLet => "'let'",
@@ -214,12 +224,11 @@ impl TokenKind {
             TokenKind::KwAssert => "'@assert'",
             TokenKind::KwIn => "'@in'",
             TokenKind::KwShallow => "'@shallow'",
+            TokenKind::KwClone => "'@clone'",
             TokenKind::Any => "'@any'",
             TokenKind::KwGc => "'@gc'",
             TokenKind::KwPub => "'pub'",
             TokenKind::KwCache => "'@cache'",
-            TokenKind::KwArray => "'array'",
-            TokenKind::KwTuple => "'tuple'",
             TokenKind::KwInt2Float => "'int2float'",
             TokenKind::KwFloat2Int => "'float2int'",
             TokenKind::KwMax => "'max'",
@@ -233,6 +242,8 @@ impl TokenKind {
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
+            TokenKind::ColonEquals => "':='",
+            TokenKind::TemplateUnify => "'<:'",
             TokenKind::TableArrow => "'==>'",
             TokenKind::TableFindArrow => "'<=='",
             TokenKind::Hash => "'#'",
@@ -316,7 +327,11 @@ enum RawToken {
     KwString,
     #[token("Type")]
     KwType,
-    #[token("struct")]
+    #[token("Tuple")]
+    KwTuple,
+    #[token("Array")]
+    KwArray,
+    #[token("Struct")]
     KwStruct,
     #[token("table")]
     KwTable,
@@ -337,10 +352,6 @@ enum RawToken {
     /// A `@`-prefixed word; an unknown one is a lex error, which reserves `@`.
     #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
     AtNameLit,
-    #[token("array")]
-    KwArray,
-    #[token("tuple")]
-    KwTuple,
     #[token("int2float")]
     KwInt2Float,
     #[token("float2int")]
@@ -373,6 +384,10 @@ enum RawToken {
     TableFindArrow,
     #[token(":")]
     Colon,
+    #[token(":=")]
+    ColonEquals,
+    #[token("<:")]
+    TemplateUnify,
     #[token("#")]
     Hash,
     #[token("?")]
@@ -432,8 +447,16 @@ enum RawToken {
 impl RawToken {
     /// Whether this kind is one of the postfix-capable delimiters that a Glue
     /// marker can precede.
+    ///
+    /// # Invariant
+    /// The set is the delimiters a postfix form can follow its atom with: `(` a
+    /// tuple read, `[` an array read or instance, `{` a struct instance.  A
+    /// delimiter outside it never glues, so it stays an ordinary grouping.
     fn is_postfix_delim(&self) -> bool {
-        matches!(&self, RawToken::LParen | RawToken::LBracket)
+        matches!(
+            &self,
+            RawToken::LParen | RawToken::LBracket | RawToken::LBrace
+        )
     }
 }
 
@@ -740,6 +763,7 @@ fn raw_to_kind(
             "assert" => Some(TokenKind::KwAssert),
             "in" => Some(TokenKind::KwIn),
             "shallow" => Some(TokenKind::KwShallow),
+            "clone" => Some(TokenKind::KwClone),
             "any" => Some(TokenKind::Any),
             "gc" => Some(TokenKind::KwGc),
             "cache" => Some(TokenKind::KwCache),
@@ -748,7 +772,7 @@ fn raw_to_kind(
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert`, `@in`, `@shallow`, `@any`, `@gc` and `@cache` are the \
+                         `@assert`, `@in`, `@shallow`, `@clone`, `@any`, `@gc` and `@cache` are the \
                          ones that exist"
                     ),
                 });
@@ -760,7 +784,9 @@ fn raw_to_kind(
             "Float" => TokenKind::KwFloat,
             "string" => TokenKind::KwString,
             "Type" => TokenKind::KwType,
-            "struct" => TokenKind::KwStruct,
+            "Tuple" => TokenKind::KwTuple,
+            "Array" => TokenKind::KwArray,
+            "Struct" => TokenKind::KwStruct,
             "table" => TokenKind::KwTable,
             "set" => TokenKind::KwSet,
             "let" => TokenKind::KwLet,
@@ -769,8 +795,6 @@ fn raw_to_kind(
             "else" => TokenKind::KwElse,
             "return" => TokenKind::KwReturn,
             "pub" => TokenKind::KwPub,
-            "array" => TokenKind::KwArray,
-            "tuple" => TokenKind::KwTuple,
             "int2float" => TokenKind::KwInt2Float,
             "float2int" => TokenKind::KwFloat2Int,
             "max" => TokenKind::KwMax,
@@ -788,6 +812,8 @@ fn raw_to_kind(
         RawToken::KwFloat => Some(TokenKind::KwFloat),
         RawToken::KwString => Some(TokenKind::KwString),
         RawToken::KwType => Some(TokenKind::KwType),
+        RawToken::KwTuple => Some(TokenKind::KwTuple),
+        RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::KwStruct => Some(TokenKind::KwStruct),
         RawToken::KwTable => Some(TokenKind::KwTable),
         RawToken::KwSet => Some(TokenKind::KwSet),
@@ -797,8 +823,6 @@ fn raw_to_kind(
         RawToken::KwElse => Some(TokenKind::KwElse),
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
-        RawToken::KwArray => Some(TokenKind::KwArray),
-        RawToken::KwTuple => Some(TokenKind::KwTuple),
         RawToken::KwInt2Float => Some(TokenKind::KwInt2Float),
         RawToken::KwFloat2Int => Some(TokenKind::KwFloat2Int),
         RawToken::KwMax => Some(TokenKind::KwMax),
@@ -814,6 +838,8 @@ fn raw_to_kind(
         RawToken::TableArrow => Some(TokenKind::TableArrow),
         RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),
         RawToken::Colon => Some(TokenKind::Colon),
+        RawToken::ColonEquals => Some(TokenKind::ColonEquals),
+        RawToken::TemplateUnify => Some(TokenKind::TemplateUnify),
         RawToken::Hash => Some(TokenKind::Hash),
         RawToken::Question => Some(TokenKind::Question),
         RawToken::Bang => Some(TokenKind::Bang),
