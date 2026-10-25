@@ -207,24 +207,24 @@ mod tests {
 
     #[test]
     fn position_offset_round_trips() {
-        let source = "a = 1\nb = a + 1\nb";
+        let source = "a := 1\nb := a + 1\nb";
         let starts = lichen_language::lex::line_starts(source);
-        // The `a` use in `b = a + 1` is at line 1, byte column 4 (0-based col 4).
-        let pos = position_at_offset(source, &starts, starts[1] + 4);
+        // The `a` use in `b := a + 1` is at line 1, byte column 5 (0-based col 5).
+        let pos = position_at_offset(source, &starts, starts[1] + 5);
         assert_eq!(
             pos,
             Position {
                 line: 1,
-                character: 4
+                character: 5
             }
         );
         let back = offset_from_position(source, &starts, pos).expect("position in source");
-        assert_eq!(back, starts[1] + 4);
+        assert_eq!(back, starts[1] + 5);
     }
 
     #[test]
     fn span_of_offset_round_trips_to_1_based_span() {
-        let source = "a = 1\nb";
+        let source = "a := 1\nb";
         let starts = lichen_language::lex::line_starts(source);
         // Byte offset of the `b` on line 2 (col 1).
         let offset = starts[1];
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn encode_semantic_tokens_delta_encodes_and_maps_legend_indices() {
-        let source = "a = 1\nb = 2\na + b\n";
+        let source = "a := 1\nb := 2\na + b\n";
         let starts = lichen_language::lex::line_starts(source);
         let tokens = vec![
             // `a` at line 0 char 0.
@@ -243,17 +243,17 @@ mod tests {
                 token_type: SemanticTokenType::VARIABLE,
                 modifiers: Vec::new(),
             },
-            // `1` at line 0 char 4 (same line, so a delta_start).
+            // `1` at line 0 char 5 (same line, so a delta_start).
             SemanticTokenData {
-                start: 4,
-                end: 5,
+                start: 5,
+                end: 6,
                 token_type: SemanticTokenType::NUMBER,
                 modifiers: Vec::new(),
             },
-            // `2` at line 1 char 4 (a new line, so an absolute delta_start).
+            // `2` at line 1 char 5 (a new line, so an absolute delta_start).
             SemanticTokenData {
-                start: 10,
-                end: 11,
+                start: 12,
+                end: 13,
                 token_type: SemanticTokenType::NUMBER,
                 modifiers: Vec::new(),
             },
@@ -268,10 +268,10 @@ mod tests {
         assert_eq!(encoded.data[0].length, 1);
         assert_eq!(encoded.data[0].token_type, ty(&SemanticTokenType::VARIABLE));
         assert_eq!(encoded.data[1].delta_line, 0);
-        assert_eq!(encoded.data[1].delta_start, 4);
+        assert_eq!(encoded.data[1].delta_start, 5);
         assert_eq!(encoded.data[1].token_type, ty(&SemanticTokenType::NUMBER));
         assert_eq!(encoded.data[2].delta_line, 1);
-        assert_eq!(encoded.data[2].delta_start, 4);
+        assert_eq!(encoded.data[2].delta_start, 5);
         assert_eq!(encoded.data[2].token_type, ty(&SemanticTokenType::NUMBER));
     }
 }

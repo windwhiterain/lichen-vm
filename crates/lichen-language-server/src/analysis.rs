@@ -2565,7 +2565,7 @@ mod tests {
     fn field_access_error_suggests_a_close_field() {
         // `point.sux` reads a field the container lacks; the diagnostic
         // appends the closest field name as a did-you-mean clause.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.sux\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.sux\n");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2581,7 +2581,7 @@ mod tests {
     #[test]
     fn completion_after_a_dot_offers_the_structs_fields() {
         // Typing `point.s` offers the struct's own field `sub`, never a bare name.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.s\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.s\n");
         let items = d.completion_at(Position {
             line: 1,
             character: 7,
@@ -2604,7 +2604,7 @@ mod tests {
     #[test]
     fn field_completion_is_filtered_by_the_typed_prefix() {
         // Typing `y` after `point.` offers only the field(s) sharing that prefix.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.y\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.y\n");
         let items = d.completion_at(Position {
             line: 1,
             character: 7,
@@ -2623,7 +2623,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let main_path = write(
             &dir,
@@ -2674,7 +2674,7 @@ mod tests {
     fn a_prelude_name_use_jumps_into_the_builtins_own_file() {
         // `add` has no binding and no import: the prelude is seeded, and a
         // use resolves to the built-in's file.
-        let d = doc("add [1, 2]\n");
+        let d = doc("add (1, 2)\n");
         let def = d
             .definition_at(Position {
                 line: 0,
@@ -2693,7 +2693,7 @@ mod tests {
             "the jump should land in the built-in's file"
         );
         assert!(
-            file.code.contains("add = operands"),
+            file.code.contains("add := operands"),
             "the built-in's text is the record's: got {:?}",
             file.code
         );
@@ -2702,16 +2702,18 @@ mod tests {
         assert_eq!(range.start.line, 2, "`add` is on line 3 of core.lichen");
 
         // A failure *inside* the built-in belongs to its file, not the document
-        // (`docs/notes/core-prelude.md` §4).
-        let failing = doc("add [\"a\", \"b\"]\n");
+        // (`docs/notes/core-prelude.md` §4). The prelude states its class
+        // contract as a template match, so the refusal the built-in carries is
+        // the operator's own class domain.
+        let failing = doc("add (\"a\", \"b\")\n");
         let files = failing.file_diagnostics();
         assert!(
             files.iter().any(|file| {
                 file.path.file_name().is_some_and(|n| n == "core.lichen")
-                    && file.diagnostics.iter().any(|d| {
-                        d.message
-                            .contains("the refinement's predicate did not answer 1")
-                    })
+                    && file
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("does not satisfy {Int, Float}"))
             }),
             "expected the built-in's failure on the built-in's file, got {files:?}"
         );
@@ -2734,7 +2736,7 @@ mod tests {
         let (msg, _range) = d
             .hover_at(Position {
                 line: 1,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `a`");
         assert!(msg.contains("1 : Int"), "hover msg = {msg}");
@@ -2744,11 +2746,11 @@ mod tests {
     fn hover_on_a_non_binding_definition_reports_its_line() {
         // A lambda parameter is a definition but not a top-level statement, so
         // there is no `value : type` snapshot.
-        let d = doc("f = x => x\nf 1\n");
+        let d = doc("f := x => x\nf 1\n");
         let (msg, _) = d
             .hover_at(Position {
                 line: 0,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `x`");
         assert!(msg.contains("defined at line `1`"), "hover msg = {msg}");
@@ -2758,7 +2760,7 @@ mod tests {
     fn hover_renders_a_binding_value_and_type() {
         // A binding hover shows the bound expr's `value : type` — for the
         // binding's own name and for any use of it.
-        let d = doc("x := 3\ny = x + 4\nx + y\n");
+        let d = doc("x := 3\ny := x + 4\nx + y\n");
         // On the definition site of `x`: value 3 : Int.
         let (msg, _) = d
             .hover_at(Position {
@@ -2784,7 +2786,7 @@ mod tests {
         let (msg, _) = d
             .hover_at(Position {
                 line: 1,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `unknown`");
         assert!(msg.contains("unresolved name"), "hover msg = {msg}");
@@ -2840,7 +2842,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_classify_literals_operators_and_declarations() {
-        let d = doc("f = x => x + 1\nf 7\n");
+        let d = doc("f := x => x + 1\nf 7\n");
         let toks = d.semantic_tokens();
         let types = |t: &crate::lsp::SemanticTokenType| toks.iter().any(|x| &x.token_type == t);
         assert!(
@@ -2909,17 +2911,17 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "---output = \"(Function, Function): struct{.succ Int -> Int, .add Int -> Int -> Int}\"---\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "---output = \"(Int -> Int, Int -> Int -> Int): Struct\"---\nsucc := x => x + 1\nadd := x => y => x + y\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "---math = import \"math.lichen\"\noutput = \"(Function, Function): struct{.double Int -> Int, .inc_twice Int -> Int}\"---\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
+            "---math = import \"math.lichen\"\noutput = \"(Int -> Int, Int -> Int): Struct\"---\ndouble := x => math.add x x\ninc_twice := x => math.succ (math.succ x)\n",
         );
         let main_path = write(
             &dir,
             "_.lichen",
-            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): tuple{Int, Int, Int}\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
+            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): Tuple\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
@@ -2937,7 +2939,7 @@ mod tests {
     fn new_with_cache_writes_imports_to_the_lichen_home() {
         // The settled imports are compiled into the device cache at `cache_root`.
         let dir = temp_dir("cachewrite");
-        write(&dir, "math.lichen", "{\n  succ = x => x + 1\n}\n");
+        write(&dir, "math.lichen", "succ := x => x + 1\n");
         let main_path = write(
             &dir,
             "main.lichen",
@@ -2979,7 +2981,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let main_path = write(
             &dir,
@@ -2999,7 +3001,13 @@ mod tests {
             })
             .expect("hover on `math`");
         assert!(msg.contains("imported module"), "module hover msg = {msg}");
-        assert!(msg.contains("Int -> Int"), "module hover type = {msg}");
+        // The module's **type** is the shared `Struct` layout: the field names
+        // and their types live in the module's own value, and the field hover
+        // below reads them there.
+        assert_eq!(
+            msg, "`math` — imported module : Struct",
+            "the module's type is the layout template"
+        );
 
         // The field `succ` (line 3, char 5): a field of the imported module —
         // its `value : type`, not "unresolved".
@@ -3113,7 +3121,7 @@ mod tests {
     fn local_struct_field_access_hovers_with_value_and_type() {
         // A field access on a *local* struct binding renders the field's
         // value:type, from this file's struct-block field table.
-        let d = doc("point = { x = 1, y = 2 }\npoint.x\n");
+        let d = doc("point := {.x 1, .y 2}\npoint.x\n");
         let (msg, _) = d
             .hover_at(Position {
                 line: 1,
@@ -3134,19 +3142,19 @@ mod tests {
         let math_path = write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&math_path).unwrap(),
             Some(math_path.as_path()),
         );
 
-        // `succ` at line 1, char 2; `add` at line 2, char 2.
-        for (line, name) in [(1usize, "succ"), (2, "add")] {
+        // `succ` at line 0, char 0; `add` at line 1, char 0.
+        for (line, name) in [(0usize, "succ"), (1, "add")] {
             let (msg, _) = d
                 .hover_at(Position {
                     line: line as u32,
-                    character: 2,
+                    character: 0,
                 })
                 .unwrap_or_else(|| panic!("hover on `{name}`"));
             assert!(
