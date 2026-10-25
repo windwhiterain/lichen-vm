@@ -19,6 +19,7 @@ pub use crate::loop_conversion::{
 pub use crate::resolve::{Define, Selection};
 pub use crate::static_module::Rehome;
 pub(crate) use crate::static_module::StaticModuleCache;
+pub use crate::template::{TemplateBoundary, TemplateInstance};
 
 pub mod ancestors;
 mod apply;
@@ -36,6 +37,7 @@ mod registry;
 pub mod resolve;
 mod static_module;
 mod table;
+mod template;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
