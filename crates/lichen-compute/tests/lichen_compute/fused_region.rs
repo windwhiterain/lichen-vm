@@ -604,15 +604,11 @@ fn a_fan_out_region_with_no_pack_is_refused_by_name() {
     let graph = recorded(&module, &value);
     assert_eq!(graph.len(), 3, "the producer feeds two consumers");
     install_region_merge(&module);
-    let lines = refuses_by_name(&graph, "NotAReductionChain");
+    let lines = refuses_by_name(&graph, "ConsumerEntryDoesNotReturn");
+    let expected = "region 0 (nodes 0, 1, 2): refused: ConsumerEntryDoesNotReturn: consumer 0 does not return from its entry block, and the next consumer's body is appended where that block leaves the merged body, so it would run on a path this consumer never takes".to_string();
     assert_eq!(
         lines,
-        vec![
-            "region 0 (nodes 0, 1, 2): refused: NotAReductionChain: graph node 0's edges inside \
-             the region do not make one producer-to-consumer chain, so the floor's own proof cannot \
-             hold it, and a merge is licensed only by a pack whose `fuse` names this region's schema"
-                .to_string()
-        ],
+        vec![expected],
         "the region is refused by name, and nothing merged"
     );
     clear_graph_pass();

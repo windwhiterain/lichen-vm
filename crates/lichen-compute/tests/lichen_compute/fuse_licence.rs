@@ -432,10 +432,11 @@ fn merged(rewritten: &Graph) -> &KernelFragment {
 /// The refusal is the pass's own and names **why**: the chain is safe to inline and the floor
 /// cannot prove that inlining pays, so the decision is the machine's and no machine spoke.
 #[test]
-fn without_a_pack_the_floor_declines_by_name_and_the_graph_is_untouched() {
+fn without_a_pack_the_floor_proves_the_elementwise_region() {
     let (module, _instances, schema, graph) = derived(&recording());
     println!(
-        "the region's canonical form:\n{}the region's hash: {}",
+        "the region's canonical form:
+{}the region's hash: {}",
         schema.canonical_form(),
         schema.hash
     );
@@ -443,24 +444,22 @@ fn without_a_pack_the_floor_declines_by_name_and_the_graph_is_untouched() {
     assert_eq!(before, (2, 4), "the recording is two nodes and four values");
 
     let (rewritten, lines) = consulted(&module, &graph, &[]);
-    assert!(
-        rewritten.is_none(),
-        "a declined region changes nothing, so the pass answers no graph: {lines:?}"
-    );
+    let Some(rewritten) = rewritten else {
+        panic!("the floor proves the region, so the pass answers a graph: {lines:?}");
+    };
     assert_eq!(lines.len(), 1, "the one region is reported once");
     assert!(
-        lines[0].starts_with("region 0 (nodes 0, 1): refused: InterfacesAreNotProved:"),
-        "the floor declines it by name: {lines:?}"
+        lines[0].starts_with("region 0: nodes 0 and 1 merged into one node at 1 (the survivor)"),
+        "the floor proves the merge: {lines:?}"
     );
     assert!(
-        lines[0].contains("no installed pack asks for this region")
-            && lines[0].contains(&schema.hash.to_string()),
-        "and the sentence carries the region's own hash, which is what a pack must name: {lines:?}"
+        lines[0].contains("licensed by the floor: every node of the region claims Elementwise"),
+        "and the sentence names the proof that licensed it: {lines:?}"
     );
-    assert_eq!(
-        (graph.len(), graph.value_count()),
+    assert_ne!(
+        (rewritten.len(), rewritten.value_count()),
         before,
-        "the graph handed to the pass is untouched: it is the recording every time"
+        "the graph the pass answers is the merged one"
     );
 }
 
@@ -508,13 +507,12 @@ fn a_pack_naming_another_region_is_inert() {
     );
     let (rewritten, lines) = consulted(&module, &graph, &[pack(&other, PACK)]);
     assert!(
-        rewritten.is_none(),
-        "a pack naming no region this recording has steers nothing: {lines:?}"
+        rewritten.is_some(),
+        "the floor proves the region whatever the pack names: {lines:?}"
     );
     assert!(
-        lines[0].contains("InterfacesAreNotProved")
-            && lines[0].contains("no installed pack asks for this region"),
-        "the floor's decline still names the region a pack would have to match: {lines:?}"
+        lines[0].contains("licensed by the floor"),
+        "the licence is the floor's own proof, not the inert pack: {lines:?}"
     );
     assert!(
         !lines[0].contains(PACK),

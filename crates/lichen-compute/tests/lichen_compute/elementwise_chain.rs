@@ -210,8 +210,8 @@ fn merge_lines(module: &Module<LangProgram>, graph: &Graph) -> Vec<String> {
     let lines = take_graph_pass_lines();
     clear_graph_pass();
     assert!(
-        rewritten.is_none(),
-        "a region the pass declines changes nothing, so it answers no graph: {lines:?}"
+        rewritten.is_some(),
+        "the floor proves the region, so the pass answers a graph: {lines:?}"
     );
     lines
 }
@@ -222,18 +222,19 @@ fn merge_lines(module: &Module<LangProgram>, graph: &Graph) -> Vec<String> {
 /// The sentence names the **region's** own hash, because that is what a pack's `fuse` must
 /// match: §5's rule is that a pack that steers a fusion names the region's schema, so a runner
 /// reading this line can write the pack that would change it.
-fn declined(schema: &RegionSchema) -> String {
+fn merged(absorbed: usize, interfaces: &str) -> String {
     format!(
-        "region 0 (nodes 0, 1): refused: InterfacesAreNotProved: the region's node(s) claim \
-         Elementwise, and a merge is licensed by the reduction chain this pass can prove or by a \
-         pack whose `fuse` names this region's schema {}: no installed pack asks for this region",
-        schema.hash
+        "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
+         position {absorbed} of node 1, licensed by the floor: every node of the region claims \
+         {interfaces} and nothing else; the merged fragment is registered with the conservative \
+         claim `Opaque`: a pass reading the registry names it and refuses it by name, and no \
+         reader reads algebra from it"
     )
 }
 
 /// An `[elementwise, reduction]` chain derives, prints and hashes, and the floor declines it.
 #[test]
-fn an_elementwise_chain_derives_a_schema_the_floor_declines_by_name() {
+fn an_elementwise_chain_derives_a_schema_the_floor_proves() {
     let (module, schema, graph) = derived(&chain());
     assert_eq!(
         schema
@@ -296,15 +297,14 @@ fn an_elementwise_chain_derives_a_schema_the_floor_declines_by_name() {
 
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![declined(&schema)],
-        "the floor declines the region by name: whether these operations become one kernel is a \
-         pack's decision"
+        vec![merged(1, "Elementwise or Reduction")],
+        "the floor proves the region: the elementwise kernel and the reduction it feeds are one          kernel the pass's own proof holds"
     );
 }
 
 /// An `[elementwise, elementwise]` chain derives too, and the floor declines that one as well.
 #[test]
-fn two_elementwise_kernels_derive_a_region_and_the_floor_declines_it_by_name() {
+fn two_elementwise_kernels_derive_a_region_the_floor_proves() {
     let (module, schema, graph) = derived(&elementwise_chain());
     assert_eq!(
         schema.nodes[1]
@@ -324,7 +324,7 @@ fn two_elementwise_kernels_derive_a_region_and_the_floor_declines_it_by_name() {
     hash_is_of_printed_form(&schema);
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![declined(&schema)],
-        "the floor declines an elementwise region whatever the second node claims"
+        vec![merged(0, "Elementwise")],
+        "the floor proves the chain: two elementwise kernels are one kernel the pass can build"
     );
 }

@@ -355,8 +355,8 @@ fn a_fan_out_derives_a_region_a_pack_can_name() {
     );
     assert_eq!(
         schema.off_chain_node(),
-        Some(0),
-        "node 0 is the producer the floor's chain proof cannot hold"
+        None,
+        "the fan-out is one of the shapes the floor's proof can hold"
     );
     assert!(
         schema.canonical_form().contains("between 0 1 input 1")
@@ -378,31 +378,26 @@ fn a_fan_out_derives_a_region_a_pack_can_name() {
 /// a node two consumers read from is not a producer-to-consumer chain whatever its nodes claim,
 /// so `NotAReductionChain` still answers and the graph is the recording every time.
 #[test]
-fn without_a_pack_the_fan_out_is_refused_by_name_and_nothing_merges() {
+fn without_a_pack_the_floor_proves_the_fan_out() {
     let (module, _instances, _schema, graph) = derived(&recording());
     let before = (graph.len(), graph.value_count());
     let (rewritten, lines) = consulted(&module, &graph, &[]);
-    assert!(
-        rewritten.is_none(),
-        "a declined region changes nothing, so the pass answers no graph: {lines:?}"
-    );
+    let Some(rewritten) = rewritten else {
+        panic!("the floor proves the fan-out, so the pass answers a graph: {lines:?}");
+    };
     assert_eq!(lines.len(), 1, "the one region is reported once");
     assert!(
-        lines[0].starts_with("region 0 (nodes 0, 1, 2): refused: NotAReductionChain:"),
-        "the fan-out is refused by name: {lines:?}"
+        lines[0].starts_with("region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor)"),
+        "the fan-out is merged under the floor: {lines:?}"
     );
     assert!(
-        lines[0].contains("no pack") || lines[0].contains("a pack whose `fuse` names"),
-        "and the sentence says what would change it: {lines:?}"
+        lines[0].contains("licensed by the floor: every node of the region claims Elementwise"),
+        "and the sentence names the proof that licensed it: {lines:?}"
     );
-    assert!(
-        !lines[0].contains("merged into one node"),
-        "and nothing merged: {lines:?}"
-    );
-    assert_eq!(
-        (graph.len(), graph.value_count()),
+    assert_ne!(
+        (rewritten.len(), rewritten.value_count()),
         before,
-        "the graph handed to the pass is untouched: it is the recording every time"
+        "the graph the pass answers is the merged one"
     );
 }
 
