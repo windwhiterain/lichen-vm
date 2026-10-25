@@ -16,7 +16,7 @@ jit := f => {I := _; O := _; f : I -> O; (K _){.native $jit(f), .I I, .O O}}
 launch := k <: K _ => a => {a <: k.I; a # _; r := $launch(k.native, a); r <: k.O}
 call := k <: K _ => a => {a <: k.I; a # _; r := $call(k.native, a); r <: k.O}
 parallel := f => b : string => o : _ => {I := _; O := _; f : I -> O; (K _){.native $parallel(f, b), .I I, .O o}}
-plrun := k <: K _ => a <: k.I => {r := $plrun(k.native, a); r <: k.O}
+plrun := k <: K _ => a <: k.I => {r := $plrun(k.native, a, k.O); r <: k.O}
 range := x : Int => (($range(x) : Int) # 1)
 row := cfg => (($row(cfg) : Int) # 1)
 col := cfg => (($col(cfg) : Int) # 1)

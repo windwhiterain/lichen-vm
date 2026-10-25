@@ -1440,6 +1440,9 @@ where
                     // SAFETY: the VM just evaluated `operands`; the arm's `items()`
                     // calls are live nodes of `module`.
                     let operands = unsafe { operands.items() };
+                    // The declared codomain, when the caller states one: the result's
+                    // layout is the declaration's own.
+                    let declared = operands.get(2).map(|item| item.node);
                     let Some(ComputeValue::ParKernel(id, backend)) = module
                         .node_value(operands[0].node)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -1574,7 +1577,13 @@ where
                                         (payload, result.class)
                                     })
                                     .collect();
-                                return build_outputs::<P>(module, block, &facts.roles, &outputs);
+                                return build_outputs::<P>(
+                                    module,
+                                    block,
+                                    &facts.roles,
+                                    &outputs,
+                                    declared,
+                                );
                             }
                             // Several outputs are the tuple of them, each buffer a live
                             // node of this block rather than a detached value.
@@ -1637,7 +1646,13 @@ where
                                         (payload, class)
                                     })
                                     .collect();
-                                return build_outputs::<P>(module, block, &facts.roles, &outputs);
+                                return build_outputs::<P>(
+                                    module,
+                                    block,
+                                    &facts.roles,
+                                    &outputs,
+                                    declared,
+                                );
                             }
                             if results.len() != 1 {
                                 let items: Vec<ArrayItem> = results
@@ -4041,17 +4056,103 @@ where
     ))
 }
 
+/// A **declared group**: the value the surface states, and the type it carries.
+///
+/// # Invariant
+/// The value is the declaration's own compound value and the type is the one
+/// the declaration states, so a reader takes the **layout** from the type and
+/// the **header** from the value (`docs/notes/value-templates.md`).
+#[derive(Clone, Copy)]
+struct DeclaredGroup {
+    /// The declared compound value: the header a struct group inherits.
+    value: AnyNodeId,
+    /// The declared value's type: the layout the group is read at.
+    ty: Option<AnyNodeId>,
+}
+
+/// The layout a declared group carries.
+///
+/// # Invariant
+/// The layout is the group's **type** where the type names one; a group whose
+/// type names none is read by its own shape, where a struct value's header
+/// holds the two slots before the first field and every other compound value's
+/// elements are its own items (`docs/notes/value-templates.md`).
+fn declared_layout<P>(module: &Module<P>, declared: DeclaredGroup) -> CompoundLayout
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    if let Some(ty) = declared.ty
+        && let Some(layout) = compound_layout::<P>(module, ty)
+    {
+        return layout;
+    }
+    if is_struct_value(module, declared.value) {
+        CompoundLayout::Struct
+    } else {
+        CompoundLayout::Tuple
+    }
+}
+
+/// The declared child at `at`: the value and the type it carries.
+///
+/// # Invariant
+/// A group is walked through the value its own slot holds, so a nested group is
+/// read at the declaration's own position and the layout's own slots — a
+/// struct's header, an array's template — are never a child
+/// (`docs/notes/value-templates.md`).
+fn declared_child<P>(
+    module: &Module<P>,
+    declared: DeclaredGroup,
+    layout: CompoundLayout,
+    at: usize,
+) -> Option<DeclaredGroup>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    match layout {
+        CompoundLayout::Struct => {
+            let field =
+                shape::value_item(module, declared.value, shape::STRUCT_VALUE_FIELD_BASE + at)?;
+            let value = struct_field_value_of_expr(module, field)?;
+            let ty = struct_field_type_of_expr(module, field);
+            Some(DeclaredGroup { value, ty })
+        }
+        CompoundLayout::Array => {
+            let item =
+                shape::value_item(module, declared.value, shape::ARRAY_VALUE_ELEMENT_BASE + at)?;
+            Some(DeclaredGroup {
+                value: module.element_value_node(item)?,
+                ty: shape::value_item(module, item, shape::EXPR_TYPE_SLOT),
+            })
+        }
+        CompoundLayout::Tuple => {
+            let item = shape::value_item(module, declared.value, at)?;
+            Some(DeclaredGroup {
+                value: module.element_value_node(item)?,
+                ty: shape::value_item(module, item, shape::EXPR_TYPE_SLOT),
+            })
+        }
+    }
+}
+
 /// Assemble one level of a result structure, driven by the result paths.
 ///
 /// # Invariant
 /// A group's arity is one past the highest field any path names, and a position no
 /// path names is not built — the structure is exactly what the walk found.
+///
+/// The group is the declaration's shape: a struct inherits the name table and the
+/// nominal id, an array keeps its element template, a tuple has no header
+/// (`docs/notes/value-templates.md`).
 fn assemble_result<P>(
     module: &mut Module<P>,
     block: BlockId,
     outputs: &[(Vec<usize>, NodeId)],
     prefix: &[usize],
     depth: usize,
+    declared: Option<DeclaredGroup>,
 ) -> Option<NodeId>
 where
     P: Program,
@@ -4064,6 +4165,7 @@ where
         .filter_map(|(path, _)| path.get(depth))
         .max()
         .map(|highest| highest + 1)?;
+    let layout = declared.map(|declared| declared_layout::<P>(module, declared));
     let mut items: Vec<ArrayItem> = Vec::with_capacity(arity);
     for at in 0..arity {
         let leaf = outputs
@@ -4074,21 +4176,36 @@ where
             None => {
                 let mut nested = prefix.to_vec();
                 nested.push(at);
-                assemble_result(module, block, outputs, &nested, depth + 1)?
+                // A group is walked through the declared child it holds.
+                let child = match (declared, layout) {
+                    (Some(declared), Some(layout)) => {
+                        declared_child::<P>(module, declared, layout, at)
+                    }
+                    _ => None,
+                };
+                assemble_result(module, block, outputs, &nested, depth + 1, child)?
             }
         };
         // An element is a complete slot: its value, an undecided type, the wildcards.
         let node = AnyNodeId::Dynamic(element_slot(module, block, value)?);
         items.push(ArrayItem::new(node));
     }
-    let handle = module.alloc_array(&items, block);
-    Some(module.add_node(
-        block,
-        None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
-            handle.into(),
-        ))),
-    ))
+    // The group's header: a struct inherits the declaration's, an array its
+    // element template, a tuple none.
+    match (layout, declared) {
+        (Some(CompoundLayout::Struct), Some(declared)) => {
+            struct_value_node::<P>(module, block, declared.value, items)
+        }
+        (Some(CompoundLayout::Array), Some(declared)) => {
+            let template =
+                shape::value_item(module, declared.value, shape::ARRAY_VALUE_TEMPLATE_SLOT)?;
+            let mut all = Vec::with_capacity(items.len() + 1);
+            all.push(ArrayItem::new(template));
+            all.extend(items);
+            Some(array_node::<P>(module, block, &all))
+        }
+        _ => Some(array_node::<P>(module, block, &items)),
+    }
 }
 
 /// A struct **value** the compute crate builds: the name table, the nominal id
@@ -4169,11 +4286,16 @@ where
 /// # Invariant
 /// A role path starts at `.out` and ends at the buffer's `.native` slot; the result
 /// *is* the codomain, so the builder drops both ends.
+///
+/// The result's **layout** is the declared codomain's own: the declaration says
+/// which group is a struct, an array or a tuple, so a named read of the result
+/// finds the field it names (`docs/notes/value-templates.md`).
 fn build_outputs<P>(
     module: &mut Module<P>,
     block: BlockId,
     roles: &KernelRoles,
     outputs: &[(NodeId, ScalarClass)],
+    declared: Option<AnyNodeId>,
 ) -> Option<P::Value>
 where
     P: Program,
@@ -4186,7 +4308,14 @@ where
         let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
         placed.push((path.clone(), value));
     }
-    let root = assemble_result::<P>(module, block, &placed, &[], 0)?;
+    let root = assemble_result::<P>(
+        module,
+        block,
+        &placed,
+        &[],
+        0,
+        declared.map(|value| DeclaredGroup { value, ty: None }),
+    )?;
     module.node_value(AnyNodeId::Dynamic(root))
 }
 
@@ -5820,6 +5949,9 @@ where
         );
         return None;
     }
+    // The declared codomain, when the caller states one: the recorded result's
+    // layout is the declaration's own.
+    let declared = operands.get(2).map(|item| item.node);
     let Some(ComputeValue::ParKernel(id, backend)) = module
         .node_value(operands[0].node)
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
@@ -5995,7 +6127,14 @@ where
         };
         fields.push((path.clone(), buf));
     }
-    match assemble_result::<P>(module, block, &fields, &[], 0) {
+    match assemble_result::<P>(
+        module,
+        block,
+        &fields,
+        &[],
+        0,
+        declared.map(|value| DeclaredGroup { value, ty: None }),
+    ) {
         Some(root) => module.node_value(AnyNodeId::Dynamic(root)),
         None => None,
     }
@@ -6128,7 +6267,7 @@ where
             // same placeholder.
             let built = match parameter_value {
                 Some(value) => assemble_parameter::<P>(module, block, value, &cells, &[]),
-                None => assemble_result::<P>(module, block, &cells, &[], 0),
+                None => assemble_result::<P>(module, block, &cells, &[], 0, None),
             };
             match built {
                 Some(root) => root,
@@ -7913,8 +8052,8 @@ where
 /// the launch's output count.
 pub struct ParallelOp;
 
-/// `$plrun(pk, cfg)` — run a parallel kernel over `[0, cfg.n)` and collect the writes
-/// into `.out`.
+/// `$plrun(pk, cfg, codomain)` — run a parallel kernel over `[0, cfg.n)` and collect
+/// into the declared codomain.
 pub struct ParLaunchOp;
 
 /// `$range(n)` — the loop index `i ∈ [0, n)` of the current invocation.
@@ -8012,7 +8151,7 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$plrun(native, a)` — run parallel kernel `native` over `a` (the `cfg`).
+    /// `$plrun(native, a, codomain)` — run parallel kernel `native` over `a` (the `cfg`).
     ///
     /// # Invariant
     /// The result type is the call's own fresh cell, deliberately: the parameter's
@@ -8029,7 +8168,13 @@ where
     ) -> NativeApply {
         let native = &args[0];
         let a = &args[1];
-        let operands = ctx.array_node(&[native.value, a.value]);
+        // The declared codomain rides as the third operand: the result's layout is
+        // the declaration's own.
+        let mut items = vec![native.value, a.value];
+        if let Some(declared) = args.get(2) {
+            items.push(declared.value);
+        }
+        let operands = ctx.array_node(&items);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::ParLaunch),
             Some(operands),
