@@ -218,3 +218,6 @@ rustdoc refer to it for syntax and never restate it.
 
 - The attribute extension is *inspired by* a paper — see
   [Typed Perspectives](reference/Modular%20GPU%20Programming%20with%20Typed%20Perspectives.pdf).
+- [Vertex Block Descent](reference/README.md) — a physics solver paper kept as
+  reference material, in the [PDF](reference/Vertex%20Block%20Descent.pdf) and as
+  [Markdown](reference/Vertex%20Block%20Descent.md).
