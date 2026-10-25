@@ -439,6 +439,11 @@ fn the_tuple_is_a_value_and_only_a_value() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Tuple(..)));
+    // The tuple's template is the builtin `Tuple` constant.
+    assert!(matches!(
+        parse_ok("Tuple"),
+        Expr::TypeConst(TypeConst::Tuple, _)
+    ));
 }
 
 #[test]
@@ -462,6 +467,11 @@ fn a_struct_value_names_its_fields() {
         panic!("expected a struct value")
     };
     assert!(fields.is_empty());
+    // The struct's template is the builtin `Struct` constant.
+    assert!(matches!(
+        parse_ok("Struct"),
+        Expr::TypeConst(TypeConst::Struct, _)
+    ));
 }
 
 #[test]
@@ -578,6 +588,11 @@ fn the_array_template_is_a_binary_form() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Array { .. }));
+    // The array's template is the builtin `Array` constant.
+    assert!(matches!(
+        parse_ok("Array"),
+        Expr::TypeConst(TypeConst::Array, _)
+    ));
 }
 
 #[test]

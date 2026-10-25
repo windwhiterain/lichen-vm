@@ -14,6 +14,12 @@ pub enum TypeConst {
     Float,
     String,
     Type,
+    /// `Tuple` — the builtin tuple template.
+    Tuple,
+    /// `Array` — the builtin array template.
+    Array,
+    /// `Struct` — the builtin struct template.
+    Struct,
 }
 
 /// A binary operator: unsigned `Int` arithmetic, or a comparison yielding
@@ -148,7 +154,8 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
-    /// `if cond then e1 else e2`; desugared to the lazy index `[e2, e1][cond]`.
+    /// `if cond then e1 else e2`; desugared to the lazy application
+    /// `(e2, e1)(cond)`.
     If {
         condition: Box<Expr>,
         then_branch: Box<Expr>,
@@ -230,8 +237,8 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
-    /// `S{.a 1, .b 2}` — a struct instance: the callee is the struct's
-    /// nominal type and the fields are its values.
+    /// `S{.a 1, .b 2}` — a struct instance: the callee is the struct's value
+    /// or template, and the fields are the values it is filled with.
     StructInst {
         callee: Box<Expr>,
         fields: Vec<StructFieldValue>,

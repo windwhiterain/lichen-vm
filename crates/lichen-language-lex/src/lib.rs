@@ -36,6 +36,13 @@ pub enum TokenKind {
     KwString,
     /// The Type type constant -- the universe.
     KwType,
+    /// The `Tuple` template constant — the builtin tuple template, a value
+    /// like `Int` and `Type` (`docs/language-spec.md` §Type).
+    KwTuple,
+    /// The `Array` template constant — the builtin array template.
+    KwArray,
+    /// The `Struct` template constant — the builtin struct template.
+    KwStruct,
     /// The `table` keyword — the table value `table(k ==> v)` and the table
     /// type `table{K, V}` (`docs/language-spec.md` §2).
     KwTable,
@@ -203,6 +210,9 @@ impl TokenKind {
             TokenKind::KwFloat => "'Float'",
             TokenKind::KwString => "'string'",
             TokenKind::KwType => "'Type'",
+            TokenKind::KwTuple => "'Tuple'",
+            TokenKind::KwArray => "'Array'",
+            TokenKind::KwStruct => "'Struct'",
             TokenKind::KwTable => "'table'",
             TokenKind::KwSet => "'set'",
             TokenKind::KwLet => "'let'",
@@ -317,6 +327,12 @@ enum RawToken {
     KwString,
     #[token("Type")]
     KwType,
+    #[token("Tuple")]
+    KwTuple,
+    #[token("Array")]
+    KwArray,
+    #[token("Struct")]
+    KwStruct,
     #[token("table")]
     KwTable,
     #[token("set")]
@@ -768,6 +784,9 @@ fn raw_to_kind(
             "Float" => TokenKind::KwFloat,
             "string" => TokenKind::KwString,
             "Type" => TokenKind::KwType,
+            "Tuple" => TokenKind::KwTuple,
+            "Array" => TokenKind::KwArray,
+            "Struct" => TokenKind::KwStruct,
             "table" => TokenKind::KwTable,
             "set" => TokenKind::KwSet,
             "let" => TokenKind::KwLet,
@@ -793,6 +812,9 @@ fn raw_to_kind(
         RawToken::KwFloat => Some(TokenKind::KwFloat),
         RawToken::KwString => Some(TokenKind::KwString),
         RawToken::KwType => Some(TokenKind::KwType),
+        RawToken::KwTuple => Some(TokenKind::KwTuple),
+        RawToken::KwArray => Some(TokenKind::KwArray),
+        RawToken::KwStruct => Some(TokenKind::KwStruct),
         RawToken::KwTable => Some(TokenKind::KwTable),
         RawToken::KwSet => Some(TokenKind::KwSet),
         RawToken::KwLet => Some(TokenKind::KwLet),

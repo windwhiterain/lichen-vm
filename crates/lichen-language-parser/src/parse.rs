@@ -1227,6 +1227,11 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             token(TokenKind::KwFloat).map(|t| Expr::TypeConst(TypeConst::Float, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
+            // The builtin templates: `Tuple`, `Array` and `Struct` are values,
+            // not spellings of a type.
+            token(TokenKind::KwTuple).map(|t| Expr::TypeConst(TypeConst::Tuple, t.span)),
+            token(TokenKind::KwArray).map(|t| Expr::TypeConst(TypeConst::Array, t.span)),
+            token(TokenKind::KwStruct).map(|t| Expr::TypeConst(TypeConst::Struct, t.span)),
             // `_` is its own token, never a name: it can appear as a value but
             // cannot be bound.
             token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),

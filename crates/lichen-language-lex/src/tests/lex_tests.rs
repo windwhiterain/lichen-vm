@@ -95,7 +95,7 @@ fn arrows_and_punctuation() {
 }
 
 #[test]
-fn int_and_type_are_keywords_but_not_prefixes() {
+fn the_type_constants_are_keywords_but_not_prefixes() {
     assert_eq!(
         kinds("Int Type Int2 int"),
         vec![
@@ -103,6 +103,18 @@ fn int_and_type_are_keywords_but_not_prefixes() {
             TokenKind::KwType,
             TokenKind::Name("Int2".to_string()),
             TokenKind::Name("int".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+    // The builtin templates are constants too: `Tuple`, `Array` and `Struct`
+    // are keywords, and a longer name keeps its own spelling.
+    assert_eq!(
+        kinds("Tuple Array Struct Tuple2"),
+        vec![
+            TokenKind::KwTuple,
+            TokenKind::KwArray,
+            TokenKind::KwStruct,
+            TokenKind::Name("Tuple2".to_string()),
             TokenKind::Eof,
         ]
     );
