@@ -89,6 +89,12 @@ struct ApplyCtx<'a> {
     /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
     /// a closure's fresh id.
     tag: Option<FunctionId>,
+    /// The closure memo: a cell's own closure, and the reach it is on.
+    ///
+    /// # Invariant
+    /// One entry per cell the pass judges, so the proof runs once per cell and
+    /// a cycle among decided cells is settled by the first verdict.
+    closure: HashMap<NodeId, Option<bool>>,
     remap: &'a mut HashMap<NodeId, NodeId>,
     /// A source [`FunctionId`] → the fresh closure this walk minted for it.
     ///
@@ -333,6 +339,7 @@ impl<P: Program> Module<P> {
             parameter_slot,
             minted_keys: None,
             tag: self.nodes[node].function,
+            closure: HashMap::new(),
             remap: &mut remap,
             minted: &mut minted,
         };
@@ -494,9 +501,14 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        // One shared node: each reach mints its own undecided cell, never a cached one.
+        // The wildcard is **decided**: the clone's own cell carries it, so the
+        // position stays a wildcard and never becomes an inference hole. Each
+        // reach mints its own cell, so two unconstrained positions in one
+        // instantiation stay two cells.
         if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
-            return self.add_node(ctx.target, None, None);
+            let fresh = self.add_node(ctx.target, None, None);
+            self.write_node_value(fresh, value);
+            return fresh;
         }
         // A closure is instantiated from its template, whose body a clone never names.
         let member = self.template_member(function, ctx)
@@ -534,6 +546,18 @@ impl<P: Program> Module<P> {
             && operation.is_none()
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
+        // A **closed** cell is shared: nothing can be written into it, so the
+        // instance gains nothing by copying it. The proof is the template
+        // walk's — a decided value that is not the wildcard, no operator, and
+        // every cell its content reaches closed too — so a name table and the
+        // rest of a decided layout are one cell in the instance, not two.
+        // A **closure** is re-homed per call: the clone mints one, so its cell
+        // is never shared, however closed its own content is.
+        let rehomed = matches!(
+            value.and_then(|value| value.as_enum()),
+            Some(LowValue::Function(_))
+        );
+        let closed = !rehomed && self.template_content_is_closed(node, None, &mut ctx.closure);
         // A scope's content is this call's; a clone of a scope's node is scoped too.
         let scoped = self.blocks[block].parent.is_some()
             || self.blocks[self.nodes[template_root].block]
@@ -542,7 +566,7 @@ impl<P: Program> Module<P> {
         // Judged against the call's anchor, so one call gives a node one answer.
         let depends_on_parameter = node == ctx.parameter
             || Some(node) == ctx.parameter_slot
-            || !proven_concrete
+            || (!proven_concrete && !closed)
             || scoped
             || self.value_holds_foreign_function(value, ctx.anchor);
         if !depends_on_parameter {
@@ -734,6 +758,7 @@ impl<P: Program> Module<P> {
                     parameter_slot,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
+                    closure: HashMap::new(),
                     remap: ctx.remap,
                     minted,
                 };

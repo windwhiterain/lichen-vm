@@ -168,26 +168,18 @@ impl<P: Program> Module<P> {
     /// plugin value keeps alive — decides closure, but is not cloned.
     fn template_closure_map(&mut self, root: NodeId, ctx: &mut TemplateCtx<'_>) {
         // A **payload edge** names a cell the value holds; the walk clones it.
-        let mut parents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         let mut seen: HashSet<NodeId> = HashSet::new();
-        let mut open: HashSet<NodeId> = HashSet::new();
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
                 continue;
             }
-            // A marked cell is the caller's own: its content is the caller's too.
-            if ctx.boundary.shares(node) {
-                continue;
-            }
             for child in self.template_payload_children(node) {
                 if let Dyn(child) = child {
-                    parents.entry(child).or_default().push(node);
                     stack.push(child);
                 }
             }
             for child in self.template_traced_children(node) {
-                parents.entry(child).or_default().push(node);
                 stack.push(child);
             } // The operator's operand is a cell of the template, with no parent
             // edge: an operator's input is not the cell's content.
@@ -197,30 +189,66 @@ impl<P: Program> Module<P> {
                 stack.push(operand);
             }
         }
-        // The open cells: the leaves open by their own account, and every cell whose
-        // content reaches one.
-        for &node in &seen {
-            if self.template_cell_is_open(node) {
-                open.insert(node);
-            }
+        // The verdict per cell: the same proof the apply's walk uses, so a
+        // closed cell is closed for both.
+        let mut memo: HashMap<NodeId, Option<bool>> = HashMap::new();
+        for node in seen {
+            let closed = self.template_content_is_closed(node, Some(ctx.boundary), &mut memo);
+            ctx.closed.insert(node, closed);
         }
-        // The reach runs upward, so a cycle among the open cells is open as a
-        // whole: the graph is a graph, not a tree.
-        let mut queue: Vec<NodeId> = open.iter().copied().collect();
-        while let Some(node) = queue.pop() {
-            let Some(owners) = parents.get(&node) else {
-                continue;
-            };
-            for &owner in owners {
-                if open.insert(owner) {
-                    queue.push(owner);
+    }
+
+    /// Whether a cell's own content is **closed**: it holds a decided value
+    /// that is not the wildcard, it has no operator, and every cell its
+    /// content reaches is closed too.
+    ///
+    /// # Invariant
+    /// A cycle among decided cells is closed: the reach runs over decided
+    /// content only, so a cycle is a fact about the content, not a hole. An
+    /// operator's operand is not the cell's content, so it never decides. A
+    /// **marked** cell is the caller's own: its content is the caller's, so the
+    /// reach stops there and the cell's own account alone decides it.
+    pub(crate) fn template_content_is_closed(
+        &mut self,
+        node: NodeId,
+        boundary: Option<&TemplateBoundary>,
+        memo: &mut HashMap<NodeId, Option<bool>>,
+    ) -> bool {
+        match memo.get(&node) {
+            Some(Some(closed)) => return *closed,
+            // A cell on the current reach: a cycle among decided cells.
+            Some(None) => return true,
+            None => {}
+        }
+        memo.insert(node, None);
+        let mut closed = !self.template_cell_is_open(node);
+        let marked = boundary.is_some_and(|boundary| boundary.shares(node));
+        if closed && !marked {
+            for child in self.template_content_children(node) {
+                if !self.template_content_is_closed(child, boundary, memo) {
+                    closed = false;
+                    break;
                 }
             }
         }
-        for node in seen {
-            let closed = !open.contains(&node);
-            ctx.closed.insert(node, closed);
-        }
+        memo.insert(node, Some(closed));
+        closed
+    }
+
+    /// The cells a cell's own content reaches: the ones its value names.
+    fn template_content_children(&self, node: NodeId) -> Vec<NodeId> {
+        let mut children: Vec<NodeId> = self
+            .template_payload_children(node)
+            .into_iter()
+            .filter_map(|child| match child {
+                Dyn(child) => Some(child),
+                // A frozen cell is read in its own module; it is not a cell of
+                // this one, so it cannot decide this cell's closure.
+                AnyNodeId::Static(_) => None,
+            })
+            .collect();
+        children.extend(self.template_traced_children(node));
+        children
     }
 
     /// Whether a cell is open by its own account: it holds nothing, it holds the

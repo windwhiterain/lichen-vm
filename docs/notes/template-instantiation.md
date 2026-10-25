@@ -42,11 +42,18 @@ two questions the template walk answers differently:
 | freshness | the cell depends on the argument | the cell's own content is not closed |
 
 Everything else is the apply's, reused rather than restated: one clone per
-source cell, the operator travelling with its operand, the wildcard never
-carried, and the class topology rebuilt by the **same**
-`apply::regroup_clones` / `apply::unify_clone_groups` the apply and the static
-apply use. A third traversal with its own freshness rule would be a third
-semantics; this one is the apply's walk with two decisions swapped.
+source cell, the operator travelling with its operand, and the class topology
+rebuilt by the **same** `apply::regroup_clones` / `apply::unify_clone_groups`
+the apply and the static apply use. A third traversal with its own freshness
+rule would be a third semantics; this one is the apply's walk with two
+decisions swapped.
+
+The **wildcard** is the third decision, and it is this walk's own. The apply
+clones a function's *body*, so an unconstrained position in it stays a
+wildcard: the body's `@any : t` field is a requirement, not a capture
+position, and nothing writes into it. This walk clones a *template*, whose
+slots are capture positions: the instance's own cell replaces the wildcard, so
+the actual's value fills it.
 
 ## 3. The rules
 
@@ -69,9 +76,12 @@ semantics; this one is the apply's walk with two decisions swapped.
   may not.** A cell is **closed** when it holds a decided value, has no
   operator, and every cell its content reaches is closed too. The top-level
   value alone does not decide it: a tuple whose second element is an open hole
-  is not closed, however decided the tuple itself is. The reach runs upward, so
-  a cycle among the open cells is open as a whole — the graph is a graph, not a
-  tree.
+  is not closed, however decided the tuple itself is. The reach runs over the
+  content, so a cycle among the open cells is open as a whole — the graph is a
+  graph, not a tree. The **apply's walk shares the same closed cells**, by the
+  same proof, so a decided layout — a name table above all — is one cell in
+  the instance and not two: two tables are never one handle, so a copied one
+  would conflict with the original.
 - **The wildcard is decided but never carried.** `LowValue::Any` is a value, not
   an open hole; the instance's cell replaces it, so the caller's value can fill
   it — a class holding the wildcard neither merges nor writes, so sharing the
