@@ -91,6 +91,21 @@ where
             .clone_template(root, self.current_block, self.current_function(), &boundary)
     }
 
+    /// The instance of a template's **value** graph, or `None` when a budget
+    /// stopped the walk.
+    ///
+    /// # Invariant
+    /// The instance is **fresh**: the walk clones the graph it reaches and
+    /// shares only the cells the boundary names, so the template's own cells
+    /// are the template's. The root is the value itself, so a callee whose
+    /// value is a call's answer is read where it is decided.
+    pub(super) fn clone_instance_value(&mut self, value: ExprId) -> Option<TemplateInstance> {
+        let root = self.value_of(value);
+        let boundary = self.clone_boundary(value);
+        self.module
+            .clone_template(root, self.current_block, self.current_function(), &boundary)
+    }
+
     /// The cells a clone of `value` **shares** with the caller.
     ///
     /// # Invariant

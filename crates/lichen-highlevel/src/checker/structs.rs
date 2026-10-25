@@ -279,6 +279,21 @@ where
             })
     }
 
+    /// Whether a type node is the shared **struct layout**.
+    ///
+    /// # Invariant
+    /// The layout is recognised by its **class**: a cell the shared template
+    /// was unified into is that template's class, so a call result whose type
+    /// cell carries the layout is the layout too. The template's own
+    /// self-reference is not needed to name it.
+    pub(super) fn is_struct_layout(&mut self, ty: NodeId) -> bool {
+        if shape::is_struct_type_any(&mut self.module, self.type_expr, AnyNodeId::Dynamic(ty)) {
+            return true;
+        }
+        let template = self.struct_template();
+        self.module.equality_representative(ty) == self.module.equality_representative(template)
+    }
+
     /// A struct **value** `{.a e1, .b e2}`.
     ///
     /// # Invariant
@@ -491,11 +506,7 @@ where
             self.state[e].ty = Some(template_ty);
             return expr;
         }
-        if !shape::is_struct_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(template_ty),
-        ) {
+        if !self.is_struct_layout(template_ty) {
             // A non-struct template is a diagnostic, never a runtime panic.
             self.record_guard(
                 template_ty,
@@ -517,15 +528,33 @@ where
             self.loc(template, 1),
             DiagKind::Guard,
         );
-        // The arguments, in call order.
-        let elements = self.range_children(value);
+        // The arguments, in call order. The instantiation's value is the tuple
+        // of arguments; a value that is not one supplies none, and the
+        // instantiation is refused rather than reaching the fields.
+        let elements = match self.ir[value].kind {
+            ExprKind::Tuple(_) => self.range_children(value),
+            _ => {
+                self.record_guard(
+                    template_ty,
+                    template_ty,
+                    self.loc(value, 0),
+                    DiagKind::Guard,
+                    Some("struct instance"),
+                );
+                return self.refused_expr(e);
+            }
+        };
         let mut vals = Vec::with_capacity(elements.len());
         for &el in &elements {
             self.check_expr(el);
             vals.push(self.state[el].term.expect("an argument is compiled"));
         }
+        // The template's own value: a call result is decided by running it, so
+        // the checker forces it before it reads the template's fields.
+        let template_value = self.value_of(template);
+        self.module.evaluate_node_deep(template_value, None);
         // The template's clone: the requirements are the clone's own fields.
-        let Some(instance) = self.clone_instance(template) else {
+        let Some(instance) = self.clone_instance_value(template) else {
             self.record_guard(
                 template_ty,
                 template_ty,
@@ -535,11 +564,7 @@ where
             );
             return self.refused_expr(e);
         };
-        let clone_value = instance.node_of(
-            self.state[template]
-                .val
-                .expect("the template's value is compiled"),
-        );
+        let clone_value = instance.root;
         let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(clone_value)) else {
             self.record_guard(
                 template_ty,
