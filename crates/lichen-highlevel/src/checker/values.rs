@@ -25,8 +25,9 @@ where
     /// A **lazy region** is narrower than a slot: the element is its own
     /// value and the read's type stays open.
     ///
-    /// A **decided** container and a constant index are read directly; the
-    /// rest keeps the lazy read.
+    /// A **decided** container and a constant index are read directly, and
+    /// only while the nodes named outlive the read; the rest keeps the lazy
+    /// read.
     pub(super) fn value_slot_read(
         &mut self,
         container_value: NodeId,
@@ -41,6 +42,7 @@ where
                     shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)
                 })
                 .and_then(|node| node.dynamic())
+                .filter(|&node| self.outlives_read(node))
                 .unwrap_or_else(|| self.index_of(container_value, index));
             let ty_node = self.fresh_cell();
             return (element, element, ty_node);
@@ -62,7 +64,11 @@ where
                 shape::EXPR_TYPE_SLOT,
             )
             .and_then(|node| node.dynamic());
-            if let (Some(value_node), Some(ty_node)) = (value_node, ty_node) {
+            if let (Some(value_node), Some(ty_node)) = (value_node, ty_node)
+                && self.outlives_read(element)
+                && self.outlives_read(value_node)
+                && self.outlives_read(ty_node)
+            {
                 return (element, value_node, ty_node);
             }
         }
@@ -84,6 +90,29 @@ where
         );
         self.stamp_read_node(node);
         node
+    }
+
+    /// Whether a node outlives the read: its block is the current one, an
+    /// ancestor, or a block that is never released.
+    ///
+    /// # Invariant
+    /// A block's parent outlives it and a block with no parent is never
+    /// released, so a node homed in one of those is safe to name from the
+    /// current block. A child block's node is not: the collect that releases
+    /// it would leave the name dangling. See `docs/notes/gc-block.md`.
+    fn outlives_read(&self, node: NodeId) -> bool {
+        let block = self.module.node_block(node);
+        if self.module.blocks[block].parent.is_none() {
+            return true;
+        }
+        let mut current = Some(self.current_block);
+        while let Some(current_block) = current {
+            if current_block == block {
+                return true;
+            }
+            current = self.module.blocks[current_block].parent;
+        }
+        false
     }
 
     /// The constant position a subscript states; `None` otherwise, where the
