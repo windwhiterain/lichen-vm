@@ -3,6 +3,6 @@
   compute = import "compute.lichen"
   output = "6: Int"
 ---
-k_double = compute.jit (y : Int => y + y)
-k_outer  = compute.jit (x : Int => compute.launch k_double x)
+k_double := compute.jit (y : Int => y + y)
+k_outer  := compute.jit (x : Int => compute.launch k_double x)
 compute.launch k_outer 3
