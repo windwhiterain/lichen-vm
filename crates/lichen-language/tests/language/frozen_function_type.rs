@@ -22,7 +22,7 @@ fn render_imported_wrapper(module_source: &str, program: &str) -> String {
 #[test]
 fn a_written_arrow_in_a_frozen_module_is_a_function_type() {
     let out = render_imported_wrapper(
-        "wrap = f => {I = _; f: I -> _; I}",
+        "wrap := f => {I := _; f: I -> _; I}",
         "---\nw = import \"wrap.lichen\"\n---\nw.wrap",
     );
     assert!(

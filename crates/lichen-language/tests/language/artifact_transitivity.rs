@@ -49,12 +49,12 @@ fn a_dependency_change_rekeys_its_importer() {
     let math = write(
         &pkg,
         "math.lichen",
-        "succ = x => x + 1\nadd = x => y => x + y\n",
+        "succ := x => x + 1\nadd := x => y => x + y\n",
     );
     let geometry = write(
         &pkg,
         "geometry.lichen",
-        "---\n  math = import \"math.lichen\"\n---\ndouble = x => math.add x x\n",
+        "---\n  math = import \"math.lichen\"\n---\ndouble := x => math.add x x\n",
     );
 
     // First compile: everything is fresh.
@@ -77,7 +77,7 @@ fn a_dependency_change_rekeys_its_importer() {
     write(
         &pkg,
         "math.lichen",
-        "succ = x => x + 1\nadd = x => y => x + y\nextra = 7\n",
+        "succ := x => x + 1\nadd := x => y => x + y\nextra := 7\n",
     );
     assert_eq!(
         load(&cache, &math),
