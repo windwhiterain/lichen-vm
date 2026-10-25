@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::program::ValueType;
+use lichen_highlevel::shape;
 use lichen_kernel_ir::{
     Br, KernelBin, KernelBody, KernelInstr, KernelMark, KernelShape, MarkField, ScalarClass,
     Terminator, ValueDef, ValueId,
@@ -732,12 +733,12 @@ where
 
     /// The domain's leaves, flattened — the ABI's argument list.
     fn domain_leaves(&self) -> Result<Vec<NodeId>, String> {
-        self.module.value_leaves(self.domain)
+        super::value_leaves_of(self.module, self.domain)
     }
 
     /// A value's leaves: itself, or an array's items. A codomain is at most a tuple of scalars.
     fn leaves_of(&self, value: NodeId) -> Result<Vec<NodeId>, String> {
-        self.module.value_leaves(value)
+        super::value_leaves_of(self.module, value)
     }
 
     /// The ABI slot the domain's `leaf`-th leaf takes.
@@ -819,7 +820,11 @@ where
         node
     }
 
-    /// The first slot's value node when `node` is an array (a struct instance).
+    /// The first **field**'s value node when `node` is an array (a struct instance).
+    ///
+    /// # Invariant
+    /// A struct value carries the name table and the nominal id before its fields,
+    /// so the first field is at [`shape::STRUCT_VALUE_FIELD_BASE`].
     fn first_slot_value(&self, node: NodeId) -> Option<NodeId> {
         let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
         let Some(LowValue::Array(items)) = AsEnum::<LowValue>::as_enum(&value) else {
@@ -828,7 +833,7 @@ where
         // SAFETY: `items` is the payload of a live value of `module` on this borrow.
         let items = unsafe { items.items() };
         self.module
-            .element_value_node(items.first()?.node)
+            .element_value_node(items.get(shape::STRUCT_VALUE_FIELD_BASE)?.node)
             .and_then(|slot| slot.dynamic())
     }
 
@@ -836,7 +841,7 @@ where
     ///
     /// # Invariant
     /// The wrapper states the payload first (`.native`, then `.type`, `.length`), so a
-    /// declaration instance is a struct whose first slot holds the `$buf` op
+    /// declaration instance is a struct whose first field holds the `$buf` op
     /// (`docs/notes/kernel-buffer-declarations.md`). Any other array is not a declaration.
     fn instance_payload(&self, node: NodeId) -> Option<NodeId> {
         let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
@@ -847,7 +852,7 @@ where
         let items = unsafe { items.items() };
         let slot = self
             .module
-            .element_value_node(items.first()?.node)
+            .element_value_node(items.get(shape::STRUCT_VALUE_FIELD_BASE)?.node)
             .and_then(|slot| slot.dynamic())?;
         let operation = self.module.node_operation(slot)?;
         matches!(
@@ -1341,9 +1346,7 @@ where
                 return Ok(None);
             };
             let value = self.module.expr_value_half(argument).unwrap_or(argument);
-            let elements = self
-                .module
-                .value_leaves(value)
+            let elements = super::value_leaves_of(self.module, value)
                 .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
             let (Some(lhs), Some(rhs)) = (elements.first().copied(), elements.get(1).copied())
             else {
