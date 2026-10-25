@@ -56,8 +56,8 @@ fn imports_and_applies_a_function_package() {
 #[test]
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
-    write(&dir, "s.lichen", "struct{.f Int}\n");
-    let main = "---s = import \"s.lichen\"---s(5,)\n";
+    write(&dir, "s.lichen", "{.f @any : Int}\n");
+    let main = "---s = import \"s.lichen\"---s{.f 5}\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
     assert_eq!(
@@ -91,11 +91,11 @@ fn transitive_imports_apply_across_modules() {
 fn transitive_struct_types_flow_through_packages() {
     // The nominal id and the frozen type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
-    write(&dir, "inner.lichen", "struct{.f Int}\n");
+    write(&dir, "inner.lichen", "{.f @any : Int}\n");
     write(
         &dir,
         "middle.lichen",
-        "---S = import \"inner.lichen\"---S(41,)\n",
+        "---S = import \"inner.lichen\"---S{.f 41}\n",
     );
     let main = "---v = import \"middle.lichen\"---v.f\n";
     let mut store = PackageStore::<LangProgram>::new();
@@ -192,7 +192,7 @@ fn a_failure_inside_the_prelude_is_attributed_to_its_own_file() {
     // The module is materialized on disk when a store has a cache root, and
     // named by its own path when it has none.
     let mut store = PackageStore::<LangProgram>::new();
-    let err = evaluate_raw("add [\"a\", \"b\"]\n", None, &mut store).unwrap_err();
+    let err = evaluate_raw("add (\"a\", \"b\")\n", None, &mut store).unwrap_err();
     let attributed: Vec<_> = err.iter().filter(|d| d.file.is_some()).collect();
     assert!(
         !attributed.is_empty(),
