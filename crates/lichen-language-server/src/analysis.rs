@@ -24,7 +24,7 @@ use lichen_language::persist::ArtifactCodec;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
 use lichen_language::program::GcdOp;
-use lichen_language::render::{print_type_lang, print_value_lang, struct_type_named_fields};
+use lichen_language::render::{print_type_lang, print_value_lang, struct_value_named_fields};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::AnyNodeId;
 
@@ -421,7 +421,10 @@ where
                 && let Some(t) = build.state[eid].ty
             {
                 import_ty.insert(imp.span, print_type_lang(&build.module, t));
-                if let Some(names) = struct_type_named_fields(&build.module, t) {
+                // The field names live in the binding's own value.
+                if let Some(names) = build.state[eid].val.and_then(|value| {
+                    struct_value_named_fields(&build.module, AnyNodeId::Dynamic(value))
+                }) {
                     let fields = names
                         .into_iter()
                         .flatten()
@@ -482,9 +485,11 @@ where
                         Some(t) => print_type_lang(&build.module, t),
                         None => String::new(),
                     };
-                    // A concrete struct binding offers its fields after a `.`.
-                    if let Some(t) = ty_node
-                        && let Some(names) = struct_type_named_fields(&build.module, t)
+                    // A concrete struct binding offers its fields after a `.`; the
+                    // names live in the binding's own value.
+                    if let Some(value) = build.state[id].val
+                        && let Some(names) =
+                            struct_value_named_fields(&build.module, AnyNodeId::Dynamic(value))
                     {
                         struct_fields_by_stmt.insert(
                             i,

@@ -172,7 +172,8 @@ where
     /// # Invariant
     /// The name table is the value's first slot and the field is at the name's
     /// position plus the two header slots, so the layout is read from the value
-    /// and never from a type.
+    /// and never from a type.  A missing field is reported with the container's
+    /// **value** in `a` — where the names live — and its type in `b`.
     pub(super) fn check_named_field(
         &mut self,
         e: ExprId,
@@ -204,7 +205,7 @@ where
             // A struct without this field: the name rides in the entry, so the
             // language layer can append a did-you-mean clause.
             self.record_guard(
-                container_ty,
+                container_value,
                 container_ty,
                 self.loc(e, 0),
                 DiagKind::NamedField,
@@ -567,8 +568,15 @@ where
             .filter_map(|node| node.dynamic())
             .collect();
         let table = self.struct_name_table(clone_value);
-        let (ordered, valid) =
-            self.reorder_arguments(e, &template_ty, &elements, arg_names, &fields, table);
+        let (ordered, valid) = self.reorder_arguments(
+            e,
+            &template_ty,
+            clone_value,
+            &elements,
+            arg_names,
+            &fields,
+            table,
+        );
         if valid {
             // Each argument is matched against the clone's own field.
             for (position, argument) in ordered.iter().enumerate() {
@@ -611,10 +619,14 @@ where
     /// in call order, so pairing by position would take the wrong field. A
     /// missing, duplicate, unknown or excess field is recorded here, and the
     /// caller then skips the field unify.
+    ///
+    /// A recorded failure names the clone's **value** — where the field names
+    /// live — and the template's type beside it.
     fn reorder_arguments(
         &mut self,
         e: ExprId,
         template_ty: &NodeId,
+        clone_value: NodeId,
         elements: &[ExprId],
         arg_names: &[Option<&'static str>],
         fields: &[NodeId],
@@ -637,7 +649,7 @@ where
                     }
                     if assign[position].is_some() {
                         self.record_guard(
-                            *template_ty,
+                            clone_value,
                             *template_ty,
                             self.loc(elements[i], 0),
                             DiagKind::StructDuplicateField,
@@ -650,7 +662,7 @@ where
                 }
                 None => {
                     self.record_guard(
-                        *template_ty,
+                        clone_value,
                         *template_ty,
                         self.loc(elements[i], 0),
                         DiagKind::StructUnknownField,
@@ -697,7 +709,7 @@ where
                 if slot.is_none() {
                     let name = table.and_then(|table| self.struct_field_name(table, position));
                     self.record_guard(
-                        *template_ty,
+                        clone_value,
                         *template_ty,
                         self.loc(e, 0),
                         DiagKind::StructMissingField,

@@ -280,6 +280,13 @@ pub struct Diag<P: Program> {
     pub kind: DiagKind,
     /// The conflicting sides: the checker's operands (for a runtime failure, the
     /// parameter and the argument).
+    ///
+    /// # Invariant
+    ///
+    /// A **struct field** diagnostic names the struct's **value** in `a` and its
+    /// type in `b`: the field names live in the value's own name table, so a
+    /// reader that wants the names reads the value and one that spells the
+    /// container reads the type.
     pub a: NodeId,
     pub b: NodeId,
     /// The conflicting classes' values at error time (snapshots).

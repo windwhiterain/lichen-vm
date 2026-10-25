@@ -23,9 +23,9 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// # Invariant
 ///
 /// The type chain decides how the value reads: the universe an atomic constant
-/// (`Int`), a kind a compound type, a tuple `(1, Int)`, an array `[1, 2, 3]`, a
-/// struct its field tuple.  An opaque chain — an undecided cell, an extension
-/// type — falls back to the raw layout, and every reading of it is marked:
+/// (`Int`), a **layout template** a tuple `(1, 2)`, an array `[1, 2, 3]`, a
+/// struct its field tuple, and a kind a compound type — the set, the table, the
+/// function type.  An opaque chain falls back to the raw layout, marked
 /// `raw[…]`, `raw 6` / `raw Int`.  A dump never spells itself like a read.
 pub fn print_value<P: HighProgram + 'static>(
     module: &Module<P>,
@@ -157,9 +157,6 @@ where
     /// The attribute registry, the same callback [`render_attributes`] reads;
     /// `None` spells no element attribute.
     attrs: Option<Attrs<'a, P>>,
-    /// Render a struct type's nominal id as `struct{…}#n`, on for the diagnostic
-    /// printer only.
-    show_struct_id: bool,
 }
 
 /// The **attribute registry** a printer spells element attributes through.
@@ -242,21 +239,134 @@ fn float_literal(value: f32) -> String {
     text
 }
 
-/// Whether `node` is itself a struct kind, rather than a struct type term whose
-/// kind slot is such a node.
-fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
+/// Whether a type node is the shared **`Struct` template`.
+///
+/// # Invariant
+///
+/// The template is recognised by its **value**: the marker at the value slot is
+/// the struct one, and only the template carries it.  It is the
+/// self-referential `[StructType, ↺]` every struct value's type is.
+fn is_struct_template<P: HighProgram>(module: &Module<P>, ty: AnyNodeId) -> bool
 where
     P::Value: ValueType,
 {
-    module
-        .node_value(AnyNodeId::Dynamic(node))
-        .and_then(|v| v.as_enum())
-        .is_some_and(|v| match v {
-            // SAFETY: `kind` is the payload of the value read from the live
-            // node `node`.
-            LowValue::Array(kind) => kind_is_struct(module, unsafe { kind.items() }),
-            _ => false,
-        })
+    let Some(items) = shape::value_items(module, ty) else {
+        return false;
+    };
+    items.len() >= 2
+        && module.node_value(items[shape::EXPR_VALUE_SLOT].node)
+            == Some(P::Value::type_struct_marker())
+}
+
+/// The per-field names of a struct **value**, read from its own name table.
+///
+/// # Invariant
+///
+/// The result is sized to the field count: `None` for an unnamed field, `Some`
+/// for a named one; a name whose index falls outside the field list is
+/// dropped.  The table is the value's own, so the names travel with the value
+/// and a clone inherits them.
+fn struct_value_names<P: HighProgram>(
+    module: &Module<P>,
+    items: &[ArrayItem],
+) -> Vec<Option<&'static str>>
+where
+    P::Value: ValueType,
+{
+    let field_count = items.len().saturating_sub(shape::STRUCT_VALUE_FIELD_BASE);
+    let mut out = vec![None; field_count];
+    let Some(names_item) = items.get(shape::STRUCT_VALUE_NAMES_SLOT) else {
+        return out;
+    };
+    let Some(LowValue::Table(table)) = module.node_value(names_item.node).and_then(|v| v.as_enum())
+    else {
+        // An anonymous struct has no table: every field is unnamed.
+        return out;
+    };
+    // SAFETY: `table` is the payload of the value read from the live node
+    // `names_item` of the module being rendered.
+    for item in unsafe { table.items() } {
+        let name = module
+            .node_value(item.key)
+            .and_then(|v| v.as_enum())
+            .and_then(|v| match v {
+                LowValue::Str(s) => Some(s),
+                _ => None,
+            });
+        let index = module
+            .node_value(item.value)
+            .and_then(|v| v.as_enum())
+            .and_then(|v| match v {
+                LowValue::USize(n) => Some(n),
+                _ => None,
+            });
+        if let (Some(name), Some(index)) = (name, index)
+            && index < field_count
+        {
+            out[index] = Some(name);
+        }
+    }
+    out
+}
+
+/// The per-field names of a struct **value**, in field order.
+///
+/// # Invariant
+///
+/// The names come from the value's own name table — the layout authority — and
+/// never from a hardcoded shape; `None` when the node holds no struct value.
+pub fn struct_value_named_fields<P: HighProgram>(
+    module: &Module<P>,
+    value: AnyNodeId,
+) -> Option<Vec<Option<&'static str>>>
+where
+    P::Value: ValueType,
+{
+    let items = shape::value_items(module, value)?;
+    // The nominal id at the second slot is the struct's own: no other layout
+    // carries one.
+    let id = module.node_value(items.get(shape::STRUCT_VALUE_ID_SLOT)?.node)?;
+    id.type_id()?;
+    Some(struct_value_names(module, items))
+}
+
+/// Render a struct value's named fields (`name = value, …`), the names read
+/// from the value's own name table.
+///
+/// # Invariant
+///
+/// The renderer walks the **value**, so the names come from the value's name
+/// table — the layout authority — and never from a hardcoded shape; `None`
+/// when the value and type do not form a struct value.
+pub fn render_struct_fields_named<P: HighProgram + 'static>(
+    module: &Module<P>,
+    value_node: AnyNodeId,
+    ty_node: AnyNodeId,
+) -> Option<String>
+where
+    P::Value: ValueType,
+{
+    // The type is the shared `Struct` template: the layout is the value's, and
+    // the template says which layout this is.
+    if !is_struct_template(module, ty_node) {
+        return None;
+    }
+    let items = shape::value_items(module, value_node)?;
+    if items.len() < shape::STRUCT_VALUE_FIELD_BASE {
+        return None;
+    }
+    let names = struct_value_names(module, items);
+    let mut vp = ValuePrinter::new(module);
+    let mut fields = Vec::with_capacity(items.len() - shape::STRUCT_VALUE_FIELD_BASE);
+    for (index, field) in items[shape::STRUCT_VALUE_FIELD_BASE..].iter().enumerate() {
+        // A field is a complete expression: its value and its type are its own.
+        let rendered = vp.element_expr(field.node);
+        match names.get(index).copied().flatten() {
+            Some(name) => fields.push(format!("{name} = {rendered}")),
+            None => fields.push(rendered),
+        }
+    }
+    Some(fields.join(", "))
 }
 
 /// Whether `node`'s class is the canonical universe `K = [Type, ↺]`.
@@ -315,254 +425,4 @@ where
                 _ => false,
             }),
     }
-}
-
-/// Whether a value is a struct marker, the expr `[payload, TypeStruct]`.
-///
-/// # Invariant
-///
-/// The test is the tag: the marker is a two-element `[value, type]` expr whose
-/// type slot holds the `TypeStruct` atom; anything else is not a struct marker.
-fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
-where
-    P::Value: ValueType,
-{
-    let Some(LowValue::Array(m)) = module.node_value(marker).and_then(|v| v.as_enum()) else {
-        return false;
-    };
-    // SAFETY: `m` is the payload of the value read from the live node `marker`.
-    let items = unsafe { m.items() };
-    items.len() >= 2
-        && module.node_value(items[shape::STRUCT_MARKER_TAG_SLOT].node)
-            == Some(P::Value::type_struct_marker())
-}
-
-/// Whether `kind_items` describe a struct kind: a standard `[marker, K]` expr
-/// whose marker carries the `TypeStruct` tag.
-fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
-where
-    P::Value: ValueType,
-{
-    kind_items.len() >= 2
-        && is_universe_any(module, kind_items[1].node)
-        && marker_is_struct(module, kind_items[0].node)
-}
-
-/// The per-field names of a struct type, read from the marker expr's payload.
-///
-/// # Invariant
-///
-/// The result is sized to `field_count`: `None` for an unnamed field, `Some` for
-/// a `.name Ty` one; a name whose index falls outside the field list is dropped.
-fn struct_field_names<P: HighProgram>(
-    module: &Module<P>,
-    kind_items: &[ArrayItem],
-    field_count: usize,
-) -> Vec<Option<&'static str>>
-where
-    P::Value: ValueType,
-{
-    let mut out = vec![None; field_count];
-    let marker_items = module
-        .node_value(kind_items[0].node)
-        .and_then(|v| v.as_enum())
-        .and_then(|v| match v {
-            // SAFETY: `m` is the payload of a value read from a live node of
-            // the module being rendered.
-            LowValue::Array(m) => Some(unsafe { m.items() }),
-            _ => None,
-        });
-    let Some(marker_items) = marker_items else {
-        return out;
-    };
-    // The marker expr's value slot is the payload `[TypeId, names,
-    // names_in_order]`.
-    let Some(payload_item) = marker_items.get(shape::STRUCT_MARKER_PAYLOAD_SLOT) else {
-        return out;
-    };
-    let Some(LowValue::Array(payload)) = module
-        .node_value(payload_item.node)
-        .and_then(|v| v.as_enum())
-    else {
-        return out;
-    };
-    // SAFETY: `payload` is the payload of a value read from a live node of the
-    // module being rendered.
-    let Some(names_item) = unsafe { payload.items() }.get(shape::STRUCT_MARKER_NAMES_SLOT) else {
-        return out;
-    };
-    let Some(LowValue::Table(table)) = module.node_value(names_item.node).and_then(|v| v.as_enum())
-    else {
-        return out;
-    };
-    // SAFETY: `table` is the payload of the value read from the live node
-    // `names_item`.
-    for item in unsafe { table.items() } {
-        let name = module
-            .node_value(item.key)
-            .and_then(|v| v.as_enum())
-            .and_then(|v| match v {
-                LowValue::Str(s) => Some(s),
-                _ => None,
-            });
-        let index = module
-            .node_value(item.value)
-            .and_then(|v| v.as_enum())
-            .and_then(|v| match v {
-                LowValue::USize(n) => Some(n),
-                _ => None,
-            });
-        if let (Some(name), Some(index)) = (name, index)
-            && index < field_count
-        {
-            out[index] = Some(name);
-        }
-    }
-    out
-}
-
-/// The named-field list of a struct type term, read from its kind marker expr.
-///
-/// # Invariant
-///
-/// `None` when `node` is not a concrete struct type (an undecided cell, a tuple,
-/// an array, a function); otherwise sized to the shape with `None` entries
-/// positional and `Some` entries `.name Ty`.
-pub fn struct_type_named_fields<P: HighProgram>(
-    module: &Module<P>,
-    node: NodeId,
-) -> Option<Vec<Option<&'static str>>>
-where
-    P::Value: ValueType,
-{
-    // The type term `[shape, kind]`.
-    let ty = module.node_value(AnyNodeId::Dynamic(node))?;
-    let LowValue::Array(ty_arr) = ty.as_enum()? else {
-        return None;
-    };
-    // SAFETY: `ty_arr`, `shape` and `kind` come from live nodes of `module`,
-    // whose `items()` calls this note covers.
-    let tys = unsafe { ty_arr.items() };
-    if tys.len() < 2 {
-        return None;
-    }
-    // The shape (the positional field-type list) gives the field count.
-    let LowValue::Array(shape) = module.node_value(tys[0].node)?.as_enum()? else {
-        return None;
-    };
-    let field_count = unsafe { shape.items() }.len();
-    // The kind `[marker, K]`: only a struct kind carries a name table.
-    let LowValue::Array(kind) = module.node_value(tys[1].node)?.as_enum()? else {
-        return None;
-    };
-    let kind_items = unsafe { kind.items() };
-    if !kind_is_struct(module, kind_items) {
-        return None;
-    }
-    Some(struct_field_names(module, kind_items, field_count))
-}
-
-/// The nominal id of a struct type, read from its kind's marker payload.
-fn struct_kind_id<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> Option<usize>
-where
-    P::Value: ValueType,
-{
-    let marker_items = module
-        .node_value(kind_items[0].node)
-        .and_then(|v| v.as_enum())
-        .and_then(|v| match v {
-            // SAFETY: `m` is the payload of a value read from a live node of
-            // `module`.
-            LowValue::Array(m) => Some(unsafe { m.items() }),
-            _ => None,
-        })?;
-    let payload_item = marker_items.get(shape::STRUCT_MARKER_PAYLOAD_SLOT)?;
-    // SAFETY: `payload` is the payload of a value read from a live node of
-    // `module`.
-    let LowValue::Array(payload) = module.node_value(payload_item.node)?.as_enum()? else {
-        return None;
-    };
-    let id_item = unsafe { payload.items() }.get(shape::STRUCT_MARKER_ID_SLOT)?;
-    module.node_value(id_item.node).and_then(|v| v.type_id())
-}
-
-/// Render a struct field list with per-field names (`.name T` for a named
-/// field, `T` for an unnamed one).
-fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -> Vec<String> {
-    fields
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| match names.get(i).copied().flatten() {
-            // The canonical spelling is the `.name type` prefix marker.
-            Some(name) => format!(".{name} {ty}"),
-            None => ty.clone(),
-        })
-        .collect()
-}
-
-/// Render a struct instance's named fields (`name = value, …`), the names read
-/// from the struct type's name table.
-///
-/// # Invariant
-///
-/// The renderer walks the *type chain*, so the names come from the type, never a
-/// hardcoded shape; `None` when the value and type do not form a struct instance.
-pub fn render_struct_fields_named<P: HighProgram + 'static>(
-    module: &Module<P>,
-    value_node: AnyNodeId,
-    ty_node: AnyNodeId,
-) -> Option<String>
-where
-    P::Value: ValueType,
-{
-    // The struct instance value: a field-tuple array.
-    let value = module.node_value(value_node)?.as_enum()?;
-    let LowValue::Array(value_arr) = value else {
-        return None;
-    };
-    // SAFETY: each slice below is a value read from a live node of `module`,
-    // whose `items()` calls this note covers.
-    let field_values = unsafe { value_arr.items() };
-
-    // The struct type: `[shape, kind]` where kind is `[marker, K]`.
-    let ty = module.node_value(ty_node)?.as_enum()?;
-    let LowValue::Array(ty_arr) = ty else {
-        return None;
-    };
-    let tys = unsafe { ty_arr.items() };
-    if tys.len() < 2 {
-        return None;
-    }
-    let kind = module.node_value(tys[1].node)?.as_enum()?;
-    let LowValue::Array(kind_items) = kind else {
-        return None;
-    };
-    if !kind_is_struct(module, unsafe { kind_items.items() }) {
-        return None;
-    }
-    // The shape is the positional field-**slot** list: a field's type is its
-    // slot's type position.
-    let shape = module.node_value(tys[0].node)?.as_enum()?;
-    let LowValue::Array(shape_items) = shape else {
-        return None;
-    };
-    let field_slots = unsafe { shape_items.items() };
-    let names = struct_field_names(module, unsafe { kind_items.items() }, field_values.len());
-
-    let mut vp = ValuePrinter::new(module);
-    let mut fields = Vec::with_capacity(field_values.len());
-    for (i, value_item) in field_values.iter().enumerate() {
-        let rendered = match field_slots.get(i) {
-            Some(slot) => {
-                let ty = shape::slot_type(module, slot.node).unwrap_or(slot.node);
-                vp.element_any(value_item.node, ty)
-            }
-            None => "?".to_string(),
-        };
-        match names.get(i).copied().flatten() {
-            Some(name) => fields.push(format!("{name} = {rendered}")),
-            None => fields.push(rendered),
-        }
-    }
-    Some(fields.join(", "))
 }
