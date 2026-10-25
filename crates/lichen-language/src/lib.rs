@@ -362,9 +362,6 @@ where
         let attrs = lang_attr_ext::<P>();
         let mut printer =
             crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
-        // The diagnostic printer shows a struct's nominal id so two structs with
-        // the same field shape stay distinguishable.
-        printer.show_struct_ids();
         // An element slot spells its own attributes, as it does in source.
         printer.show_attributes(&*attrs);
         diagnostics.extend(

@@ -52,6 +52,39 @@ and class regroup with an explicit caller-owned sharing boundary. A synthetic
 immediate lambda application was rejected: `T := (_, _); x <: T` would capture
 the name and share the template's holes, so the match would write back into `T`.
 
+## The renderer
+
+The renderer reads the layout the same way the checker does: from the **type
+marker** and the **value's own offsets**. It never reads a shape out of a type.
+
+- A tuple value is `[element exprs…]` and its type is the shared `Tuple`
+  template; the renderer reads the elements from offset `0`.
+- An array value is `[element template, element exprs…]` and its type is the
+  shared `Array` template; the elements start at offset `1`.
+- A struct value is `[name table, nominal id, field exprs…]` and its type is the
+  shared `Struct` template; the fields start at offset `2`.
+
+The offsets are the highlevel's (`shape::TUPLE_VALUE_ELEMENT_BASE`,
+`shape::ARRAY_VALUE_ELEMENT_BASE`, `shape::STRUCT_VALUE_FIELD_BASE`); the
+renderer names them rather than writing its own `+1` or `+2`.
+
+The **header** of a struct value — its name table and its nominal id — and the
+**template** of an array value are internal: they name the layout and are never
+user data, so a struct reads as its field tuple and an array as its elements.
+
+The **type** of a compound is the template itself, so a type prints as `Tuple`,
+`Array` or `Struct`; the element types live in the elements' own expressions
+and are read from there. The retired `tuple{…}`, `array{…}` and `struct{…}`
+spellings are gone, and so are the `TypeTuple`, `TypeArray` and `TypeStruct`
+markers' names: the templates are `Tuple`, `Array` and `Struct`.
+
+A struct's **field names** live in the value's own name table, so a reader that
+wants them reads the **value**, not the type. The diagnostic contract follows:
+a struct field diagnostic names the struct's value in `a` and its type in `b`.
+The `show_struct_ids` switch and the `struct_type_named_fields` reader are gone
+with the type that carried the names; `struct_value_named_fields` reads the
+value's table instead.
+
 ## Open details
 
 - A single comma-free `a[i]` is an array read. `T[x,]` is a one-element
