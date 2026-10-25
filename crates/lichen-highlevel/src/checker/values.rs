@@ -21,18 +21,30 @@ where
     ///
     /// # Invariant
     /// An element is a **complete expression**: the read's value is the
-    /// element's own value slot and its type the element's own type slot, so
-    /// an element's type and attributes are read from the element.
+    /// element's own value slot and its type the element's own type slot.
+    /// A **lazy region** is narrower than a slot: the element is its own
+    /// value and the read's type stays open.
     ///
-    /// A **decided** container and a constant index are read directly, so the
-    /// read's type is decided where the read is checked; anything else keeps
-    /// the lazy read.
+    /// A **decided** container and a constant index are read directly; the
+    /// rest keeps the lazy read.
     pub(super) fn value_slot_read(
         &mut self,
         container_value: NodeId,
         index: NodeId,
         constant: Option<usize>,
     ) -> (NodeId, NodeId, NodeId) {
+        // A lazy region's expr is narrower than a slot: the element is its own
+        // value, and the region states no type of its own.
+        if self.is_shallow_region(container_value) {
+            let element = constant
+                .and_then(|at| {
+                    shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)
+                })
+                .and_then(|node| node.dynamic())
+                .unwrap_or_else(|| self.index_of(container_value, index));
+            let ty_node = self.fresh_cell();
+            return (element, element, ty_node);
+        }
         if let Some(at) = constant
             && let Some(element) =
                 shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)

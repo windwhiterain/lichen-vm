@@ -1275,6 +1275,23 @@ where
         node
     }
 
+    /// Whether a node holds a shallow mark's expr: a wrapper this check built,
+    /// or a clone of one.
+    ///
+    /// # Invariant
+    /// A clone instantiates the template's wrapper, so the origin chain answers
+    /// for it; the set holds the wrappers the check built.
+    pub(super) fn is_shallow_region(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            if self.shallow_regions.contains(&node) {
+                return true;
+            }
+            current = self.module.node_origin(node);
+        }
+        false
+    }
+
     pub fn op_node(
         &mut self,
         block: BlockId,
