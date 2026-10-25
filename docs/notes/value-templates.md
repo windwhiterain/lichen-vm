@@ -35,6 +35,13 @@ this note records the migration decisions and the reasons for them.
   homogeneity across elements.
 - Binary operators take a tuple `(left, right)`. The old `[left, right]` spelling
   now denotes an array template and cannot keep its former meaning.
+- A compound domain in a function arrow uses template matching. Scalar domains
+  keep their ordinary type semantics. Detailed signatures and generic I/O
+  template inference are required; the signature implementation is reviewed
+  separately below rather than replacing compound templates with layout-only
+  types.
+- A single comma-free `a[i]` is an array read. `T[x,]` is a one-element
+  instance; `T[]` and `T[x, y]` are the zero- and multi-element forms.
 
 ## Implementation direction
 
@@ -87,12 +94,19 @@ value's table instead.
 
 ## Open details
 
-- A single comma-free `a[i]` is an array read. `T[x,]` is a one-element
-  instance; `T[]` and `T[x, y]` are the zero- and multi-element forms.
 - An array template's length may be unevaluated. Its representation must not force
-  an arbitrary expression merely to allocate the value's repeated holes.
+  an arbitrary expression merely to allocate the value's repeated holes. The
+  current checker builds a decidable length directly and refuses an instance
+  whose cloned value or length is not decidable; that is a limitation, not the
+  dynamic-array semantics.
 - The interaction of `@shallow` with template arrays and instances needs to be
   stated rather than inherited accidentally from the retired array literal.
+- The highlevel clone boundary currently shares only enclosing lambda
+  parameters. It deliberately does not infer lexical ownership for local
+  bindings in nested lambdas.
+- Compound arrow domains require template-aware signature unification, including
+  inference when the written domain or codomain is still a hole. The design must
+  preserve frozen functions and scalar signatures, not only concrete examples.
 
 ## Verification boundary
 
