@@ -630,6 +630,16 @@ where
         checker.module.evaluate_node_deep(checker.int_type, None);
         checker.module.evaluate_node_deep(checker.float_type, None);
         checker.module.evaluate_node_deep(checker.string_type, None);
+        // The compound templates are concrete before the definition pass.
+        checker
+            .module
+            .evaluate_node_deep(checker.tuple_template, None);
+        checker
+            .module
+            .evaluate_node_deep(checker.array_template, None);
+        checker
+            .module
+            .evaluate_node_deep(checker.struct_template, None);
         let root = checker.ir.root;
         // Type-check every user-written top-level statement, then the final root.
         let stmt_roots = checker.ir.stmt_roots.clone();
@@ -651,9 +661,7 @@ where
             let expression = ExprId(index as u32);
             let is_type = matches!(
                 checker.ir[expression].kind,
-                ExprKind::TypeFunction { .. }
-                    | ExprKind::TypeSet(_)
-                    | ExprKind::TypeTable(_)
+                ExprKind::TypeFunction { .. } | ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
             );
             if is_type && let Some(term) = checker.state[expression].term {
                 checker.module.evaluate_node_deep(term, None);
@@ -917,9 +925,8 @@ where
         self.int_type = self.kind_expr(root, self.markers.int_marker);
         self.float_type = self.kind_expr(root, self.markers.float_marker);
         self.string_type = self.kind_expr(root, self.markers.string_marker);
-        // The compound **templates**: the shared layout expressions a compound
-        // value's type is. The tuple's and the array's close on the universe, as
-        // every kind does; the struct's closes on itself.
+        // The compound **templates**: the shared layout expressions a
+        // compound value's type is.
         self.tuple_template = self.kind_expr(root, self.markers.tuple_type_marker);
         self.array_template = self.kind_expr(root, self.markers.array_type_marker);
         self.struct_template = self.self_referential_template(root);
@@ -933,8 +940,7 @@ where
         let defaults = vec![cell; crate::shape::EXPR_ATTR_BASE + P::Attr::ORDER.len()];
         let defaults = self.module.alloc_array(&defaults, root);
         self.module.set_default_attributes(defaults);
-        // The full width, recorded for the operators that build an expression of
-        // their own — the array template's holes are full placeholder exprs.
+        // The full width, for the operators that build an expression of their own.
         let full_width = self.full_width_layout();
         self.module.record_full_width_layout(full_width);
     }

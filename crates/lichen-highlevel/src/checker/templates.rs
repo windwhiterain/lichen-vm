@@ -92,12 +92,8 @@ where
     pub(super) fn clone_instance(&mut self, value: ExprId) -> Option<TemplateInstance> {
         let root = self.state[value].term?;
         let boundary = self.clone_boundary(value);
-        self.module.clone_template(
-            root,
-            self.current_block,
-            self.current_function(),
-            &boundary,
-        )
+        self.module
+            .clone_template(root, self.current_block, self.current_function(), &boundary)
     }
 
     /// The cells a clone of `value` **shares** with the caller.
@@ -106,15 +102,11 @@ where
     /// Only the enclosing **lambda parameters** are shared: their cells are the
     /// caller's, and a template that depends on one keeps the dependency.
     ///
-    /// A `let` binding is **not** shared: its cell is the template's own, and
-    /// sharing it would let a unify through the clone write into the template's
-    /// hole. The same holds for a block-wide binding, whose placeholder is the
-    /// binding's own cell; the clone walk shares it when it is decided and
-    /// closed, and clones it when it is open — which is the behaviour a
-    /// template's own hole needs.
+    /// A `let` binding is **not** shared: its cell is the template's own, so
+    /// sharing it would let a unify write into the template's hole.
     ///
-    /// The limit is deliberate: this slice does not decide the lexical
-    /// ownership of a binding inside a nested lambda, so it shares none.
+    /// The limit is deliberate: this slice does not decide a nested lambda's
+    /// binding ownership, so it shares none.
     pub(super) fn clone_boundary(&self, value: ExprId) -> TemplateBoundary {
         let mut boundary = TemplateBoundary::new();
         for parameter in self.reachable_parameters(value) {

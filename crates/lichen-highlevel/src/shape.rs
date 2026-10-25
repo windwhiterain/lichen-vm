@@ -142,12 +142,7 @@ pub fn slot_width<P: HighProgram>() -> usize {
     EXPR_ATTR_BASE + P::Attr::ORDER.len()
 }
 
-// --- kinded-type layout: `[shape, kind]` with kind `[marker, universe]` ------
-//
-// The compound **templates** are not kinded types: a tuple's type is the
-// shared `[TupleType, Type]`, an array's the shared `[ArrayType, Type]` and a
-// struct's the shared `[StructType, ↺]`. The layout below is what the set,
-// the table and the function kinds still use.
+// --- kinded-type layout: `[shape, kind]` ---
 
 /// Element 0 of a kinded type expression `[shape, kind]` — the shape, whose
 /// meaning is the kind's.
@@ -160,20 +155,13 @@ pub const KIND_MARKER_SLOT: usize = 0;
 /// Element 1 of a kind `[marker, universe]` — the universe the kind closes on.
 pub const KIND_UNIVERSE_SLOT: usize = 1;
 
-// --- value layout: the compound values carry their own shape ----------------
-//
-// A tuple's value is its elements' own exprs, an array's value is the element
-// template and the elements, and a struct's value is the name table, the
-// nominal id and the fields. The offsets below are the one place the three
-// layouts are written down, so a reader never writes its own `+1` or `+2`.
+// --- value layout: the compound values carry their own shape ---
 
-/// A **tuple value**'s first element: the elements are the value's own items,
-/// from this slot on.
+/// A **tuple value**'s first element: the elements are its own items.
 pub const TUPLE_VALUE_ELEMENT_BASE: usize = 0;
 /// An **array value**'s element template — the slot `0` of `[template, …]`.
 pub const ARRAY_VALUE_TEMPLATE_SLOT: usize = 0;
-/// An **array value**'s first element: the template holds slot `0`, so the
-/// elements are the value's own items from this slot on.
+/// An **array value**'s first element: the template holds slot `0`.
 pub const ARRAY_VALUE_ELEMENT_BASE: usize = 1;
 /// A **struct value**'s name table — the name→field-index table.
 pub const STRUCT_VALUE_NAMES_SLOT: usize = 0;
@@ -226,10 +214,7 @@ where
 /// A compound value's shape lives in its value and nowhere else, so this is the
 /// one reader of it: the offsets above say which item is which, and a caller
 /// never writes its own `+1` or `+2`.
-pub fn value_items<P: Program>(
-    module: &Module<P>,
-    value: AnyNodeId,
-) -> Option<&'static [ArrayItem]>
+pub fn value_items<P: Program>(module: &Module<P>, value: AnyNodeId) -> Option<&'static [ArrayItem]>
 where
     P::Value: AsEnum<LowValue>,
 {

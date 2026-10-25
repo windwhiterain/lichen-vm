@@ -22,12 +22,11 @@ where
     /// # Invariant
     /// An element is a **complete expression**: the read's value is the
     /// element's own value slot and its type the element's own type slot, so
-    /// an element's type and attributes are read from the element and never
-    /// from the container's type.
+    /// an element's type and attributes are read from the element.
     ///
     /// A **decided** container and a constant index are read directly, so the
     /// read's type is decided where the read is checked; anything else keeps
-    /// the lazy read, which resolves when the container binds.
+    /// the lazy read.
     pub(super) fn value_slot_read(
         &mut self,
         container_value: NodeId,
@@ -35,11 +34,8 @@ where
         constant: Option<usize>,
     ) -> (NodeId, NodeId, NodeId) {
         if let Some(at) = constant
-            && let Some(element) = shape::value_item(
-                &self.module,
-                AnyNodeId::Dynamic(container_value),
-                at,
-            )
+            && let Some(element) =
+                shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)
             && let Some(element) = element.dynamic()
         {
             let value_node = shape::value_item(

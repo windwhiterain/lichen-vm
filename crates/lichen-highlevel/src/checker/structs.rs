@@ -1,7 +1,8 @@
-//! Structs: the struct **value**, the struct **instance**, and the reads —
-//! the positional one over a tuple and the named one over a struct.
+//! Structs: the struct value, the struct instance, and the two reads.
 
-use lichen_lowlevel::{AnyFunctionId, AnyHandle, AnyNodeId, LowOperator, LowValue, NodeId, TableItem};
+use lichen_lowlevel::{
+    AnyFunctionId, AnyHandle, AnyNodeId, LowOperator, LowValue, NodeId, TableItem,
+};
 
 use lichen_utils::extend::AsEnum;
 
@@ -237,8 +238,7 @@ where
                 (index, None)
             }
         };
-        let (element, value_node, ty_node) =
-            self.value_slot_read(container_value, index, constant);
+        let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
         let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
@@ -249,7 +249,10 @@ where
     }
 
     /// The name table a struct value holds at its first slot.
-    pub(super) fn struct_name_table(&self, container_value: NodeId) -> Option<AnyHandle<[TableItem]>> {
+    pub(super) fn struct_name_table(
+        &self,
+        container_value: NodeId,
+    ) -> Option<AnyHandle<[TableItem]>> {
         let names = shape::value_item(
             &self.module,
             AnyNodeId::Dynamic(container_value),
@@ -297,11 +300,42 @@ where
             vals.push(self.state[el].term.expect("a field is compiled"));
         }
         let (value, ty_node) = self.struct_value_node(e, &vals, &field_names);
+        self.require_struct_field_names(&field_names, &elements, value);
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// Refuse a struct **value** with an unnamed field, at that field's own
+    /// location (language-spec.md §Structs).
+    ///
+    /// # Invariant
+    /// Every struct field carries a name: an instance reads by name, and the
+    /// positional form is the *tuple* read. A block's fields need no check —
+    /// they are its bindings.
+    fn require_struct_field_names(
+        &mut self,
+        names: &[Option<&'static str>],
+        fields: &[ExprId],
+        struct_node: NodeId,
+    ) {
+        let Some(at) = names.iter().position(|name| name.is_none()) else {
+            return;
+        };
+        // `fields` is index-aligned with `names`, so an unnamed field has the
+        // expression that states it.
+        let Some(&field) = fields.get(at) else {
+            return;
+        };
+        self.record_guard(
+            struct_node,
+            struct_node,
+            self.loc(field, 1),
+            DiagKind::StructFieldName,
+            None,
+        );
     }
 
     /// A struct-returning block: an anonymous struct over the bindings,

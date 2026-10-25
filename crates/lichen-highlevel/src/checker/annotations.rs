@@ -106,13 +106,13 @@ where
             // the instance's own.
             ExprKind::Array { template, length } => vec![template, length],
             ExprKind::ArrayInst {
-                template,
-                elements,
-                ..
+                template, elements, ..
             } => {
                 let mut children = vec![template];
                 children.extend(
-                    self.ir.children[elements.start as usize..elements.end as usize].iter().copied(),
+                    self.ir.children[elements.start as usize..elements.end as usize]
+                        .iter()
+                        .copied(),
                 );
                 children
             }
@@ -562,9 +562,9 @@ where
             // A value's elements: a set's members, a table's interleaved
             // key/value list, an array instance's elements.
             ExprKind::Set(_) | ExprKind::Table(_) => Some(self.range_children(expr)),
-            ExprKind::ArrayInst { elements, .. } => Some(
-                self.ir.children[elements.start as usize..elements.end as usize].to_vec(),
-            ),
+            ExprKind::ArrayInst { elements, .. } => {
+                Some(self.ir.children[elements.start as usize..elements.end as usize].to_vec())
+            }
             // The type forms: a set's one slot and a table's two, each of which
             // exprs with the value's elements.
             ExprKind::TypeSet(_) => Some(self.range_children(expr)),

@@ -132,8 +132,7 @@ where
     ) -> NodeId {
         self.check_expr(template);
         self.check_expr(length);
-        let template_term = self
-            .state[template]
+        let template_term = self.state[template]
             .term
             .expect("the element template is compiled");
         let length_value = self.value_of(length);
@@ -188,17 +187,14 @@ where
             self.ir.children[elements.start as usize..elements.end as usize].to_vec();
         let element_depths: Vec<usize> =
             self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
-        // The element template: the template's own element expression. It is
-        // the clone's value's first slot, read here from the expression that
-        // states it — the value is computed, so the slot is not readable at
-        // check time.
+        // The element template: the template's own element expression.
         let element_template = match self.ir[template].kind {
             ExprKind::Array { template, .. } => Some(template),
             _ => None,
         };
         let Some(element_template) = element_template else {
-            // The template's element is not stated here: the requirement cannot
-            // be checked, and an unchecked requirement is worse than a refusal.
+            // An element template that is not stated here cannot be checked,
+            // and an unchecked requirement is worse than a refusal.
             self.record_guard(
                 template_ty,
                 template_ty,
@@ -216,25 +212,20 @@ where
             let element = match depth {
                 0 => element,
                 // A marked element's value stays lazy: the wrap is the
-                // element's value, and its reads get a fresh cell.
+                // element's value.
                 _ => {
                     let wrapped = self.wrap_shallow(el, depth);
                     let ty = self.fresh_cell();
-                    // The tail is closed on the element's own type once the
-                    // type application decided it.
+                    // The tail closes on the element's own type.
                     if let Some(&type_apply) = self.type_applies.get(&el) {
-                        self.shallow_types.push((
-                            type_apply,
-                            ty,
-                            self.state[el].ty.unwrap(),
-                        ));
+                        self.shallow_types
+                            .push((type_apply, ty, self.state[el].ty.unwrap()));
                     }
                     self.element_expr(wrapped, ty, element)
                 }
             };
             // The element's own clone of the template: the requirement is the
-            // clone's element template, so the template's holes are the
-            // clone's.
+            // clone's element template.
             let Some(instance) = self.clone_instance(template) else {
                 self.record_guard(
                     template_ty,

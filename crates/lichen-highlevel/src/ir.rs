@@ -540,7 +540,10 @@ pub enum ExprKind<L> {
     /// `names` is index-aligned with `fields`, and a field is a complete
     /// expression: the value holds the fields' own exprs, so a read takes an
     /// element's type and attributes from the element itself.
-    Struct { fields: ChildRange, names: ChildRange },
+    Struct {
+        fields: ChildRange,
+        names: ChildRange,
+    },
     /// A set `set(a, b, …)`, homogeneous like an [`Self::Array`].
     ///
     /// # Invariant

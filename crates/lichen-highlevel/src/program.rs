@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic, GlobalExt, LowOperator, LowShape,
-    LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt,
+    AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic, GlobalExt, LowOperator,
+    LowShape, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -510,8 +510,7 @@ where
     }
 }
 
-/// The built-in `Struct` template constant — the shared self-referential
-/// `[StructType, ↺]` expression every struct value's type is.
+/// The built-in `Struct` template constant — the shared `[StructType, ↺]`.
 ///
 /// # Invariant
 /// It is **self-referential**: its type slot is itself, as the universe's is, so
@@ -1167,8 +1166,9 @@ where
                 }
                 // An undecided length keeps the operator lazy: the value is not
                 // allocated and the length is never guessed.
-                let Some(LowValue::USize(length)) =
-                    module.node_value(items[1].node).and_then(|value| value.as_enum())
+                let Some(LowValue::USize(length)) = module
+                    .node_value(items[1].node)
+                    .and_then(|value| value.as_enum())
                 else {
                     return None;
                 };
@@ -1196,9 +1196,7 @@ where
                 // SAFETY: `operands` is the array the VM just evaluated for this
                 // node; its home block is alive here.
                 let items = unsafe { operands.items() };
-                let Some(value) = items
-                    .first()
-                    .and_then(|item| module.node_value(item.node))
+                let Some(value) = items.first().and_then(|item| module.node_value(item.node))
                 else {
                     return None;
                 };
@@ -1458,8 +1456,7 @@ where
             TypeOperator::IsStructType => Some(LowShape::USize),
             TypeOperator::IsTupleType => Some(LowShape::USize),
             TypeOperator::IsArrayType => Some(LowShape::USize),
-            // The array template's value states **no** shape: its element type is
-            // the template's own, and the length is not known here.
+            // The array template's value states **no** shape.
             TypeOperator::ArrayTemplate => None,
             // A count is a machine scalar.
             TypeOperator::ArrayLength => Some(LowShape::USize),
