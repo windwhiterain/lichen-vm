@@ -424,12 +424,10 @@ where
         let arguments = self.range_children(value);
         let names = self.ir.struct_names[names_start..names_end].to_vec();
         let written = if names.iter().any(|name| name.is_some()) {
-            let ty = self.state[argument].ty?;
-            let table = crate::shape::struct_names_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )?;
+            // The name table is the instance value's own first slot: the layout
+            // lives in the value.
+            let value = self.value_of(argument);
+            let table = self.struct_name_table(value)?;
             let field = self.module.name_table_name(table, position)?;
             names.iter().position(|name| *name == Some(field))
         } else {
