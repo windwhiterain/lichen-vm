@@ -38,8 +38,8 @@ compiler ([a native link library](https://github.com/windwhiterain/lichen-vm/blo
 Two files in one directory:
 
 ```lichen math.lichen
-succ = x => x + 1
-add = (x : Int) => (y : Int) => x + y
+succ := x => x + 1
+add := (x : Int) => (y : Int) => x + y
 ```
 
 ```lichen main.lichen
@@ -50,13 +50,13 @@ add = (x : Int) => (y : Int) => x + y
 ```
 
 ```text
-(42, 3): tuple{Int, Int}
+(42, 3): Tuple
 ```
 
 `main.lichen`'s header binds `math` to the value of `math.lichen`. That
-value is a record — `struct{.succ Int -> Int, .add Int -> Int -> Int}` —
-so `math.succ` reads the record's field. The path is relative to the
-**importing file's** directory.
+value is a record — a struct, so its type is `Struct` — and `math.succ`
+reads the record's field. The path is relative to the **importing file's**
+directory.
 
 The imported value need not be a record. It is whatever the imported
 program evaluates to, so a file that ends in an expression imports as that
@@ -89,7 +89,7 @@ imports `math.lichen`, and the top-level program imports `geo.lichen`:
 ---
   math = import "math.lichen"
 ---
-double = x => math.add x x
+double := x => math.add x x
 ```
 
 ```lichen uses-geo.lichen
@@ -108,14 +108,14 @@ each module is loaded once.
 
 ### What a module exports
 
-A record's fields are selected by the rules of Chapter 8: a `name = expr`
+A record's fields are selected by the rules of Chapter 8: a `name := expr`
 binding is a field, `let` is never a field, a bare expression is never a
 field, and `pub` selects — when any statement is `pub`, only the `pub`
 ones are fields.
 
 ```lichen library.lichen
-pub a = 1
-pub b = 2
+pub a := 1
+pub b := 2
 ```
 
 ```lichen uses-library.lichen
@@ -126,7 +126,7 @@ pub b = 2
 ```
 
 ```text
-(1, 2): tuple{Int, Int}
+(1, 2): Tuple
 ```
 
 ### When a module fails
@@ -146,7 +146,7 @@ bad
 ```
 
 ```text
-error: cannot load package 'broken.lichen': expected Int, found string
+error: cannot load package 'broken.lichen': expected Tuple, found Tuple
   --> 2:3
    |
  2 |   bad = import "broken.lichen"
@@ -172,8 +172,8 @@ The prelude is **shadowable, not reserved**: a program's own binding of a
 name replaces the prelude's for that program.
 
 ```lichen
-add = (operands : array{Int, 2}) => operands[0] * operands[1]
-add [5, 2]
+add := (operands : Tuple) => operands(0) * operands(1)
+add (5, 2)
 ```
 
 ```text
@@ -187,7 +187,7 @@ prelude is also a module value if you want its names qualified:
 ---
   core = import "core.lichen"
 ---
-core.add [1, 2]
+core.add (1, 2)
 ```
 
 ```text
@@ -212,7 +212,7 @@ directory reaches it with a relative path:
 ```
 
 ```text
-(Int, 7): tuple{Type, Int}
+(Int, 7): Tuple
 ```
 
 The path is the price of not having a package registry in the import
@@ -256,11 +256,12 @@ type it exports:
 ```text
 $ lichen-compiler build examples/import/math.lichen
 built …/examples/import/math.lichen
-type: struct{.succ Int -> Int, .add Int -> Int -> Int}
+type: Struct
 ```
 
 It is the quickest way to ask a module "what do you export?" The first
-line names the package's path; the second is the type of its value.
+line names the package's path; the second is the type of its value — a
+record program exports a struct, so its type is the layout type `Struct`.
 
 ## Summary
 
