@@ -652,6 +652,30 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                         }
                     };
                 }
+                // A merged fragment reads back the buffer its producer wrote: the
+                // ordinal names an output, and this reference keeps one output
+                // array, so it reads that one.
+                KernelInstr::OutputReadCall(read_class) => {
+                    let element_index = operand(1).as_index();
+                    let position = operand(0).as_index();
+                    if position != 0 {
+                        panic!(
+                            "the reference keeps one output array, so it cannot read the output \
+                             buffer {position}"
+                        );
+                    }
+                    let value = output[element_index];
+                    produced = match read_class {
+                        ScalarClass::Int => Scalar::Int(value),
+                        // This reading's own word layout, not the ABI's: a float
+                        // element in an `i64` word is its low 32 bits.
+                        ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
+                        // And a half's is the 16 bits above the word's middle.
+                        ScalarClass::BFloat16 => {
+                            Scalar::Float(f32::from_bits(value as u32 & !0xFFFF))
+                        }
+                    };
+                }
                 KernelInstr::BufferWriteCall(_) => {
                     let value = operand(2).as_class(class);
                     let element_index = operand(1).as_index();

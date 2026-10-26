@@ -30,11 +30,11 @@ fn the_compiled_fragment_names_the_declared_element_class() {
     assert_eq!(
         (fragment.inputs, fragment.input_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`Par` declares `.in In` and `In` is `struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
+        "`Par` declares `.in In` and `In` is `{{.d (compute.Buf (compute.BufParam{{.type Float, .length 1}}))}}`"
     );
     assert_eq!(
         (fragment.outputs, fragment.output_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`OutE` is the codomain and it is `struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
+        "`OutE` is the codomain and it is `{{.e (compute.Buf (compute.BufParam{{.type Float, .length 1}}))}}`"
     );
 }

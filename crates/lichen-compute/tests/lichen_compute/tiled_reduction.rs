@@ -132,16 +132,16 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Par = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)) ~ "combine"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (0, 0.0 ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at 0}}) : Float)) ~ "combine"))
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (0, 0.0 ~ "identity")}}))}})
 }}
-k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out _
 k
 "#
     )

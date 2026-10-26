@@ -49,34 +49,34 @@ fn program() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParE = struct{{.n Int, .in In}}
-ArgE = struct{{.n Int, .I In}}
-scale_raw = (k : ParE) => {{
-  i = compute.range k.n
-  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
+In  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParE := _x => {{.n @any : Int, .in In _}}
+ArgE := _x => {{.n @any : Int, .I In}}
+scale_raw := (k <: ParE) => {{
+  i := compute.range k.n
+  e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutE){{.e (compute.write (compute.Write{{.to e, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
 }}
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-Arg2 = struct{{.n Int, .I In2}}
-offset_raw = (k : Par2) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element"))))))
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE _
+In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+Arg2 := _x => {{.n @any : Int, .I In2}}
+offset_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutZ){{.z (compute.write (compute.Write{{.to z, .at i, .value (((compute.read (compute.Read{{.from k.in.p, .at i}}) : Float) + 1.0) ~ "element")}}))}})
 }}
-offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg = struct{{.n Int, .in In}}
-step = (s : GArg) => {{
-  first = (compute.plrun scale ((ArgE)(.n s.n, .I In(.d s.in.d))) : OutE)
-  left = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
-  right = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
+offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ _
+GArg := _x => {{.n @any : Int, .in In _}}
+step := (s <: GArg) => {{
+  first := (compute.plrun scale ((ArgE){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  left := (compute.plrun offset ((Arg2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}}) : Struct)
+  right := (compute.plrun offset ((Arg2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}}) : Struct)
   (left, right)
 }}
-built = compute.graph step
+built := compute.graph step
 (scale, offset, built)
 "#
     )
@@ -96,14 +96,14 @@ fn recording() -> String {
 fn filled() -> String {
     format!(
         r#"
-Data = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Fill = struct{{.n Int}}
-fill = (c : Fill) => {{
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
-  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+Data := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Fill := _x => {{.n @any : Int}}
+fill := (c <: Fill) => {{
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
+  ((Data){{.d (compute.write (compute.Write{{.to d, .at i, .value (int2float i + 1.0)}}))}})
 }}
-filler = compute.parallel fill "cpu" Data
+filler := compute.parallel fill "cpu" Data _
 "#
     )
 }
@@ -116,8 +116,8 @@ filler = compute.parallel fill "cpu" Data
 /// an observation rather than an inference.
 fn running() -> String {
     format!(
-        "{head}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
-         r = (compute.graphrun built (count, data.d) : array{{(compute.Buf ((compute.BufParam _)(.type Float, .length {count}))), 2}})\n\
+        "{head}\n{fill}count :=  ({count})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
+         r := (compute.graphrun built (count, data.d) : Array)\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
         head = recording(),
         fill = filled(),

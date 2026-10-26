@@ -12,7 +12,6 @@ use super::common;
 
 use lichen_compute::ComputeValue;
 use lichen_highlevel::program::TypeValue;
-use lichen_highlevel::shape::{TypeRef, field_type};
 use lichen_kernel_ir::ScalarClass;
 use lichen_lowlevel::AnyNodeId;
 use lichen_utils::extend::AsEnum;
@@ -52,14 +51,7 @@ fn the_module_holds_a_decided_float_element_type() {
         !reads.is_empty(),
         "the module carries `Buf`-shaped type terms"
     );
-    for (id, _read) in &reads {
-        let slot = AnyNodeId::Dynamic(*id);
-        let element = [TypeRef::Term(slot), TypeRef::Slot(slot)]
-            .into_iter()
-            .find_map(|ty| field_type(&module, ty, 1));
-        let Some(element) = element else {
-            continue;
-        };
+    for (id, element) in common::buf_element_fields(&module) {
         let value = module
             .element_value_node(element)
             .and_then(|node| node.dynamic())
@@ -88,12 +80,12 @@ fn the_compiled_fragment_names_the_declared_element_class() {
     assert_eq!(
         (fragment.inputs, fragment.input_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`Par` declares `.in In` and `In` is `struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
+        "`Par` declares `.in In` and `In` is `{{.d (compute.Buf (compute.BufParam{{.type Float, .length 1}}))}}`"
     );
     assert_eq!(
         (fragment.outputs, fragment.output_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`OutE` is the codomain and it is `struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
+        "`OutE` is the codomain and it is `{{.e (compute.Buf (compute.BufParam{{.type Float, .length 1}}))}}`"
     );
 }
 

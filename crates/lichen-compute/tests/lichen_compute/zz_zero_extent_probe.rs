@@ -40,7 +40,6 @@ struct Imports {
 /// The kernel's module-level bindings the bodies read.
 struct Kernel {
     in0: ExprId,
-    out0: ExprId,
     kg: ExprId,
 }
 
@@ -61,11 +60,11 @@ fn fields(w: &Writer<LangAttr, HighProgramLiteral>, name: &str, values: &[ExprId
 /// The kernel, as IR: `In0`, `Out0`, `Par0`, `g` and `kg`.
 fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> Kernel {
     let int = w.int_type("Int");
-    let in0 = w.statement(w.struct_type("In0", &[(int, Some("a"))]));
+    let in0 = w.statement(w.struct_value("In0", &[(int, Some("a"))]));
 
     let buf = bundled(w, imports.expr, "Buf");
     let out0 = w.app("Buf_of_element", buf, w.hole("z_element"));
-    let out0 = w.statement(w.struct_type("Out0", &[(out0, Some("z"))]));
+    let out0 = w.statement(w.struct_value("Out0", &[(out0, Some("z"))]));
 
     let kt = bundled(w, imports.expr, "KT");
     let kt = w.app("KT_of_element", kt, w.hole("kt_element"));
@@ -78,11 +77,28 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let par0 = w.statement(w.app("Par0", bundled(w, imports.expr, "P"), kt));
 
     let k = w.param("k");
+    // A compound constraint is a template match: the actual is unified with a
+    // clone of the template, so the template keeps its own holes.
+    let constraint = w.unify("k_matches_par0", k, w.clone("par0_clone", par0));
     let i = w.app(
         "i",
         bundled(w, imports.expr, "range"),
         w.named_field("k_n", k, "n"),
     );
+    // The kernel's own buffer: the parameter template carries no output group,
+    // so the body allocates the buffer it writes to and answers with it.
+    let bufparam_type = w.app(
+        "BufParam_of_element",
+        bundled(w, imports.expr, "BufParam"),
+        w.hole("bufparam_element"),
+    );
+    let bufparam = w.instantiate(
+        "bufparam",
+        bufparam_type,
+        fields(w, "bufparam_fields", &[int, w.named_field("k_n", k, "n")]),
+        &[Some("type"), Some("length")],
+    );
+    let buffer = w.app("out_buffer", bundled(w, imports.expr, "buf"), bufparam);
     let write_type = w.app(
         "Write_of_element",
         bundled(w, imports.expr, "Write"),
@@ -91,33 +107,35 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let ten = w.app(
         "i_plus_ten",
         imports.add,
-        w.array("operands", &[i, w.int("ten", 10)]),
+        w.tuple("operands", &[i, w.int("ten", 10)]),
     );
     let write = w.instantiate(
         "write_argument",
         write_type,
-        fields(
-            w,
-            "argument_fields",
-            &[
-                w.named_field("k_out_z", w.named_field("k_out", k, "out"), "z"),
-                i,
-                ten,
-            ],
-        ),
+        fields(w, "argument_fields", &[buffer, i, ten]),
         &[Some("to"), Some("at"), Some("value")],
     );
-    let body = w.app("write_call", bundled(w, imports.expr, "write"), write);
+    let written = w.app("write_call", bundled(w, imports.expr, "write"), write);
+    let out_value = w.statement(w.instantiate(
+        "out0_value",
+        out0,
+        fields(w, "out0_fields", &[written]),
+        &[Some("z")],
+    ));
     // A block is a tuple of its statements read positionally, and its last statement is the one
     // the block answers with.
-    let body = w.field("g_last", w.tuple("g_stmts", &[i, body]), w.int("last", 1));
-    let g = w.statement(w.lam_typed("g", k, Some(par0), body, false));
+    let body = w.field(
+        "g_last",
+        w.tuple("g_stmts", &[constraint, i, out_value]),
+        w.int("last", 2),
+    );
+    let g = w.statement(w.lam("g", k, body));
 
     let parallel = w.app("parallel_g", bundled(w, imports.expr, "parallel"), g);
     let parallel = w.app("parallel_backend", parallel, w.string("gpu", "gpu"));
     let kg = w.statement(w.app("kg", parallel, out0));
 
-    Kernel { in0, out0, kg }
+    Kernel { in0, kg }
 }
 
 /// The launch argument both bodies dispatch: `In0` over `.n`, the extent itself varied.
@@ -160,11 +178,7 @@ fn write_plain(
     imports: &Imports,
     kernel: &Kernel,
 ) -> ExprId {
-    let out = w.statement(w.annotate(
-        "out",
-        dispatch(w, imports, kernel, w.int("n", 0)),
-        kernel.out0,
-    ));
+    let out = w.statement(dispatch(w, imports, kernel, w.int("n", 0)));
     w.app(
         "collected",
         bundled(w, imports.expr, "collect"),
@@ -178,23 +192,22 @@ fn write_recorded(
     imports: &Imports,
     kernel: &Kernel,
 ) -> ExprId {
-    let garg = w.statement(w.struct_type(
+    let garg = w.statement(w.struct_value(
         "GArg",
         &[(w.int_type("Int"), Some("n")), (kernel.in0, Some("in"))],
     ));
 
     let s = w.param("s");
-    let step = w.statement(w.lam_typed(
-        "step",
-        s,
-        Some(garg),
-        w.annotate(
-            "out",
-            dispatch(w, imports, kernel, w.named_field("s_n", s, "n")),
-            kernel.out0,
-        ),
-        false,
-    ));
+    // The step's parameter is constrained the same way the kernel's is: the
+    // actual is unified with a clone of the template.
+    let constraint = w.unify("s_matches_garg", s, w.clone("garg_clone", garg));
+    let out = dispatch(w, imports, kernel, w.named_field("s_n", s, "n"));
+    let body = w.field(
+        "step_last",
+        w.tuple("step_stmts", &[constraint, out]),
+        w.int("last", 1),
+    );
+    let step = w.statement(w.lam("step", s, body));
     let built = w.statement(w.app("built", bundled(w, imports.expr, "graph"), step));
     let run = w.app(
         "graphrun_built",
