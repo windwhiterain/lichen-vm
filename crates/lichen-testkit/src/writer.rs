@@ -527,15 +527,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
         )
     }
 
-    /// `name = T -> U` — a function type.
+    /// `name = p : T => (_ : U)` — a function template.
     pub fn type_function(&self, name: &str, parameter: ExprId, return_type: ExprId) -> ExprId {
-        self.named(
-            name,
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            },
-        )
+        let parameter_name = self.param(&format!("{name}_parameter"));
+        let return_value = self.hole(&format!("{name}_return"));
+        let body = self.annotate(&format!("{name}_codomain"), return_value, return_type);
+        self.lam_typed(name, parameter_name, Some(parameter), body, false)
     }
 
     /// `name = @gc e` — a scope of its own, released once `e` is decided.

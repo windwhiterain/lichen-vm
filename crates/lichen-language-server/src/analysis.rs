@@ -1466,9 +1466,8 @@ fn classify_token_kind(
         | TokenKind::KwGc => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
-        // Operators: arrows, annotations, separators-of-fields, and math.
-        TokenKind::Arrow
-        | TokenKind::FatArrow
+        // Operators: lambda/table arrows, annotations, fields, and math.
+        TokenKind::FatArrow
         | TokenKind::TableArrow
         | TokenKind::TableFindArrow
         | TokenKind::Colon
@@ -1667,14 +1666,6 @@ impl<'a> NameClass<'a> {
                 if let Some(p) = perspective {
                     self.expr(p);
                 }
-            }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
             }
             Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
@@ -1990,14 +1981,6 @@ impl Walk {
                 if let Some(p) = perspective {
                     self.expr(p);
                 }
-            }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
             }
             Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
@@ -2342,14 +2325,6 @@ impl<'a> ScopeCapture<'a> {
                 if let Some(p) = perspective {
                     self.expr(p);
                 }
-            }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
             }
             Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
