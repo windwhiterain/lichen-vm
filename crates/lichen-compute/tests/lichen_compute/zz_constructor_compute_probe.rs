@@ -1,4 +1,8 @@
-//! Probe: what the constructor pipeline's parallel path records, printing and asserting nothing.
+//! Probe: the constructor pipeline's parallel and jit paths, printing and asserting nothing.
+//!
+//! The cases name what each reading shows: a frozen constructor's application,
+//! the `parallel` call's arity, the kernel body's lowering, and the jit
+//! launch's result type.
 
 use lichen_compute::language::{LangProgram, new_store};
 use lichen_lowlevel::{AnyNodeId, LowValue, NodeId};
@@ -45,11 +49,17 @@ fn recorded(source: &str) -> String {
         out.push_str(&format!("\n  eval_errors={:?}", module.eval_errors));
         for (index, error) in module.unify_errors.iter().enumerate() {
             out.push_str(&format!(
-                "\n    unify[{index}] root_a={:?} root_b={:?} a={:?} b={:?} steps={:?}",
-                error.root_a, error.root_b, error.a, error.b, error.steps
+                "\n    unify[{index}] root_a={:?} root_b={:?} steps={:?}",
+                error.root_a, error.root_b, error.steps
             ));
-            out.push_str(&format!("\n      root_a shape={}", shape(module, error.root_a)));
-            out.push_str(&format!("\n      root_b shape={}", shape(module, error.root_b)));
+            out.push_str(&format!(
+                "\n      root_a shape={}",
+                shape(module, error.root_a)
+            ));
+            out.push_str(&format!(
+                "\n      root_b shape={}",
+                shape(module, error.root_b)
+            ));
         }
     }
     out
@@ -88,10 +98,99 @@ fn rendered(source: &str) -> String {
     }
 }
 
-const PARALLEL: &str = r#"
----
-  compute = import "compute.lichen"
----
+const CASES: &[(&str, &str)] = &[
+    (
+        "a struct constructor applied once",
+        "In := _x => {.a @any : Int}
+In{.a 0}
+",
+    ),
+    (
+        "a frozen constructor applied once",
+        "--- compute = import \"compute.lichen\" ---
+compute.A{.n 4, .I 1}
+",
+    ),
+    (
+        "the frozen kernel struct applied once",
+        "--- compute = import \"compute.lichen\" ---
+compute.K{.native 1, .I 2, .O 3}
+",
+    ),
+    ("parallel with a trailing hole", PARALLEL_TRAILING_HOLE),
+    ("parallel with three arguments", PARALLEL_THREE),
+    ("parallel with an output instance", PARALLEL_INSTANCE),
+    (
+        "a conditional applied to a hole",
+        "f := (x => if x <= 3 then 10 else 20)
+f _
+",
+    ),
+    (
+        "an arithmetic applied to a hole",
+        "f := (x => x + 1)
+f _
+",
+    ),
+    (
+        "the jit launch of a conditional",
+        "--- compute = import \"compute.lichen\" ---
+k := compute.jit (x => if x <= 3 then 10 else 20)
+compute.launch k 5
+",
+    ),
+    (
+        "the jit launch of an arithmetic",
+        "--- compute = import \"compute.lichen\" ---
+k := compute.jit (x => x + 1)
+compute.launch k 5
+",
+    ),
+];
+
+/// The three parallel spellings, each with the kernel the cases share: a
+/// trailing hole, the wrapper's own arity, and an output instance.
+const PARALLEL_TRAILING_HOLE: &str = r#"--- compute = import "compute.lichen" ---
+In  := _x => {.a @any : Int}
+Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := _x => {.n @any : Int, .in In _}
+f := (k <: Par) => {
+  i := compute.range k.n
+  y := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+}
+k := compute.parallel f "cpu" Out _
+k
+"#;
+
+const PARALLEL_THREE: &str = r#"--- compute = import "compute.lichen" ---
+In  := _x => {.a @any : Int}
+Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := _x => {.n @any : Int, .in In _}
+f := (k <: Par) => {
+  i := compute.range k.n
+  y := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+}
+k := compute.parallel f "cpu" Out
+k
+"#;
+
+const PARALLEL_INSTANCE: &str = r#"--- compute = import "compute.lichen" ---
+In  := _x => {.a @any : Int}
+Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := _x => {.n @any : Int, .in In _}
+f := (k <: Par) => {
+  i := compute.range k.n
+  y := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+}
+k := compute.parallel f "cpu" (Out _)
+k
+"#;
+
+/// The program the compute suite's parallel case runs.
+const FAILING: &str = r#"--- compute = import "compute.lichen" ---
 In  := _x => {.a @any : Int}
 Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := _x => {.n @any : Int, .in In _}
@@ -105,121 +204,14 @@ out := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
 (compute.read (compute.Read{.from out.z, .at 2}) : Int)
 "#;
 
-const CASES: &[(&str, &str)] = &[
-    ("plain struct instance", "In := _x => {.a @any : Int}\nIn{.a 0}\n"),
-    ("plain struct applied", "In := _x => {.a @any : Int}\nIn _\n"),
-    (
-        "frozen A instance with import",
-        "--- compute = import \"compute.lichen\" ---\ncompute.A{.n 4, .I 1}\n",
-    ),
-    (
-        "frozen K instance",
-        "--- compute = import \"compute.lichen\" ---\ncompute.K{.native 1, .I 2, .O 3}\n",
-    ),
-    (
-        "parallel only",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
-  i := compute.range k.n
-  y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
-}
-k := compute.parallel f "cpu" Out _
-k
-"#,
-    ),
-    (
-        "parallel without trailing hole",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
-  i := compute.range k.n
-  y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
-}
-k := compute.parallel f "cpu" Out
-k
-"#,
-    ),
-    (
-        "parallel with parenthesised instance",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
-  i := compute.range k.n
-  y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
-}
-k := compute.parallel f "cpu" (Out _)
-k
-"#,
-    ),
-    (
-        "parallel with parenthesised instance, then plrun",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
-  i := compute.range k.n
-  y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
-}
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from out.z, .at 2}) : Int)
-"#,
-    ),
-    (
-        "parallel with a constant body",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => { 1 }
-k := compute.parallel f "cpu" Out
-k
-"#,
-    ),
-    (
-        "parallel with a range body",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => { i := compute.range k.n; i }
-k := compute.parallel f "cpu" Out
-k
-"#,
-    ),
-    (
-        "parallel with a write body, no Out",
-        r#"--- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
-  i := compute.range k.n
-  y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  (compute.write (compute.Write{.to y, .at i, .value i + i}))
-}
-k := compute.parallel f "cpu" Out
-k
-"#,
-    ),
-];
-
 #[test]
 fn probe_parallel_pipeline() {
-    println!("[parallel]\n{}", recorded(PARALLEL));
     for (name, source) in CASES {
         println!("[{name}] {}", rendered(source));
     }
+    println!(
+        "[the failing program]
+{}",
+        recorded(FAILING)
+    );
 }

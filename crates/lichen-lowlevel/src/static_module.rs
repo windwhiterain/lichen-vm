@@ -99,6 +99,12 @@ impl<P: Program> Module<P> {
     /// **A read's position is a subscript, not a computation**: a field read
     /// computes `TableGet(names, name) + <base>`, not the body's operator
     /// (`docs/notes/loop-conversion.md`).
+    ///
+    /// # Invariant
+    /// The body is read through its **classes**: a constructor application
+    /// fills a cell by unifying it, so the operator a wrapper computes is a
+    /// member of the returned cell's class and not an item of its graph. A
+    /// wildcard is never a computation, so the undecided class is not read.
     pub fn static_function_compute_operator(
         &self,
         function: StaticFunctionRef,
@@ -170,6 +176,20 @@ impl<P: Program> Module<P> {
                     {
                         pending.push((inner.index, position));
                     }
+                }
+            }
+            // A constructor's operator is a class member, not a graph item.
+            let members = static_class_members(&module, local);
+            for member in members {
+                // The wildcard is never a computation.
+                let wildcard = module
+                    .nodes
+                    .get(member.index)
+                    .and_then(|member| member.value.as_ref())
+                    .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(value))
+                    .is_some_and(|value| matches!(value, crate::LowValue::Any));
+                if !wildcard {
+                    pending.push((member, position));
                 }
             }
         }
@@ -316,6 +336,36 @@ fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNod
         module: module.key,
         index: node,
     })
+}
+
+/// The cells a frozen cell's **class** holds: the representative and the members
+/// the frozen equality links name.
+///
+/// # Invariant
+/// The representative is the solved union-find's root, and the members are the
+/// `next` chain from it, so the list is the class the frozen module solved — the
+/// same cells the dynamic module's class names.
+fn static_class_members<P: Program>(
+    module: &StaticModule<P>,
+    node: LocalNodeId,
+) -> Vec<LocalNodeId> {
+    let Some(root) = module
+        .nodes
+        .get(node.index)
+        .map(|_| static_find(&module.nodes, node))
+    else {
+        return Vec::new();
+    };
+    let mut members = vec![root];
+    let mut current = root;
+    while let Some(next) = module.nodes[current.index].equality.next() {
+        if members.contains(&next) {
+            break;
+        }
+        members.push(next);
+        current = next;
+    }
+    members
 }
 
 /// Every module key a static ref in the module's solved values names — its frozen
