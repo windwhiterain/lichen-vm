@@ -153,7 +153,10 @@ fn a_named_read_of_an_array_is_refused() {
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
     assert_eq!(
-        undecided_read("f := x => x.a\nf [@any, 2][10, 20]", "field read"),
+        undecided_read(
+            "f := x => x.a\nA := _x => [@any, 2]\nf A[10, 20]",
+            "field read",
+        ),
         Some((1, 6)),
         "the caret is the container, not the read"
     );
