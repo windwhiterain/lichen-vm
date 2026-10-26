@@ -26,7 +26,7 @@ fn output(source: &str) -> String {
 fn a_field_requirement_refuses_an_argument_that_misses_it() {
     let (message, kind) = refused("S := {.a @any : Int # 4}\nS{.a 1 # 2}");
     assert_eq!(kind, DiagKind::Annotation);
-    assert_eq!(message, "expected raw[1, Int], found raw[1, Int]");
+    assert_eq!(message, "expected 4, found 2");
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn a_field_requirement_holds_for_an_argument_that_meets_it() {
 fn a_field_pin_refuses_the_value_it_names() {
     let (message, kind) = refused("S := {.a 5 : Int}\nS{.a 6}");
     assert_eq!(kind, DiagKind::Annotation);
-    assert_eq!(message, "expected raw[5, Int], found raw[6, Int]");
+    assert_eq!(message, "expected 5, found 6");
 }
 
 /// The pairing is the **definition's** order, not the call's: the argument
@@ -59,7 +59,7 @@ fn a_field_pin_refuses_the_value_it_names() {
 #[test]
 fn a_named_argument_reconciles_against_its_own_field() {
     let (message, _) = refused("S := {.a 5 : Int, .b 7 : Int}\nS{.b 8, .a 6}");
-    assert_eq!(message, "expected raw[5, Int], found raw[6, Int]");
+    assert_eq!(message, "expected 5, found 6");
     assert_eq!(
         output("S := {.a 5 : Int, .b 7 : Int}\nS{.b 7, .a 5}"),
         "(5, 7): Struct"
