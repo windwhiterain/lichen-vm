@@ -93,8 +93,6 @@ impl<P: Program> Module<P> {
             pattern_seen: Vec::new(),
             stamp_depth: 0,
             deep_depth: 0,
-            type_applying: Vec::new(),
-            value_applying: HashSet::new(),
             value_templates: HashSet::new(),
             budget_exhausted: None,
             report_type_side_failures: false,

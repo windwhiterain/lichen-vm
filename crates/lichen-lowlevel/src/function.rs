@@ -153,19 +153,6 @@ impl<P: Program> Module<P> {
         cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         // The nesting guard, first: `node`'s depth bounds the expansion, so a loop never nests.
-        if std::env::var("DSH_TRACE").is_ok() {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static CALLS: AtomicUsize = AtomicUsize::new(0);
-            let calls = CALLS.fetch_add(1, Ordering::Relaxed);
-            if calls < 40 || calls % 10_000 == 0 {
-                eprintln!(
-                    "[apply] calls={calls} function={function:?} template={:?} node={node:?} depth={} nodes={}",
-                    self.functions[function].template,
-                    self.node_depth(node),
-                    self.nodes.len()
-                );
-            }
-        }
         if self.depth_exhausted(node) {
             return None;
         }
@@ -177,15 +164,7 @@ impl<P: Program> Module<P> {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
         let template = self.functions[function].template.unwrap_or(function);
-        let argument_key = match argument {
-            Dyn(node) => Dyn(self.class_root(node)),
-            AnyNodeId::Static(sref) => AnyNodeId::Static(self.static_equality_representative(sref)),
-        };
-        let key = (template, argument_key);
         if self.report_type_side_failures && self.value_templates.contains(&template) {
-            return None;
-        }
-        if !self.value_applying.insert(key) {
             return None;
         }
         self.value_templates.insert(template);
@@ -212,7 +191,6 @@ impl<P: Program> Module<P> {
             self.wire_apply_result(node, result, instantiation.applied, block)
         })();
         self.value_templates.remove(&template);
-        self.value_applying.remove(&key);
         result
     }
 
@@ -245,40 +223,6 @@ impl<P: Program> Module<P> {
         cell: Option<AnyNodeId>,
         check: ParameterCheck,
     ) -> bool {
-        // A type application whose function is **already being type-applied** in
-        // this chain does not force the callee's body.
-        //
-        // # Invariant
-        // The type application forces the body only to read the codomain and
-        // the returned attribute; the body in turn applies the types of the
-        // calls it names, so a signature that closes on itself expands the
-        // body at every turn. The chain is the guard: the function is already
-        // inside itself, and a second force is the expansion the chain never
-        // leaves. The chain names the **template** each application is an
-        // instance of, because a call's callee is a per-call closure: the
-        // template is what says the chain is inside the same function again.
-        // The parameter check still runs, so the call's diagnostics do not
-        // depend on the guard.
-        let template = self.functions[function].template.unwrap_or(function);
-        let reentrant = self.type_applying.contains(&template);
-        self.type_applying.push(template);
-        let applied = self.apply_type_body(function, argument, block, node, cell, check, reentrant);
-        self.type_applying.pop();
-        applied
-    }
-
-    /// The body of a type application; `reentrant` says the chain is already
-    /// inside `function`, so the body is not forced again.
-    fn apply_type_body(
-        &mut self,
-        function: FunctionId,
-        argument: AnyNodeId,
-        block: BlockId,
-        node: NodeId,
-        cell: Option<AnyNodeId>,
-        check: ParameterCheck,
-        reentrant: bool,
-    ) -> bool {
         let Some(instantiation) = self.instantiate(function, argument, block, node, check) else {
             return false;
         };
@@ -291,9 +235,8 @@ impl<P: Program> Module<P> {
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
         // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
-        // apply the deep budget counts. A reentrant application leaves the clone
-        // unforced: the chain is already inside this function.
-        if !reentrant && self.expr_type_item(applied).is_none() {
+        // apply the deep budget counts.
+        if self.expr_type_item(applied).is_none() {
             self.evaluate_node(Dyn(applied), Some(block));
         }
         let Some(codomain) = self.expr_type_item(applied) else {
