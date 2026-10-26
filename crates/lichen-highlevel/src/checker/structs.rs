@@ -531,24 +531,9 @@ where
             DiagKind::Guard,
         );
         // The arguments, in call order: the value is the tuple of arguments.
-        let elements = match self.ir[value].kind {
-            ExprKind::Tuple(_) => self.range_children(value),
-            _ => {
-                self.record_guard(
-                    template_ty,
-                    template_ty,
-                    self.loc(value, 0),
-                    DiagKind::Guard,
-                    Some("struct instance"),
-                );
-                return self.refused_expr(e);
-            }
+        let Some((elements, vals)) = self.instantiation_arguments(value, template_ty) else {
+            return self.refused_expr(e);
         };
-        let mut vals = Vec::with_capacity(elements.len());
-        for &el in &elements {
-            self.check_expr(el);
-            vals.push(self.state[el].term.expect("an argument is compiled"));
-        }
         // The template's clone: the requirements are the clone's own fields.
         let Some(instance) = self.clone_instance_value(template) else {
             self.record_guard(
@@ -630,6 +615,33 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// The argument expressions and their compiled terms, in call order.
+    fn instantiation_arguments(
+        &mut self,
+        value: ExprId,
+        template_ty: NodeId,
+    ) -> Option<(Vec<ExprId>, Vec<NodeId>)> {
+        let elements = match self.ir[value].kind {
+            ExprKind::Tuple(_) => self.range_children(value),
+            _ => {
+                self.record_guard(
+                    template_ty,
+                    template_ty,
+                    self.loc(value, 0),
+                    DiagKind::Guard,
+                    Some("struct instance"),
+                );
+                return None;
+            }
+        };
+        let mut vals = Vec::with_capacity(elements.len());
+        for &el in &elements {
+            self.check_expr(el);
+            vals.push(self.state[el].term.expect("an argument is compiled"));
+        }
+        Some((elements, vals))
     }
 
     /// The arguments in the definition's order, and whether the call matched

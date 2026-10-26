@@ -848,8 +848,9 @@ where
     ///
     /// # Invariant
     /// The wrapper states the payload first (`.native`, then `.type`, `.length`), so a
-    /// declaration instance is a struct whose first field holds the `$buf` op
-    /// (`docs/notes/kernel-buffer-declarations.md`). Any other array is not a declaration.
+    /// declaration instance's first field holds `$buf` and a write result's holds
+    /// `$write`/`$write_atomic` (`docs/notes/kernel-buffer-declarations.md`). Any other
+    /// array is not a declaration.
     fn instance_payload(&self, node: NodeId) -> Option<NodeId> {
         let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
         let Some(LowValue::Array(items)) = AsEnum::<LowValue>::as_enum(&value) else {
@@ -864,7 +865,7 @@ where
         let operation = self.module.node_operation(slot)?;
         matches!(
             AsEnum::<ComputeOperator>::as_enum(&operation.operator),
-            Some(ComputeOperator::Buf)
+            Some(ComputeOperator::Buf | ComputeOperator::Write | ComputeOperator::WriteAtomic)
         )
         .then_some(slot)
     }
@@ -914,7 +915,7 @@ where
                 self.module
                     .node_operation(node)
                     .and_then(|operation| AsEnum::<ComputeOperator>::as_enum(&operation.operator)),
-                Some(ComputeOperator::Write | ComputeOperator::WriteAtomic | ComputeOperator::Buf)
+                Some(ComputeOperator::Buf | ComputeOperator::Write | ComputeOperator::WriteAtomic)
             )
         {
             let value = self.value(origin)?;
@@ -1058,6 +1059,12 @@ where
         }
     }
 
+    /// Native operands as values: a struct argument contributes its fields,
+    /// while an ordinary operand array contributes its elements.
+    fn operand_values(&self, operand: NodeId) -> Result<Vec<NodeId>, String> {
+        super::value_leaves_of(self.module, operand, None)
+    }
+
     /// A declared slice: its declaration order is its output ordinal.
     ///
     /// # Invariant
@@ -1065,7 +1072,7 @@ where
     /// only authority over an ordinal: a write whose target is one of these fills the
     /// position the declaration was lowered at, not a parameter path.
     fn buf_declare(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
-        let items = self.module.operand_items(operand)?;
+        let items = self.operand_values(operand)?;
         // The declaration's operands are `[type, length]`: the type first, the length second.
         let Some(count) = items.get(1) else {
             return Err(
@@ -1074,7 +1081,7 @@ where
                     .into(),
             );
         };
-        let count_node = dynamic(count.node)?;
+        let count_node = *count;
         // A literal length is the allocation; a runtime one leaves the launch count.
         let extent = self
             .module
@@ -1305,23 +1312,86 @@ where
         }
     }
 
+    /// The dynamic function an apply's callee names, through its value or type.
+    fn dynamic_callee(&self, callee: NodeId, type_slot: Option<AnyNodeId>) -> Option<FunctionId> {
+        if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(callee))
+            && let Some(LowValue::Function(AnyFunctionId::Dynamic(function))) =
+                AsEnum::<LowValue>::as_enum(&value)
+        {
+            return Some(function);
+        }
+        let type_node = type_slot?.dynamic()?;
+        match self.module.function_type_function(type_node)? {
+            AnyFunctionId::Dynamic(function) => Some(function),
+            AnyFunctionId::Static(_) => None,
+        }
+    }
+
+    /// The compute operator a dynamic function clone's body computes, or `None`.
+    fn dynamic_compute_operator(&self, function: FunctionId) -> Option<P::Operator> {
+        let function = self.module.functions.get(function)?;
+        let mut found = None;
+        let mut pending = vec![function.r#return];
+        let mut seen = HashSet::new();
+        while let Some(node) = pending.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if let Some(operation) = self.module.node_operation(node) {
+                if AsEnum::<LowOperator>::as_enum(&operation.operator).is_none()
+                    && operation.operand.is_some()
+                {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(operation.operator);
+                }
+                if let Some(operand) = operation.operand {
+                    pending.push(operand);
+                }
+            } else if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node))
+                && let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
+            {
+                // SAFETY: the array is a live value of this module during the walk.
+                for item in unsafe { array.items() } {
+                    if let AnyNodeId::Dynamic(inner) = item.node {
+                        pending.push(inner);
+                    }
+                }
+            }
+        }
+        found
+    }
+
     fn routed_operator(
         &mut self,
         node: NodeId,
         callee: NodeId,
         operand: NodeId,
     ) -> Result<Option<ValueId>, String> {
-        let function = match self.static_callee(
-            callee,
-            self.module
-                .operand_items(operand)
-                .ok()
-                .and_then(|items| items.get(3).map(|item| item.node)),
-        ) {
-            Some(function) => function,
-            None => return Ok(None),
+        let type_slot = self
+            .module
+            .operand_items(operand)
+            .ok()
+            .and_then(|items| items.get(3).map(|item| item.node));
+        let function = self
+            .static_callee(callee, type_slot)
+            .map(AnyFunctionId::Static)
+            .or_else(|| {
+                self.dynamic_callee(callee, type_slot)
+                    .map(AnyFunctionId::Dynamic)
+            });
+        let Some(function) = function else {
+            return Ok(None);
         };
-        let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
+        let operator = match function {
+            AnyFunctionId::Static(function) => self
+                .module
+                .static_function_compute_operator(function)
+                .map(|(operator, _)| operator),
+            AnyFunctionId::Dynamic(function) => self.dynamic_compute_operator(function),
+        };
+        let Some(operator) = operator else {
             return Ok(None);
         };
         // The operator's operands are the call site's argument's value half.
@@ -1397,7 +1467,7 @@ where
             .static_callee(callee, operands.get(3).map(|item| item.node))
             .is_some()
             || is_static_function(self.module, callee);
-        if frozen && let Some(value) = self.routed_operator(node, callee, operand)? {
+        if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);
         }
         // The routing case: emit the residual the clone wrote.
@@ -2241,7 +2311,7 @@ where
 
     /// Read an input buffer element: `read [cfg(1)(k), idx]`.
     fn buffer_read(&mut self, operand: NodeId) -> Result<ValueId, String> {
-        let operands = self.module.operand_expr(operand, "read")?;
+        let operands = self.operand_values(operand)?;
         let (Some(buffer), Some(index)) = (operands.first(), operands.get(1)) else {
             return Err("read's operand array must have two elements".into());
         };
@@ -2386,14 +2456,14 @@ where
     }
 
     fn write_call(&mut self, operand: NodeId, atomic: bool) -> Result<ValueId, String> {
-        let items = self.module.operand_items(operand)?;
+        let items = self.operand_values(operand)?;
         if items.len() < 3 {
             return Err(format!(
                 "a write takes three operands and its operand array has {}",
                 items.len()
             ));
         }
-        let mut target = dynamic(items[0].node)?;
+        let mut target = items[0];
         // **A carried version names the buffer it was entered with**: follow the
         // state read to the entering value.
         for _ in 0..8 {
@@ -2408,8 +2478,8 @@ where
             }
             target = entering;
         }
-        let index = dynamic(items[1].node)?;
-        let value_node = dynamic(items[2].node)?;
+        let index = items[1];
+        let value_node = items[2];
         // **A record stores the call's expr**: the value written is the expr's value
         // half — the call.
         let value_node = if self.module.node_operation(value_node).is_none() {
