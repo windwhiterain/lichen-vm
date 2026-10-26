@@ -739,6 +739,11 @@ impl<P: Program> Module<P> {
     /// answer cannot report undecided itself, so its operand's verdict is folded
     /// in at the deep walk. Each position's verdict is read through
     /// [`Self::ref_is_undecided`].
+    ///
+    /// # Invariant
+    /// An array's **template** position holds the layout, not content, so its verdict is
+    /// not read: the element template of an array instance is `@any` more often than
+    /// not, and that must not leave the instance's own elements undecided.
     fn value_is_undecided(
         &self,
         cache: &mut StaticModuleCache<P>,
@@ -757,7 +762,7 @@ impl<P: Program> Module<P> {
                 if unsafe { array.items() }.iter().any(|item| item.shallow)
                     || unsafe { array.items() }
                         .iter()
-                        .any(|item| self.ref_is_undecided(cache, item.node))
+                        .any(|item| !item.template && self.ref_is_undecided(cache, item.node))
         ) || matches!(
             view,
             Some(LowValue::Table(table))
