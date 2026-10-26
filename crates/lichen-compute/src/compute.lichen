@@ -5,7 +5,7 @@ KT := _x => {.I _, .O _}
 K := _x => {.native _, .I _, .O _}
 A := I => {.n @any : Int, .I I}
 P := T <: KT _ => {.n @any : Int, .in T.I}
-S := T <: KT _ => (i <: (A T.I) => o <: T.O)
+S := T <: KT _ => (i <: (A T.I) => _ : T.O)
 BufParam := _x => {.type _, .length _}
 Buf := x <: BufParam _ => {
   .native @any : $buf_type(x.type, x.length)
@@ -35,5 +35,5 @@ Mma := _x => {
   .c (Buf ((BufParam _){.type Int, .length 16})) # warp
 }
 mma := x <: Mma _ => {r := $mma(x.s, x.a, x.b, x.c); r <: (Buf ((BufParam _){.type Int, .length 16})) # warp}
-graph := f => {f <: (_ => _); $graph(f)}
+graph := f => {f <: (x => _); $graph(f)}
 graphrun := g => a => $graphrun(g, a)

@@ -2,11 +2,10 @@
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder. The parameter is a
-pair template, so each call unifies its argument with a fresh clone. The arrow's
-compound domain states the same detailed template, while the recursive result's
-type follows from the signature (`6: Int`). Nothing carries the `raw` mark,
-because the type is decided."
+pair template, so each call unifies its argument with a fresh clone. The body is
+annotated as `Int`, so the recursive result's type is decided (`6: Int`). Nothing
+carries the `raw` mark."
   output = "6: Int"
 ---
-gcd := ((p <: (@any : Int, @any : Int)) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : (@any : Int, @any : Int) -> Int
+gcd := (p <: (@any : Int, @any : Int)) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
