@@ -57,8 +57,7 @@ fn array_ids(value: LangValue) -> Vec<NodeId> {
         .collect()
 }
 
-/// The node ids of an **array value's elements**: the first slot holds the
-/// element template, which names the layout and is never user data.
+/// The node ids of an array value's elements, after its template slot.
 fn array_element_ids(value: LangValue) -> Vec<NodeId> {
     let ids = array_ids(value);
     ids.into_iter()
@@ -1071,8 +1070,7 @@ fn a_bound_struct_type_is_reusable() {
 
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
-    // Nominal identity lives in the struct value. Matching a second occurrence
-    // against the first must reject their different nominal ids.
+    // Struct occurrences have nominal identity, so matching two rejects their ids.
     let report = compile("S1 := {.f @any : Int}; S2 := {.f @any : Int}; [S1, 2][S1, S2]");
     assert!(
         !report.ok(),
@@ -1801,11 +1799,7 @@ fn a_dependent_array_length_pins_the_parameter() {
 
 #[test]
 fn a_dependent_array_length_rejects_other_lengths() {
-    // `n` is pinned to 3 by the instance's own count; applying 5 clashes at the
-    // apply. The expectation stays the strong one: a *runtime* refusal that
-    // names the pinned length and the argument. The checker answers a `Guard`
-    // today — the template's length is not decidable where the instance is
-    // checked — and the test says so rather than accepting the weaker kind.
+    // The instance count pins `n` to 3; applying 5 is a runtime length mismatch.
     let d = diags("((n => [@any : Int, n][1, 2, 3]) 5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");

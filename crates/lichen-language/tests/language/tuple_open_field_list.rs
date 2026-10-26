@@ -32,10 +32,7 @@ impl Seed {
         )
     }
 
-    /// The **retired** kinded tuple type: a `[shape, kind]` term whose shape
-    /// slot holds a field list.
-    ///
-    /// `None` leaves the shape slot value-less, which is what opens the list.
+    /// A retired `[shape, kind]` tuple term; `None` leaves its field list open.
     fn retired_tuple_term(&mut self, fields: Option<&[AnyNodeId]>) -> NodeId {
         let marker = self
             .module
@@ -63,9 +60,7 @@ fn seed() -> Seed {
     }
 }
 
-/// The retired kinded term — a `[shape, kind]` node with an open field list —
-/// reads as the raw layout: the `tuple{…}` spelling is gone with the field
-/// list it named.
+/// A retired open field list prints as raw layout, not `tuple{…}`.
 #[test]
 fn a_retired_field_list_reads_as_the_raw_layout() {
     let mut seed = seed();

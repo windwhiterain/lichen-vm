@@ -103,9 +103,7 @@ fn a_bracket_read_of_a_tuple_is_refused() {
 
 // --- every struct field is named -----------------------------------------
 
-/// An unnamed field has no read, so the definition is refused. The struct
-/// value's fields always carry their names now, so a brace group without
-/// them is a block — and a block checks.
+/// An unnamed brace group is a block, not a struct instance, so it checks.
 #[test]
 fn an_unnamed_struct_field_is_refused() {
     let report = compile("A := {Int, Type}\nA");

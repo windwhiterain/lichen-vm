@@ -160,6 +160,13 @@ pub const KIND_UNIVERSE_SLOT: usize = 1;
 /// A **tuple value**'s first element: the elements are its own items.
 pub const TUPLE_VALUE_ELEMENT_BASE: usize = 0;
 /// An **array value**'s element template — the slot `0` of `[template, …]`.
+///
+/// # Invariant
+/// The result's value is `[T's element template, the elements…]`, so a read
+/// of element `i` is the value's slot `i + 1`. The first slot is the element
+/// template, so it carries the template marker: the slot holds the layout and
+/// not a user element, and a key comparison reads its presence, never its
+/// value.
 pub const ARRAY_VALUE_TEMPLATE_SLOT: usize = 0;
 /// An **array value**'s first element: the template holds slot `0`.
 pub const ARRAY_VALUE_ELEMENT_BASE: usize = 1;
@@ -463,8 +470,7 @@ where
     if !self_referential {
         return true;
     }
-    // The self-referential template's type slot is in the template's own class,
-    // or names the same frozen expression through a dynamic alias.
+    // The template's type slot is in its class, or aliases the same frozen expr.
     if module.same_class(items[EXPR_TYPE_SLOT].node, ty) {
         return true;
     }

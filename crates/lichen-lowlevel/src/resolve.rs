@@ -446,8 +446,8 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether two references belong to one equality class. A dynamic node and
-    /// a frozen reference do not share a class merely by having equal content.
+    /// Whether references share an equality class; equal content is not enough
+    /// across dynamic and frozen references.
     pub fn same_class(&self, a: AnyNodeId, b: AnyNodeId) -> bool {
         match (a, b) {
             (AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b)) => {

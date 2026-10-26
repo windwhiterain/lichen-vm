@@ -1139,8 +1139,7 @@ where
         self.array_node_with_layout(block, ids, 0)
     }
 
-    /// An array **instance**'s value: its items carry their own **shallow** flags,
-    /// and its first slot is the element template.
+    /// An array instance's value: shallow flags are per item; slot 0 is the template.
     ///
     /// # Invariant
     /// The flags are the items' own, so a marked position is the item a deep

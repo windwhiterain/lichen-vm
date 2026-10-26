@@ -12,16 +12,14 @@ pub use lichen_language::testing::{
     type_is_undecided, usize_array, usize_of, values_eq,
 };
 
-/// The `usize` elements of an **array** value: its first slot holds the
-/// element template, which names the layout and is never user data.
+/// The `usize` elements of an array value; slot 0 is the layout template.
 pub fn usize_array_elements(module: &Module<LangProgram>, value: &LangValue) -> Vec<usize> {
     let mut values = array_values(module, value);
     values.remove(0);
     values.iter().map(usize_of).collect()
 }
 
-/// The `usize` fields of a **struct** value: its first two slots hold the name
-/// table and the nominal id, which name the struct and are never user data.
+/// The `usize` fields of a struct value, after its name table and nominal id.
 pub fn usize_struct_fields(module: &Module<LangProgram>, value: &LangValue) -> Vec<usize> {
     let LangValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected a struct value, got {value:?}");

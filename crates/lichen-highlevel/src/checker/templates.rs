@@ -51,9 +51,7 @@ where
     /// against its layout. A function template unifies the actual function's
     /// type with the cloned signature, preserving the actual body for calls.
     /// The direction is fixed: `actual` is found and `expected` the requirement.
-    ///
-    /// The `:` annotation does **not** come through here: it states a type, and
-    /// a type is unified as a type.
+    /// The `:` annotation does **not** come through here: it states a type, and a type is unified as a type.
     pub(super) fn check_unify_expr(
         &mut self,
         e: ExprId,
@@ -67,8 +65,8 @@ where
         let actual_ty = self.state[actual].ty.expect("the actual has a type");
         let expected_ty = self.state[expected].ty.expect("the expected has a type");
         self.compute_operands(actual_term, expected_term);
-        // A function is its own type: constrain its signature, not its callable
-        // body. Other templates state the whole value layout.
+        // Constrain a function's signature, preserving its body; other templates
+        // constrain the whole value layout.
         let found = if self.module.is_function_type(expected_ty) {
             actual_ty
         } else {

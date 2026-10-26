@@ -272,8 +272,7 @@ impl<P: Program> Module<P> {
                 // SAFETY: `array` is the payload of a live node of this module, and the
                 // unfolding only reads.
                 for item in unsafe { array.items() } {
-                    // The element template slot holds the layout, not a user element:
-                    // in key content its value is not read, and its presence is.
+                    // Template slots contribute presence, not value, to key content.
                     if item.template && mode == UnfoldMode::Key {
                         hash = mix(hash ^ TEMPLATE_TOKEN);
                         continue;

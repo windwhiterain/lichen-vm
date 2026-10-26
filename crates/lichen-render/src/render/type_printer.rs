@@ -134,8 +134,7 @@ where
             .unwrap_or_else(|| "?".to_string())
     }
 
-    /// Render a recorded mismatch value without an owning node. Array values
-    /// need their node and answer `None`, so the caller can use that node.
+    /// Render a node-less mismatch value; arrays return `None` for node fallback.
     pub fn diagnostic_value(&mut self, value: P::Value) -> Option<String> {
         if let Some(structural) = value.as_enum() {
             return match structural {

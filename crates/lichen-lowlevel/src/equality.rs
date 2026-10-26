@@ -1059,8 +1059,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Compare two functions by their parameter and return cells. `None` means
-    /// that at least one side has no readable signature.
+    /// Compare function parameter and return cells; `None` means no signature.
     fn unify_function_signatures(
         &mut self,
         a: AnyFunctionId,

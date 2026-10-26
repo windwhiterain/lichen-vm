@@ -200,12 +200,6 @@ where
     /// the template keeps its own holes and one element's match never reaches
     /// the next. The clone's internal sharing survives: a template such as
     /// `('a, 'a)` stays one position inside one clone.
-    ///
-    /// The result's value is `[T's element template, the elements…]`, so a read
-    /// of element `i` is the value's slot `i + 1`. The first slot is the element
-    /// template, so it carries the template marker: the slot holds the layout and
-    /// not a user element, and a key comparison reads its presence, never its
-    /// value.
     pub(super) fn check_array_inst(
         &mut self,
         e: ExprId,

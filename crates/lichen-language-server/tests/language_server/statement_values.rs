@@ -92,8 +92,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
-    // Native kernel calls are deferred at check time: they report no concrete
-    // value, and their call-result type cells are still open.
+    // Deferred native kernels have no value and open call-result type cells.
     for sv in vals {
         assert_eq!(sv.ty, "?a", "the native result type is open: {sv:?}");
         assert_eq!(sv.value, None, "the native result is deferred: {sv:?}");
