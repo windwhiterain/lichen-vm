@@ -1387,7 +1387,7 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     );
     // a different source occurrence is a different nominal type
     let d = diags(
-        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; A := _x => [s1, 2]; A[s1{.f 1, .g 2}, s2{.f 1, .g 2}]",
+        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; A := _x => [s1, 2]; A[(_x => s1){.f 1, .g 2}, (_x => s2){.f 1, .g 2}]",
     );
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -1978,7 +1978,7 @@ fn an_unannotated_call_runs_and_its_type_is_derived() {
 
 #[test]
 fn a_heterogeneous_array_is_rejected() {
-    let d = diags("A := _x => [@any, 1]\nA[1, x => x]");
+    let d = diags("A := _x => [@any, 2]\nA[1, x => x]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
@@ -2013,7 +2013,7 @@ fn an_out_of_bounds_index_is_rejected() {
         Some(LangValue::LowValue(LowValue::USize(3))),
         "the length"
     );
-    assert_eq!(d[0].span, Some((1, 28)), "the index's span");
+    assert_eq!(d[0].span, Some((2, 14)), "the index's span");
 }
 
 // --- the frontend -----------------------------------------------------------
