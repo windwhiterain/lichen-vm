@@ -90,7 +90,7 @@ languages = ["Lichen"]
 # touching `tree-sitter-lichen/grammar.js`, `tree-sitter-lichen/queries/` or
 # `lichen-language-zed/languages/lichen/`, so it must be bumped in the same
 # commit as any grammar, query or highlight change.  The current rev is the
-# value-template syntax migration and its synchronized highlight queries.
+# constructor-template syntax migration and its synchronized highlight queries.
 #
 # The `repository` is the public HTTPS remote and `rev` is a commit pushed to
 # `origin/dev`, so a registry install (or any machine without a local clone) can
@@ -99,5 +99,5 @@ languages = ["Lichen"]
 # same `rev`.
 [grammars.lichen]
 repository = "https://github.com/windwhiterain/lichen-vm"
-rev = "feb292840d805b0711468f32b06d38eb6442f5e7"
+rev = "b5de498c280fbdfea6697d726614ebffcaffa8f8"
 path = "tree-sitter-lichen"
