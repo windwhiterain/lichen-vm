@@ -9,9 +9,9 @@ use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelMark, KernelRoles, KernelShape,
-    LaneHeight, LaneWidth, LaunchSet, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice,
-    Space, Staging, TargetFacts,
+    IntWidth, KernelBody, KernelFragment, KernelMark, KernelRoles, KernelShape, LaneHeight,
+    LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging,
+    TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -215,7 +215,7 @@ fn a_declared_plan_stages_the_reduction() {
     let (reduction, staged_name) = declared_reduction_and_name();
     let lengths = [LANES as u64, (LANES * 3) as u64, (LANES * 4) as u64];
     for &count in &lengths {
-        let data = triangle_data(count);
+        let _data = triangle_data(count);
         let folding = Folding::new(
             &reduction,
             Element::Buffer { position: 0 },

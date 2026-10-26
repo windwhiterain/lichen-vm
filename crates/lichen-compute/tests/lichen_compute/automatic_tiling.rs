@@ -196,7 +196,7 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
 
     // The pass, installed from the program's own module, and the same program again.
     install_tiling(&module);
-    let (tiled_module, tiled_value, _root) = common::run(&source);
+    let (tiled_module, _tiled_value, _root) = common::run(&source);
     assert!(
         reports_a_tiling(&pass_report(&tiled_module)),
         "the pass reports the node it tiled and the algebra its own marks declared: {:?}",
@@ -349,7 +349,7 @@ fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
 
     // The floor, installed from that program's own module, and the same program again.
     install_floor(&module);
-    let (floored_module, floored_value, _root) = common::run(&source);
+    let (floored_module, _floored_value, _root) = common::run(&source);
     let report = pass_report(&floored_module);
     println!("the floor's run reported:\n  {}", report.join("\n  "));
 

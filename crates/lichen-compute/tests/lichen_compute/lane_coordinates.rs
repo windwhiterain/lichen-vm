@@ -6,8 +6,6 @@
 //! names, so a launch that declares a third one answers the same whichever of the two
 //! the body happens to read for itself.
 
-use super::common;
-
 use lichen_compute::language::new_store;
 
 /// Six lanes over three columns, each writing `source[r * k.stride + c]`.

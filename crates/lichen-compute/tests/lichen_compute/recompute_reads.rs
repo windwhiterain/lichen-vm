@@ -448,7 +448,7 @@ fn the_merge_copies_the_producer_cone_once_per_read_at_that_read_s_address() {
 /// composed body says which node the device dispatched. `DEFINED` is how many leading elements
 /// both runs define; a test with no device returns without asserting.
 fn device_triple() {
-    let name = std::thread::current()
+    let _name = std::thread::current()
         .name()
         .unwrap_or("recompute_reads")
         .to_string();

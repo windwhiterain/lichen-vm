@@ -12,7 +12,7 @@ use lichen_lowlevel::{
 };
 use lichen_utils::extend::AsEnum;
 
-use lichen_compute::{ComputeOperator, ComputeValue};
+use lichen_compute::ComputeOperator;
 
 /// Compile the way a host does — imports through a `PackageStore` — and return
 /// the **module**, not a rendered value.

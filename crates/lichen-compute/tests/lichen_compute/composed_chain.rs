@@ -6,11 +6,8 @@ use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_compute::language::new_store;
 use lichen_compute::{ComputeValue, compute::graph};
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
-use lichen_kernel_ir::{
-    BufferSlot, KernelBody, KernelFragment, KernelInstr, Plan, ScalarClass, ScalarData, ValueDef,
-    compose,
-};
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
+use lichen_kernel_ir::{KernelBody, KernelFragment, KernelInstr, Plan, ValueDef, compose};
 use lichen_lowlevel::{AnyNodeId, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
@@ -22,7 +19,7 @@ const ABSORBED: u32 = 1;
 
 #[test]
 fn the_composed_chain_records_the_merged_body() {
-    let (instances, recorded) = compile(SOURCE).expect("the chain compiles");
+    let (instances, _recorded) = compile(SOURCE).expect("the chain compiles");
     let producer = instances[0].fragment.clone();
     let consumer = instances[1].fragment.clone();
 

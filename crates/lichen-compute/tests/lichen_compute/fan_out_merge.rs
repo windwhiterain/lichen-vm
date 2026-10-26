@@ -14,9 +14,7 @@ use lichen_compute::fusion_claim::{
 use lichen_compute::fusion_file::{Budget, FusionPlan, Strategy};
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_compute::placement_pack::{PlacementPack, read_placement_pack};
-use lichen_compute::region_merge::{
-    install_region_merge_with_plan, region_merge_pass_with_packs, region_merge_pass_with_plan,
-};
+use lichen_compute::region_merge::{install_region_merge_with_plan, region_merge_pass_with_plan};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, compose_fan_out,
@@ -484,7 +482,7 @@ fn a_pack_naming_the_fan_out_merges_all_three_nodes_into_one() {
 /// fused diamond computes the same numbers unfused, so only an answer that moves with the composed
 /// body says which node the device dispatched. One consumer's constant moves alone, so one returned
 /// buffer moves alone and the second ordinal is read rather than inferred from the first.
-fn device_triple(test: &str) {
+fn device_triple(_test: &str) {
     let (stub, _guard) = common::stub();
     clear_graph_pass();
     // A stub computes nothing, so each leg proves its **dispatch record**.

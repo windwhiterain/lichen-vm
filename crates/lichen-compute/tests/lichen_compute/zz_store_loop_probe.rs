@@ -7,8 +7,6 @@
 //! the process and loses the tail of its output. Nothing here asserts: the run's own limits
 //! are the reading.
 
-use lichen_compute::language::new_store;
-
 use super::common;
 
 /// Append one line to the probe's log; a fresh handle per line flushes it.
@@ -53,6 +51,6 @@ out := (compute.plrun k (compute.A{.n 69, .I In{.a 0}}) : Struct)
     mark("first program dropped");
     let (_stub, _guard) = common::stub();
     mark("cpu start");
-    let (cpu_module, cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
+    let (_cpu_module, _cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
     mark("cpu done");
 }

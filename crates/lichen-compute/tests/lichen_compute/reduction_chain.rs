@@ -4,18 +4,15 @@
 use super::common;
 
 use super::common::LANES;
-use lichen_compute::compute::{
-    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, write_fused_kernel,
-};
+use lichen_compute::compute::{FusedKernel, write_fused_kernel};
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id, marked_value};
 use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Expr, Reduction};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
-    LaneWidth, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging, TargetFacts,
-    fragment_digest,
+    IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth, Plan,
+    ScalarClass, Slice, Space, Staging, TargetFacts, fragment_digest,
 };
 use lichen_lowlevel::Module;
 
@@ -304,7 +301,7 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
     fragment
         .check_plan(&plan)
         .unwrap_or_else(|refusal| panic!("the fragment stages what the plan says: {refusal}"));
-    let artifact = write_fused_kernel(&FusedKernel {
+    let _artifact = write_fused_kernel(&FusedKernel {
         fragment,
         claim: None,
         plan: plan.clone(),

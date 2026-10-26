@@ -13,7 +13,6 @@ use lichen_compute::language::LangProgram;
 use lichen_highlevel::program::TypeOperator;
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Operation,
-    Selection,
 };
 use lichen_utils::extend::AsEnum;
 

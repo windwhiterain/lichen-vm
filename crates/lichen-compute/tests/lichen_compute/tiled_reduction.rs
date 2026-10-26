@@ -9,8 +9,8 @@ use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding, TileRefusal};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
-    LaneWidth, LaunchSet, ScalarClass, ScalarData, Slice, Space, TargetFacts,
+    IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth,
+    ScalarClass, ScalarData, Slice, Space, TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -242,7 +242,7 @@ fn a_tiled_reduction_tiles_the_declared_sum() {
 fn a_second_combine_tiles_through_the_same_path() {
     let (_stub, _guard) = common::stub();
     // **The data is bounded**: a power of two at an even index, one at an odd one.
-    let data: Vec<i64> = (0..BOUND)
+    let _data: Vec<i64> = (0..BOUND)
         .map(|position| if position % 2 == 0 { 2 } else { 1 })
         .collect();
     for steps in [1u64, 3] {
@@ -279,7 +279,7 @@ fn a_second_combine_tiles_through_the_same_path() {
                 .body
                 .validate()
                 .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
-            let tiled_fragment = body_fragment(tiled.into_body(), true);
+            let _tiled_fragment = body_fragment(tiled.into_body(), true);
             // **The launch covers the elements the fold reads**, not the lanes it runs.
         }
     }

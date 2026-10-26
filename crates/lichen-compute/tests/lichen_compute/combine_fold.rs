@@ -17,7 +17,7 @@ const COUNT: usize = 3 * LANES as usize;
 /// `(+ t (* d d))`, so its **top-level operator** is still `+` while its datum is not the datum.
 /// The parameter carries no `.out` group and the data is a fill kernel's output.
 fn squares() -> String {
-    let mut source = String::from(
+    let source = String::from(
         r#"
 ---
   compute = import "compute.lichen"
