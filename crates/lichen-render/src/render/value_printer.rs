@@ -297,7 +297,7 @@ where
         if marker == P::Value::function_type_marker() {
             if shape.len() == 2 {
                 return Some(format!(
-                    "{} -> {}",
+                    "{} => {}",
                     self.printer.any_node(shape[0].node),
                     self.printer.any_node(shape[1].node)
                 ));

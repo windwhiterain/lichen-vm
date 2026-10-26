@@ -187,7 +187,7 @@ where
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)
         {
-            return format!("{dom} -> {cod}");
+            return format!("{dom} => {cod}");
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
@@ -209,7 +209,7 @@ where
                         && s.len() >= 2
                     {
                         return format!(
-                            "{} -> {}",
+                            "{} => {}",
                             self.any_node(s[0].node),
                             self.any_node(s[1].node)
                         );
@@ -251,7 +251,7 @@ where
         // the shape; otherwise it reads raw.
         if elements.len() >= 2 && self.is_arrow(node) {
             return format!(
-                "{} -> {}",
+                "{} => {}",
                 self.any_node(elements[0].node),
                 self.any_node(elements[1].node)
             );
@@ -544,7 +544,7 @@ where
                 if let Some(fid) = self.static_function_type_function(sref)
                     && let Some((dom, cod)) = self.function_signature(fid)
                 {
-                    format!("{dom} -> {cod}")
+                    format!("{dom} => {cod}")
                 } else {
                     self.static_elements(sref, items, visiting)
                 }
@@ -592,7 +592,7 @@ where
                         && s.len() >= 2
                     {
                         return format!(
-                            "{} -> {}",
+                            "{} => {}",
                             self.static_any(s[0].node, visiting),
                             self.static_any(s[1].node, visiting)
                         );
