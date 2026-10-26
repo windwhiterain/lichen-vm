@@ -2151,8 +2151,7 @@ where
     items.get(element_base_of::<P>(module, value, ty)..)
 }
 
-/// The **operands** a compound argument contributes: each element's own node
-/// when it computes one, and the value it holds otherwise.
+/// The **operands** a compound argument contributes: each call, or value.
 ///
 /// # Invariant
 /// A field's value half is the value the field holds, and a call's **compound**

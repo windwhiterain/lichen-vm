@@ -405,10 +405,7 @@ where
                                 self.origins.remove(&node);
                                 value
                             }
-                            // **A node with an operation is its own definition**:
-                            // the operation is the definition, so the definition's
-                            // walk answers it. The refusal below is for a node
-                            // with neither a value nor an operation.
+                            // **A node with an operation is its own definition.**
                             None => self.definition(node)?,
                         }
                     }
@@ -1059,8 +1056,7 @@ where
         }
     }
 
-    /// Native operands as values: a struct argument contributes its fields,
-    /// while an ordinary operand array contributes its elements.
+    /// Native operands as values: struct fields or array elements.
     ///
     /// # Invariant
     /// A field that **computes** contributes the call that computes it: a call's
@@ -1326,7 +1322,11 @@ where
     /// function: the clone's body holds the frozen operators by reference — a
     /// residual operation keeps its frozen reference — so the operator is read
     /// in the module that owns it, not in the clone.
-    fn dynamic_callee(&self, callee: NodeId, type_slot: Option<AnyNodeId>) -> Option<AnyFunctionId> {
+    fn dynamic_callee(
+        &self,
+        callee: NodeId,
+        type_slot: Option<AnyNodeId>,
+    ) -> Option<AnyFunctionId> {
         if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(callee))
             && let Some(LowValue::Function(AnyFunctionId::Dynamic(function))) =
                 AsEnum::<LowValue>::as_enum(&value)
@@ -1359,8 +1359,8 @@ where
         let mut found = None;
         // Each entry says whether the node was reached as a read's position.
         let mut pending = vec![(function.r#return, false)];
-        // Each node's own flag: a node first met as a position and later met
-        // as a computation is a computation, so the walk visits it twice.
+        // A node first met as a position and later as a computation is a
+        // computation, so the walk visits it twice.
         let mut seen: HashMap<NodeId, bool> = HashMap::new();
         // The nodes already counted, so a revisit does not count twice.
         let mut counted: HashSet<NodeId> = HashSet::new();
@@ -1374,10 +1374,7 @@ where
             if let Some(operation) = self.module.node_operation(node) {
                 let low = AsEnum::<LowOperator>::as_enum(&operation.operator);
                 let read = matches!(low, Some(LowOperator::Index | LowOperator::TableGet));
-                if !position
-                    && low.is_none()
-                    && operation.operand.is_some()
-                    && counted.insert(node)
+                if !position && low.is_none() && operation.operand.is_some() && counted.insert(node)
                 {
                     if found.is_some() {
                         return None;
@@ -1992,9 +1989,7 @@ where
         let Some(target) = arguments.first() else {
             return Err("an index read is missing its target".into());
         };
-        // **A read of a call's result names the call**: the result is an expr and
-        // the read is its value half, so the computation the read names is the
-        // call (`docs/notes/value-templates.md`).
+        // **A read of a call's result names the call** (`docs/notes/value-templates.md`).
         if let Some(call) = target.dynamic()
             && let Some(operation) = self.module.node_operation(call)
             && matches!(

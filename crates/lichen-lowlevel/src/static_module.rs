@@ -93,21 +93,12 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// Answered from the artifact's structure, never from a value: the body is
-    /// reachable by [`StaticFunctionRef`] whether or not anything evaluated —
-    /// what a routed apply needs when its argument is a read the kernel emits.
-    /// `None` for a body that computes no compute operator or more than one.
-    /// Routing is the prelude's: docs/notes/operator-polymorphism.md.
+    /// reachable by [`StaticFunctionRef`] whether or not anything evaluated.
+    /// `None` for a body that computes no operator or more than one.
     ///
-    /// # Invariant
-    /// **A read's position is a subscript, not a computation.** The position an
-    /// `Index` or a `TableGet` reads at is computed by an operator whenever it
-    /// is not a literal — a struct field read whose name table is undecided
-    /// computes `TableGet(names, name) + <field base>`. That arithmetic is
-    /// *addressing*, so it is not the operator the body computes: the compute
-    /// module's own wrappers (`read`, `write`, `buf`, `collect`) each carry
-    /// such an addition beside the one operator they compute, and counting it
-    /// left them with no answer at all
-    /// (`docs/notes/loop-conversion.md` §8.5).
+    /// **A read's position is a subscript, not a computation**: a field read
+    /// computes `TableGet(names, name) + <base>`, not the body's operator
+    /// (`docs/notes/loop-conversion.md`).
     pub fn static_function_compute_operator(
         &self,
         function: StaticFunctionRef,
@@ -118,8 +109,8 @@ impl<P: Program> Module<P> {
         let mut found: Option<(P::Operator, LocalNodeId)> = None;
         // Each entry says whether the node was reached as a read's position.
         let mut pending = vec![(function.r#return, false)];
-        // Each node's own flag: a node first met as a position and later met
-        // as a computation is a computation, so the walk visits it twice.
+        // A node first met as a position and later as a computation is a
+        // computation, so the walk visits it twice.
         let mut seen: HashMap<LocalNodeId, bool> = HashMap::new();
         // The nodes already counted, so a revisit does not count twice.
         let mut counted: HashSet<LocalNodeId> = HashSet::new();
