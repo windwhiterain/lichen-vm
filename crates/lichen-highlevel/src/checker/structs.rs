@@ -577,28 +577,13 @@ where
         arg_names: &[Option<&'static str>],
     ) -> NodeId {
         let placeholder = self.placeholder_callee_expr(template);
-        let constructor = placeholder
-            .map(|placeholder| self.placeholder_constructors.contains(&placeholder))
-            .unwrap_or(false);
-        if constructor || placeholder.is_none() {
-            self.check_expr(template);
-        } else if let Some(placeholder) = placeholder {
-            self.check_expr(placeholder);
-        }
+        let (subject, apply_template) = self.template_subject(template, placeholder);
+        self.check_expr(subject);
         self.check_expr(value);
-        let (template_value, template_ty) = if constructor {
+        let (template_value, template_ty) = if apply_template {
             (self.value_of(template), self.state[template].ty.unwrap())
         } else {
-            match placeholder {
-                Some(placeholder) => (
-                    self.value_of(placeholder),
-                    self.state[placeholder].ty.unwrap(),
-                ),
-                None => {
-                    let template_value = self.value_of(template);
-                    (template_value, self.state[template].ty.unwrap())
-                }
-            }
+            (self.value_of(subject), self.state[subject].ty.unwrap())
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
