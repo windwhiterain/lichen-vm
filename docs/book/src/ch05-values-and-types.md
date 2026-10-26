@@ -76,7 +76,7 @@ tuple's type is `Tuple`, every array's is `Array`, and every struct's is
 
 ```lichen
 type_of := x => {t := _; x: t; t}
-(type_of (1, 2), type_of [@any : Int, 2][1, 2], type_of {.x @any : Int})
+(type_of (1, 2), type_of [@any : Int, 2], type_of {.x @any : Int})
 ```
 
 ```text
@@ -84,7 +84,7 @@ type_of := x => {t := _; x: t; t}
 ```
 
 So where does the *shape* live? In the **value**. A tuple's elements are
-the value's own elements; an array's template and elements are the
+the value's own elements; an array's requirement and elements are the
 value's own slots; a struct's field names and values are the value's own
 header and fields. The type says which layout the value has; the value
 says what is in it. That is why a read of a compound takes its
@@ -92,12 +92,16 @@ requirement from the value's layout rather than from a type expression
 (Chapter 7), and why two tuples of different shapes have the *same* type
 and are told apart by their values.
 
-A **template** is the other half of the story: a value that *states* what
-a compound must look like. A tuple template is written like a tuple of
-requirements, `(@any : Int, @any : Int)`; an array template is
-`[requirement, length]`; a struct template is `{.name requirement, …}`.
-A template is matched with `<:` — the actual is unified with a fresh
-clone of the template — and Chapter 7 is about the three forms.
+A **requirement** is the other half of the story: a slot that states what
+one position of a compound must hold. A tuple's requirements are written
+as a tuple of them, `(@any : Int, @any : Int)`; an array's is a requirement
+and a length, `[requirement, length]`; a struct's is
+`{.name requirement, …}`. A **constructor** is a function that returns a
+fresh requirement when it is applied — `T := _x => (@any : Int, @any : Int)`
+— and the match operator `<:` applies it exactly once and unifies the
+actual with what comes back: `actual <: T` is `actual = T _`. Each
+application therefore yields fresh holes, and the constructor keeps its own.
+Chapter 7 is about the three forms.
 
 ## Unification is how the type is found
 
@@ -253,7 +257,7 @@ this chapter introduced — the placeholder and the annotation:
 
 ```lichen
 type_of := x => {t := _; x: t; t}
-(type_of (1), type_of Int, type_of [@any : Int, 2][1, 2])
+(type_of (1), type_of Int, type_of [@any : Int, 2])
 ```
 
 ```text
@@ -314,9 +318,11 @@ expr.
 - A type is a value; the atom types have type `Type`.
 - A compound's type is one of three shared layout types — `Tuple`,
   `Array`, `Struct` — and the *value* owns the layout: the elements, the
-  array's template, the struct's field names.
-- A **template** is a value that states what a compound must be; `<:`
-  matches an actual against a fresh clone of a template.
+  array's requirement, the struct's field names.
+- A **requirement** states what one position of a compound must be, and a
+  **constructor** is a function that returns a fresh requirement when
+  applied; `<:` applies the constructor once and unifies the actual with the
+  result, while plain `=` applies nothing.
 - An expression's type is found by unification, not declared and checked.
 - An undecided type is an open cell named `?a`; the same name means one
   cell. `_` is a placeholder. An answer whose type stays open prints that

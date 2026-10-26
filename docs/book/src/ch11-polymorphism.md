@@ -7,7 +7,7 @@ annotation — the **refinement** — that writes such a contract.
 
 ## Every application is fresh
 
-A function value is a template. Applying it instantiates the parameter and
+Applying a function instantiates its parameter and
 the return type afresh, so one binding can serve different types:
 
 ```lichen
@@ -25,9 +25,9 @@ generalize/instantiate form, because the answer is a fresh cell at each
 call. Chapter 5's `type_of` is the same idea in a nicer costume — one
 function, used at `Int`, at `Type`, and at `Array`.
 
-A template is only as open as its definition left it. A body that
-constrains its parameter decides the template there, and then every call
-must meet it:
+A function is only as open as its definition left it. A body that
+constrains its parameter decides it there, and then every call must meet
+it:
 
 ```lichen
 inc := x => x + 1
@@ -169,12 +169,13 @@ This is where a **class contract** belongs: the function accepts any
 member of a set of types, and the set is the interface.
 
 A refinement written on a type survives wherever a type expression is
-consumed, so it can ride on one requirement of a compound **template**:
+consumed, so it can ride on one requirement of a compound's **constructor**:
 
 ```lichen
 Num := set(Int, Float)
 in_num := t => t @in Num
-f := (p <: (@any : (_ ! in_num), @any : (_ ! in_num))) => p
+Pair := _x => (@any : (_ ! in_num), @any : (_ ! in_num))
+f := (p <: Pair) => p
 f (1, 2.5)
 ```
 
@@ -185,8 +186,8 @@ f (1, 2.5)
 The requirement `@any : (_ ! in_num)` asks for any value whose **type** is
 a member of `Num`, so the two positions accept an `Int` and a `Float`
 together. What the match compares is the shape — the requirement's own
-cells — so a template states a contract without becoming a second check on
-every use; the class *refusal* is the prelude's operators' business, and
+cells — so a constructor states a contract without becoming a second check
+on every use; the class *refusal* is the prelude's operators' business, and
 it is shown below.
 
 A refinement does not change the value or its type. It is a predicate
@@ -203,8 +204,12 @@ binds `add`, `sub`, `mul`, `div`, `less`, `greater`, `less_or_equal` and
 refined by the class:
 
 ```lichen
-add := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) + operands(1) }
+let Pair := _x => (_ ! in_num, _ ! in_num)
+add := operands => { operands <: Pair; operands(0) + operands(1) }
 ```
+
+`Pair` is a constructor, and `operands <: Pair` applies it once: the two
+positions it returns are the requirements the operands must meet.
 
 That one declaration is the whole contract, and it is checked three ways.
 
@@ -213,10 +218,10 @@ diagnostics the operator reports, the class refusal reads:
 
 ```text
 error: does not satisfy {Int, Float}
-  --> …/builtin/core.lichen:3:60
+  --> …/builtin/core.lichen:4:40
    |
- 3 | add := operands => { operands <: (_ ! in_num, _ ! in_num); operands(0) + operands(1) }
-   |                                                            ^
+ 4 | add := operands => { operands <: Pair; operands(0) + operands(1) }
+   |                                        ^
 note: the failing use is here
   --> 1:5
    |
@@ -252,7 +257,7 @@ same way.
 
 - Every application instantiates its function's cells afresh: one binding
   can be used at many types, with no annotation.
-- A template is only as open as its definition left it; `x + 1` decides
+- A function is only as open as its definition left it; `x + 1` decides
   `Int`, so `inc 2.5` is refused.
 - The arithmetic operators are polymorphic over `{Int, Float}` and refuse a
   mixture.
@@ -277,5 +282,5 @@ same way.
    while `20` does not.
 5. Write `add (1, 2)`, `add (1.5, 2.5)`, `add (1, 1.5)`, and
    `add (1, 2, 3)` and explain each answer.
-6. Refine one requirement of a two-element tuple template and check which
+6. Refine one requirement of a two-element tuple constructor and check which
    calls hold.

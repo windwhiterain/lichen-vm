@@ -367,6 +367,14 @@ There is no function-type level any more. A function's type is the
 function itself, and a signature is written with `=>`; Chapter 4 is about
 what that means.
 
+The two unify operators differ in one thing: `=` asks two expressions to
+agree and applies nothing, while `<:` asks an actual to agree with a
+**constructor** and applies that constructor exactly once. So
+`actual <: S` is the same as `actual = S _`, and `actual <: S _` writes
+the application out twice — the constructor applied, and then its result
+applied again — which is a different program. Chapter 7 is about the
+constructors themselves.
+
 A few readings of the table are worth checking against the compiler:
 
 ```lichen
@@ -475,7 +483,7 @@ the container's type` — because a read states its requirement from the
 container's type (Chapter 4's `gcd` is the same rule). The annotation
 states the container's layout, and the answer is `3: Int`.
 
-A tuple parameter may instead be given a **template**, which states what
+A tuple parameter may instead be given a **constructor**, which states what
 each position must be; Chapter 7 shows that form, and Chapter 4's `gcd`
 is one.
 

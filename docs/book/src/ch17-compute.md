@@ -20,47 +20,48 @@ the result back:
 ---
   compute = import "compute.lichen"
 ---
-In  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Par := {.n @any : Int, .in In}
+In  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Par := _x => {.n @any : Int, .in In}
 double_raw := (k <: Par) => {
   i := compute.range k.n
-  x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
-  y := compute.buf ((compute.BufParam _){.type Float, .length k.n})
-  (Out{.y (compute.write ((compute.Write _){.to y, .at i, .value (x * 2.0 ~ "element")}))})
+  x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
+  y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  (Out{.y (compute.write (compute.Write{.to y, .at i, .value (x * 2.0 ~ "element")}))})
 }
 double := compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu" Out
-Fill := {.n @any : Int}
+Fill := _x => {.n @any : Int}
 fill_raw := (c <: Fill) => {
   i := compute.range c.n
-  d := compute.buf ((compute.BufParam _){.type Float, .length 3})
+  d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := 1.0 + int2float i
-  (In{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
+  (In{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
 fill := compute.parallel fill_raw "cpu" In
 b := (compute.plrun fill (Fill{.n 3}) : Struct).x
-out := (compute.plrun double ((compute.A In){.n 3, .I (In{.x b})}) : Struct)
+out := (compute.plrun double (compute.A In{.n 3, .I (In{.x b})}) : Struct)
 compute.collect out.y : Array
 ```
 
 There is a lot in that program, so let us take it apart.
 
-**The data is buffers, and the shape is a struct template.** A buffer's
+**The data is buffers, and the shape is a struct constructor.** A buffer's
 type states its element type and its length —
-`compute.Buf ((compute.BufParam _){.type Float, .length 3})` is a buffer
-of three floats. The kernel's input and output are struct **templates** —
-`In`, `Out` — and a kernel's parameter is a template the kernel is
-matched against, `Par := {.n @any : Int, .in In}`. There is no output
+`compute.Buf (compute.BufParam{.type Float, .length 3})` is a buffer
+of three floats. The kernel's input and output are struct **constructors**
+— `In`, `Out` — and a kernel's parameter is a constructor the kernel is
+matched against, `Par := _x => {.n @any : Int, .in In}`. There is no output
 group in the parameter: a kernel's **result** is its codomain, `Out`, and
 the body hands that result back (below).
 
 **The body runs once per lane.** `(k <: Par)` is the kernel's parameter,
-constrained against the template. The first line, `i := compute.range
-k.n`, is the lane's own index — the kernel is launched over `n` lanes, and
-`compute.range` answers which one this invocation is. The rest of the
-body reads its input at `i`, computes, and writes its output at `i`. That
-shape — one lane per element, read at the lane index, write at the lane
-index — is the compute language's model.
+matched against the constructor: the match applies `Par` once and unifies
+the parameter with the requirement it returns. The first line, `i :=
+compute.range k.n`, is the lane's own index — the kernel is launched over
+`n` lanes, and `compute.range` answers which one this invocation is. The
+rest of the body reads its input at `i`, computes, and writes its output
+at `i`. That shape — one lane per element, read at the lane index, write
+at the lane index — is the compute language's model.
 
 **Reads and writes name their buffer and position.** `compute.read` takes
 a `Read` value built with `{.from buf, .at i}`, and the call states its
@@ -73,7 +74,7 @@ the read to take). `compute.write` takes a `Write` built with
 own type parameters (Chapter 5's `_`), which the checker decides.
 
 **A kernel declares the buffers it writes.** The body names the buffer it
-writes — `y := compute.buf ((compute.BufParam _){.type Float, .length
+writes — `y := compute.buf (compute.BufParam{.type Float, .length
 k.n})` — and a write's **result** is that buffer's new version. So the
 body ends by building the result struct, `(Out{.y (compute.write …)})`:
 the value that flows out *is* the write's result, and there is no effect
@@ -105,7 +106,7 @@ value leaves the compute layer — and the annotation is what decides the
 resulting array's type.
 
 **The backend is a string.** `compute.parallel … "cpu" Out` binds the
-kernel to the CPU path and names its output struct template. The output
+kernel to the CPU path and names its output struct constructor. The output
 type is passed rather than read off the kernel's fields: those fields hold
 type values, and a read takes its type from a value that has one (Chapter
 4's rule), so the caller states it. The other backend is `"gpu"`; the same
@@ -116,9 +117,23 @@ suite is device-independent; the device legs are measured separately
 
 ### The parallel path is under repair
 
-**This program does not run today.** The type checking is complete — the
-program above is well typed — but the *lowering* of a parallel kernel that
-carries buffers and structs is refused, with this diagnostic:
+**This program does not run today.** The compute layer is mid-migration: the
+constructor form above is the shape the language states, but the compute
+package's own surface has not caught up with it, and the compiler refuses
+the program at the kernel's parameter:
+
+```text
+error: expected Struct, found ?a => Struct
+  --> 9:42
+   |
+ 9 |   x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
+   |                                          ^
+```
+
+A kernel's parameter carries the input's **type** in the new model, and the
+kernel body reads the buffer through that type rather than through a struct
+value; the *lowering* of a parallel kernel that carries buffers and structs
+is refused as well:
 
 ```text
 error: compute.parallel: a definition cycle: NodeId(2211v1) is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)
@@ -220,7 +235,7 @@ A few that shape what a kernel can look like:
 
 - **No two-dimensional arrays.** A matrix is a flat array with index
   arithmetic in the body; the examples spell `A[r * k + c]` by hand.
-- **No runtime-length arrays.** An array's length is in its **template**
+- **No runtime-length arrays.** An array's length is in its **requirement**
   (Chapter 7); a buffer's length is the launch's extent, and the host
   writes it with a kernel.
 - **One lane per element.** A kernel writes one position per lane; a
@@ -243,18 +258,20 @@ was measured and what is next.
   no file.
 - A kernel is a body of one lane, launched over an extent, reading and
   writing buffers at its lane's index.
-- A kernel's parameter is matched against a struct **template** —
-  `Par := {.n @any : Int, .in In}` — and `compute.Buf` is a buffer whose
-  type states its element type and its length; `compute.range` is the lane
+- A kernel's parameter is matched against a struct **constructor** —
+  `Par := _x => {.n @any : Int, .in In}` — and `compute.Buf` is a buffer
+  whose type states its element type and its length; `compute.range` is the
+  lane
   index; `compute.read`/`compute.write` are the buffer reads and writes,
   and a read names its element type at the call site; `compute.buf`
   declares a buffer, `compute.parallel` builds a kernel and `compute.plrun`
   runs it; `compute.collect` reads a buffer back as an array, and it is the
   only way out.
-- **The parallel path is under repair**: a kernel that carries buffers and
-  structs is refused by the lowering with a *definition cycle* diagnostic,
-  and the repository's buffer-valued examples report the same. The book's
-  programs state their semantics; they do not print answers.
+- **The parallel path is under repair**: the compute surface has not caught
+  up with the constructor model, and a kernel that carries buffers and
+  structs is refused as well — by the lowering, with a *definition cycle*
+  diagnostic, and the repository's buffer-valued examples report the same.
+  The book's programs state their semantics; they do not print answers.
 - The backend is a string, `"cpu"` or `"gpu"`, and both run the same kernel.
 - `compute.jit`/`compute.launch` is the scalar path, and it runs.
 - The graph path records a chain and lets the fusion pass merge regions from

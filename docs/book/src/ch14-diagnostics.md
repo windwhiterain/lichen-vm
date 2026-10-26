@@ -46,7 +46,7 @@ error: unexpected character '@'
    |
  1 | @
    | ^
-error: expected a separator, 'return', 'pub', '@loop', '@cache', 'let', a name, '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program
+error: expected a separator, 'return', 'pub', '@loop', '@cache', 'let', a name, '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program
   --> 2:1
    |
  2 |
@@ -68,7 +68,7 @@ next property.
 ```
 
 ```text
-error: expected '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', or an expression, found a separator
+error: expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', or an expression, found a separator
   --> 1:4
    |
  1 | 3 :
@@ -287,20 +287,17 @@ that could not be computed.
 ## One honest limit
 
 Almost every diagnostic has a position, but not all of them do. When the
-failing expression sits inside a desugared branch — an `if`'s untaken arm,
-for example — the position may not survive:
-
-```lichen
-if 1 == 1 then 1 else ([@any : Int, 2][1, 2])[5]
-```
+failing check sits inside a part the compiler *built* rather than read —
+the elements of an array instance, for example — the position may not
+survive:
 
 ```text
 error: the build failed, but the failing check could not be attributed to an expression in this source
 ```
 
-The program is still refused — correctly, because the index is out of
-bounds — but the message says it could not be placed rather than guessing
-a position. This is the compiler's honest failure, not its normal one.
+The program is still refused — correctly, because the check inside it failed
+— but the message says it could not be placed rather than guessing a
+position. This is the compiler's honest failure, not its normal one.
 
 ## Summary
 

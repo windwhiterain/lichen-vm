@@ -77,11 +77,11 @@ Int => Int: Int => Int
 
 A whole signature is stated with a **function template**: a parameter with
 its type, `=>`, and the result. The template is written where a function
-would be, and it is matched with `<:`, the template-match operator:
+would be, and it is unified with plain `=`:
 
 ```lichen
 inc := (x : Int) => x + 1
-inc <: (x : Int => _: Int)
+inc = (x : Int => _: Int)
 ```
 
 ```text
@@ -89,11 +89,16 @@ Int => Int: Int => Int
 ```
 
 The template `(x : Int => _: Int)` says: a function whose parameter is
-annotated `Int`, and whose result is a placeholder of type `Int`. The
-`<:` asks the actual to match that template — and the actual's own body
+annotated `Int`, and whose result is a placeholder of type `Int`. The `=`
+asks the actual's **signature** to agree with it — and the actual's own body
 is kept; only its signature is constrained. There is no separate
 function-type syntax, and no thin arrow: `->` is not a token in the
-language. Chapter 7 and Chapter 12 show the template form for the other
+language.
+
+Plain `=` is the spelling because `=` applies nothing. The match operator
+`<:` applies its right hand side exactly once, and a function template is
+not a constructor to apply: it states a signature, not a requirement to be
+produced. Chapter 7 and Chapter 12 show the constructor form for the other
 compound layouts.
 
 A function's parameter is instantiated fresh at every application. That
@@ -121,24 +126,20 @@ the function is returned from that block, it keeps them:
 a := 1
 f1 := x => {
     b := 2
-    f2 := y => [@any : Int, 4][a, b, x, y]
+    f2 := y => (a, b, x, y)
     f2
 }
 f1 3 4
 ```
 
 ```text
-[1, 2, 3, 4]: Array
+(1, 2, 3, 4): Tuple
 ```
 
 `f1 3` runs the block: it binds `b := 2`, builds `f2`, and returns it.
 `f2`'s body reads `a` from the enclosing program, `b` from the block, and
 `x` from `f1`'s parameter; the call `f1 3 4` supplies `y`. The result is
-the four captured values in the order the array lists them.
-
-The array is written in two parts: `[@any : Int, 4]` is the **template** —
-four elements, each an `Int` — and the bracket after it is the
-**instance**, the four values that fill it. Chapter 7 is about the two.
+the four captured values in the order the tuple lists them.
 
 Every call of `f1` builds its own environment, so the closures it returns
 are independent. This is ordinary partial application: applying one
@@ -248,12 +249,13 @@ error: this tuple read cannot be checked: the container's type is not decided he
 
 A read states its requirement from the type of its container, and `p`
 has none here: nothing in the program has said what its elements are,
-and a recursive function's type is the function itself. A **template**
-states the shape — here a tuple template whose two positions require an
-`Int` — and the result follows from it:
+and a recursive function's type is the function itself. A
+**constructor** states the shape — here a tuple constructor whose two
+positions require an `Int` — and the result follows from it:
 
 ```lichen
-gcd := (p <: (@any : Int, @any : Int)) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+T := _x => (@any : Int, @any : Int)
+gcd := (p <: T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
 ```
 
@@ -262,9 +264,9 @@ gcd (48, 18)
 ```
 
 The `@any : Int` is the *requirement* for one position: any `Int` will
-do. The template is matched with `<:`, which clones the template and
-unifies the clone with the actual — so the template keeps its own holes,
-and the argument is checked against a fresh copy each time.
+do. The `<:` applies the constructor exactly once and unifies the
+parameter with the requirement that comes back, so the argument is checked
+against a fresh requirement each time.
 
 The annotation on a recursive function is a constraint on the function's
 own cells, not a check performed beside the recursion; Chapter 12
@@ -331,25 +333,24 @@ compose inc inc 5
 7: Int
 ```
 
-Functions can be stored in arrays, because an array is a template and an
-instance of it:
+Functions can be stored in a compound, because a compound is an ordinary
+value:
 
 ```lichen
 inc := x => x + 1
-fs := [@any, 2][inc, inc]
-fs[0] 5
+fs := (inc, inc)
+fs(0) 5
 ```
 
 ```text
 6: Int
 ```
 
-The template's element is `@any` — the requirement that accepts a value of
-any type — and the instance fills the two positions with the two
-functions.
+The tuple's positions hold the two functions, and the read takes the first
+of them.
 
 There is no map over an array. An array's length is part of its
-**template**, and the language has no runtime read of that length, so
+**requirement**, and the language has no runtime read of that length, so
 iteration over an array is written by carrying the count in a recursion:
 
 ```lichen
@@ -371,16 +372,17 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 - A function's type is the function itself (`f : f`); its two printed
   halves are one signature, written with `=>`.
 - A signature is stated with a **function template** — `(x : Int => _: Int)`
-  — and matched with `<:`; there is no thin arrow.
+  — and unified with plain `=`, which applies nothing; there is no thin
+  arrow.
 - An application instantiates the parameter fresh, so a binding is
   automatically polymorphic.
 - A closure keeps the names visible where it was written; partial
   application builds one.
 - Recursion is a self-call; a recursive function whose result stays open
-  states its signature with a template.
+  states its signature with a constructor.
 - `@loop` marks a recursion the compiler may compile as a loop; it changes
   no answer.
-- Functions are values: they can be arguments, results, and array
+- Functions are values: they can be arguments, results, and compound
   elements.
 
 ## Exercises
@@ -390,7 +392,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 2. Write `compose3 = f => g => h => x => f (g (h x))` and use it.
 3. Explain why `fib 0` terminates, in terms of what the tuple's elements
    evaluate.
-4. Remove the template from the `gcd` above and compare the output.
+4. Remove the constructor from the `gcd` above and compare the output.
 5. Write `@loop` and unmarked versions of `fact` and confirm they agree.
 6. Write a function that returns a function of its own, and explain what
    the returned function captured.

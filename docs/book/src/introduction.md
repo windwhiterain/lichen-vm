@@ -35,8 +35,8 @@ and again:
   tuple's type is `Tuple`, every array's is `Array`, and every struct's is
   `Struct`. What the tuple's elements are, how long the array is, and what
   the struct's fields are called are all read from the **value**. A
-  **template** is the value that states what a compound must be, and `<:`
-  matches an actual against a fresh clone of one.
+  **constructor** is a function that returns a fresh requirement when it is
+  applied, and `<:` applies it once and unifies an actual with the result.
 - **`Type : Type` holds.** The chain `value → type → layout → …` closes in a
   cycle at `Type`, which is the terminal of every chain rather than a
   supertype of everything. There is no subtyping and no kind system: a
@@ -70,8 +70,8 @@ The book is in four parts:
 1. **Learning lichen** — install, run, and write real programs. This part
    ends with everything a first program needs.
 2. **Values and types** — the model: the value/type expr, laziness, the
-   compound forms (tuples, arrays, structs, tables, sets), the templates
-   that state their shape, and types as values.
+   compound forms (tuples, arrays, structs, tables, sets), the
+   constructors that state their shape, and types as values.
 3. **Types at work** — polymorphism, classes and refinements, recursive and
    dependent shapes, attributes, and diagnostics.
 4. **Building programs** — modules and packages, verifying programs, kernels
