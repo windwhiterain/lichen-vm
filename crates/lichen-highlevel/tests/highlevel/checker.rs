@@ -679,21 +679,6 @@ fn inline_lambda_applies() {
     let five = w.int("five", 5);
     let call = w.app("call", l, five);
     let b = build(call, w);
-    // PROBE: what the build reports when the unify no longer forces.
-    if !b.ok && std::env::var_os("LICHEN_BUILD_TRACE").is_some() {
-        for d in b.diagnostics() {
-            eprintln!(
-                "PROBE diag: kind={:?} a={:?} b={:?} loc={:?} va={:?} vb={:?}",
-                d.kind, d.a, d.b, d.loc, d.value_a, d.value_b
-            );
-        }
-        for e in &b.module.unify_errors {
-            eprintln!(
-                "PROBE unify_error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
-                e.a, e.b, e.value_a, e.value_b, e.steps
-            );
-        }
-    }
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
@@ -2364,9 +2349,6 @@ fn two_written_struct_values_are_distinct_nominal_types() {
     let cloned = w.clone("cloned", written_in_annotation);
     let matched = w.unify("matched", arg, cloned);
     let b = build(matched, w);
-    for d in b.diagnostics() {
-        eprintln!("PROBE two occurrences diag: {d:?}");
-    }
     assert!(
         !b.ok,
         "two written occurrences of the same struct text are distinct nominal types"
@@ -2400,26 +2382,6 @@ fn an_open_struct_template_lets_its_field_be_read() {
     let arg = w.instantiate("arg", open_struct, fields, &[Some("I"), Some("O")]);
     let call = w.app("call", f, arg);
     let b = build(call, w);
-    // The checker's own per-expression view, not mutated by the unify.
-    for (at, st) in b.state.iter().enumerate() {
-        let e = ExprId(at as u32);
-        eprintln!(
-            "PROBE expr[{at}] kind={:?}\n    term={:?}\n    val ={:?}\n    ty  ={:?}",
-            b.ir[e].kind, st.term, st.val, st.ty,
-        );
-    }
-    for d in b.diagnostics() {
-        eprintln!("PROBE open struct diag: {d:?}");
-    }
-    // What each function's parameter type slot holds after the build.
-    for (fid, function) in b.module.functions.iter() {
-        let cell = array_ids(&b, function.parameter)[1];
-        eprintln!(
-            "PROBE function {fid:?} param_type_cell={cell:?} value={:?} low={:?}",
-            b.module.node_value(AnyNodeId::Dynamic(cell)),
-            b.module.low_type_of_node(cell),
-        );
-    }
     assert!(
         b.ok,
         "an open struct template must still let the body read its field"
@@ -2448,22 +2410,10 @@ fn a_tuple_template_parameter_function_reads_an_element() {
     let fields = w.tuple("fields", &[one, two]);
     let call = w.app("call", f, fields);
     let b = build(call, w);
-    for d in b.diagnostics() {
-        eprintln!(
-            "PROBE tuple read diag: kind={:?} loc={:?} a={:?} b={:?}",
-            d.kind, d.loc, d.a, d.b
-        );
-    }
     assert!(b.ok, "f (1, 2) against the tuple template must check");
     // And actually evaluate it: the apply's parameter check runs there.
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
-    for e in &module.unify_errors {
-        eprintln!(
-            "PROBE tuple read eval error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
-            e.a, e.b, e.value_a, e.value_b, e.steps
-        );
-    }
     // The body's value is the match and the read; the read is the second.
     let ids = array_ids_from(value);
     assert_eq!(ids.len(), 2, "the body's value is the match and the read");
