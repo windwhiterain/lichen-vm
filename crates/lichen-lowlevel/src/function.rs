@@ -501,6 +501,32 @@ impl<P: Program> Module<P> {
         image
     }
 
+    /// The template root a clone instantiates: the top of its origin chain.
+    ///
+    /// # Invariant
+    /// The chain stops at a released origin: the origin edge is not a keep-alive
+    /// edge, so the collector may take the node it names, and the last live node
+    /// of the chain is the template root then. A live node's own block outlives
+    /// it, so the root's block is a live block.
+    fn template_root(&self, node: NodeId, origin: Option<NodeId>) -> NodeId {
+        let mut root = node;
+        let mut next = origin;
+        let mut hops = 0;
+        while let Some(origin) = next {
+            // The chain stops where the collector took the node.
+            if !self.nodes.contains_key(origin) {
+                break;
+            }
+            root = origin;
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+            next = self.nodes[root].origin;
+        }
+        root
+    }
+
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
@@ -537,20 +563,7 @@ impl<P: Program> Module<P> {
         // The clone computes the same thing, so the source's class low type seeds it.
         let low_shape = self.class_low_shape(node);
         // The template root a clone instantiates, whose block may still be a scope.
-        let template_root = {
-            let mut root = node;
-            let mut next = origin;
-            let mut hops = 0;
-            while let Some(origin) = next {
-                root = origin;
-                hops += 1;
-                if hops > 64 {
-                    break;
-                }
-                next = self.nodes[root].origin;
-            }
-            root
-        };
+        let template_root = self.template_root(node, origin);
         // Only a template's own fact is proven; a computed value is that call's.
         let template_decided = template_root == node
             || (self.nodes[template_root].value.is_some()
