@@ -73,7 +73,7 @@ fn declared() -> String {
 In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 Par := _x => {{.n @any : Int, .in In _}}
-Arg := _x => {{.n @any : Int, .I In}}
+Arg := _x => {{.n @any : Int, .I In _}}
 GA  := _x => {{.n @any : Int, .in In _}}
 reduction := (k <: Par) => {{
   i := compute.range k.n

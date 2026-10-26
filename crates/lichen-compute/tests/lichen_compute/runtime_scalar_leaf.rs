@@ -96,7 +96,7 @@ normalise_raw := (k <: ParY) => {{
 normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "gpu" OutY _
 All   := _x => {{.x (compute.Buf (compute.BufParam{{.type Float, .length {count}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 GArg  := _x => {{.n @any : Int, .eps @any : Float, .in All _}}
-ArgY  := _x => {{.n @any : Int, .eps @any : Float, .I Moments}}
+ArgY  := _x => {{.n @any : Int, .eps @any : Float, .I Moments _}}
 {step}
 built := compute.graph step
 "#,

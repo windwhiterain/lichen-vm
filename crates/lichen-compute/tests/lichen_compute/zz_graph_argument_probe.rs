@@ -182,7 +182,7 @@ const GEMV: &str = r#"
 InG  := _x => {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 OutG := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par  := _x => {.n @any : Int, .kdim @any : Int, .in InG _, .out OutG}
-ArgK := _x => {.n @any : Int, .kdim @any : Int, .I InG}
+ArgK := _x => {.n @any : Int, .kdim @any : Int, .I InG _}
 gemv_raw := (k <: Par) => {
   i := compute.range k.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read (compute.Read{.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
@@ -201,7 +201,7 @@ const GEMV_NO_FOLD: &str = r#"
 InG  := _x => {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 OutG := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par  := _x => {.n @any : Int, .in InG _, .out OutG}
-ArgK := _x => {.n @any : Int, .I InG}
+ArgK := _x => {.n @any : Int, .I InG _}
 f := (k <: Par) => {
   i := compute.range k.n
   y := ((compute.read (compute.Read{.from k.in.w, .at (i * 3 + 0)}) : Float) * (compute.read (compute.Read{.from k.in.x, .at 0}) : Float)) + ((compute.read (compute.Read{.from k.in.w, .at (i * 3 + 1)}) : Float) * (compute.read (compute.Read{.from k.in.x, .at 1}) : Float)) + ((compute.read (compute.Read{.from k.in.w, .at (i * 3 + 2)}) : Float) * (compute.read (compute.Read{.from k.in.x, .at 2}) : Float))

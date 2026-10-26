@@ -27,7 +27,7 @@ fn mark(what: &str) {
 fn a_store_registration_and_a_module_drop_repeat_where_the_peel_breaks_them() {
     let source = r#"
 ---
-  compute := import "compute.lichen" ---
+  compute = import "compute.lichen" ---
 k := compute.jit (x : Int => int2float (x + 1))
 compute.launch k 5
 "#;
@@ -41,7 +41,7 @@ f := (k <: Par) => {
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write (compute.Write{.to z, .at i, .value float2int (int2float i + 0.5)}))})
 }
-k := compute.parallel f "BACKEND" Out
+k := compute.parallel f "BACKEND" Out _
 out := (compute.plrun k (compute.A{.n 69, .I In{.a 0}}) : Struct)
 ((compute.read (compute.Read{.from out.z, .at 0}) : Int), (compute.read (compute.Read{.from out.z, .at 1}) : Int), (compute.read (compute.Read{.from out.z, .at 68}) : Int), compute.collect out.z)
 "#;
@@ -52,7 +52,7 @@ out := (compute.plrun k (compute.A{.n 69, .I In{.a 0}}) : Struct)
     drop(first_value);
     mark("first program dropped");
     let (_stub, _guard) = common::stub();
-    mark("cpu start _");
+    mark("cpu start");
     let (cpu_module, cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
-    mark("cpu done _");
+    mark("cpu done");
 }

@@ -32,7 +32,7 @@ const KERNELS: &str = r#"
 QK := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 192}))}
 Scored := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 192}))}
 ParS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .in QK _}
-ArgS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .I QK}
+ArgS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .I QK _}
 scores_raw := (k <: ParS) => {
   i := compute.range k.n
   query := compute.row k
@@ -45,7 +45,7 @@ scores := compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,eleme
 QSV := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 192})), .v (compute.Buf (compute.BufParam{.type Float, .length 192}))}
 OutA := _x => {.o (compute.Buf (compute.BufParam{.type Float, .length 192}))}
 ParA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .in QSV _}
-ArgA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .I QSV}
+ArgA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .I QSV _}
 attend_raw := (k <: ParA) => {
   i := compute.range k.n
   query := compute.row k

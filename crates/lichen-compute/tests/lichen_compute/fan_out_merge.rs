@@ -52,7 +52,7 @@ fn program() -> String {
 In  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParE := _x => {{.n @any : Int, .in In _}}
-ArgE := _x => {{.n @any : Int, .I In}}
+ArgE := _x => {{.n @any : Int, .I In _}}
 scale_raw := (k <: ParE) => {{
   i := compute.range k.n
   e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
@@ -62,7 +62,7 @@ scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE 
 In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := _x => {{.n @any : Int, .in In2 _}}
-Arg2 := _x => {{.n @any : Int, .I In2}}
+Arg2 := _x => {{.n @any : Int, .I In2 _}}
 offset_raw := (k <: Par2) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})

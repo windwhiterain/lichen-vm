@@ -24,7 +24,7 @@ const TEMPLATE: &str = r#"
 In  := _x => {.unused (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Out := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par := _x => {.n @any : Int, .taps @any : Int, .in In _, .out Out}
-Arg := _x => {.n @any : Int, .taps @any : Int, .I In}
+Arg := _x => {.n @any : Int, .taps @any : Int, .I In _}
 raw := (c <: Par) => {
   i := compute.range c.n
 @BODY@

@@ -17,7 +17,7 @@ const KERNEL: &str = r#"
 PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .lim (compute.Buf (compute.BufParam{.type Int, .length _}))}
 POut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 PPar := _x => {.n @any : Int, .least @any : Float, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .least @any : Float, .I PIn}
+PArg := _x => {.n @any : Int, .least @any : Float, .I PIn _}
 sum_raw := (c <: PPar) => {
   i := compute.range c.n
   lim := (compute.read (compute.Read{.from c.in.lim, .at 0}) : Int)

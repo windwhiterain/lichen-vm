@@ -9,7 +9,7 @@ raw := (lane <: Par) => {
   ((OutE){.e (compute.write (compute.Write{.to e, .at 0, .value (compute.read (compute.Read{.from lane.in.d, .at 0}) : Float)}))})
 }
 k := compute.parallel raw "gpu" OutE _
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 GArg := _x => {.n @any : Int, .in In _}
 built := compute.graph ((a <: GArg) => {
   (compute.plrun k ((Arg){.n a.n, .I a.in}) : Struct)

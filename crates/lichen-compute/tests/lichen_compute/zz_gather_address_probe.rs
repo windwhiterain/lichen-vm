@@ -17,7 +17,7 @@ const KERNEL: &str = r#"
 PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _})), .tbl (compute.Buf (compute.BufParam{.type Int, .length _}))}
 POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
 PPar := _x => {.n @any : Int, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .I PIn}
+PArg := _x => {.n @any : Int, .I PIn _}
 gather_raw := (k <: PPar) => {
   i := compute.range k.n
   j := (compute.read (compute.Read{.from k.in.tbl, .at i}) : Int)

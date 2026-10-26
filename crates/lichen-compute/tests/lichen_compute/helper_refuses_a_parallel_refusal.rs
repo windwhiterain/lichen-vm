@@ -22,7 +22,7 @@ filler := compute.parallel fill "cpu" Data _
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
 In  := _x => {.k (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 f := (k <: Par) => {
   i := compute.range k.n
   ((Out){.e (compute.write (compute.Write{.to k.in.k, .at i, .value (99.0 : Float)}))})

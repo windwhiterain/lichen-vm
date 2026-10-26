@@ -43,7 +43,7 @@ L    := 6
 In   := _x => {.a (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Out  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Par  := _x => {.n @any : Int, .cols @any : Int, .in In _}
-Arg  := _x => {.n @any : Int, .cols @any : Int, .I In}
+Arg  := _x => {.n @any : Int, .cols @any : Int, .I In _}
 strip_raw := (k <: Par) => {
   i := compute.range k.n
   r := i / k.cols
@@ -63,7 +63,7 @@ L    := 6
 In2   := _x => {.a (compute.Buf (compute.BufParam{.type Int, .length L})), .b (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Out2  := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Par2  := _x => {.n @any : Int, .cols @any : Int, .in In2 _}
-Arg2  := _x => {.n @any : Int, .cols @any : Int, .I In2}
+Arg2  := _x => {.n @any : Int, .cols @any : Int, .I In2 _}
 "#;
 
 /// `body`, declared over the control's parameter, as the kernel `compute.parallel` takes it.
@@ -335,7 +335,7 @@ neither_raw := (k <: Par2) => {
 fn a_second_runtime_scalar_is_carried_beside_the_extent() {
     let source = format!(
         "{HEAD}\nPar3 := _x => {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In _}}\n\
-         Arg3 := _x => {{.n Int, .cols Int, .rows Int, .I In}}\n\
+         Arg3 := _x => {{.n Int, .cols Int, .rows Int, .I In _}}\n\
          three_raw := (k <: Par3) => {{\n  i := compute.range k.n\n  \
          v := (compute.read (compute.Read{{.from k.in.a, .at (i / k.cols)}}) : Int)\n  \
          b := compute.buf (compute.BufParam{{.type Int, .length k.n}})\n  \

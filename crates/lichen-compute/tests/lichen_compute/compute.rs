@@ -848,7 +848,7 @@ inbuf := (compute.plrun kg (compute.A{.n 3, .I In0{.a 0}}) : Struct)
 In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := _x => {.n @any : Int, .alpha @any : Float, .in In _}
-Host := _x => {.n @any : Int, .alpha @any : Float, .I In}
+Host := _x => {.n @any : Int, .alpha @any : Float, .I In _}
 f := (k <: Par) => {
   i := compute.range k.n
   v := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
@@ -897,7 +897,7 @@ inbuf := (compute.plrun kg (compute.A{.n 3, .I In0{.a 0}}) : Struct)
 In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := _x => {.n @any : Int, .alpha @any : Float, .in In _}
-Host := _x => {.n @any : Int, .alpha _, .I In}
+Host := _x => {.n @any : Int, .alpha _, .I In _}
 f := (k <: Par) => {
   i := compute.range k.n
   v := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)

@@ -16,7 +16,7 @@ const IN_PLACE_WRITE: &str = r#"
 In  := _x => {.k (compute.Buf (compute.BufParam{.type Float, .length 1}))}
 Out := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
 Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 Fill := _x => {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n

@@ -16,7 +16,7 @@ const KERNEL: &str = r#"
 PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _}))}
 POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
 PPar := _x => {.n @any : Int, .off @any : Int, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .off @any : Int, .I PIn}
+PArg := _x => {.n @any : Int, .off @any : Int, .I PIn _}
 append_raw := (c <: PPar) => {
   i := compute.range c.n
   v := (compute.read (compute.Read{.from c.in.x, .at i}) : Int)

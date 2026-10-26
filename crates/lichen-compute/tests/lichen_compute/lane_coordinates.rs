@@ -22,7 +22,7 @@ const TWO_EXTENTS: &str = r#"
 In := _x => {.a (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Out := _x => {.z (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Par := _x => {.n @any : Int, .cols @any : Int, .stride @any : Int, .in In _}
-Host := _x => {.n @any : Int, .cols @any : Int, .stride @any : Int, .I In}
+Host := _x => {.n @any : Int, .cols @any : Int, .stride @any : Int, .I In _}
 Data := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Fill := _x => {.n @any : Int}
 fill := (c <: Fill) => {
@@ -56,7 +56,7 @@ const ONE_EXTENT: &str = r#"
 In := _x => {.a (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Out := _x => {.z (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Par := _x => {.n @any : Int, .in In _}
-Host := _x => {.n @any : Int, .I In}
+Host := _x => {.n @any : Int, .I In _}
 Data := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Fill := _x => {.n @any : Int}
 fill := (c <: Fill) => {

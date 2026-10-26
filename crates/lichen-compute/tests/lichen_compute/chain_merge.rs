@@ -62,7 +62,7 @@ fn program(step: &str) -> String {
 In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutR := _x => {{.r (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par  := _x => {{.n @any : Int, .in In _}}
-Arg  := _x => {{.n @any : Int, .I In}}
+Arg  := _x => {{.n @any : Int, .I In _}}
 total_raw := (k <: Par) => {{
   i := compute.range k.n
   r := compute.buf (compute.BufParam{{.type Float, .length k.n}})
@@ -73,7 +73,7 @@ total := compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu
 In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := _x => {{.n @any : Int, .in In2 _}}
-Arg2 := _x => {{.n @any : Int, .I In2}}
+Arg2 := _x => {{.n @any : Int, .I In2 _}}
 shift_raw := (k <: Par2) => {{
   i := compute.range k.n
   p := (compute.read (compute.Read{{.from k.in.p, .at 0}}) : Float)
@@ -85,7 +85,7 @@ shift := compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element
 In3  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .q (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutY := _x => {{.y (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par3 := _x => {{.n @any : Int, .in In3 _}}
-Arg3 := _x => {{.n @any : Int, .I In3}}
+Arg3 := _x => {{.n @any : Int, .I In3 _}}
 lift_raw := (k <: Par3) => {{
   i := compute.range k.n
   q := (compute.read (compute.Read{{.from k.in.q, .at 0}}) : Float)

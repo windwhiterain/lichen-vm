@@ -25,7 +25,7 @@ fill := (c <: Fill) => {
 fk := compute.parallel fill "cpu" Out _
 filled := (compute.plrun fk ((FillArg){.n 2}) : Struct)
 Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 raw := (c <: Par) => {
   i := compute.range c.n
   x := (compute.read (compute.Read{.from c.in.unused, .at i}) : Float)
@@ -284,7 +284,7 @@ fill := (c <: Fill) => {
 filler := compute.parallel fill "cpu" In _
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
 Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 alias_raw := (k <: Par) => {
   i := compute.range k.n
   low := (compute.read (compute.Read{.from k.in.d, .at i}) : Float)
@@ -329,7 +329,7 @@ fill := (c <: Fill) => {
 filler := compute.parallel fill "cpu" In _
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
 Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In}
+Arg := _x => {.n @any : Int, .I In _}
 then_raw := (k <: Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Float, .length k.n})

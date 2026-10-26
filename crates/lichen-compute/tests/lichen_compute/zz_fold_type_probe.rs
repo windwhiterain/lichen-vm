@@ -16,7 +16,7 @@ const KERNEL: &str = r#"
 XIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
 XOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 XPar := _x => {.n @any : Int, .alpha @any : Float, .in XIn _, .out XOut}
-XArg := _x => {.n @any : Int, .alpha @any : Float, .I XIn}
+XArg := _x => {.n @any : Int, .alpha @any : Float, .I XIn _}
 ring_raw := (c <: XPar) => {
   i := compute.range c.n
   centre := (compute.read (compute.Read{.from c.in.x, .at i}) : Float)

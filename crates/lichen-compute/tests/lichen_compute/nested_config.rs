@@ -54,7 +54,7 @@ Meta  := _x => {{.rows @any : Int, .cols {kind}}}
 In2   := _x => {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}})), .b (compute.Buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}}))}}
 Out   := _x => {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {ROWS}}}))}}
 Par   := _x => {{.meta Meta, .in In2 _}}
-Arg   := _x => {{.meta Meta, .I In2}}
+Arg   := _x => {{.meta Meta, .I In2 _}}
 GA    := {ga}
 nested_raw := (k <: Par) => {{
   i := compute.range k.meta.rows
@@ -87,7 +87,7 @@ fn flat() -> String {
 In1   := _x => {{.a (compute.Buf (compute.BufParam{{.type Int, .length {ELEMENTS}}}))}}
 Out1  := _x => {{.z (compute.Buf (compute.BufParam{{.type Int, .length {ROWS}}}))}}
 Par3  := _x => {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1 _}}
-Arg3  := _x => {{.n @any : Int, .K @any : Int, .cols @any : Int, .I In1}}
+Arg3  := _x => {{.n @any : Int, .K @any : Int, .cols @any : Int, .I In1 _}}
 GA3   := _x => {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1 _}}
 shape_raw := (k <: Par3) => {{
   i := compute.range k.n

@@ -56,7 +56,7 @@ fn scaled(kind: &str) -> String {
 In1  := _x => {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
 Out1 := _x => {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
 Par  := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1 _}}
-Arg  := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1}}
+Arg  := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1 _}}
 GA   := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1 _}}
 scale_raw := (k <: Par) => {{
   i := compute.range k.n
@@ -94,7 +94,7 @@ fn mismatched(leaf: &str, kind: &str) -> String {
 In1  := _x => {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
 Out1 := _x => {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
 Par  := _x => {{.n @any : Int, .scale {leaf}, .in In1 _}}
-Arg  := _x => {{.n @any : Int, .scale {leaf}, .I In1}}
+Arg  := _x => {{.n @any : Int, .scale {leaf}, .I In1 _}}
 GA   := _x => {{.n @any : Int, .scale {leaf}, .in In1 _}}
 mismatch_raw := (k <: Par) => {{
   i := compute.range k.n

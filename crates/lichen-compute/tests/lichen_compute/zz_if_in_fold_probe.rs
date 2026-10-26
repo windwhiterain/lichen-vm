@@ -25,7 +25,7 @@ fn program(condition: &str, then: &str, otherwise: &str) -> String {
 TIn  := _x => {{.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 TOut := _x => {{.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 TPar := _x => {{.n @any : Int, .taps @any : Int, .in TIn _, .out TOut}}
-TArg := _x => {{.n @any : Int, .taps @any : Int, .I TIn}}
+TArg := _x => {{.n @any : Int, .taps @any : Int, .I TIn _}}
 tiny_raw := (c <: TPar) => {{
   i := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))
