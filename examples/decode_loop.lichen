@@ -306,12 +306,13 @@ fill_spare_raw := (c <: Fill) => {
 }
 fill_spare := compute.parallel fill_spare_raw "cpu" (spareBuf _)
 spare := (compute.plrun fill_spare (Fill{.n 2}) : Struct).spare
-drive := (s <: (@any : Int, @any : Struct, @any : Struct, @any : Struct)) => if s(0) == 2 then s else { cached := (compute.plrun append (ParK{.n 8, .cap 4, .dim 2, .t (s(0) + 2), .in (KVIn{.k s(1).k, .v s(1).v, .nk nk, .nv nv})}) : Struct)
+DriveState := _x => (@any : Int, @any : Struct, @any : Struct, @any : Struct)
+drive := (s <: DriveState) => if s(0) == 2 then s else { cached := (compute.plrun append (ParK{.n 8, .cap 4, .dim 2, .t (s(0) + 2), .in (KVIn{.k s(1).k, .v s(1).v, .nk nk, .nv nv})}) : Struct)
   scored := (compute.plrun score (ParS{.n 4, .kdim 2, .in (Gin{.w cached.k, .x q})}) : Struct)
   topped := (compute.plrun rowmax (ParM{.n 4, .in (Row{.x scored.y})}) : Struct)
   weights := (compute.plrun softmax (ParY{.n 4, .in (Soft{.x scored.y, .m topped.m})}) : Struct)
   out := (compute.plrun weigh (ParW{.n 2, .dim 2, .keys 4, .in (AV{.a weights.y, .v cached.v})}) : Struct)
   logged := (compute.plrun keep (ParT{.n 4, .j s(0), .dim 2, .in (KTIn{.o out.o, .x s(2)})}) : Struct)
   drive (s(0) + 1, cached, logged.y, out) }
-final := (drive (0, KVOut{.k kbuf, .v vbuf}, log, OutW{.o spare}) <: (@any : Int, @any : Struct, @any : Struct, @any : Struct))
+final := (drive (0, KVOut{.k kbuf, .v vbuf}, log, OutW{.o spare}) <: DriveState)
 (compute.collect final(2) : Array, compute.collect final(3).o : Array, final(0))

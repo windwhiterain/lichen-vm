@@ -122,7 +122,7 @@
 Row := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
 Pick := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Par0 := _x => {.n @any : Int, .w @any : Int, .in (Row _)}
-Arg0 := _x => {.n @any : Int, .w @any : Int, .I Row}
+Arg0 := _x => {.n @any : Int, .w @any : Int, .I (Row _)}
 rank0_raw := (k <: Par0) => {
   lane := compute.range k.n
   base := lane * k.w
@@ -134,7 +134,7 @@ rank0 := compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu
 Sel1 := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Cat1 := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 10}))}
 Par1 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel1 _)}
-Arg1 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I Sel1}
+Arg1 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel1 _)}
 rank1_raw := (k <: Par1) => {
   lane := compute.range k.n
   rank := lane / k.rows
@@ -153,7 +153,7 @@ rank1 := compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu" (Cat1 _
 Sel2 := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compute.Buf (compute.BufParam{.type Float, .length 10}))}
 Cat2 := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 15})), .t (compute.Buf (compute.BufParam{.type Float, .length 15}))}
 Par2 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel2 _)}
-Arg2 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I Sel2}
+Arg2 := _x => {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel2 _)}
 rank2_raw := (k <: Par2) => {
   lane := compute.range k.n
   rank := lane / k.rows

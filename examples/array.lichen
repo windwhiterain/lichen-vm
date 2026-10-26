@@ -2,4 +2,5 @@
   order = "0"
   output = "[1, 2, 3]: Array"
 ---
-[@any : Int, 3][1, 2, 3]
+Int3 := _x => [@any : Int, 3]
+Int3[1, 2, 3]

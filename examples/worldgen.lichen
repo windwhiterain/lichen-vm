@@ -39,7 +39,7 @@ InLand := _x => {.height (compute.Buf (compute.BufParam{.type Float, .length 163
 InTile := _x => {.biomes (compute.Buf (compute.BufParam{.type Int, .length 16384}))}
 
 PNoise := _x => {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .in (InSeed _)}
-ANoise := _x => {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .I InSeed}
+ANoise := _x => {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .I (InSeed _)}
 noise_raw := (p <: PNoise) => {
   i := compute.range p.n
   row := compute.row p
@@ -63,7 +63,7 @@ noise_raw := (p <: PNoise) => {
 noise := compute.parallel noise_raw "cpu" (OutField _)
 
 PMix := _x => {.n @any : Int, .cols @any : Int, .w @any : Float, .in (InField2 _)}
-AMix := _x => {.n @any : Int, .cols @any : Int, .w @any : Float, .I InField2}
+AMix := _x => {.n @any : Int, .cols @any : Int, .w @any : Float, .I (InField2 _)}
 mix_raw := (p <: PMix) => {
   i := compute.range p.n
   a := (compute.read (compute.Read{.from p.in.a, .at i}) : Float)
@@ -74,7 +74,7 @@ mix_raw := (p <: PMix) => {
 mix := compute.parallel mix_raw "cpu" (OutField _)
 
 PSmooth := _x => {.n @any : Int, .cols @any : Int, .in (InField _)}
-ASmooth := _x => {.n @any : Int, .cols @any : Int, .I InField}
+ASmooth := _x => {.n @any : Int, .cols @any : Int, .I (InField _)}
 smooth_raw := (p <: PSmooth) => {
   i := compute.range p.n
   row := compute.row p
@@ -92,7 +92,7 @@ smooth_raw := (p <: PSmooth) => {
 smooth := compute.parallel smooth_raw "cpu" (OutField _)
 
 PBiome := _x => {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .in (InLand _)}
-ABiome := _x => {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .I InLand}
+ABiome := _x => {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .I (InLand _)}
 biome_raw := (p <: PBiome) => {
   i := compute.range p.n
   e := (compute.read (compute.Read{.from p.in.height, .at i}) : Float)
@@ -104,7 +104,7 @@ biome_raw := (p <: PBiome) => {
 biome := compute.parallel biome_raw "cpu" (OutIds _)
 
 PTile := _x => {.n @any : Int, .cols @any : Int, .seed @any : Int, .in (InTile _)}
-ATile := _x => {.n @any : Int, .cols @any : Int, .seed @any : Int, .I InTile}
+ATile := _x => {.n @any : Int, .cols @any : Int, .seed @any : Int, .I (InTile _)}
 tile_raw := (p <: PTile) => {
   i := compute.range p.n
   row := compute.row p

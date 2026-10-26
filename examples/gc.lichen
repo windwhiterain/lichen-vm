@@ -2,8 +2,9 @@
   order = "2"
   output = "[8, 16]: Array"
 ---
+Any2 := _x => [@any, 2]
 add    := x => y => x + y
 double := n => @gc { a := n + 1
                      b := add a a
                      b }
-@gc [@any, 2][double 3, double 7]
+@gc Any2[double 3, double 7]

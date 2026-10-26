@@ -182,7 +182,7 @@
     kernels**: the surface has no array-to-buffer conversion \
     (`docs/notes/kernel-buffer-declarations.md`), so the weights, the cache, the value row and the \
     blank log are five more kernels and this file now runs eight, and the recursion's state is \
-    annotated `tuple{Int, KVOut, Gout}` because a read inside a `@loop` body needs the state's type \
+    annotated `GenerateState` because a read inside a `@loop` body needs the state's type \
     decided."
   output = "([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0]): tuple{array{Float, 5}, Int, array{Float, 4}}"
 ---
@@ -208,7 +208,7 @@ append := compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" (KVOu
 Gin  := _x => {.w (compute.Buf (compute.BufParam{.type Float, .length 20})), .x (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Gout := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := _x => {.n @any : Int, .kdim @any : Int, .in (Gin _)}
-ArgS := _x => {.n @any : Int, .kdim @any : Int, .I Gin}
+ArgS := _x => {.n @any : Int, .kdim @any : Int, .I (Gin _)}
 logits_raw := (k <: ParS) => {
   i := compute.range k.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read (compute.Read{.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
@@ -219,7 +219,7 @@ logits := compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,eleme
 Row  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Pick := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 1}))}
 Par  := _x => {.n @any : Int, .w @any : Int, .in (Row _)}
-Arg  := _x => {.n @any : Int, .w @any : Int, .I Row}
+Arg  := _x => {.n @any : Int, .w @any : Int, .I (Row _)}
 greedy_raw := (k <: Par) => {
   lane := compute.range k.n
   base := lane * k.w
@@ -275,11 +275,12 @@ fill_blank_raw := (c <: Fill) => {
 fill_blank := compute.parallel fill_blank_raw "cpu" (blankBuf _)
 blank := (compute.plrun fill_blank (Fill{.n 4}) : Struct).blank
 sentinel := 3.0
-@loop generate := (s <: (@any : Int, @any : Struct, @any : Struct)) => {
+GenerateState := _x => (@any : Int, @any : Struct, @any : Struct)
+@loop generate := (s <: GenerateState) => {
   scored := (compute.plrun logits (ParS{.n 4, .kdim 5, .in (Gin{.w weights, .x s(1).k})}) : Struct)
   tok := (compute.plrun greedy (Par{.n 1, .w 4, .in (Row{.x scored.y})}) : Struct)
   cached := (compute.plrun append (ParK{.n 5, .cap 5, .dim 1, .t (s(0) + 2), .in (KVIn{.k s(1).k, .v s(1).v, .nk tok.p, .nv nv})}) : Struct)
   bit := (compute.collect tok.p : Array)[0]
   if bit == sentinel then (s(0) + 1, cached, scored) else generate (s(0) + 1, cached, scored) }
-final := (generate (0, KVOut{.k kbuf, .v vbuf}, Gout{.y blank}) <: (@any : Int, @any : Struct, @any : Struct))
+final := (generate (0, KVOut{.k kbuf, .v vbuf}, Gout{.y blank}) <: GenerateState)
 (compute.collect final(1).k : Array, final(0), compute.collect final(2).y : Array)

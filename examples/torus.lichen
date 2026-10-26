@@ -61,7 +61,7 @@
 GIn := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 9}))}
 GOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 9}))}
 GPar := _x => {.n @any : Int, .cols @any : Int, .alpha @any : Float, .in (GIn _)}
-GArg := _x => {.n @any : Int, .cols @any : Int, .alpha @any : Float, .I GIn}
+GArg := _x => {.n @any : Int, .cols @any : Int, .alpha @any : Float, .I (GIn _)}
 grid_raw := (c <: GPar) => {
   i := compute.range c.n
   row := compute.row c

@@ -3,7 +3,8 @@
   std = import "../lichen-std/_.lichen"
   output = "(Int, Type, Int, Array, Type, 5): Tuple"
 ---
+Any2 := _x => [@any, 2]
 f := std.type_of
 g := x => std.type_of x
 n := 5 : std.type_of (1)
-(std.type_of (1), f Int, g 2, std.type_of [@any, 2][1, 2], std.type_of Type, n)
+(std.type_of (1), f Int, g 2, std.type_of Any2[1, 2], std.type_of Type, n)

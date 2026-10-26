@@ -137,7 +137,7 @@
 Row := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
 Pick := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Par := _x => {.n @any : Int, .w @any : Int, .in (Row _)}
-Arg := _x => {.n @any : Int, .w @any : Int, .I Row}
+Arg := _x => {.n @any : Int, .w @any : Int, .I (Row _)}
 greedy_raw := (k <: Par) => {
   lane := compute.range k.n
   base := lane * k.w
