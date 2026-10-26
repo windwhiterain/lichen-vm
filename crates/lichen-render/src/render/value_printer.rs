@@ -469,8 +469,8 @@ where
             return (expr, expr);
         };
         if array.layout() == 0 {
-            // The cycle-cut skeleton: a binding's own `[value, type]` cells.
-            // SAFETY: `array` is the payload of a value of the module being rendered.
+            // A skeleton: the binding's own `[value, type]` cells.
+            // SAFETY: the payload of a value of the module being rendered.
             let items = unsafe { array.items() };
             if items.len() == 2 {
                 return (items[0].node, items[1].node);
@@ -499,22 +499,18 @@ where
     ///
     /// A frozen value reads against the type chain like a live one: its cells
     /// are static refs, and each is met here in turn, so a reused cell prints
-    /// as its form rather than as a raw dump.
-    ///
-    /// The value guard counts **classes**, not nodes: the encoding's identity
-    /// is the equality class, so a value met again through a binding's cell is
-    /// the value it was unified with, and the cycle is cut there.  The type
-    /// guard holds only the types that can recur: a shared layout template
-    /// names a layout, not a structure, so it never cuts a nested value.
+    /// as its form rather than as a raw dump.  The cycle guards cover both
+    /// halves: a dynamic value node by id, a type node by its absolute ref.
     fn render_element(&mut self, id: AnyNodeId, ty: AnyNodeId) -> String {
+        // The value guard holds the value's **class**, the equality the
+        // encoding gives it; a layout template holds no type path.
         let recurs = self.layout_any(ty).is_none();
         if recurs && self.tpath.contains(ty) {
             return "…".to_string();
         }
         let pinned = match id {
             AnyNodeId::Dynamic(node) => {
-                // The class is the value's identity; a node the walk cannot
-                // place stands for itself.
+                // A node the walk cannot place stands for itself.
                 let class = representative(self.module, node).unwrap_or(node);
                 if self.path.contains(class) {
                     return "…".to_string();
