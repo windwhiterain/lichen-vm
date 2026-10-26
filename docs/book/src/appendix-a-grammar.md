@@ -10,7 +10,7 @@ in the chapter named beside it.
 The keywords cannot be bound or used as names:
 
 ```text
-Int Float string Type tuple struct array table set
+Int Float string Type Tuple Array Struct table set
 let if then else return pub
 int2float float2int max min exp sqrt floor sin cos ln
 ```
@@ -18,7 +18,7 @@ int2float float2int max min exp sqrt floor sin cos ln
 and the `@`-led words:
 
 ```text
-@loop @assert @shallow @gc @in @cache
+@loop @assert @shallow @gc @in @cache @clone @any
 ```
 
 The underscore `_` is not a name; it is the placeholder (Chapter 5). A
@@ -27,7 +27,7 @@ name is a lowercase or mixed-case identifier.
 ## Punctuation
 
 ```text
-= => -> : :: # ? ! ~ $ ==> <== @
+= := => : # ? ! ~ $ ==> <== @
 + - * / % < > <= >= == != & | ^
 ( ) [ ] { } , ; and newline
 ```
@@ -36,12 +36,15 @@ The three separators — newline, `;`, `,` — are the same token; their
 quantity never matters. `---` opens and closes the header block and is
 reserved elsewhere.
 
+There is **no** `->`: a function's signature is written with `=>`, and a
+constraint on one is a function template matched with `<:` (Chapter 4).
+
 ## The program
 
 ```text
 program  := (statement separator)* [expr]
 statement := ['pub'] [binding | expr]
-binding  := ['@loop'] ['@cache'] ['let'] name '=' expr
+binding  := ['@loop'] ['@cache'] ['let'] name ':=' expr
 ```
 
 A program is a block: statements, then an optional tail expression. A
@@ -57,8 +60,8 @@ blocks are elided:
 ```text
 expr      := lambda
 lambda    := annotated ('=>' expr)?                  right
-annotated := arrow (((':' | '#' | '!' | '?') arrow) | ('~' string))*
-arrow     := find ('->' find)*                        right
+annotated := unify (((':' | '#' | '!' | '?') unify) | ('~' string))*
+unify     := find (('=' | '<:') find)*                 left
 find      := cmp ('<==' cmp)*                         table read
 cmp       := bits (('<'|'>'|'<='|'>='|'=='|'!='|'@in') bits)*
 bits      := bitxor ('|' bitxor)*
@@ -73,18 +76,35 @@ prefix    := '@assert' apply
            | apply
 apply     := atom atom*
 atom      := primary postfix*
-primary   := int | string | 'Int' | 'Float' | 'string' | 'Type' | '_'
-           | name | '$' name '(' args ')' | '(' expr ')' | '(' tuple ')'
-           | '[' array ']' | 'table' '(' exprs ')' | 'set' '(' args ')'
-           | '{' block '}' | 'tuple' '{' slots '}' | 'struct' '{' fields '}'
-           | 'array' '{' expr ',' expr '}' | 'set' '{' slot '}'
-           | 'table' '{' expr ',' expr '}' | 'if' expr 'then' expr 'else' expr
-postfix   := glued '[' expr ']'        -- array read
-           | glued '(' fields ')'      -- tuple read, or struct instantiation
+primary   := int | float | string | 'Int' | 'Float' | 'string' | 'Type'
+           | 'Tuple' | 'Array' | 'Struct'
+           | '_' | '@any' | name
+           | '$' name '(' args ')' | '(' expr ')' | '(' tuple ')'
+           | '[' array-template ']' | 'table' '(' exprs ')' | 'set' '(' args ')'
+           | '{' block '}' | '{' struct-template '}' | 'if' expr 'then' expr 'else' expr
+postfix   := glued '[' expr ']'        -- array read, or array instance
+           | glued '(' expr ')'        -- tuple read
+           | glued '{' fields '}'      -- struct instance
            | '.' name                  -- struct field read
 element   := ['@shallow' ['(' n ')']] glued-expr
 expr      := expr '==>' expr
 ```
+
+The compound forms, in one place:
+
+```text
+tuple value      := '(' (expr sep)+ ')'
+tuple template   := '(' requirement (sep requirement)+ ')'
+array template   := '[' requirement sep length ']'
+array instance   := template-glue '[' (expr sep)* ']'
+struct template  := '{' ('.' name requirement sep)* '}'
+struct instance  := template-glue '{' ('.' name expr sep)* '}'
+requirement      := '@any' [':' type] | value [':' type]
+```
+
+The **layout types** `Tuple`, `Array` and `Struct` are values, not
+spellings of a type; the shape of a compound lives in its value, and a
+**template** is the value that states what a compound must be (Chapter 7).
 
 Where this differs from the spec, the spec is right.
 
@@ -113,15 +133,15 @@ ignored and prose inside it is the only prose a file can carry.
 | form | chapter |
 |---|---|
 | bindings, separators, blocks, `if` | 3 |
-| lambdas, application, recursion | 4 |
-| annotations, `_`, `raw` | 5 |
+| lambdas, application, recursion, function templates | 4 |
+| annotations, `_`, `raw`, the layout types | 5 |
 | laziness, `@shallow`, `@gc`, `none` | 6 |
-| tuples and arrays | 7 |
-| structs and records | 8 |
+| tuples, arrays, templates, `<:` | 7 |
+| structs, instances, records | 8 |
 | tables and sets, `@in` | 9 |
-| pins, dependent lengths | 10 |
+| template constructors, requirements, pinned lengths | 10 |
 | refinements, classes | 11 |
-| recursive and dependent types | 12 |
+| recursive and dependent shapes | 12 |
 | `#`, `?`, `~` | 13 |
 | diagnostics and `@assert` | 14 |
 | imports and packages | 15 |

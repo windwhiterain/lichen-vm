@@ -49,12 +49,12 @@ error: unexpected character '@'
 error: expected a separator, 'return', 'pub', '@loop', '@cache', 'let', a name, '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program
   --> 2:1
    |
- 2 |
+ 2 | 
    | ^
 error: the program could not be parsed
   --> 2:1
    |
- 2 |
+ 2 | 
    | ^
 ```
 

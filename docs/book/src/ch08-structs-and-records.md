@@ -113,10 +113,10 @@ S{.x "s"}
 
 ```text
 error: expected Int, found string
-  --> 2:11
+  --> 2:6
    |
  2 | S{.x "s"}
-   |           ^
+   |      ^
 ```
 
 A field left unsupplied is refused, naming the field:
@@ -143,10 +143,10 @@ S{.y 1}
 
 ```text
 error: no field named y in the struct type Struct
-  --> 2:7
+  --> 2:6
    |
  2 | S{.y 1}
-   |       ^
+   |      ^
 ```
 
 A struct with no fields is written `{}`, and its instance is `S{}`:

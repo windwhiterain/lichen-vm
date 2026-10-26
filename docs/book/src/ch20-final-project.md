@@ -55,7 +55,7 @@ centre_raw := (k <: ParC) => {
   m := (compute.read ((compute.Read _){.from k.in.s, .at 0}) : Float) / int2float k.n
   x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
   b_y := compute.buf ((compute.BufParam _){.type Float, .length k.n})
-  (Centred{.y (compute.write ((compute.Write _){.to b_y, .at i, .value ((x - m) ~ "element"))}))})
+  (Centred{.y (compute.write ((compute.Write _){.to b_y, .at i, .value ((x - m) ~ "element")}))})
 }
 centre := compute.parallel (centre_raw ~ "claim:Reduction(element)") "cpu" Centred
 Fill := {.n @any : Int}
