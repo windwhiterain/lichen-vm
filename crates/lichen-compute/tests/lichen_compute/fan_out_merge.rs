@@ -117,7 +117,7 @@ filler := compute.parallel fill "cpu" Data
 fn running() -> String {
     format!(
         "{head}\n{fill}count = ({count})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
-         r := (compute.graphrun built (count, data.d) : array{{(compute.Buf ((compute.BufParam _){{.type Float, .length {count}}})), 2}})\n\
+         r := (compute.graphrun built (count, data.d) : Array)\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
         head = recording(),
         fill = filled(),

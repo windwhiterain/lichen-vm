@@ -32,7 +32,7 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
         r#"
 --- compute = import "compute.lichen" ---
 Src := {{.a Int}}
-SrcOut := {{.z (compute.Buf Float)}}
+SrcOut := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 SrcPar := compute.P (compute.KT _){{.I Src, .O SrcOut}}
 fill := (k <: SrcPar) => {{
   i := compute.range k.n

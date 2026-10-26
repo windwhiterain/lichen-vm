@@ -29,8 +29,8 @@ fn recorded(body: &str) -> String {
 
 /// The ring kernel and its input, shared by both cases.
 const KERNEL: &str = r#"
-XIn  := {.x (compute.Buf Float)}
-XOut := {.y (compute.Buf Float)}
+XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
 XArg := {.n Int, .alpha Float, .I XIn}
 ring_raw := (c <: XPar) => {
@@ -41,7 +41,7 @@ ring_raw := (c <: XPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
 }
 ring := compute.parallel ring_raw "cpu" XOut
-x := (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 seed := (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct)
 "#;
 

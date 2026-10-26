@@ -97,14 +97,10 @@ fn an_imported_requirement_judges_like_an_inline_one() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Gauge := _x => {.v Int # 32}\nstrict := (g : (Gauge _)) => g.v\nstrict ((Gauge _){.v (5 # 1)})\n",
+        "Gauge := _x => {.v Int # 32}\nstrict := (g <: (Gauge _)) => g.v\nstrict ((Gauge _){.v (5 # 1)})\n",
     );
     let imported = compile_at(
-        "---
-  gauge = import \"gauge.lichen\"
----
-gauge.strict ((gauge.Gauge _)(.v (5 # 1)))
-",
+        "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.strict ((gauge.Gauge _){.v (5 # 1)})\n",
         Some(&base),
     );
     let inline_messages: Vec<String> = inline
@@ -148,14 +144,10 @@ fn an_imported_open_requirement_is_bound_at_the_call() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Choose := _p => {.v Int # _p}\npick := (g : (Choose _)) => g.v\npick ((Choose 32){.v (5 # 1)})\n",
+        "Choose := _p => {.v Int # _p}\npick := (g <: (Choose _)) => g.v\npick ((Choose 32){.v (5 # 1)})\n",
     );
     let imported = compile_at(
-        "---
-  gauge = import \"gauge.lichen\"
----
-gauge.pick ((gauge.Choose 32)(.v (5 # 1)))
-",
+        "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.pick ((gauge.Choose 32){.v (5 # 1)})\n",
         Some(&base),
     );
     let inline_messages: Vec<String> = inline

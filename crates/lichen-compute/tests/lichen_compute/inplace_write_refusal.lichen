@@ -1,15 +1,22 @@
 ---
   compute = import "compute.lichen"
 ---
-In := {.k (compute.Buf Float)}
-OutE := {.e (compute.Buf Float)}
-Par := {.n Int, .in In, .out OutE}
+In := {.k (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
+OutE := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
+Par := {.n Int, .in In}
 Arg := {.n Int, .I In}
+Fill := {.n Int}
+fill := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf ((compute.BufParam _){.type Float, .length 1})
+  ((In){.k (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
+}
+filler := compute.parallel fill "cpu" In
 raw := (lane <: Par) => {
   i := compute.range lane.n
-  compute.write ((compute.Write _){.to lane.in.k, .at i, .value (99.0 : Float)})
+  ((OutE){.e (compute.write ((compute.Write _){.to lane.in.k, .at i, .value (99.0 : Float)}))})
 }
 k := compute.parallel raw "cpu" OutE
-kbuf := (compute.buffer ([1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf Float))
-out := (compute.plrun k ((Arg){.n 4, .I In{.k kbuf}}) : Struct)
-compute.collect kbuf
+kbuf := (compute.plrun filler ((Fill){.n 1}) : Struct)
+out := (compute.plrun k ((Arg){.n 1, .I In{.k kbuf.k}}) : Struct)
+compute.collect kbuf.k

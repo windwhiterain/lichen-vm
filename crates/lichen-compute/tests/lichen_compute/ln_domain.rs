@@ -63,8 +63,8 @@ fn emitted(operands: &[f32]) -> Vec<f32> {
 ---
   compute = import "compute.lichen"
 ---
-Args := {{.x (compute.Buf Float)}}
-Out  := {{.v (compute.Buf Float)}}
+Args := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
+Out  := {{.v (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 Par  := compute.P (compute.KT Float){{.I Args, .O Out}}
 applied := (k <: Par) => {{
   i := compute.range k.n
@@ -72,12 +72,11 @@ applied := (k <: Par) => {{
   compute.write ((compute.Write _){{.to k.out.v, .at i, .value (ln x ~ "element")}})
 }}
 kernel := compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
-args := (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
+args := (compute.buffer ([@any : Float, {}][{}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 out := (compute.plrun kernel ((compute.A Args){{.n {}, .I Args{{.x args}}}}) : Struct)
-compute.collect out.v : array{{Float, {}}}
+compute.collect out.v : Array
 "#,
         table.join(", "),
-        operands.len(),
         operands.len(),
         operands.len(),
     );

@@ -14,8 +14,8 @@ use lichen_compute::language::new_store;
 /// The gather: one read's address is another read's value.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  := {.x (compute.Buf Int), .tbl (compute.Buf Int)}
-POut := {.y (compute.Buf Int)}
+PIn  := {.x (compute.Buf ((compute.BufParam _){.type Int, .length _})), .tbl (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
+POut := {.y (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 PPar := {.n Int, .in PIn, .out POut}
 PArg := {.n Int, .I PIn}
 gather_raw := (k <: PPar) => {
@@ -24,8 +24,8 @@ gather_raw := (k <: PPar) => {
   compute.write ((compute.Write _){.to k.out.y, .at i, .value ((compute.read ((compute.Read _){.from k.in.x, .at j}) : Int))})
 }
 gather := compute.parallel gather_raw "gpu" POut
-x   := (compute.buffer ([10, 20, 30, 40, 50, 60] : Array) : (compute.Buf Int))
-tbl := (compute.buffer ([5, 0, 4, 1, 3, 2] : Array) : (compute.Buf Int))
+x   := (compute.buffer ([@any : Int, 6][10, 20, 30, 40, 50, 60] : Array) : (compute.Buf ((compute.BufParam _){.type Int, .length _})))
+tbl := (compute.buffer ([@any : Int, 6][5, 0, 4, 1, 3, 2] : Array) : (compute.Buf ((compute.BufParam _){.type Int, .length _})))
 "#;
 
 /// The plain gather: `y[i] = x[tbl[i]]`, so `[60, 10, 50, 20, 40, 30]`.
@@ -40,7 +40,7 @@ compute.collect gathered.y : Array
 /// An out-of-buffer read answers `0`, which is the padding a masked batch relies on, so
 /// `tbl = [5, 9, 4, 1, 3, 2]` answers `[60, 0, 50, 20, 40, 30]` rather than refusing.
 const PAST_THE_END: &str = r#"
-far := (compute.buffer ([5, 9, 4, 1, 3, 2] : Array) : (compute.Buf Int))
+far := (compute.buffer ([@any : Int, 6][5, 9, 4, 1, 3, 2] : Array) : (compute.Buf ((compute.BufParam _){{.type Int, .length _}})))
 gathered := (compute.plrun gather ((PArg){.n 6, .I PIn{.x x, .tbl far}}) : Struct)
 compute.collect gathered.y : Array
 "#;

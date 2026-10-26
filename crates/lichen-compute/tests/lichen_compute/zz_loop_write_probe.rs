@@ -21,8 +21,8 @@ use super::common;
 /// The program, with the backend and the body substituted.
 const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := {.unused (compute.Buf Float)}
-Out := {.y (compute.Buf Float)}
+In  := {.unused (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+Out := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 Par := {.n Int, .taps Int, .in In, .out Out}
 Arg := {.n Int, .taps Int, .I In}
 raw := (c <: Par) => {
@@ -30,7 +30,7 @@ raw := (c <: Par) => {
 @BODY@
 }
 k := compute.parallel raw "@B@" Out
-x := (compute.buffer ([1.0, 1.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 2][1.0, 1.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 out := (compute.plrun k ((Arg){.n 2, .taps 3, .I In{.unused x}}) : Struct)
 compute.collect out.y : Array
 "#;

@@ -165,11 +165,9 @@ fn a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body() {
     let report = pass_report(&passed_module);
     clear_graph_pass();
     println!(
-        "the tiling pass reported:
-  {}",
+        "the tiling pass reported:\n  {}",
         report.join(
-            "
-  "
+            "\n  "
         )
     );
 
@@ -204,11 +202,9 @@ fn a_datum_no_body_computes_is_refused_by_name_and_the_body_answers() {
     let report = pass_report(&passed_module);
     clear_graph_pass();
     println!(
-        "the tiling pass reported:
-  {}",
+        "the tiling pass reported:\n  {}",
         report.join(
-            "
-  "
+            "\n  "
         )
     );
 

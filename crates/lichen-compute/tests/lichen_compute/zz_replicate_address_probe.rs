@@ -19,8 +19,8 @@ use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 fn program() -> String {
     r#"
 --- compute = import "compute.lichen" ---
-AIn  := {.x (compute.Buf Float)}
-AOut := {.y (compute.Buf Float)}
+AIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+AOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 APar := {.n Int, .cols Int, .taps Int, .in AIn, .out AOut}
 sum_raw := (c <: APar) => {
   i := compute.range c.n
@@ -44,8 +44,8 @@ sums
 fn terms(expression: &str) -> String {
     let template = r#"
 --- compute = import "compute.lichen" ---
-TIn  := {.x (compute.Buf Float)}
-TOut := {.y (compute.Buf Float)}
+TIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+TOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 TPar := {.n Int, .cols Int, .in TIn, .out TOut}
 term_raw := (c <: TPar) => {
   i := compute.range c.n

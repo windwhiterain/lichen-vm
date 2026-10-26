@@ -26,10 +26,10 @@ fn recorded(body: &str) -> String {
 /// Three kernels over the three input structs the cases below need, and the data they read.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-Inc    := {.d (compute.Buf Float)}
-Two    := {.d (compute.Buf Float), .z (compute.Buf Float)}
-Single := {.q (compute.Buf Float)}
-Out    := {.e (compute.Buf Float)}
+Inc    := {.d (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+Two    := {.d (compute.Buf ((compute.BufParam _){.type Float, .length _})), .z (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+Single := {.q (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+Out    := {.e (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 ParD := compute.P (compute.KT Float){.I Inc, .O Out}
 ParT := compute.P (compute.KT Float){.I Two, .O Out}
 ParQ := compute.P (compute.KT Float){.I Single, .O Out}
@@ -48,7 +48,7 @@ dblQ_raw := (k <: ParQ) => {
   compute.write ((compute.Write _){.to k.out.e, .at i, .value ((compute.read ((compute.Read _){.from k.in.q, .at i}) : Float) * 2.0)})
 }
 dblQ := compute.parallel dblQ_raw "gpu" Out
-data := (compute.buffer ([1.0, 2.0, 3.0] : Array) : (compute.Buf Float))
+data := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf ((compute.BufParam _){.type Float, .length _})))
 "#;
 
 /// One buffer under `.in`, and the body **reads its own extent argument**.

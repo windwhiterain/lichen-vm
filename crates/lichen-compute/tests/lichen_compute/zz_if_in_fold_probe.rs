@@ -22,8 +22,8 @@ fn program(condition: &str, then: &str, otherwise: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-TIn  := {{.x (compute.Buf Float)}}
-TOut := {{.y (compute.Buf Float)}}
+TIn  := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
+TOut := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 TPar := {{.n Int, .taps Int, .in TIn, .out TOut}}
 TArg := {{.n Int, .taps Int, .I TIn}}
 tiny_raw := (c <: TPar) => {{
@@ -32,7 +32,7 @@ tiny_raw := (c <: TPar) => {{
   compute.write ((compute.Write _){{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}})
 }}
 tiny := compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "cpu" TOut
-x := (compute.buffer ([1.0, 1.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 2][1.0, 1.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 out := (compute.plrun tiny ((TArg){{.n 2, .taps 3, .I TIn{{.x x}}}}) : Struct)
 compute.collect out.y : Array
 "#

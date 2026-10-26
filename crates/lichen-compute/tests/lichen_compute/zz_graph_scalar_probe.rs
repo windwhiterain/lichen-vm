@@ -13,8 +13,8 @@ use lichen_compute::language::new_store;
 /// The kernel: `y[i + off] = x[i]`, with the offset a runtime scalar leaf beside the extent.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  := {.x (compute.Buf Int)}
-POut := {.y (compute.Buf Int)}
+PIn  := {.x (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
+POut := {.y (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 PPar := {.n Int, .off Int, .in PIn, .out POut}
 PArg := {.n Int, .off Int, .I PIn}
 append_raw := (c <: PPar) => {
@@ -23,7 +23,7 @@ append_raw := (c <: PPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at (i + c.off), .value v})
 }
 append := compute.parallel append_raw "gpu" POut
-x := (compute.buffer ([1, 2, 3, 4] : Array) : (compute.Buf Int))
+x := (compute.buffer ([@any : Int, 4][1, 2, 3, 4] : Array) : (compute.Buf ((compute.BufParam _){.type Int, .length _})))
 "#;
 
 /// The step, recorded: the extent, the offset and the buffer are the graph's three arguments.

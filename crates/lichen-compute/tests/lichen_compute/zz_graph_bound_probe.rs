@@ -14,8 +14,8 @@ use lichen_compute::language::new_store;
 /// The two kernels: one writes a bound, the other folds that many terms.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-LIn  := {.d (compute.Buf Int)}
-LOut := {.lim (compute.Buf Int)}
+LIn  := {.d (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
+LOut := {.lim (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 LPar := {.n Int, .in LIn, .out LOut}
 lim_raw := (k <: LPar) => {
   i := compute.range k.n
@@ -27,8 +27,8 @@ lim10_raw := (k <: LPar) => {
   compute.write ((compute.Write _){.to k.out.lim, .at i, .value (((compute.read ((compute.Read _){.from k.in.d, .at i}) : Int)) + 10)})
 }
 lim10k := compute.parallel lim10_raw "gpu" LOut
-SIn  := {.x (compute.Buf Float), .lim (compute.Buf Int)}
-SOut := {.y (compute.Buf Float)}
+SIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .lim (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
+SOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 SPar := {.n Int, .in SIn, .out SOut}
 sum_raw := (c <: SPar) => {
   i := compute.range c.n
@@ -38,8 +38,8 @@ sum_raw := (c <: SPar) => {
 }
 sumk := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" SOut
 GArg := {.n Int, .in SIn}
-x := (compute.buffer ([1.0, 2.0, 4.0, 8.0, 16.0, 32.0] : Array) : (compute.Buf Float))
-d := (compute.buffer ([2] : Array) : (compute.Buf Int))
+x := (compute.buffer ([@any : Float, 6][1.0, 2.0, 4.0, 8.0, 16.0, 32.0] : Array) : (compute.Buf ((compute.BufParam _){.type Float, .length _})))
+d := (compute.buffer ([@any : Int, 1][2] : Array) : (compute.Buf ((compute.BufParam _){.type Int, .length _})))
 "#;
 
 /// The chained step: the fold's bound is the first dispatch's own output.

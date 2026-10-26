@@ -13,8 +13,8 @@ use lichen_compute::language::new_store;
 /// The three kernels: a `Float` max fold, a conditional mark, an `Int` min fold.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-MIn  := {.x (compute.Buf Float)}
-MOut := {.m (compute.Buf Float)}
+MIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+MOut := {.m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 MPar := {.n Int, .w Int, .least Float, .in MIn, .out MOut}
 MArg := {.n Int, .w Int, .least Float, .I MIn}
 peak_raw := (c <: MPar) => {
@@ -23,8 +23,8 @@ peak_raw := (c <: MPar) => {
   compute.write ((compute.Write _){.to c.out.m, .at lane, .value (fold (c.w, c.least ~ "identity"))})
 }
 peak := compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" MOut
-HIn  := {.x (compute.Buf Float), .m (compute.Buf Float)}
-HOut := {.h (compute.Buf Int)}
+HIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+HOut := {.h (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 HPar := {.n Int, .big Int, .in HIn, .out HOut}
 HArg := {.n Int, .big Int, .I HIn}
 mark_raw := (c <: HPar) => {
@@ -35,8 +35,8 @@ mark_raw := (c <: HPar) => {
   compute.write ((compute.Write _){.to c.out.h, .at i, .value hit})
 }
 mark := compute.parallel mark_raw "gpu" HOut
-FIn  := {.x (compute.Buf Float), .m (compute.Buf Float)}
-FOut := {.h (compute.Buf Float)}
+FIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+FOut := {.h (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 FPar := {.n Int, .big Float, .in FIn, .out FOut}
 FArg := {.n Int, .big Float, .I FIn}
 markf_raw := (c <: FPar) => {
@@ -47,8 +47,8 @@ markf_raw := (c <: FPar) => {
   compute.write ((compute.Write _){.to c.out.h, .at i, .value hit})
 }
 markf := compute.parallel markf_raw "gpu" FOut
-TIn  := {.h (compute.Buf Int)}
-TOut := {.t (compute.Buf Int)}
+TIn  := {.h (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
+TOut := {.t (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 TPar := {.n Int, .w Int, .big Int, .in TIn, .out TOut}
 TArg := {.n Int, .w Int, .big Int, .I TIn}
 pick_raw := (c <: TPar) => {
@@ -57,8 +57,8 @@ pick_raw := (c <: TPar) => {
   compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
 pick := compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
-UIn  := {.h (compute.Buf Float)}
-UOut := {.t (compute.Buf Float)}
+UIn  := {.h (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
+UOut := {.t (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 UPar := {.n Int, .w Int, .big Float, .in UIn, .out UOut}
 UArg := {.n Int, .w Int, .big Float, .I UIn}
 pickf_raw := (c <: UPar) => {
@@ -68,7 +68,7 @@ pickf_raw := (c <: UPar) => {
 }
 pickf := compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" UOut
 ZIn  := {.a Int}
-ZOut := {.z (compute.Buf Int)}
+ZOut := {.z (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 ZPar := {.n Int, .in ZIn, .out ZOut}
 ZArg := {.n Int, .I ZIn}
 idx_raw := (c <: ZPar) => {
@@ -76,7 +76,7 @@ idx_raw := (c <: ZPar) => {
   compute.write ((compute.Write _){.to c.out.z, .at i, .value (i + 10)})
 }
 idx := compute.parallel idx_raw "gpu" ZOut
-x := (compute.buffer ([1.0, 3.0, 2.0, 7.0, 0.5, 9.0, 4.0, 2.5] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 8][1.0, 3.0, 2.0, 7.0, 0.5, 9.0, 4.0, 2.5] : Array) : (compute.Buf ((compute.BufParam _){.type Float, .length _})))
 "#;
 
 /// Stage 1: the `Float` max fold over one lane of eight. Hand answer `[9.0]`.

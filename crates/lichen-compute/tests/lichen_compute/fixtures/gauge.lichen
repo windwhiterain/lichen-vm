@@ -1,4 +1,4 @@
 Gauge := _x => {.v Int # 32}
-strict := (g : (Gauge _)) => g.v
+strict := (g <: (Gauge _)) => g.v
 Choose := _p => {.v Int # _p}
-pick := (g : (Choose _)) => g.v
+pick := (g <: (Choose _)) => g.v

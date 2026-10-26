@@ -435,8 +435,7 @@ fn merged(rewritten: &Graph) -> &KernelFragment {
 fn without_a_pack_the_floor_proves_the_elementwise_region() {
     let (module, _instances, schema, graph) = derived(&recording());
     println!(
-        "the region's canonical form:
-{}the region's hash: {}",
+        "the region's canonical form:\n{}the region's hash: {}",
         schema.canonical_form(),
         schema.hash
     );

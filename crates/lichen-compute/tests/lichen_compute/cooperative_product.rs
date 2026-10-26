@@ -80,7 +80,7 @@ a := (compute.plrun ka ((Fill){{.n {a_len}}}) : Struct)
 b := (compute.plrun kb ((Fill){{.n {b_len}}}) : Struct)
 c := (compute.plrun kc ((Fill){{.n {c_len}}}) : Struct)
 product := (compute.mma (compute.Mma Int){{.s "{backend}", .a a.a, .b b.b, .c c.c}})
-compute.collect product : array{{Int, {product_len}}}
+compute.collect product : Array
 "#,
         rows = ROWS,
         steps = STEPS,
@@ -88,7 +88,6 @@ compute.collect product : array{{Int, {product_len}}}
         a_len = a.len(),
         b_len = b.len(),
         c_len = c.len(),
-        product_len = ROWS * COLUMNS,
     )
 }
 

@@ -428,9 +428,7 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
     let report = compile(&chain(UNANNOTATED));
     assert!(
         !report.ok(),
-        "the step never names its parameter's type, so the program records no graph, and the check
-         fails on it: the entry says `fails_build`, and a program that answers nothing is what
-         that flag is for"
+        "the step never names its parameter's type, so the program records no graph, and the check\n         fails on it: the entry says `fails_build`, and a program that answers nothing is what\n         that flag is for"
     );
     let joined = report
         .diagnostics

@@ -115,8 +115,8 @@ fn emitted(operator: &str) -> Vec<f32> {
 ---
   compute = import "compute.lichen"
 ---
-Angles := {{.x (compute.Buf Float)}}
-Out    := {{.v (compute.Buf Float)}}
+Angles := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
+Out    := {{.v (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 Par    := compute.P (compute.KT Float){{.I Angles, .O Out}}
 applied := (k <: Par) => {{
   i := compute.range k.n
@@ -124,12 +124,11 @@ applied := (k <: Par) => {{
   compute.write ((compute.Write _){{.to k.out.v, .at i, .value ({operator} a ~ "element")}})
 }}
 kernel := compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
-angles := (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
+angles := (compute.buffer ([@any : Float, {}][{}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 out := (compute.plrun kernel ((compute.A Angles){{.n {}, .I Angles{{.x angles}}}}) : Struct)
-compute.collect out.v : array{{Float, {}}}
+compute.collect out.v : Array
 "#,
         table.join(", "),
-        ANGLES.len(),
         ANGLES.len(),
         ANGLES.len(),
     );

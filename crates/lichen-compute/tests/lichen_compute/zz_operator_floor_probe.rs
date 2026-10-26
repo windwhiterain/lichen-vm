@@ -21,8 +21,8 @@ const EXTENT: usize = common::LANES as usize;
 /// The GEMV of `examples/gemv.lichen`, through the graph leg, collected directly.
 const GEMV: &str = r#"
 --- compute = import "compute.lichen" ---
-InG  := {.w (compute.Buf Float), .x (compute.Buf Float)}
-OutG := {.y (compute.Buf Float)}
+InG  := {.w (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+OutG := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 Par  := {.n Int, .kdim Int, .in InG, .out OutG}
 ArgK := {.n Int, .kdim Int, .I InG}
 gemv_raw := (k <: Par) => {
@@ -33,8 +33,8 @@ gemv_raw := (k <: Par) => {
 kg := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutG
 step := (g <: Par) => (compute.plrun kg ((ArgK){.n g.n, .kdim g.kdim, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
 built := compute.graph step
-w := (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : Array) : (compute.Buf Float))
-x := (compute.buffer ([1.0, 2.0, 3.0] : Array) : (compute.Buf Float))
+w := (compute.buffer ([@any : Float, 12][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+x := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (4, 3, w, x))
 "#;
 
@@ -46,8 +46,8 @@ compute.collect (compute.graphrun built (4, 3, w, x))
 /// that read another node's output.
 const STENCIL_RING: &str = r#"
 --- compute = import "compute.lichen" ---
-XIn  := {.x (compute.Buf Float)}
-XOut := {.y (compute.Buf Float)}
+XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
 XArg := {.n Int, .alpha Float, .I XIn}
 ring_raw := (c <: XPar) => {
@@ -60,7 +60,7 @@ ring_raw := (c <: XPar) => {
 ks := compute.parallel ring_raw "gpu" XOut
 step := (s <: XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
 built := compute.graph step
-x := (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (6, 0.25, x))
 "#;
 
@@ -71,8 +71,8 @@ compute.collect (compute.graphrun built (6, 0.25, x))
 /// analysis at all.
 const STENCIL_DIRICHLET: &str = r#"
 --- compute = import "compute.lichen" ---
-XIn  := {.x (compute.Buf Float)}
-XOut := {.y (compute.Buf Float)}
+XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
 XArg := {.n Int, .alpha Float, .I XIn}
 step_raw := (c <: XPar) => {
@@ -85,15 +85,15 @@ step_raw := (c <: XPar) => {
 ks := compute.parallel step_raw "gpu" XOut
 step := (s <: XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
 built := compute.graph step
-x := (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (6, 0.25, x))
 "#;
 
 /// The two-dimensional step: `compute.row`/`compute.col`, four neighbours, two masks.
 const STENCIL_GRID: &str = r#"
 --- compute = import "compute.lichen" ---
-GIn  := {.x (compute.Buf Float)}
-GOut := {.y (compute.Buf Float)}
+GIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+GOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 GPar := {.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
 GArg := {.n Int, .cols Int, .alpha Float, .I GIn}
 grid_raw := (c <: GPar) => {
@@ -110,7 +110,7 @@ grid_raw := (c <: GPar) => {
 kg := compute.parallel grid_raw "gpu" GOut
 step := (s <: GPar) => (compute.plrun kg ((GArg){.n s.n, .cols s.cols, .alpha s.alpha, .I GIn{.x s.in.x}}) : Struct)
 built := compute.graph step
-plane := (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : Array) : (compute.Buf Float))
+plane := (compute.buffer ([@any : Float, 9][0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (9, 3, 0.25, plane))
 "#;
 
@@ -159,8 +159,8 @@ compute.collect (compute.graphrun built ({count}, {capacity}, {dim}, 1, {capacit
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-DIn   := {{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .q (compute.Buf Float)}}
-KVOut := {{.k (compute.Buf Float), .v (compute.Buf Float)}}
+DIn   := {{.k (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .v (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .nk (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .nv (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
+KVOut := {{.k (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .v (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 KPar  := {{.n Int, .cap Int, .dim Int, .t Int, .in DIn, .out KVOut}}
 KArg  := {{.n Int, .cap Int, .dim Int, .t Int, .I DIn}}
 append_raw := (k <: KPar) => {{
@@ -175,8 +175,8 @@ append_raw := (k <: KPar) => {{
   (compute.write ((compute.Write _){{.to k.out.k, .at slot, .value (new_k ~ "element")}}), compute.write ((compute.Write _){{.to k.out.v, .at slot, .value (new_v ~ "element")}}))
 }}
 append := compute.parallel (append_raw ~ "claim:Reduction(element)") "gpu" KVOut
-GIn  := {{.w (compute.Buf Float), .x (compute.Buf Float)}}
-GOut := {{.y (compute.Buf Float)}}
+GIn  := {{.w (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
+GOut := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 GPar := {{.n Int, .kdim Int, .in GIn, .out GOut}}
 GArg := {{.n Int, .kdim Int, .I GIn}}
 gemv_raw := (k <: GPar) => {{
@@ -185,11 +185,11 @@ gemv_raw := (k <: GPar) => {{
   compute.write ((compute.Write _){{.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))}})
 }}
 gemv := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" GOut
-k0 := (compute.buffer ([{cache}] : array{{Float, {count}}}) : (compute.Buf Float))
-v0 := (compute.buffer ([{values}] : array{{Float, {count}}}) : (compute.Buf Float))
-nk := (compute.buffer ([{key}] : Array) : (compute.Buf Float))
-nv := (compute.buffer ([{value}] : Array) : (compute.Buf Float))
-q  := (compute.buffer ([{query}] : array{{Float, {dim}}}) : (compute.Buf Float))
+k0 := (compute.buffer ([@any : Float, {count}][{cache}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+v0 := (compute.buffer ([@any : Float, {count}][{values}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+nk := (compute.buffer ([@any : Int, 1][{key}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+nv := (compute.buffer ([@any : Int, 1][{value}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+q  := (compute.buffer ([@any : Float, {dim}][{query}] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 {tail}
 "#,
         count = count,
@@ -206,8 +206,8 @@ q  := (compute.buffer ([{query}] : array{{Float, {dim}}}) : (compute.Buf Float))
 /// The convolution whose coefficients are a buffer: a **claimed** reduction with a window read.
 const FIR_SMOOTH: &str = r#"
 --- compute = import "compute.lichen" ---
-FIn  := {.x (compute.Buf Float), .w (compute.Buf Float)}
-FOut := {.y (compute.Buf Float)}
+FIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+FOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 FPar := {.n Int, .taps Int, .in FIn, .out FOut}
 FArg := {.n Int, .taps Int, .I FIn}
 filter_raw := (c <: FPar) => {
@@ -218,16 +218,16 @@ filter_raw := (c <: FPar) => {
 kf := compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "gpu" FOut
 smooth := (s <: FPar) => (compute.plrun kf ((FArg){.n s.n, .taps s.taps, .I FIn{.x s.in.x, .w s.in.w}}) : Struct)
 built := compute.graph smooth
-x := (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : Array) : (compute.Buf Float))
-w := (compute.buffer ([1.0, 2.0, 1.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 6][1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
+w := (compute.buffer ([@any : Float, 3][1.0, 2.0, 1.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (6, 3, x, w))
 "#;
 
 /// The library's `rowsum`: a **claimed** reduction reading `r * kdim + k`, one lane per row.
 const ROWSUM_LIBRARY: &str = r#"
 --- compute = import "compute.lichen" ---
-RIn  := {.x (compute.Buf Float)}
-ROut := {.y (compute.Buf Float)}
+RIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+ROut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 RPar := {.n Int, .kdim Int, .in RIn, .out ROut}
 RArg := {.n Int, .kdim Int, .I RIn}
 rowsum_raw := (c <: RPar) => {
@@ -238,15 +238,15 @@ rowsum_raw := (c <: RPar) => {
 kr := compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" ROut
 sums := (s <: RPar) => (compute.plrun kr ((RArg){.n s.n, .kdim s.kdim, .I RIn{.x s.in.x}}) : Struct)
 built := compute.graph sums
-x := (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 8][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (2, 4, x))
 "#;
 
 /// The library's `scale`: elementwise, so there is **no claim** to register — the control.
 const SCALE_ELEMENTWISE: &str = r#"
 --- compute = import "compute.lichen" ---
-SIn  := {.x (compute.Buf Float)}
-SOut := {.y (compute.Buf Float)}
+SIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
+SOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 SPar := {.n Int, .k Float, .in SIn, .out SOut}
 SArg := {.n Int, .k Float, .I SIn}
 scale_raw := (c <: SPar) => {
@@ -257,7 +257,7 @@ scale_raw := (c <: SPar) => {
 ks := compute.parallel scale_raw "gpu" SOut
 twice := (s <: SPar) => (compute.plrun ks ((SArg){.n s.n, .k s.k, .I SIn{.x s.in.x}}) : Struct)
 built := compute.graph twice
-x := (compute.buffer ([1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf Float))
+x := (compute.buffer ([@any : Float, 4][1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))
 compute.collect (compute.graphrun built (4, 2.0, x))
 "#;
 
