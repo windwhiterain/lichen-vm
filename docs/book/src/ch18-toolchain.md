@@ -98,7 +98,7 @@ Two things follow. First, a build's compiled artifacts are **shared across
 processes**: a second run of the compiler, or the language server, reads
 what the first one stored, which is why a warm start is fast. Second, the
 core prelude is a real file under `builtin/`, which is why a failure
-inside it can name `…/builtin/core.lichen:3:39` (Chapter 11). The artifact
+inside it can name `…/builtin/core.lichen:3:60` (Chapter 11). The artifact
 store's key is content, not time: an artifact is valid for the sources and
 the vocabulary that produced it, and an edit that changes neither does not
 invalidate it.
