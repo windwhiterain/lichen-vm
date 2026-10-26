@@ -44,9 +44,10 @@ impl<P: Program> Module<P> {
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
             };
-            let applied = self.static_node_apply(r#return, &mut ctx);
-            // The parameter is a walk entry point: an ignored one is still satisfied.
+            // The parameter is cloned before the return so parameter-owned fields
+            // resolve to the same instance; an ignored one is still satisfied.
             self.static_node_apply(parameter, &mut ctx);
+            let applied = self.static_node_apply(r#return, &mut ctx);
             // Each assert instantiates through the shared remap; a baked
             // condition is not re-registered.
             for index in 0..assert_count {
