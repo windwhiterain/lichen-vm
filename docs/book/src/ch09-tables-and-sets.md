@@ -193,7 +193,7 @@ error: expected set{?a}, found Int
 
 Membership is the only read a set has. `set(1, 2)[0]` is refused with
 `expected Array, found set{Int}`: the bracket read requires the array
-layout, and a set is a different kind.
+layout, and a set is a different one.
 
 ### Sets of types are classes
 

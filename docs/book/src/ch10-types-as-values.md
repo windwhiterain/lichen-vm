@@ -1,4 +1,4 @@
-# Types as Values
+# Types and Templates as Values
 
 Chapter 5 established that a type is a value. This chapter takes that
 seriously: types are bound and passed, **templates** are built by

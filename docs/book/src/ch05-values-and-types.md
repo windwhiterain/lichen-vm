@@ -241,7 +241,7 @@ error: expected Array, found Tuple
    | ^
 ```
 
-Chapter 3's `5 : Float` is that refusal too, and Chapter 10 shows the
+Chapter 3's `5 : Float` is that refusal too, and Chapter 13 shows the
 annotations that carry more than a type: the perspective `#`, the
 refinement `!`, and the doc `?`.
 

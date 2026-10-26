@@ -1,4 +1,4 @@
-# Recursive and Dependent Types
+# Recursive and Dependent Shapes
 
 The last two chapters of this part are about the two things lichen's type
 system does that a conventional one does not: a value may be

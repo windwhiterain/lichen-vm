@@ -94,7 +94,7 @@ annotated `Int`, and whose result is a placeholder of type `Int`. The
 is kept; only its signature is constrained. There is no separate
 function-type syntax, and no thin arrow: `->` is not a token in the
 language. Chapter 7 and Chapter 12 show the template form for the other
-compound kinds.
+compound layouts.
 
 A function's parameter is instantiated fresh at every application. That
 is what lets one binding be used at two different types:
