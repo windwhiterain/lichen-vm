@@ -195,10 +195,9 @@ where
     ///
     /// # Invariant
     ///
-    /// Empty by construction: a written arrow lowers to a function, so `Ctx::arrow`
-    /// has no call site and no node is registered here (see
-    /// docs/notes/function-type-merge.md). The printer's bare `[in, out]` arrow arm
-    /// therefore never fires, and no reading depends on this being non-empty.
+    /// Empty by construction: the language has no arrow type, so no node is
+    /// registered here. The printer's bare `[in, out]` arrow arm therefore never
+    /// fires, and no reading depends on this being non-empty.
     arrows: HashSet<NodeId>,
     /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,

@@ -888,7 +888,7 @@ fn broken_statements_are_recovered() {
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));
     // A statement that cannot start is skipped entirely, and the parse
     // continues to the final expression.
-    let tokens = lex("a := 1; -> ; b := 2; b").tokens;
+    let tokens = lex("a := 1; => ; b := 2; b").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
     assert!(matches!(program.expr, Some(Expr::Name(name, _, _)) if name == "b"));
@@ -901,7 +901,6 @@ fn dangling_operators_are_recovered() {
     let cases: &[(&str, (u32, u32))] = &[
         ("a := 1 + ; b := 2; b", (1, 10)),
         ("a := 1 <= ; b := 2; b", (1, 11)),
-        ("a := 1 -> ; b := 2; b", (1, 11)),
         ("a := 1 : ; b := 2; b", (1, 10)),
         ("a := x => ; b := 2; b", (1, 11)),
     ];
