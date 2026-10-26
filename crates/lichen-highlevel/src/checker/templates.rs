@@ -47,9 +47,10 @@ where
     /// `a = b` — the unify of the **actual** with the **expected**.
     ///
     /// # Invariant
-    /// The two sides are unified as whole terms, so a value is matched against a
-    /// template and not merely against its type. The direction is fixed:
-    /// `actual` is the found side and `expected` the requirement.
+    /// A non-function template unifies whole terms, so a value is matched
+    /// against its layout. A function template unifies the actual function's
+    /// type with the cloned signature, preserving the actual body for calls.
+    /// The direction is fixed: `actual` is found and `expected` the requirement.
     ///
     /// The `:` annotation does **not** come through here: it states a type, and
     /// a type is unified as a type.
@@ -63,9 +64,18 @@ where
         self.check_expr(expected);
         let actual_term = self.state[actual].term.expect("the actual is compiled");
         let expected_term = self.state[expected].term.expect("the expected is compiled");
+        let actual_ty = self.state[actual].ty.expect("the actual has a type");
+        let expected_ty = self.state[expected].ty.expect("the expected has a type");
         self.compute_operands(actual_term, expected_term);
+        // A function is its own type: constrain its signature, not its callable
+        // body. Other templates state the whole value layout.
+        let found = if self.module.is_function_type(expected_ty) {
+            actual_ty
+        } else {
+            actual_term
+        };
         self.check_unify(
-            actual_term,
+            found,
             expected_term,
             self.loc(actual, 0),
             DiagKind::Annotation,

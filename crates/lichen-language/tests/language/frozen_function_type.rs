@@ -1,4 +1,4 @@
-//! A written arrow in a frozen module stays the function type it names.
+//! A function template in a frozen module stays a real function.
 //! See function-type-merge.md.
 
 use lichen_language::package::PackageStore;
@@ -20,28 +20,27 @@ fn render_imported_wrapper(module_source: &str, program: &str) -> String {
 }
 
 #[test]
-fn a_written_arrow_in_a_frozen_module_is_a_function_type() {
+fn a_function_template_in_a_frozen_module_is_a_function() {
     let out = render_imported_wrapper(
-        "wrap := f => {I := _; f: I -> _; I}",
+        "wrap := f => {I := _; f <: (i <: I => _); I}",
         "---\nw = import \"wrap.lichen\"\n---\nw.wrap",
     );
-    assert!(
-        out.contains("->"),
-        "the imported wrapper is a function type: {out:?}"
-    );
+    assert!(out.contains("=>"), "the wrapper is a function: {out:?}");
+    assert!(!out.contains("->"), "the thin arrow is gone: {out:?}");
     assert!(
         !out.contains("raw[Function"),
-        "a function type is not its own two items: the parameter's type is the \
-         function type the annotation names, so the signature reads as an \
-         arrow rather than as `[Function, <signature>]` — got {out:?}"
+        "a function type is not its own two items: {out:?}"
     );
 
-    let out = render_imported_wrapper(
-        "wrap := f => {O := _; f : _ -> O; O}",
-        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y)",
-    );
+    let mut store = PackageStore::<LangProgram>::new();
+    let out = lichen_language::run::evaluate_raw(
+        "apply := x <: (x : Int => _: Int) => x 1\napply (y : Int => y + y)",
+        None,
+        &mut store,
+    )
+    .unwrap_or_else(|diags| panic!("the function template must check, got: {diags:?}"));
     assert_eq!(
-        out, "Int: Type",
-        "a frozen wrapper captures the codomain type"
+        out, "2: Int",
+        "the template constrains the function without replacing its body"
     );
 }
