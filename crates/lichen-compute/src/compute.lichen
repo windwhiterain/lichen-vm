@@ -5,17 +5,17 @@ KT := _x => {.I _, .O _}
 K := _x => {.native _, .I _, .O _}
 A := I => {.n @any : Int, .I I}
 P := T <: KT _ => {.n @any : Int, .in T.I}
-S := T <: KT _ => A T.I -> T.O
+S := T <: KT _ => (i <: (A T.I) => o <: T.O)
 BufParam := _x => {.type _, .length _}
 Buf := x <: BufParam _ => {
   .native @any : $buf_type(x.type, x.length)
   .type x.type
   .length x.length
 }
-jit := f => {I := _; O := _; f : I -> O; (K _){.native $jit(f), .I I, .O O}}
+jit := f => {I := _; f <: (i <: I => _); O := f I; (K _){.native $jit(f), .I I, .O O}}
 launch := k <: K _ => a => {a <: k.I; a # _; r := $launch(k.native, a); r <: k.O}
 call := k <: K _ => a => {a <: k.I; a # _; r := $call(k.native, a); r <: k.O}
-parallel := f => b : string => o : _ => {I := _; O := _; f : I -> O; (K _){.native $parallel(f, b), .I I, .O o}}
+parallel := f => b : string => o : _ => {I := _; f <: (i <: I => _); (K _){.native $parallel(f, b), .I I, .O o}}
 plrun := k <: K _ => a <: k.I => {r := $plrun(k.native, a, k.O); r <: k.O}
 range := x : Int => (($range(x) : Int) # 1)
 row := cfg => (($row(cfg) : Int) # 1)
@@ -35,5 +35,5 @@ Mma := _x => {
   .c (Buf ((BufParam _){.type Int, .length 16})) # warp
 }
 mma := x <: Mma _ => {r := $mma(x.s, x.a, x.b, x.c); r <: (Buf ((BufParam _){.type Int, .length 16})) # warp}
-graph := f => {f : _ -> _; $graph(f)}
+graph := f => {f <: (_ => _); $graph(f)}
 graphrun := g => a => $graphrun(g, a)
