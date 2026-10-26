@@ -12,11 +12,11 @@ Buf := x <: BufParam _ => {
   .type x.type
   .length x.length
 }
-jit := f => {I := _; f = (i = I => _); O := f I; (K _){.native $jit(f), .I I, .O O}}
-launch := k <: K _ => a => {a = k.I; a # _; r := $launch(k.native, a); r : type_of (k.O); r = k.O}
-call := k <: K _ => a => {a = k.I; a # _; r := $call(k.native, a); r : type_of (k.O); r = k.O}
-parallel := f => b : string => o : _ => {I := _; f = (i = I => _); (K _){.native $parallel(f, b), .I I, .O o}}
-plrun := k <: K _ => a = k.I => {r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O}
+jit := f => {I := _x => _; f = (i <: I => _); O := f (I _); (K _){.native $jit(f), .I I, .O O}}
+launch := k <: K _ => a => {a <: k.I; a # _; r := $launch(k.native, a); r : type_of (k.O); r = k.O}
+call := k <: K _ => a => {a <: k.I; a # _; r := $call(k.native, a); r : type_of (k.O); r = k.O}
+parallel := f => b : string => o : _ => {I := _x => _; f = (i <: I => _); (K _){.native $parallel(f, b), .I I, .O o}}
+plrun := k <: K _ => a <: k.I => {r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O}
 range := x : Int => (($range(x) : Int) # 1)
 row := cfg => (($row(cfg) : Int) # 1)
 col := cfg => (($col(cfg) : Int) # 1)
