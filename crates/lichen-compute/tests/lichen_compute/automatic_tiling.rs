@@ -70,25 +70,25 @@ fn declared() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Par = struct{{.n Int, .in In}}
-Arg = struct{{.n Int, .I In}}
-GA  = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
+In  := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
+Out := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
+Par := {{.n Int, .in In}}
+Arg := {{.n Int, .I In}}
+GA  := {{.n Int, .in In}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
 }}
-kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step = (s : GA) => {{
-  compute.plrun kernel ((Arg)(.n s.n, .I In(.b s.in.b))) : Out
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+step := (s <: GA) => {{
+  compute.plrun kernel ((Arg){{.n s.n, .I In{{.b s.in.b}}}}) : Out
 }}
-built = compute.graph step
+built := compute.graph step
 {fill}
-data = (compute.plrun filler ((Fill)(.n {count})) : Data)
-out = compute.collect (compute.graphrun built ({count}, data.b))
+data := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)
+out := compute.collect (compute.graphrun built ({count}, data.b))
 out
 "#,
         fill = filled(),
@@ -106,14 +106,14 @@ out
 fn filled() -> String {
     format!(
         r#"
-Data = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Fill = struct{{.n Int}}
-fill = (c : Fill) => {{
-  i = compute.range c.n
-  b = compute.buf ((compute.BufParam _)(.type Float, .length {count}))
-  ((Data)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (int2float i + 1.0))))))
+Data := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
+Fill := {{.n Int}}
+fill := (c <: Fill) => {{
+  i := compute.range c.n
+  b := compute.buf ((compute.BufParam _){{.type Float, .length {count}}})
+  ((Data){{.b (compute.write ((compute.Write _){{.to b, .at i, .value (int2float i + 1.0)}}))}})
 }}
-filler = compute.parallel fill "cpu" Data
+filler := compute.parallel fill "cpu" Data
 "#,
         count = COUNT,
     )

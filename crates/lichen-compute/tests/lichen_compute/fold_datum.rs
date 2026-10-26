@@ -30,33 +30,33 @@ fn fold_over(combine: &str, identity: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.b (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
-Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length COUNT)))}
-Par = struct{.n Int, .in In}
-reduction = (k : Par) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity"))))))
+In  := {.b (compute.Buf ((compute.BufParam _){.type Float, .length COUNT}))}
+Out := {.z (compute.Buf ((compute.BufParam _){.type Float, .length COUNT}))}
+Par := {.n Int, .in In}
+reduction := (k <: Par) => {
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){.type Float, .length k.n})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity")}))})
 }
-kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step = (s : Par) => {
-  compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+step := (s <: Par) => {
+  compute.plrun kernel ((compute.A In){.n s.n, .I In{.b s.in.b}}) : Out
 }
-built = compute.graph step
-Fill = struct{.n Int}
-fill = (c : Fill) => {
-  i = compute.range c.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length COUNT))
-  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
+built := compute.graph step
+Fill := {.n Int}
+fill := (c <: Fill) => {
+  i := compute.range c.n
+  y := compute.buf ((compute.BufParam _){.type Float, .length COUNT})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value (int2float i + 1.0)}))})
 }
-filler = compute.parallel fill "cpu" Out
-data = (compute.plrun filler ((Fill)(.n COUNT)) : Out)
-out = compute.collect (compute.graphrun built (COUNT, data.z))
+filler := compute.parallel fill "cpu" Out
+data := (compute.plrun filler ((Fill){.n COUNT}) : Struct)
+out := compute.collect (compute.graphrun built (COUNT, data.z))
 out
 "#,
     );
-    let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
+    let read = "(compute.read ((compute.Read _){.from k.in.b, .at s(0) - 1}) : Float)";
     source = source.replace("COMBINE", combine.replace("READ", read).as_str());
     source = source.replace("IDENTITY", identity);
     source.replace("COUNT", &COUNT.to_string())

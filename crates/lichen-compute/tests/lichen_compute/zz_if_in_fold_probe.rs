@@ -22,19 +22,19 @@ fn program(condition: &str, then: &str, otherwise: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-TIn  = struct{{.x (compute.Buf Float)}}
-TOut = struct{{.y (compute.Buf Float)}}
-TPar = struct{{.n Int, .taps Int, .in TIn, .out TOut}}
-TArg = struct{{.n Int, .taps Int, .I TIn}}
-tiny_raw = (c : TPar) => {{
-  i = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+TIn  := {{.x (compute.Buf Float)}}
+TOut := {{.y (compute.Buf Float)}}
+TPar := {{.n Int, .taps Int, .in TIn, .out TOut}}
+TArg := {{.n Int, .taps Int, .I TIn}}
+tiny_raw := (c <: TPar) => {{
+  i := compute.range c.n
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}})
 }}
-tiny = compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "cpu" TOut
-x = (compute.buffer ([1.0, 1.0] : array{{Float, 2}}) : (compute.Buf Float))
-out = (compute.plrun tiny ((TArg)(.n 2, .taps 3, .I TIn(.x x))) : TOut)
-compute.collect out.y : array{{Float, 2}}
+tiny := compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "cpu" TOut
+x := (compute.buffer ([1.0, 1.0] : Array) : (compute.Buf Float))
+out := (compute.plrun tiny ((TArg){{.n 2, .taps 3, .I TIn{{.x x}}}}) : Struct)
+compute.collect out.y : Array
 "#
     )
 }

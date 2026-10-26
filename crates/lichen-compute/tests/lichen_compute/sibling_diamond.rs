@@ -112,48 +112,48 @@ fn layernorm() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Row   = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Sums  = struct{{.s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParS  = struct{{.n Int, .in Row}}
-row_sum_raw = (k : ParS) => {{
-  i = compute.range k.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
-  ((Sums)(.s (compute.write ((compute.Write _)(.to y, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
+Row   := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+Sums  := {{.s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParS  := {{.n Int, .in Row}}
+row_sum_raw := (k <: ParS) => {{
+  i := compute.range k.n
+  y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine"))
+  ((Sums){{.s (compute.write ((compute.Write _){{.to y, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
-Sumsq = struct{{.q (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParQ  = struct{{.n Int, .in Row}}
-row_sumsq_raw = (k : ParQ) => {{
-  i = compute.range k.n
-  q = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
-  ((Sumsq)(.q (compute.write ((compute.Write _)(.to q, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
+row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
+Sumsq := {{.q (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParQ  := {{.n Int, .in Row}}
+row_sumsq_raw := (k <: ParQ) => {{
+  i := compute.range k.n
+  q := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
+  ((Sumsq){{.q (compute.write ((compute.Write _){{.to q, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
-row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
-Moments = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutY    = struct{{.y (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParY    = struct{{.n Int, .in Moments}}
-normalise_raw = (k : ParY) => {{
-  i = compute.range k.n
-  count = int2float k.n
-  m = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / count
-  v = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float) / count - m * m
-  d = sqrt (v + 1.0)
-  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (((x - m) / d * w) ~ "element"))))))
+row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
+Moments := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+OutY    := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParY    := {{.n Int, .in Moments}}
+normalise_raw := (k <: ParY) => {{
+  i := compute.range k.n
+  count := int2float k.n
+  m := (compute.read ((compute.Read _){{.from k.in.s, .at 0}}) : Float) / count
+  v := (compute.read ((compute.Read _){{.from k.in.q, .at 0}}) : Float) / count - m * m
+  d := sqrt (v + 1.0)
+  x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
+  w := (compute.read ((compute.Read _){{.from k.in.w, .at i}}) : Float)
+  y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value (((x - m) / d * w) ~ "element")}}))}})
 }}
-normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
-All   = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-GArg  = struct{{.n Int, .in All}}
-step = (s : GArg) => {{
-  a = (compute.plrun row_sum ((compute.A Row)(.n s.n, .I Row(.x s.in.x))) : Sums)
-  b = (compute.plrun row_sumsq ((compute.A Row)(.n s.n, .I Row(.x s.in.x))) : Sumsq)
-  compute.plrun normalise ((compute.A Moments)(.n s.n, .I Moments(.x s.in.x, .w s.in.w, .s a.s, .q b.q))) : OutY
+normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
+All   := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+GArg  := {{.n Int, .in All}}
+step := (s <: GArg) => {{
+  a := (compute.plrun row_sum ((compute.A Row){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
+  b := (compute.plrun row_sumsq ((compute.A Row){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
+  compute.plrun normalise ((compute.A Moments){{.n s.n, .I Moments{{.x s.in.x, .w s.in.w, .s a.s, .q b.q}}}}) : OutY
 }}
-built = compute.graph step
+built := compute.graph step
 (row_sum, row_sumsq, normalise, built)
 "#
     )
@@ -171,44 +171,44 @@ fn minimal() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Row   = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Sums  = struct{{.s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParS  = struct{{.n Int, .in Row}}
-row_sum_raw = (k : ParS) => {{
-  i = compute.range k.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
-  ((Sums)(.s (compute.write ((compute.Write _)(.to y, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
+Row   := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+Sums  := {{.s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParS  := {{.n Int, .in Row}}
+row_sum_raw := (k <: ParS) => {{
+  i := compute.range k.n
+  y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine"))
+  ((Sums){{.s (compute.write ((compute.Write _){{.to y, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
-Sumsq = struct{{.q (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParQ  = struct{{.n Int, .in Row}}
-row_sumsq_raw = (k : ParQ) => {{
-  i = compute.range k.n
-  q = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
-  ((Sumsq)(.q (compute.write ((compute.Write _)(.to q, .at i, .value (fold (k.n, 0.0 ~ "identity")))))))
+row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
+Sumsq := {{.q (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParQ  := {{.n Int, .in Row}}
+row_sumsq_raw := (k <: ParQ) => {{
+  i := compute.range k.n
+  q := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
+  ((Sumsq){{.q (compute.write ((compute.Write _){{.to q, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
-row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
-Moments = struct{{.x (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutY    = struct{{.y (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParY    = struct{{.n Int, .in Moments}}
-normalise_raw = (k : ParY) => {{
-  i = compute.range k.n
-  s = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)
-  q = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float)
-  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (((x - s) / q) ~ "element"))))))
+row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
+Moments := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+OutY    := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+ParY    := {{.n Int, .in Moments}}
+normalise_raw := (k <: ParY) => {{
+  i := compute.range k.n
+  s := (compute.read ((compute.Read _){{.from k.in.s, .at 0}}) : Float)
+  q := (compute.read ((compute.Read _){{.from k.in.q, .at 0}}) : Float)
+  x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
+  y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
+  ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value (((x - s) / q) ~ "element")}}))}})
 }}
-normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
-GArg = struct{{.n Int, .in Row}}
-step = (s : GArg) => {{
-  a = (compute.plrun row_sum ((compute.A Row)(.n s.n, .I Row(.x s.in.x))) : Sums)
-  b = (compute.plrun row_sumsq ((compute.A Row)(.n s.n, .I Row(.x s.in.x))) : Sumsq)
-  compute.plrun normalise ((compute.A Moments)(.n s.n, .I Moments(.x s.in.x, .s a.s, .q b.q))) : OutY
+normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
+GArg := {{.n Int, .in Row}}
+step := (s <: GArg) => {{
+  a := (compute.plrun row_sum ((compute.A Row){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
+  b := (compute.plrun row_sumsq ((compute.A Row){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
+  compute.plrun normalise ((compute.A Moments){{.n s.n, .I Moments{{.x s.in.x, .s a.s, .q b.q}}}}) : OutY
 }}
-built = compute.graph step
+built := compute.graph step
 (row_sum, row_sumsq, normalise, built)
 "#
     )

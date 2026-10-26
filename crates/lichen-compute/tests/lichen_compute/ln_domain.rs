@@ -63,17 +63,17 @@ fn emitted(operands: &[f32]) -> Vec<f32> {
 ---
   compute = import "compute.lichen"
 ---
-Args = struct{{.x (compute.Buf Float)}}
-Out  = struct{{.v (compute.Buf Float)}}
-Par  = compute.P (compute.KT Float)(.I Args, .O Out)
-applied = (k : Par) => {{
-  i = compute.range k.n
-  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.v, .at i, .value (ln x ~ "element")))
+Args := {{.x (compute.Buf Float)}}
+Out  := {{.v (compute.Buf Float)}}
+Par  := compute.P (compute.KT Float){{.I Args, .O Out}}
+applied := (k <: Par) => {{
+  i := compute.range k.n
+  x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
+  compute.write ((compute.Write _){{.to k.out.v, .at i, .value (ln x ~ "element")}})
 }}
-kernel = compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
-args = (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
-out = (compute.plrun kernel ((compute.A Args)(.n {}, .I Args(.x args))) : Out)
+kernel := compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
+args := (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
+out := (compute.plrun kernel ((compute.A Args){{.n {}, .I Args{{.x args}}}}) : Struct)
 compute.collect out.v : array{{Float, {}}}
 "#,
         table.join(", "),

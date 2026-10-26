@@ -34,31 +34,31 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par  = struct{{.n Int, .in In}}
-producer_raw = (lane : Par) => {{
-  at = compute.range lane.n
-  e = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at at, .value (2.0 * (compute.read ((compute.Read _)(.from lane.in.d, .at at)) : Float)))))))
+In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+Par  := {{.n Int, .in In}}
+producer_raw := (lane <: Par) => {{
+  at := compute.range lane.n
+  e := compute.buf ((compute.BufParam _){{.type Float, .length lane.n}})
+  ((OutE){{.e (compute.write ((compute.Write _){{.to e, .at at, .value (2.0 * (compute.read ((compute.Read _){{.from lane.in.d, .at at}}) : Float))}}))}})
 }}
-producer = compute.parallel producer_raw "cpu" OutE
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-consumer_raw = (lane : Par2) => {{
-  at = compute.range lane.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from lane.in.e, .at s(0) - 1)) : Float)))
-  z = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at at, .value fold (lane.n, 0.0))))))
+producer := compute.parallel producer_raw "cpu" OutE
+In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
+Par2 := {{.n Int, .in In2}}
+consumer_raw := (lane <: Par2) => {{
+  at := compute.range lane.n
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _){{.from lane.in.e, .at s(0) - 1}}) : Float)))
+  z := compute.buf ((compute.BufParam _){{.type Float, .length lane.n}})
+  ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at at, .value fold (lane.n, 0.0)}}))}})
 }}
-consumer = compute.parallel consumer_raw "cpu" OutZ
-GArg = struct{{.n Int, .in In}}
-step = (s : GArg) => {{
-  first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .e first.e)))
+consumer := compute.parallel consumer_raw "cpu" OutZ
+GArg := {{.n Int, .in In}}
+step := (s <: GArg) => {{
+  first := (compute.plrun producer ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  compute.plrun consumer ((compute.A In2){{.n s.n, .I In2{{.d s.in.d, .e first.e}}}})
 }}
-built = compute.graph step
+built := compute.graph step
 (producer, consumer, built)
 "#
     )

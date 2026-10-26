@@ -1,15 +1,15 @@
 ---
   compute = import "compute.lichen"
 ---
-In = struct{.k (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-Par = struct{.n Int, .in In, .out OutE}
-Arg = struct{.n Int, .I In}
-raw = (lane : Par) => {
-  i = compute.range lane.n
-  compute.write ((compute.Write _)(.to lane.in.k, .at i, .value (99.0 : Float)))
+In := {.k (compute.Buf Float)}
+OutE := {.e (compute.Buf Float)}
+Par := {.n Int, .in In, .out OutE}
+Arg := {.n Int, .I In}
+raw := (lane <: Par) => {
+  i := compute.range lane.n
+  compute.write ((compute.Write _){.to lane.in.k, .at i, .value (99.0 : Float)})
 }
-k = compute.parallel raw "cpu" OutE
-kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
-out = (compute.plrun k ((Arg)(.n 4, .I In(.k kbuf))) : OutE)
+k := compute.parallel raw "cpu" OutE
+kbuf := (compute.buffer ([1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf Float))
+out := (compute.plrun k ((Arg){.n 4, .I In{.k kbuf}}) : Struct)
 compute.collect kbuf

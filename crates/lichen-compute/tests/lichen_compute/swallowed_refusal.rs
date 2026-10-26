@@ -12,25 +12,25 @@ use lichen_compute::language::new_store;
 /// input buffer is the one the compiler refuses (`docs/notes/kernel-buffer-declarations.md`).
 const MISPLACED_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-Data = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
-Out = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
-Fill = struct{.n Int}
-fill = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
-  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value 1.0)))))
+Data := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
+Out := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
+Fill := {.n Int}
+fill := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf ((compute.BufParam _){.type Float, .length 3})
+  ((Data){.d (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
 }
-filler = compute.parallel fill "cpu" Data
-data = (compute.plrun filler ((Fill)(.n 3)) : Data)
-In  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
-Par = struct{.n Int, .in In}
-Arg = struct{.n Int, .I In}
-f = (k : Par) => {
-  i = compute.range k.n
-  ((Out)(.e (compute.write ((compute.Write _)(.to k.in.k, .at i, .value (99.0 : Float))))))
+filler := compute.parallel fill "cpu" Data
+data := (compute.plrun filler ((Fill){.n 3}) : Struct)
+In  := {.k (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
+Par := {.n Int, .in In}
+Arg := {.n Int, .I In}
+f := (k <: Par) => {
+  i := compute.range k.n
+  ((Out){.e (compute.write ((compute.Write _){.to k.in.k, .at i, .value (99.0 : Float)}))})
 }
-k = compute.parallel f "cpu" Out
-out = (compute.plrun k ((Arg)(.n 3, .I In(.k data.d))) : Out)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((Arg){.n 3, .I In{.k data.d}}) : Struct)
 "#;
 
 /// Run `tail` after [`MISPLACED_WRITE`]: the output line, or the rendered diagnostics.

@@ -161,28 +161,28 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParA = struct{.n Int, .in InA}
-adder = compute.parallel ((k : ParA) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
+InA  := {.a Int}
+OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParA := {.n Int, .in InA}
+adder := compute.parallel ((k <: ParA) => {
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
 }) "cpu" OutA
-InB  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-OutB = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParB = struct{.n Int, .in InB}
-doubler = compute.parallel ((k : ParB) => {
-  i = compute.range k.n
-  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  w = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutB)(.w (compute.write ((compute.Write _)(.to w, .at i, .value j + j)))))
+InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParB := {.n Int, .in InB}
+doubler := compute.parallel ((k <: ParB) => {
+  i := compute.range k.n
+  j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
+  w := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutB){.w (compute.write ((compute.Write _){.to w, .at i, .value j + j}))})
 }) "cpu" OutB
-data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-InS  = struct{.b (compute.Buf _)}
-ParS = struct{.n Int, .in InS}
-step = (s : ParS) => {
-  out = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b data.z))) : OutB)
+data := (compute.plrun adder ((compute.A InA){.n 4, .I InA{.a 0}}) : Struct)
+InS  := {.b (compute.Buf _)}
+ParS := {.n Int, .in InS}
+step := (s <: ParS) => {
+  out := (compute.plrun doubler ((compute.A InB){.n 4, .I InB{.b data.z}}) : Struct)
   out
 }
 step
@@ -252,20 +252,20 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParA = struct{.n Int, .in InA}
-adder = compute.parallel ((k : ParA) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
+InA  := {.a Int}
+OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParA := {.n Int, .in InA}
+adder := compute.parallel ((k <: ParA) => {
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
 }) "cpu" OutA
-InB  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-OutB = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParB = struct{.n Int, .in InB}
-step = (s : ParB) => {
-  out = (compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a 0))) : OutA)
-  compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a out.z)))
+InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParB := {.n Int, .in InB}
+step := (s <: ParB) => {
+  out := (compute.plrun adder ((compute.A InA){.n s.n, .I InA{.a 0}}) : Struct)
+  compute.plrun adder ((compute.A InA){.n s.n, .I InA{.a out.z}})
 }
 step
 "#;
@@ -381,31 +381,31 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParA = struct{.n Int, .in InA}
-adder = compute.parallel ((k : ParA) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
+InA  := {.a Int}
+OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParA := {.n Int, .in InA}
+adder := compute.parallel ((k <: ParA) => {
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
 }) "cpu" OutA
-InB  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-OutB = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParB = struct{.n Int, .in InB}
-doubler = compute.parallel ((k : ParB) => {
-  i = compute.range k.n
-  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  w = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutB)(.w (compute.write ((compute.Write _)(.to w, .at i, .value j + j)))))
+InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParB := {.n Int, .in InB}
+doubler := compute.parallel ((k <: ParB) => {
+  i := compute.range k.n
+  j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
+  w := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutB){.w (compute.write ((compute.Write _){.to w, .at i, .value j + j}))})
 }) "cpu" OutB
-data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-step = (s : ParB) => {
-  buffer = s.in.b
-  count = s.n
-  out = (compute.plrun doubler ((compute.A InB)(.n count, .I InB(.b buffer))) : OutB)
+data := (compute.plrun adder ((compute.A InA){.n 4, .I InA{.a 0}}) : Struct)
+step := (s <: ParB) => {
+  buffer := s.in.b
+  count := s.n
+  out := (compute.plrun doubler ((compute.A InB){.n count, .I InB{.b buffer}}) : Struct)
   out.w.native
 }
-step ((ParB)(.n 4, .in InB(.b data.z)))
+step ((ParB){.n 4, .in InB{.b data.z}})
 "#;
 
 /// The `i64`s behind a buffer value.

@@ -17,27 +17,27 @@ use lichen_lowlevel::AnyNodeId;
 const SOURCE: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParA = struct{.n Int, .in InA}
-adder = compute.parallel ((k : ParA) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutA)(.z (compute.write ((compute.Write _)(.to z, .at i, .value i + 3)))))
+InA  := {.a Int}
+OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParA := {.n Int, .in InA}
+adder := compute.parallel ((k <: ParA) => {
+  i := compute.range k.n
+  z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
 }) "cpu" OutA
-InB  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-OutB = struct{.w (compute.Buf ((compute.BufParam _)(.type Int, .length 4)))}
-ParB = struct{.n Int, .in InB}
-doubler = compute.parallel ((k : ParB) => {
-  i = compute.range k.n
-  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  w = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((OutB)(.w (compute.write ((compute.Write _)(.to w, .at i, .value j + j)))))
+InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+ParB := {.n Int, .in InB}
+doubler := compute.parallel ((k <: ParB) => {
+  i := compute.range k.n
+  j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
+  w := compute.buf ((compute.BufParam _){.type Int, .length k.n})
+  ((OutB){.w (compute.write ((compute.Write _){.to w, .at i, .value j + j}))})
 }) "cpu" OutB
-raw = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-@cache mid = raw.z
-raw2 = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b mid))) : OutB)
-compute.collect raw2.w : array{Int, 4}
+raw := (compute.plrun adder ((compute.A InA){.n 4, .I InA{.a 0}}) : Struct)
+@cache mid := raw.z
+raw2 := (compute.plrun doubler ((compute.A InB){.n 4, .I InB{.b mid}}) : Struct)
+compute.collect raw2.w : Array
 "#;
 
 /// The rendered root value, through the language's own printer.

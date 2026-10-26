@@ -115,17 +115,17 @@ fn emitted(operator: &str) -> Vec<f32> {
 ---
   compute = import "compute.lichen"
 ---
-Angles = struct{{.x (compute.Buf Float)}}
-Out    = struct{{.v (compute.Buf Float)}}
-Par    = compute.P (compute.KT Float)(.I Angles, .O Out)
-applied = (k : Par) => {{
-  i = compute.range k.n
-  a = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.v, .at i, .value ({operator} a ~ "element")))
+Angles := {{.x (compute.Buf Float)}}
+Out    := {{.v (compute.Buf Float)}}
+Par    := compute.P (compute.KT Float){{.I Angles, .O Out}}
+applied := (k <: Par) => {{
+  i := compute.range k.n
+  a := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
+  compute.write ((compute.Write _){{.to k.out.v, .at i, .value ({operator} a ~ "element")}})
 }}
-kernel = compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
-angles = (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
-out = (compute.plrun kernel ((compute.A Angles)(.n {}, .I Angles(.x angles))) : Out)
+kernel := compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
+angles := (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
+out := (compute.plrun kernel ((compute.A Angles){{.n {}, .I Angles{{.x angles}}}}) : Struct)
 compute.collect out.v : array{{Float, {}}}
 "#,
         table.join(", "),
