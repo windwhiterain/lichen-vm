@@ -1,17 +1,17 @@
 ---
   compute = import "compute.lichen"
 ---
-In = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}
-OutE = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}
-Par = struct{.n Int, .in In}
-raw = (lane : Par) => {
-  e = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at 0, .value (compute.read ((compute.Read _)(.from lane.in.d, .at 0)) : Float))))))
+In := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+OutE := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+Par := _x => {.n @any : Int, .in In _}
+raw := (lane <: Par) => {
+  e := compute.buf (compute.BufParam{.type Float, .length lane.n})
+  ((OutE){.e (compute.write (compute.Write{.to e, .at 0, .value (compute.read (compute.Read{.from lane.in.d, .at 0}) : Float)}))})
 }
-k = compute.parallel raw "gpu" OutE
-Arg = struct{.n Int, .I In}
-GArg = struct{.n Int, .in In}
-built = compute.graph ((a : GArg) => {
-  (compute.plrun k ((Arg)(.n a.n, .I a.in)) : OutE)
+k := compute.parallel raw "gpu" (OutE _)
+Arg := _x => {.n @any : Int, .I In _}
+GArg := _x => {.n @any : Int, .in In _}
+built := compute.graph ((a <: GArg) => {
+  (compute.plrun k ((Arg){.n a.n, .I a.in}) : Struct)
 })
 built

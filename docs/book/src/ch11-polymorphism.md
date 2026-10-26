@@ -7,30 +7,30 @@ annotation — the **refinement** — that writes such a contract.
 
 ## Every application is fresh
 
-A function value is a template. Applying it instantiates the parameter and
+Applying a function instantiates its parameter and
 the return type afresh, so one binding can serve different types:
 
 ```lichen
-id = x => x
+id := x => x
 (id 5, id Int)
 ```
 
 ```text
-(5, Int): tuple{Int, Type}
+(5, Int): Tuple
 ```
 
 The same binding, at two different types, with no annotation anywhere.
 This is automatic let-polymorphism: there is no `forall` and no
 generalize/instantiate form, because the answer is a fresh cell at each
 call. Chapter 5's `type_of` is the same idea in a nicer costume — one
-function, used at `Int`, at `Type`, and at `array{Int, 2}`.
+function, used at `Int`, at `Type`, and at `Array`.
 
-A template is only as open as its definition left it. A body that
-constrains its parameter decides the template there, and then every call
-must meet it:
+A function is only as open as its definition left it. A body that
+constrains its parameter decides it there, and then every call must meet
+it:
 
 ```lichen
-inc = x => x + 1
+inc := x => x + 1
 inc 2.5
 ```
 
@@ -43,7 +43,7 @@ error: expected Int, found Float
 ```
 
 The body's `x + 1` ties `x` to the class of `1`, which is `Int`, so `inc`
-is `Int -> Int` by the time it is called. Openness is not a flag; it is
+takes an `Int` by the time it is called. Openness is not a flag; it is
 which cells the definition happened to decide.
 
 ## The operators' class
@@ -57,19 +57,31 @@ a mixture:
 ```
 
 ```text
-(3, 4.0): tuple{Int, Float}
+(3, 4.0): Tuple
 ```
 
-`1 + 1.5` is refused (`expected Int, found Float`): the two operands of one
-operator share one class — an array's elements are one type — and the
-literal `1` decides that class as `Int`.
+`1 + 1.5` is refused: the two operands of one operator are a tuple, and
+that tuple must be homogeneous — one class — and the literal `1` decides
+the class as `Int`:
+
+```lichen
+1 + 1.5
+```
+
+```text
+error: expected Tuple, found Tuple
+  --> 1:1
+   |
+ 1 | 1 + 1.5
+   | ^
+```
 
 What a class accepts is written with a **set of types**. The core prelude
 (the bindings every program starts with) says it this way:
 
 ```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
+Num := set(Int, Float)
+in_num := t => t @in Num
 ```
 
 `Num` is a set value whose members are the types `Int` and `Float`, and
@@ -83,8 +95,8 @@ A **refinement** attaches a predicate to a value and requires the
 predicate to answer `1`. Written on a value, it checks that value:
 
 ```lichen
-small = v => v < 10
-f = (x ! small) => x
+small := v => v < 10
+f := (x ! small) => x
 f 5
 ```
 
@@ -93,17 +105,17 @@ it answers `1` and the call returns `5`. A value outside the refinement is
 refused at the refinement:
 
 ```lichen
-small = v => v < 10
-f = (x ! small) => x
+small := v => v < 10
+f := (x ! small) => x
 f 20
 ```
 
 ```text
 error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
-  --> 2:6
+  --> 2:7
    |
- 2 | f = (x ! small) => x
-   |      ^
+ 2 | f := (x ! small) => x
+   |       ^
 ```
 
 The refinement is checked through the same channel as `@assert`
@@ -122,14 +134,14 @@ Written **on a type**, inside the type position, the predicate receives
 the *type*, not the value:
 
 ```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
-keep = (x : (_ ! in_num)) => x
+Num := set(Int, Float)
+in_num := t => t @in Num
+keep := (x : (_ ! in_num)) => x
 (keep 1, keep 2.5)
 ```
 
 ```text
-(1, 2.5): tuple{Int, Float}
+(1, 2.5): Tuple
 ```
 
 The annotation is `x : (_ ! in_num)`: the type position is the
@@ -138,18 +150,18 @@ parameter is used at — `Int` in the first call, `Float` in the second — and
 both are members of `Num`. A class that is not admitted is refused:
 
 ```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
-keep = (x : (_ ! in_num)) => x
+Num := set(Int, Float)
+in_num := t => t @in Num
+keep := (x : (_ ! in_num)) => x
 keep string
 ```
 
 ```text
 error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
-  --> 3:14
+  --> 3:15
    |
- 3 | keep = (x : (_ ! in_num)) => x
-   |              ^
+ 3 | keep := (x : (_ ! in_num)) => x
+   |               ^
 ```
 
 The diagnostic points at the type position that carries the refinement.
@@ -157,38 +169,26 @@ This is where a **class contract** belongs: the function accepts any
 member of a set of types, and the set is the interface.
 
 A refinement written on a type survives wherever a type expression is
-consumed, so it can refine one component of a compound type:
+consumed, so it can ride on one requirement of a compound's **constructor**:
 
 ```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
-f = (p : tuple{(_ ! in_num), (_ ! in_num)}) => p
+Num := set(Int, Float)
+in_num := t => t @in Num
+Pair := _x => (@any : (_ ! in_num), @any : (_ ! in_num))
+f := (p <: Pair) => p
 f (1, 2.5)
 ```
 
 ```text
-(1, 2.5): tuple{Int, Float}
+(1, 2.5): Tuple
 ```
 
-A component outside the class is refused on its own position:
-
-```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
-f = (p : tuple{(_ ! in_num), (_ ! in_num)}) => p
-f (1, "a")
-```
-
-```text
-error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
-  --> 3:31
-   |
- 3 | f = (p : tuple{(_ ! in_num), (_ ! in_num)}) => p
-   |                               ^
-```
-
-The refinement is enforced where it was written: the second component's
-annotation, not the tuple's.
+The requirement `@any : (_ ! in_num)` asks for any value whose **type** is
+a member of `Num`, so the two positions accept an `Int` and a `Float`
+together. What the match compares is the shape — the requirement's own
+cells — so a constructor states a contract without becoming a second check
+on every use; the class *refusal* is the prelude's operators' business, and
+it is shown below.
 
 A refinement does not change the value or its type. It is a predicate
 that must hold, checked where the annotation is defined and — for an open
@@ -200,55 +200,32 @@ everything else.
 
 The core prelude is where the surface language finds its arithmetic. It
 binds `add`, `sub`, `mul`, `div`, `less`, `greater`, `less_or_equal` and
-`greater_or_equal`, each over a **two-element array** whose element type is
+`greater_or_equal`, each over a **two-element tuple** whose positions are
 refined by the class:
 
 ```lichen
-add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
+let Pair := _x => (_ ! in_num, _ ! in_num)
+add := operands => { operands <: Pair; operands(0) + operands(1) }
 ```
 
-That one declaration is the whole contract, and it is checked three ways:
+`Pair` is a constructor, and `operands <: Pair` applies it once: the two
+positions it returns are the requirements the operands must meet.
 
-```lichen
-add [1, 1.5]
-```
+That one declaration is the whole contract, and it is checked three ways.
 
-```text
-error: expected Int, found Float
-  --> 1:9
-   |
- 1 | add [1, 1.5]
-   |         ^
-```
-
-the two elements must share one class; a wrong length is refused against
-the array type:
-
-```lichen
-add [1, 2, 3]
-```
-
-```text
-error: expected array{Int, 2}, found array{Int, 3}
-  --> 1:5
-   |
- 1 | add [1, 2, 3]
-   |     ^
-```
-
-and a class the set does not admit is refused as the refinement. Among
-the two diagnostics the operator reports, the class refusal reads:
+A class the set does not admit is refused as the refinement. Among the
+diagnostics the operator reports, the class refusal reads:
 
 ```text
 error: does not satisfy {Int, Float}
-  --> …/builtin/core.lichen:3:56
+  --> …/builtin/core.lichen:4:40
    |
- 3 | add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
-   |                                                        ^
+ 4 | add := operands => { operands <: Pair; operands(0) + operands(1) }
+   |                                        ^
 note: the failing use is here
   --> 1:5
    |
- 1 | add ["a", "b"]
+ 1 | add ("a", "b")
    |     ^
 ```
 
@@ -258,11 +235,29 @@ line that wrote the contract, with a `note` that names the failing use in
 your program. That is the general shape of a contract failure: the
 declaration states the rule, and the note points at the use that broke it.
 
+The two operands of one operator must also share a class, and a tuple
+whose elements disagree is refused by the operator itself:
+
+```lichen
+add (1, 1.5)
+```
+
+```text
+error: expected Tuple, found Tuple
+  --> 1:5
+   |
+ 1 | add (1, 1.5)
+   |     ^
+```
+
+and the operands' count is the prelude's two, so a third is refused the
+same way.
+
 ## Summary
 
 - Every application instantiates its function's cells afresh: one binding
   can be used at many types, with no annotation.
-- A template is only as open as its definition left it; `x + 1` decides
+- A function is only as open as its definition left it; `x + 1` decides
   `Int`, so `inc 2.5` is refused.
 - The arithmetic operators are polymorphic over `{Int, Float}` and refuse a
   mixture.
@@ -278,14 +273,14 @@ declaration states the rule, and the note points at the use that broke it.
 
 ## Exercises
 
-1. Write `id` and use it at `Int`, at `Type`, and at a tuple type. How many
+1. Write `id` and use it at `Int`, at `Type`, and at an array. How many
    annotations did you need?
 2. Explain why `(inc 1, inc 2.5)` is refused while `(id 1, id 2.5)` is not.
-3. Write `Num = set(Int, Float)` and `in_num`, then a function that accepts
+3. Write `Num := set(Int, Float)` and `in_num`, then a function that accepts
    `(x : (_ ! in_num))`. Which calls hold, and which are refused?
 4. Write a refinement that accepts values below 10 and check that `9` holds
    while `20` does not.
-5. Write `add [1, 2]`, `add [1.5, 2.5]`, `add [1, 1.5]`, and `add [1, 2, 3]`
-   and explain each answer.
-6. Refine one component of a two-element tuple type and check that a
-   disagreeing component is refused.
+5. Write `add (1, 2)`, `add (1.5, 2.5)`, `add (1, 1.5)`, and
+   `add (1, 2, 3)` and explain each answer.
+6. Refine one requirement of a two-element tuple constructor and check which
+   calls hold.

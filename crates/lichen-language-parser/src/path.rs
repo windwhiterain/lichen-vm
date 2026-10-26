@@ -115,6 +115,18 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 0, function);
             push_index(&mut out, 1, argument);
         }
+        Expr::Unify {
+            actual, expected, ..
+        } => {
+            push_index(&mut out, 0, actual);
+            push_index(&mut out, 1, expected);
+        }
+        Expr::TemplateUnify {
+            actual, template, ..
+        } => {
+            push_index(&mut out, 0, actual);
+            push_index(&mut out, 1, template);
+        }
         Expr::BinOp { left, right, .. } => {
             push_index(&mut out, 0, left);
             push_index(&mut out, 1, right);
@@ -179,37 +191,44 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 push_index(&mut out, 4, refinement);
             }
         }
-        Expr::Arrow {
-            parameter_type,
-            return_type,
-            ..
-        } => {
-            push_index(&mut out, 0, parameter_type);
-            push_index(&mut out, 1, return_type);
-        }
-        Expr::Tuple(elements, _)
-        | Expr::TypeTuple(elements, _)
-        | Expr::Array(elements, _)
-        | Expr::Set(elements, _) => {
+        Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
             for (i, element) in elements.iter().enumerate() {
                 push_index(&mut out, i as u32, element);
             }
         }
-        Expr::StructType(fields, _) => {
-            let repeated = repeated_names(fields.iter().map(|field| field.name.as_deref()));
+        Expr::StructValue { fields, .. } => {
+            let repeated = repeated_names(fields.iter().map(|field| Some(field.name.as_str())));
             for (i, field) in fields.iter().enumerate() {
-                out.push((field_step(&field.name, i, &repeated), Node::Expr(&field.ty)));
+                out.push((
+                    field_step(&Some(field.name.clone()), i, &repeated),
+                    Node::Expr(&field.value),
+                ));
             }
         }
         Expr::StructInst { callee, fields, .. } => {
             push_index(&mut out, 0, callee);
-            let repeated = repeated_names(fields.iter().map(|field| field.name.as_deref()));
+            let repeated = repeated_names(fields.iter().map(|field| Some(field.name.as_str())));
             for (i, field) in fields.iter().enumerate() {
                 // The callee reserves slot 0, so the field list starts at 1.
                 out.push((
-                    field_step(&field.name, i + 1, &repeated),
+                    field_step(&Some(field.name.clone()), i + 1, &repeated),
                     Node::Expr(&field.value),
                 ));
+            }
+        }
+        Expr::Array {
+            template, length, ..
+        } => {
+            push_index(&mut out, 0, template);
+            push_index(&mut out, 1, length);
+        }
+        Expr::ArrayInst {
+            template, elements, ..
+        } => {
+            // The template reserves slot 0, so the elements start at 1.
+            push_index(&mut out, 0, template);
+            for (i, element) in elements.iter().enumerate() {
+                push_index(&mut out, i as u32 + 1, element);
             }
         }
         Expr::Table(entries, _) => {
@@ -224,14 +243,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 1, value);
         }
         Expr::Shallow(inner, _, _) => push_index(&mut out, 0, inner),
-        Expr::TypeArray {
-            element_type,
-            length,
-            ..
-        } => {
-            push_index(&mut out, 0, element_type);
-            push_index(&mut out, 1, length);
-        }
         Expr::Block {
             statements, expr, ..
         } => {

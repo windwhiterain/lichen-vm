@@ -2,11 +2,11 @@
   order = "4"
   doc = "A struct constructor is generic: `Box t` (juxtaposition — a space, not a
 parenthesized argument) builds the *same* nominal type for every field
-type — the `Fresh` id is per occurrence and shared, so `Box Int` and
-`Box Type` differ only in their field lists (the value shape), not in
-their type (the shared kind).  They therefore coexist in one homogeneous
-tuple."
-  output = "(struct{.f Int}, struct{.f Type}, struct{.f Int}): tuple{TypeStruct, TypeStruct, TypeStruct}"
+type — the nominal id is per written occurrence and shared by the clones, so
+`Box Int` and `Box Type` differ only in their field lists (the value shape),
+not in their type (the shared `Struct` template).  They therefore coexist in
+one tuple."
+  output = "((@any,), (@any,), (@any,)): Tuple"
 ---
-Box = t => struct{.f t}
+Box := t => {.f @any : t}
 (Box Int, Box Type, Box Int)

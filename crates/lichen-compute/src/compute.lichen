@@ -1,30 +1,39 @@
-let type_of = x => {t = _; x: t; t}
-let perspective_of = x => {p = _; x # p; p}
-warp = 32
-KT = _x => struct{.I _, .O _}
-K = _x => struct{.native _, .I _, .O _}
-A = I => struct{.n Int, .I I}
-P = T: KT _ => struct{.n Int, .in T.I}
-S = T: KT _ => A T.I -> T.O
-BufParam = _x => struct{.type _, .length _}
-Buf = x : (BufParam _) => struct{.native $buf_type(x.type, x.length), .type x.type : Type, .length x.length : Int}
-jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
-launch = k: (K _) => a: k.I # _ => {r = $launch(k.native, a); r: k.O; r}
-call = k: (K _) => a: k.I # _ => {r = $call(k.native, a); r: k.O; r}
-parallel = f => b: string => o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
-plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
-range = x: Int => (($range(x): Int) # 1)
-row = cfg => (($row(cfg): Int) # 1)
-col = cfg => (($col(cfg): Int) # 1)
-Read = p : (BufParam _) => struct{.from (Buf p) # warp, .at Int}
-Write = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
-WriteAtomic = p : (BufParam _) => struct{.to (Buf p) # warp, .at Int, .value p.type}
-read = (x : (Read _)) => $read(x.from, x.at)
-write = (x : (Write _)) => ($write(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
-write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) : (Buf _) # (perspective_of x.to))
-collect = (b : (Buf _)) => $collect(b)
-buf = (x : (BufParam _)) => (Buf x)(.native $buf(x.type, x.length), .type @any, .length @any)
-Mma = _x => struct{.s string, .a (Buf ((BufParam _)(.type Int, .length 16))) # warp, .b (Buf ((BufParam _)(.type Int, .length 32))) # warp, .c (Buf ((BufParam _)(.type Int, .length 16))) # warp}
-mma = (x : (Mma _)) => ($mma(x.s, x.a, x.b, x.c) : (Buf ((BufParam _)(.type Int, .length 16))) # warp)
-graph = f => {f: _ -> _; $graph(f)}
-graphrun = g => a => $graphrun(g, a)
+let type_of := x => {t := _; x : t; t}
+let perspective_of := x => {p := _; x # p; p}
+warp := 32
+KT := _x => {.I _, .O _}
+K := _x => {.native _, .I _, .O _}
+A := I => {.n @any : Int, .I I}
+P := T <: KT => {.n @any : Int, .in T.I}
+S := T <: KT => (i = (A T.I) => _ : T.O)
+BufParam := _x => {.type _, .length _}
+Buf := x <: BufParam => {
+  .native @any : $buf_type(x.type, x.length)
+  .type x.type
+  .length x.length
+}
+jit := f => {I := _x => _; f = (i <: I => _); O := f (I _); K{.native $jit(f), .I I, .O O}}
+launch := k <: K => a => {a <: k.I; a # _; r := $launch(k.native, a); r : type_of (k.O); r = k.O}
+call := k <: K => a => {a <: k.I; a # _; r := $call(k.native, a); r : type_of (k.O); r = k.O}
+parallel := f => b : string => o : _ => {I := _x => _; f = (i <: I => _); K{.native $parallel(f, b), .I I, .O o}}
+plrun := k <: K => a <: k.I => {r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O}
+range := x : Int => (($range(x) : Int) # 1)
+row := cfg => (($row(cfg) : Int) # 1)
+col := cfg => (($col(cfg) : Int) # 1)
+Read := p <: BufParam => {.from (Buf p) # warp, .at @any : Int}
+Write := p <: BufParam => {.to (Buf p) # warp, .at @any : Int, .value @any : p.type}
+WriteAtomic := p <: BufParam => {.to (Buf p) # warp, .at @any : Int, .value @any : p.type}
+read := x <: Read => $read(x.from, x.at)
+write := x <: Write => {r := $write(x.to, x.at, x.value); r = (Buf _) # (perspective_of x.to)}
+write_atomic := x <: WriteAtomic => {r := $write_atomic(x.to, x.at, x.value); r = (Buf _) # (perspective_of x.to)}
+collect := b <: Buf => $collect(b)
+buf := x <: BufParam => {b := Buf x; b.native = $buf(x.type, x.length); b}
+Mma := _x => {
+  .s @any : string
+  .a (Buf (BufParam{.type Int, .length 16})) # warp
+  .b (Buf (BufParam{.type Int, .length 32})) # warp
+  .c (Buf (BufParam{.type Int, .length 16})) # warp
+}
+mma := x <: Mma => {r := $mma(x.s, x.a, x.b, x.c); r = (Buf (BufParam{.type Int, .length 16})) # warp}
+graph := f => {f = (x => _); $graph(f)}
+graphrun := g => a => $graphrun(g, a)

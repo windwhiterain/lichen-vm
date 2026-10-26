@@ -40,24 +40,24 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-Src = struct{{.a Int}}
-SrcOut = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}}
-SrcPar = struct{{.n Int, .in Src}}
-fill = (k : SrcPar) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((SrcOut)(.z (compute.write ((compute.Write _)(.to z, .at i, .value int2float (i + 10))))))
+Src := _x => {{.a @any : Int}}
+SrcOut := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length 3}}))}}
+SrcPar := _x => {{.n @any : Int, .in Src _}}
+fill := (k <: SrcPar) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((SrcOut){{.z (compute.write (compute.Write{{.to z, .at i, .value int2float (i + 10)}}))}})
 }}
-source_kernel = compute.parallel fill "cpu" SrcOut
-inbuf = (compute.plrun source_kernel ((compute.A Src)(.n 3, .I Src(.a 0))) : SrcOut)
+source_kernel := compute.parallel fill "cpu" (SrcOut _)
+inbuf := (compute.plrun source_kernel (compute.A{{.n 3, .I Src{{.a 0}}}}) : Struct)
 {declarations}
-f = (k : Par) => {{
-  i = compute.range k.n
-  w = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Out)(.w (compute.write ((compute.Write _)(.to w, .at i, .value {written})))))
+f := (k <: Par) => {{
+  i := compute.range k.n
+  w := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((Out){{.w (compute.write (compute.Write{{.to w, .at i, .value {written}}}))}})
 }}
-k = compute.parallel f "cpu" Out
-out = (compute.plrun k ({argument}) : Out)
+k := compute.parallel f "cpu" (Out _)
+out := (compute.plrun k ({argument}) : Struct)
 compute.collect out.w
 "#
     )

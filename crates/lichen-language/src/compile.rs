@@ -14,8 +14,8 @@ use stacksafe::stacksafe;
 use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, PrefixOp, Schema};
 use lichen_highlevel::program::{
-    AnyLit, FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
-    TypeTypeLit,
+    AnyLit, ArrayTemplateLit, FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit,
+    StrLit, StringTypeLit, StructTemplateLit, TupleTemplateLit, TypeTypeLit,
 };
 use lichen_language_lex::Span;
 
@@ -478,6 +478,20 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
+            // The builtin templates: `Tuple`, `Array` and `Struct` are values,
+            // the layout templates a compound is written against.
+            Expr::TypeConst(TypeConst::Tuple, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(TupleTemplateLit)),
+                span,
+            ),
+            Expr::TypeConst(TypeConst::Array, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(ArrayTemplateLit)),
+                span,
+            ),
+            Expr::TypeConst(TypeConst::Struct, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(StructTemplateLit)),
+                span,
+            ),
             Expr::Any(span) => {
                 self.alloc(ExprKind::Literal(HighProgramLiteral::from(AnyLit)), span)
             }
@@ -551,21 +565,101 @@ impl Compiler {
                 let argument = self.compile_expr(argument);
                 self.alloc(ExprKind::Apply { function, argument }, span)
             }
+            // `a = b`: the actual value unified with the expected one.
+            Expr::Unify {
+                actual,
+                expected,
+                span,
+            } => {
+                let actual = self.compile_expr(actual);
+                let expected = self.compile_expr(expected);
+                self.alloc_unify(actual, expected, span)
+            }
+            // `actual <: template`: apply the template constructor to `_`,
+            // then unify the actual with that fresh result.
+            Expr::TemplateUnify {
+                actual,
+                template,
+                span,
+            } => {
+                let actual = self.compile_expr(actual);
+                let template = self.compile_expr(template);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let expected = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
+                self.alloc_unify(actual, expected, span)
+            }
             // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
             Expr::StructInst {
                 callee,
                 fields,
                 span,
             } => {
-                let type_expr = self.compile_expr(callee);
+                // The constructor is applied once; its fresh struct value is
+                // the requirement the fields fill.
+                let template = self.compile_expr(callee);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let template = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
                 let field_ids: Vec<ExprId> =
                     fields.iter().map(|f| self.compile_expr(&f.value)).collect();
                 let names: Vec<Option<&'static str>> = fields
                     .iter()
-                    .map(|f| f.name.as_deref().map(|n| self.intern_str(n)))
+                    .map(|f| Some(self.intern_str(&f.name)))
                     .collect();
                 let value = self.alloc_tuple(&field_ids, span);
-                self.alloc_instantiate(type_expr, value, &names, span)
+                self.alloc_instantiate(template, value, &names, span)
+            }
+            // `{.a e1, .b e2}`: the struct value, its fields and their names.
+            Expr::StructValue { fields, span } => {
+                let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
+                    .iter()
+                    .map(|field| {
+                        let value = self.compile_expr(&field.value);
+                        let name = self.intern_str(&field.name);
+                        (value, Some(name))
+                    })
+                    .collect();
+                self.alloc_struct(&field_ids, span)
+            }
+            // `[template, length]`: the array template and its length.
+            Expr::Array {
+                template,
+                length,
+                span,
+            } => {
+                let template = self.compile_expr(template);
+                let length = self.compile_expr(length);
+                self.alloc_array(template, length, span)
+            }
+            // `template[e1, …, en]`: apply the array constructor once, then
+            // unify every element with the requirement it returns.
+            Expr::ArrayInst {
+                template,
+                elements,
+                span,
+            } => {
+                let template = self.compile_expr(template);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let template = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
+                let (ids, depths) = self.compile_elements(elements);
+                self.alloc_array_inst(template, &ids, &depths, span)
             }
             Expr::BinOp {
                 operator,
@@ -578,7 +672,9 @@ impl Compiler {
                 // The routing: a prelude in scope sends `a + b` to its binding.
                 // See `docs/notes/operator-polymorphism.md` §7.
                 if let Some(binder) = self.routed_operator(operator) {
-                    let operands = self.alloc_array(&[left, right], span);
+                    // The operands are a tuple: a binary operator takes
+                    // `(left, right)`. See `docs/language-spec.md`, "sugar".
+                    let operands = self.alloc_tuple(&[left, right], span);
                     let function = self.binder(binder);
                     return self.alloc(
                         ExprKind::Apply {
@@ -620,16 +716,16 @@ impl Compiler {
                 else_branch,
                 span,
             } => {
-                // `if c then t else e` is the lazy branch index `[e, t][c]`.
-                // See `docs/notes/operator-polymorphism.md` §4.
+                // `if c then t else e` is the lazy branch read `(e, t)(c)`.
+                // See `docs/language-spec.md`, "sugar".
                 let condition = self.compile_expr(condition);
                 let then_branch = self.compile_expr(then_branch);
                 let else_branch = self.compile_expr(else_branch);
-                let branches = self.alloc_array(&[else_branch, then_branch], span);
+                let branches = self.alloc_tuple(&[else_branch, then_branch], span);
                 self.alloc(
-                    ExprKind::Index {
-                        array: branches,
-                        index: condition,
+                    ExprKind::Field {
+                        container: branches,
+                        key: condition,
                     },
                     span,
                 )
@@ -762,28 +858,9 @@ impl Compiler {
                 let name = self.intern_str(name);
                 self.alloc(ExprKind::NamedField { container, name }, span)
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                span,
-            } => {
-                let parameter = self.compile_expr(parameter_type);
-                let return_type = self.compile_expr(return_type);
-                self.alloc(
-                    ExprKind::TypeFunction {
-                        parameter,
-                        return_type,
-                    },
-                    span,
-                )
-            }
             Expr::Tuple(elements, span) => {
                 let ids = self.compile_all(elements);
                 self.alloc_tuple(&ids, span)
-            }
-            Expr::TypeTuple(elements, span) => {
-                let ids = self.compile_all(elements);
-                self.alloc_type_tuple(&ids, span)
             }
             Expr::TypeSet(element, span) => {
                 let element = self.compile_expr(element);
@@ -793,74 +870,6 @@ impl Compiler {
                 let key = self.compile_expr(key);
                 let value = self.compile_expr(value);
                 self.alloc_type_table(key, value, span)
-            }
-            Expr::StructType(fields, span) => {
-                let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
-                    .iter()
-                    .map(|field| {
-                        let ty = self.compile_expr(&field.ty);
-                        let name = field.name.as_deref().map(|n| self.intern_str(n));
-                        (ty, name)
-                    })
-                    .collect();
-                self.alloc_type_struct(&field_ids, span)
-            }
-            Expr::Array(elements, span) => {
-                // A `~`-marked element contributes its inner expression plus a depth.
-                let mut ids = Vec::with_capacity(elements.len());
-                let mut depths = Vec::with_capacity(elements.len());
-                for element in elements {
-                    match element {
-                        Expr::Shallow(inner, depth, _) => {
-                            ids.push(self.compile_expr(inner));
-                            depths.push(*depth);
-                        }
-                        // Every other kind is a plain element; exhaustive, to force classification.
-                        Expr::Int(..)
-                        | Expr::Float(..)
-                        | Expr::Str(..)
-                        | Expr::TypeConst(..)
-                        | Expr::Name(..)
-                        | Expr::Placeholder(..)
-                        | Expr::Any(..)
-                        | Expr::Lambda { .. }
-                        | Expr::Apply { .. }
-                        | Expr::BinOp { .. }
-                        | Expr::If { .. }
-                        | Expr::Assert { .. }
-                        | Expr::Prefix { .. }
-                        | Expr::NativeCall { .. }
-                        | Expr::Index { .. }
-                        | Expr::FieldRead { .. }
-                        | Expr::NamedFieldRead { .. }
-                        | Expr::TableFind { .. }
-                        | Expr::Annotation { .. }
-                        | Expr::Arrow { .. }
-                        | Expr::Tuple(..)
-                        | Expr::TypeTuple(..)
-                        | Expr::TypeSet(..)
-                        | Expr::TypeTable { .. }
-                        | Expr::StructType(..)
-                        | Expr::StructInst { .. }
-                        | Expr::Array(..)
-                        | Expr::Table(..)
-                        | Expr::Set(..)
-                        | Expr::TypeArray { .. }
-                        | Expr::Block { .. }
-                        | Expr::RecordBlock { .. }
-                        | Expr::Gc(..)
-                        | Expr::Err { .. } => {
-                            ids.push(self.compile_expr(element));
-                            depths.push(0);
-                        }
-                    }
-                }
-                if depths.iter().any(|&d| d != 0) {
-                    let elements: Vec<(ExprId, usize)> = ids.into_iter().zip(depths).collect();
-                    self.alloc_shallow_array(&elements, span)
-                } else {
-                    self.alloc_array(&ids, span)
-                }
             }
             Expr::Table(entries, span) => {
                 // Each entry's key and value are their own nodes; the exprs feed the Table kind.
@@ -876,23 +885,9 @@ impl Compiler {
                 self.alloc_set(&ids, span)
             }
             Expr::Shallow(inner, _, _) => {
-                // Unreachable through the parser; compiles the inner expression to stay total.
+                // A mark outside an instance's element list has no carrier, so
+                // only the inner expression compiles.
                 self.compile_expr(inner)
-            }
-            Expr::TypeArray {
-                element_type,
-                length,
-                span,
-            } => {
-                let element_type = self.compile_expr(element_type);
-                let length = self.compile_expr(length);
-                self.alloc(
-                    ExprKind::TypeArray {
-                        element_type,
-                        length,
-                    },
-                    span,
-                )
             }
             Expr::Block {
                 statements,
@@ -962,6 +957,38 @@ impl Compiler {
 
     fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {
         elements.iter().map(|e| self.compile_expr(e)).collect()
+    }
+
+    /// Compile an array instance's elements, with the `~` depth each one carries.
+    ///
+    /// # Invariant
+    ///
+    /// The depths are **empty** when no element is marked, and otherwise one
+    /// entry per element, aligned with the element ids: `0` is unmarked, `n`
+    /// the value slot at the first `n` levels of the element's type spine, and
+    /// `usize::MAX` the bare `~`. See `docs/notes/shallow-depth-mechanism.md`.
+    fn compile_elements(&mut self, elements: &[Expr]) -> (Vec<ExprId>, Vec<usize>) {
+        let mut ids = Vec::with_capacity(elements.len());
+        let mut depths = Vec::with_capacity(elements.len());
+        let mut marked = false;
+        for element in elements {
+            match element {
+                Expr::Shallow(inner, depth, _) => {
+                    ids.push(self.compile_expr(inner));
+                    depths.push(*depth);
+                    marked = true;
+                }
+                // Every other element is plain: the mark is the only distinction.
+                _ => {
+                    ids.push(self.compile_expr(element));
+                    depths.push(0);
+                }
+            }
+        }
+        if !marked {
+            depths.clear();
+        }
+        (ids, depths)
     }
 }
 

@@ -133,64 +133,62 @@
    by `1` across the head dimension — a transposition of either matrix would change every entry."
   output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}"
 ---
-QK = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .k (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-Scored = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-ParS = struct{.n Int, .keys Int, .dim Int, .in QK}
-ArgS = struct{.n Int, .keys Int, .dim Int, .I QK}
-scores_raw = (k : ParS) => {
-  i = compute.range k.n
-  query = compute.row k
-  key = compute.col k
-  sc = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.k, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
-  ((Scored)(.s (compute.write ((compute.Write _)(.to sc, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element"))))))
+QK := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 8})), .k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+Scored := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .in (QK _)}
+scores_raw := (k <: ParS) => {
+  i := compute.range k.n
+  query := compute.row k
+  key := compute.col k
+  sc := compute.buf (compute.BufParam{.type Float, .length k.n})
+  @loop dot := s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read (compute.Read{.from k.in.q, .at (query * k.dim + s(0) - 1)}) : Float) * (compute.read (compute.Read{.from k.in.k, .at (key * k.dim + s(0) - 1)}) : Float)) ~ "combine")
+  (Scored{.s (compute.write (compute.Write{.to sc, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")}))})
 }
-scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Scored
-QSV = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-OutA = struct{.o (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-ParA = struct{.n Int, .dim Int, .keys Int, .in QSV}
-ArgA = struct{.n Int, .dim Int, .keys Int, .I QSV}
-attend_raw = (k : ParA) => {
-  i = compute.range k.n
-  query = compute.row k
-  column = compute.col k
-  o = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) ~ "element")) ~ "combine")
-  m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
-  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
-  denominator = den (k.keys, 0.0 ~ "identity")
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
-  ((OutA)(.o (compute.write ((compute.Write _)(.to o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element"))))))
+scores := compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Scored _)
+QSV := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 4})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+OutA := _x => {.o (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+ParA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .in (QSV _)}
+attend_raw := (k <: ParA) => {
+  i := compute.range k.n
+  query := compute.row k
+  column := compute.col k
+  o := compute.buf (compute.BufParam{.type Float, .length k.n})
+  @loop top := s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) ~ "element")) ~ "combine")
+  m := top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
+  @loop den := s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) - m) ~ "element")) ~ "combine")
+  denominator := den (k.keys, 0.0 ~ "identity")
+  @loop acc := s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) - m) ~ "element") * (compute.read (compute.Read{.from k.in.v, .at ((s(0) - 1) * k.dim + column)}) : Float)) ~ "combine", s(2))
+  (OutA{.o (compute.write (compute.Write{.to o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")}))})
 }
-attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutA
-QBuf = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-KBuf = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-VBuf = struct{.v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
-Fill = struct{.n Int}
-fill_q_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
-  v = (if i == 0 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
-  ((QBuf)(.q (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+attend := compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutA _)
+QBuf := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+KBuf := _x => {.k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+VBuf := _x => {.v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+Fill := _x => {.n @any : Int}
+fill_q_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 8})
+  v := (if i == 0 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
+  (QBuf{.q (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_k_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
-  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 1.0 else 0.0)
-  ((KBuf)(.k (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_k_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 8})
+  v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 1.0 else 0.0)
+  (KBuf{.k (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_v_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
-  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
-  ((VBuf)(.v (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_v_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 8})
+  v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
+  (VBuf{.v (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_q = compute.parallel fill_q_raw "cpu" QBuf
-fill_k = compute.parallel fill_k_raw "cpu" KBuf
-fill_v = compute.parallel fill_v_raw "cpu" VBuf
-qm = (compute.plrun fill_q ((Fill)(.n 8)) : QBuf)
-kk = (compute.plrun fill_k ((Fill)(.n 8)) : KBuf)
-vv = (compute.plrun fill_v ((Fill)(.n 8)) : VBuf)
-scale = (compute.plrun scores ((ArgS)(.n 4, .keys 2, .dim 4, .I QK(.q qm.q, .k kk.k))) : Scored)
-out = (compute.plrun attend ((ArgA)(.n 8, .dim 4, .keys 2, .I QSV(.s scale.s, .v vv.v))) : OutA)
-compute.collect out.o : array{Float, 8}
+fill_q := compute.parallel fill_q_raw "cpu" (QBuf _)
+fill_k := compute.parallel fill_k_raw "cpu" (KBuf _)
+fill_v := compute.parallel fill_v_raw "cpu" (VBuf _)
+qm := (compute.plrun fill_q (Fill{.n 8}) : Struct)
+kk := (compute.plrun fill_k (Fill{.n 8}) : Struct)
+vv := (compute.plrun fill_v (Fill{.n 8}) : Struct)
+scale := (compute.plrun scores (ParS{.n 4, .keys 2, .dim 4, .in (QK{.q qm.q, .k kk.k})}) : Struct)
+out := (compute.plrun attend (ParA{.n 8, .dim 4, .keys 2, .in (QSV{.s scale.s, .v vv.v})}) : Struct)
+compute.collect out.o : Array

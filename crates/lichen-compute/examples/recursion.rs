@@ -242,7 +242,7 @@ compute.collect out.z
 /// instantiation of the binding.
 const ONE_STAGE_TUPLE: &str = r#"
 --- compute = import "compute.lichen" ---
-sum_to = (s : tuple{Int, _}) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
+sum_to = (s <: (_x => (@any : Int, @any : Int))) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 Out  = struct{.z (compute.Buf _)}
 Par  = struct{.n Int, .out Out}
 Host = struct{.n Int}
@@ -259,7 +259,7 @@ compute.collect out.z
 /// application.
 const LOOP_TUPLE: &str = r#"
 --- compute = import "compute.lichen" ---
-loop = f => (s : tuple{Int, _}) => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
+loop = f => (s <: (_x => (@any : Int, @any : Int))) => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
 inc = x => x + 1
 Out  = struct{.z (compute.Buf _)}
 Par  = struct{.n Int, .out Out}
@@ -277,7 +277,7 @@ compute.collect out.z
 fn loop_program(trip: usize) -> String {
     format!(
         r#"--- compute = import "compute.lichen" ---
-sum_to = (s : tuple{{Int, _}}) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
+sum_to = (s <: (_x => (@any : Int, @any : Int))) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 Out  = struct{{.z (compute.Buf _)}}
 Par  = struct{{.n Int, .out Out}}
 Host = struct{{.n Int}}
@@ -296,7 +296,7 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 /// not the emitter's.
 fn host_program(trip: usize) -> String {
     format!(
-        "sum_to = (s : tuple{{Int, _}}) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
+        "sum_to = (s <: (_x => (@any : Int, @any : Int))) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
          sum_to ({trip}, 0)\n"
     )
 }
@@ -353,7 +353,7 @@ const VERDICT_ROWS: &[(&str, &str, &str)] = &[
 fn host_reduction(marked: bool, count: usize) -> String {
     let marker = if marked { "@loop " } else { "" };
     format!(
-        "{marker}sum_to = (s : tuple{{Int, _}}) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
+        "{marker}sum_to = (s <: (_x => (@any : Int, @any : Int))) => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
          sum_to ({count}, 0)\n"
     )
 }

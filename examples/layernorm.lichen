@@ -56,61 +56,60 @@
    conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
   output = "[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}"
 ---
-Row   = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-Sums  = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-ParS  = struct{.n Int, .in Row}
-row_sum_raw = (k : ParS) => {
-  i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
-  b_s = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Sums)(.s (compute.write ((compute.Write _)(.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity")))))))
+Row := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Sums := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParS := _x => {.n @any : Int, .in (Row _)}
+row_sum_raw := (k <: ParS) => {
+  i := compute.range k.n
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from k.in.x, .at s(0) - 1}) : Float))) ~ "combine"))
+  b_s := compute.buf (compute.BufParam{.type Float, .length k.n})
+  Sums{.s (compute.write (compute.Write{.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity"))}))}
 }
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
-Sumsq = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-ParQ  = struct{.n Int, .in Row}
-row_sumsq_raw = (k : ParQ) => {
-  i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
-  b_q = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Sumsq)(.q (compute.write ((compute.Write _)(.to b_q, .at i, .value (fold (k.n + 0, 0.0 ~ "identity")))))))
+row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" (Sums _)
+Sumsq := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParQ := _x => {.n @any : Int, .in (Row _)}
+row_sumsq_raw := (k <: ParQ) => {
+  i := compute.range k.n
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from k.in.x, .at s(0) - 1}) : Float) * (compute.read (compute.Read{.from k.in.x, .at s(0) - 1}) : Float))) ~ "combine" ~ "element"))
+  b_q := compute.buf (compute.BufParam{.type Float, .length k.n})
+  Sumsq{.q (compute.write (compute.Write{.to b_q, .at i, .value (fold (k.n + 0, 0.0 ~ "identity"))}))}
 }
-row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
-Moments = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-OutY    = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-ArgY    = struct{.n Int, .eps Float, .I Moments}
-ParY    = struct{.n Int, .eps Float, .in Moments}
-normalise_raw = (k : ParY) => {
-  i = compute.range k.n
-  count = int2float k.n
-  m = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / count
-  v = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float) / count - m * m
-  d = sqrt (v + k.eps)
-  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
-  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
-  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutY)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (((x - m) / d * w) ~ "element"))))))
+row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Sumsq _)
+Moments := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .w (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4})), .q (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+OutY := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParY := _x => {.n @any : Int, .eps @any : Float, .in (Moments _)}
+normalise_raw := (k <: ParY) => {
+  i := compute.range k.n
+  count := int2float k.n
+  m := (compute.read (compute.Read{.from k.in.s, .at 0}) : Float) / count
+  v := (compute.read (compute.Read{.from k.in.q, .at 0}) : Float) / count - m * m
+  d := sqrt (v + k.eps)
+  x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
+  w := (compute.read (compute.Read{.from k.in.w, .at i}) : Float)
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  OutY{.y (compute.write (compute.Write{.to b_y, .at i, .value (((x - m) / d * w) ~ "element")}))}
 }
-normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
-Fill = struct{.n Int}
-xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-fill_x_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
-  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
-  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" (OutY _)
+Fill := _x => {.n @any : Int}
+xBuf := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+fill_x_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 4})
+  v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  xBuf{.x (compute.write (compute.Write{.to d, .at i, .value v}))}
 }
-fill_x = compute.parallel fill_x_raw "cpu" xBuf
-x = (compute.plrun fill_x ((Fill)(.n 4)) : xBuf).x
-wBuf = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-fill_w_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
-  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 6.0 else 0.0)
-  ((wBuf)(.w (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_x := compute.parallel fill_x_raw "cpu" (xBuf _)
+x := (compute.plrun fill_x (Fill{.n 4}) : Struct).x
+wBuf := _x => {.w (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+fill_w_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 4})
+  v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 6.0 else 0.0)
+  wBuf{.w (compute.write (compute.Write{.to d, .at i, .value v}))}
 }
-fill_w = compute.parallel fill_w_raw "cpu" wBuf
-w = (compute.plrun fill_w ((Fill)(.n 4)) : wBuf).w
-sm = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
-sq = (compute.plrun row_sumsq ((compute.A Row)(.n 4, .I Row(.x x))) : Sumsq)
-out = (compute.plrun normalise ((ArgY)(.n 4, .eps 1.0, .I Moments(.x x, .w w, .s sm.s, .q sq.q))) : OutY)
-compute.collect out.y : array{Float, 4}
+fill_w := compute.parallel fill_w_raw "cpu" (wBuf _)
+w := (compute.plrun fill_w (Fill{.n 4}) : Struct).w
+sm := (compute.plrun row_sum (ParS{.n 4, .in (Row{.x x})}) : Struct)
+sq := (compute.plrun row_sumsq (ParQ{.n 4, .in (Row{.x x})}) : Struct)
+out := (compute.plrun normalise (ParY{.n 4, .eps 1.0, .in (Moments{.x x, .w w, .s sm.s, .q sq.q})}) : Struct)
+compute.collect out.y : Array

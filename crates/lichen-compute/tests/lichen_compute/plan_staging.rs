@@ -9,9 +9,9 @@ use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelMark, KernelRoles, KernelShape,
-    LaneHeight, LaneWidth, LaunchSet, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice,
-    Space, Staging, TargetFacts,
+    IntWidth, KernelBody, KernelFragment, KernelMark, KernelRoles, KernelShape, LaneHeight,
+    LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging,
+    TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -98,16 +98,16 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Par = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)) ~ "combine"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (0, 0.0 ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at 0}}) : Float)) ~ "combine"))
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (0, 0.0 ~ "identity")}}))}})
 }}
-k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
 k
 "#
     )
@@ -215,7 +215,7 @@ fn a_declared_plan_stages_the_reduction() {
     let (reduction, staged_name) = declared_reduction_and_name();
     let lengths = [LANES as u64, (LANES * 3) as u64, (LANES * 4) as u64];
     for &count in &lengths {
-        let data = triangle_data(count);
+        let _data = triangle_data(count);
         let folding = Folding::new(
             &reduction,
             Element::Buffer { position: 0 },

@@ -10,11 +10,11 @@ come back to.
 
 ### A binding gives a name to a value
 
-A statement of the form `name = expression` binds the name. Every use of
+A statement of the form `name := expression` binds the name. Every use of
 the name afterwards is that same value, and evaluating it once is enough:
 
 ```lichen
-answer = 1 + 2
+answer := 1 + 2
 answer * 10
 ```
 
@@ -26,6 +26,11 @@ A binding is not an assignment: there is no mutable variable to change
 later. The name *is* the value's own node in the program's graph, and
 every use of the name is that node.
 
+The `:=` operator is the binding operator, and it is the only one that
+introduces a name. The plain `=` is the **unify**: it asks two expressions
+to agree, and it is how a type is found (Chapter 5). A block-wide binding
+and a unify are two different things, and the two operators never overlap.
+
 ### A block's names are in scope throughout the block
 
 A binding is **block-wide** by default. The names of a block are entered
@@ -33,13 +38,13 @@ before any of its values are compiled, so a value may use a binding
 written later, and two values may use each other:
 
 ```lichen
-is_even = n => if n == 0 then 1 else is_odd (n - 1)
-is_odd = n => if n == 0 then 0 else is_even (n - 1)
+is_even := n => if n == 0 then 1 else is_odd (n - 1)
+is_odd := n => if n == 0 then 0 else is_even (n - 1)
 (is_even 10, is_odd 10)
 ```
 
 ```text
-(1, 0): tuple{Int, Int}
+(1, 0): Tuple
 ```
 
 Neither binding needs a forward declaration, and the two functions call
@@ -52,16 +57,16 @@ binding it binds as an input; that would make the value its own input.
 The compiler refuses it by name:
 
 ```lichen
-x = 1
-x = x + 1
+x := 1
+x := x + 1
 ```
 
 ```text
 error: `x` names itself in its own value: …
-  --> 2:5
+  --> 2:6
    |
- 2 | x = x + 1
-   |     ^
+ 2 | x := x + 1
+   |      ^
 ```
 
 The message goes on to explain that a block-wide binding's name *is* its
@@ -76,13 +81,13 @@ read, so it is well defined.
 
 ### `let` rebinds sequentially
 
-The restrictive form `let name = expression` compiles the value *before*
+The restrictive form `let name := expression` compiles the value *before*
 the name enters scope, so the name is visible only to later statements.
 That is how a value is rebound in terms of the previous one:
 
 ```lichen
-let x = 1
-let x = x + 1
+let x := 1
+let x := x + 1
 x
 ```
 
@@ -91,7 +96,7 @@ x
 ```
 
 The second `x` is a new name that shadows the first, and its value reads
-the first. `let` and `@cache` (below) may be combined: `@cache let x = …`.
+the first. `let` and `@cache` (below) may be combined: `@cache let x := …`.
 
 ### A repeated binding shadows the whole block
 
@@ -100,14 +105,14 @@ wins for *every* use in the block — including uses written before it —
 because the names are entered before the values are compiled:
 
 ```lichen
-x = 1
-y = x
-x = 2
+x := 1
+y := x
+x := 2
 (y, x)
 ```
 
 ```text
-(2, 2): tuple{Int, Int}
+(2, 2): Tuple
 ```
 
 This is the same block-wide visibility from the other side. When a
@@ -120,18 +125,18 @@ A `{ … }` block introduces a scope. Its names shadow outer ones while the
 block runs, and the outer names are back afterwards:
 
 ```lichen
-x = 1
-({ x = 2; x }, x)
+x := 1
+({ x := 2; x }, x)
 ```
 
 ```text
-(2, 1): tuple{Int, Int}
+(2, 1): Tuple
 ```
 
 ### `@cache`
 
-`@cache name = expression` marks a binding whose value is meant to survive
-a rebuild. The compiler accepts the mark everywhere and it changes
+`@cache name := expression` marks a binding whose value is meant to
+survive a rebuild. The compiler accepts the mark everywhere and it changes
 nothing about evaluation; it exists for the incremental toolchain, which
 identifies a retained cell by the binding's path from the program root and
 can reuse it when an edit does not touch it
@@ -141,11 +146,12 @@ can reuse it when an edit does not touch it
 
 A name is a lowercase or mixed-case identifier (`x`, `id`, `n2`). The
 language's keywords are reserved and cannot be names: `Int`, `Float`,
-`string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`,
+`string`, `Type`, `Tuple`, `Array`, `Struct`, `table`, `set`, `let`,
 `if`, `then`, `else`, `return`, `pub`, `int2float`, `float2int`,
 `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`, `ln`, and the `@`-led
-words `@loop`, `@assert`, `@shallow`, `@gc`, `@in` and `@cache`. The underscore `_`
-is not a name either; it is the inference placeholder of Chapter 5.
+words `@loop`, `@assert`, `@shallow`, `@gc`, `@in` and `@cache`. The
+underscore `_` is not a name either; it is the inference placeholder of
+Chapter 5.
 
 ## The atomic types
 
@@ -164,7 +170,7 @@ word is a lex error. Because the type is unsigned, subtraction wraps:
 ```
 
 ```text
-(18446744073709551615, 3, 1): tuple{Int, Int, Int}
+(18446744073709551615, 3, 1): Tuple
 ```
 
 `0 - 1` is the largest representable value, not -1. Division and
@@ -181,7 +187,7 @@ false, and those two numbers are the only branches the language needs.
 ```
 
 ```text
-(1, 3, 2, 1, 0): tuple{Int, Int, Int, Int, Int}
+(1, 3, 2, 1, 0): Tuple
 ```
 
 `&`, `|` and `^` are bitwise, which over comparison results makes them
@@ -224,7 +230,7 @@ not `%`:
 ```
 
 ```text
-(6.0, 0.5, -1.0, 1): tuple{Float, Float, Float, Int}
+(6.0, 0.5, -1.0, 1): Tuple
 ```
 
 The comparison yields an `Int` like every other comparison. A negative
@@ -239,7 +245,7 @@ operand, and `floor` yields a `Float`:
 ```
 
 ```text
-(1.0, 2.718293, 2.0, 1.0, 0.0, 1.0, 0.0): tuple{Float, Float, Float, Float, Float, Float, Float}
+(1.0, 2.718293, 2.0, 1.0, 0.0, 1.0, 0.0): Tuple
 ```
 
 `exp 1.0` is `2.718293`, not `e`: the language defines its transcendentals
@@ -255,7 +261,7 @@ values, which the printer spells `inf` and `NaN`:
 ```
 
 ```text
-(inf, NaN): tuple{Float, Float}
+(inf, NaN): Tuple
 ```
 
 `Int` and `Float` are unrelated types. No operator mixes them — `1 + 1.5`
@@ -269,7 +275,7 @@ target class:
 ```
 
 ```text
-(3.0, 3): tuple{Float, Int}
+(3.0, 3): Tuple
 ```
 
 `int2float` rounds to the nearest `Float` (`int2float 16777217` is
@@ -303,20 +309,20 @@ line two")
 
 ```text
 ("hello", "line one
-line two"): tuple{string, string}
+line two"): Tuple
 ```
 
-A string is not a container: `"abc"[0]` is refused (`expected TypeArray,
-found Type`), there is no concatenation, and `+` on two strings fails the
-numeric class the operators require. Equality works, because it is the
-generalized equality over same-typed values:
+A string is not a container: `"abc"[0]` is refused, there is no
+concatenation, and `+` on two strings fails the numeric class the
+operators require. Equality works, because it is the generalized equality
+over same-typed values:
 
 ```lichen
 ("a" == "a", "a" == "b")
 ```
 
 ```text
-(1, 0): tuple{Int, Int}
+(1, 0): Tuple
 ```
 
 ### `Type`
@@ -328,7 +334,7 @@ The four atom names are values, and all four have type `Type`:
 ```
 
 ```text
-(Int, Float, string, Type): tuple{Type, Type, Type, Type}
+(Int, Float, string, Type): Tuple
 ```
 
 `Type : Type` holds — the chain closes at `Type` — and type values are
@@ -344,7 +350,7 @@ The operators, from loosest to tightest, are:
 |---|---|---|
 | lambda | `x => e` | right |
 | annotations | `e : T`, `e # p`, `e ! p`, `e ? d`, `e ~ "text"` | right |
-| function type | `T -> U` | right |
+| unify | `a = b`, `a <: b` | left |
 | table read | `t <== k` | left |
 | comparison, membership | `<` `>` `<=` `>=` `==` `!=` `@in` | left |
 | bitwise or | `\|` | left |
@@ -357,6 +363,18 @@ The operators, from loosest to tightest, are:
 | postfix reads | `a[i]`, `a.name`, `a(k)` | left |
 | atoms | literals, names, `( … )`, `[ … ]`, `{ … }`, the type forms | — |
 
+There is no function-type level any more. A function's type is the
+function itself, and a signature is written with `=>`; Chapter 4 is about
+what that means.
+
+The two unify operators differ in one thing: `=` asks two expressions to
+agree and applies nothing, while `<:` asks an actual to agree with a
+**constructor** and applies that constructor exactly once. So
+`actual <: S` is the same as `actual = S _`, and `actual <: S _` writes
+the application out twice — the constructor applied, and then its result
+applied again — which is a different program. Chapter 7 is about the
+constructors themselves.
+
 A few readings of the table are worth checking against the compiler:
 
 ```lichen
@@ -364,7 +382,7 @@ A few readings of the table are worth checking against the compiler:
 ```
 
 ```text
-(7, 1, 3, 3.0): tuple{Int, Int, Int, Float}
+(7, 1, 3, 3.0): Tuple
 ```
 
 `*` binds tighter than `+`; a comparison is looser than the bitwise
@@ -394,12 +412,12 @@ the maximum of the atoms `a` and `b`, and `max (a + 1) b` needs its
 parentheses.
 
 ```lichen
-f = x => x + 1
+f := x => x + 1
 (f 1 * 2, max 1 2 * 3)
 ```
 
 ```text
-(4, 6): tuple{Int, Int}
+(4, 6): Tuple
 ```
 
 ## Calling functions
@@ -409,7 +427,7 @@ whitespace: `f x`. Application is left-associative, and a function that
 returns a function is applied again: `add 1 2` is `(add 1) 2`.
 
 ```lichen
-add = x => y => x + y
+add := x => y => x + y
 add 1 2
 ```
 
@@ -423,8 +441,8 @@ two-argument function is partial application, and it produces a usable
 function:
 
 ```lichen
-add = x => y => x + y
-add1 = add 1
+add := x => y => x + y
+add1 := add 1
 add1 2
 ```
 
@@ -435,8 +453,8 @@ add1 2
 A function can be passed to another function and returned from one:
 
 ```lichen
-twice = f => x => f (f x)
-inc = x => x + 1
+twice := f => x => f (f x)
+inc := x => x + 1
 twice inc 5
 ```
 
@@ -446,11 +464,12 @@ twice inc 5
 
 There is no multi-parameter lambda: `(a, b) => e` does not parse, because
 `(a, b)` is always a tuple *value*. To pass several values, pass a tuple
-and read it by position. A tuple parameter needs an annotation when the
-body does arithmetic on its positions:
+and read it by position. A tuple parameter states its **layout** with the
+shared layout type `Tuple`, and the elements' own types are decided by
+the body:
 
 ```lichen
-addpair = (p : tuple{Int, Int}) => p(0) + p(1)
+addpair := (p : Tuple) => p(0) + p(1)
 addpair (1, 2)
 ```
 
@@ -462,18 +481,21 @@ Without the annotation the read on `p` is refused — `this tuple read
 cannot be checked: the container's type is not decided here — annotate
 the container's type` — because a read states its requirement from the
 container's type (Chapter 4's `gcd` is the same rule). The annotation
-states the container's type, and the answer is `3: Int`. Chapter 10 shows
-what the annotation writes.
+states the container's layout, and the answer is `3: Int`.
+
+A tuple parameter may instead be given a **constructor**, which states what
+each position must be; Chapter 7 shows that form, and Chapter 4's `gcd`
+is one.
 
 Parentheses group, and they also make a difference in application:
 
 ```lichen
-add = x => y => x + y
+add := x => y => x + y
 (add 1 (2 + 3), add (1 + 2) 3)
 ```
 
 ```text
-(6, 6): tuple{Int, Int}
+(6, 6): Tuple
 ```
 
 An expression that is not an atom has to be parenthesized to become an
@@ -485,7 +507,7 @@ argument: `f x + 1` is `(f x) + 1`, while `f (x + 1)` passes `x + 1`.
 
 `if condition then a else b` is an expression like any other, and it can
 appear anywhere a value can. Its condition is an **index**: the desugared
-form reads position `0` or `1` of a two-element array, so the condition
+form reads position `0` or `1` of a two-element tuple, so the condition
 must be an `Int` in that range.
 
 ```lichen
@@ -515,8 +537,8 @@ and a non-`Int` condition is refused for not being an index at all:
 `if 1.5 then 1 else 2` reports `this value is not an index — an element can
 only be read by position`.
 
-Because the branches are an array's elements, they must have the same
-type, and the untaken branch is never evaluated.
+Because the branches are a tuple's elements, they need not share a type,
+and the untaken branch is never evaluated.
 
 ### Blocks are expressions
 
@@ -525,7 +547,7 @@ local, it compiles to its tail's node, and it can be used anywhere an
 expression can:
 
 ```lichen
-{ a = 5; a * 2 }
+{ a := 5; a * 2 }
 ```
 
 ```text
@@ -536,7 +558,7 @@ An explicit `return expression` anywhere in the block pins the block's
 value, so a value can be stated before the statements that follow it:
 
 ```lichen
-{ a = 1; return a + 1 }
+{ a := 1; return a + 1 }
 ```
 
 ```text
@@ -550,8 +572,8 @@ Because a block is an expression, it can be an argument, with no
 parentheses needed:
 
 ```lichen
-f = x => x + 1
-f { a = 1; a }
+f := x => x + 1
+f { a := 1; a }
 ```
 
 ```text
@@ -564,8 +586,9 @@ Chapter 8 covers that form.
 
 ## Summary
 
-- `name = expr` binds block-wide; a block's names are visible throughout it,
-  forward and backward. `let name = expr` binds sequentially.
+- `name := expr` binds block-wide; a block's names are visible throughout
+  it, forward and backward. `let name := expr` binds sequentially, and `=`
+  is the unify rather than a binding.
 - A binding may name itself only as the head of a call.
 - `Int` is unsigned and wraps; comparisons yield `0`/`1`; there is no
   `Bool` and no unary minus.
@@ -575,9 +598,9 @@ Chapter 8 covers that form.
 - Prefix keywords bind tighter than binary operators; application is
   tighter still; comparisons are looser than the bitwise operators.
 - A function takes one argument; several are passed as a tuple or as
-  nested lambdas.
-- `if` is an index into two branches; a block is an expression whose value
-  is its tail or its `return`.
+  nested lambdas, and a tuple parameter states its layout with `Tuple`.
+- `if` is a read of one element of a two-element tuple; a block is an
+  expression whose value is its tail or its `return`.
 
 ## Exercises
 

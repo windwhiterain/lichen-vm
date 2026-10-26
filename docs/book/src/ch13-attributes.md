@@ -20,9 +20,9 @@ everything to its left:
 | `e ~ "text"` | mark | compile-time metadata, not an attribute |
 
 So `e : T # p ? d ~ "m"` writes type, perspective, doc and mark on one
-expression. They bind at the same precedence as `:` — looser than `->` —
-so `e : T # p` annotates the type and the perspective of the same
-expression, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
+expression. They bind at the same precedence as `:`, so `e : T # p`
+annotates the type and the perspective of the same expression, and
+`1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
 
 ## The perspective `#`
 
@@ -48,7 +48,7 @@ checks one when a value meets a declaration.
 A function's parameter may declare a perspective it requires:
 
 ```lichen
-f = (x # 8) => x
+f := (x # 8) => x
 f (5 # 4)
 ```
 
@@ -65,7 +65,7 @@ accepts an argument whose perspective is a **multiple** of it — a value
 uniform over `n` is also uniform over any divisor of `n`:
 
 ```lichen
-f = (x # 4) => x
+f := (x # 4) => x
 f (5 # 8)
 ```
 
@@ -74,43 +74,34 @@ f (5 # 8)
 ```
 
 `4` divides `8`, so the call is accepted. `2` would reject `3`, and
-accept `4`; `1` accepts everything, and no perspective accepts a
-different one that it does not divide.
-
-An **unannotated value** counts as `0`, which is a multiple of every
-requirement — so it satisfies all of them, and a parameter accepts a
-plain argument:
+accept `4`; `1` accepts everything, because it divides everything; and a
+requirement of `0` — the "uniform everywhere" claim — accepts only an
+argument that makes the same claim.
 
 ```lichen
-f = (x # 4) => x
-f 5
-```
-
-```text
-5: Int
-```
-
-The same rule has a sharp edge: a parameter with **no** `#` requires `0`,
-and only a `0` argument is a multiple of `0`. So a plain function refuses
-an annotated argument:
-
-```lichen
-g = x => x
-g (5 # 8)
+f := (x # 0) => x
+f (5 # 8)
 ```
 
 ```text
 error: expected 0, found 8
   --> 2:1
    |
- 2 | g (5 # 8)
+ 2 | f (5 # 8)
    | ^
 ```
 
-The rule is consistent — the declaration asks for the strongest
-uniformity and the argument claims only eight-way — but it means that
-passing an annotated value through a function requires the parameter to
-say what it accepts.
+A parameter that declares **no** perspective declares no requirement, so
+it accepts any argument — annotated or not:
+
+```lichen
+f := x => x
+f (5 # 8)
+```
+
+```text
+5: Int
+```
 
 ### Replacing a perspective
 
@@ -160,8 +151,8 @@ by any other, so a later `?` overrides an earlier one, and the printed
 value carries it:
 
 ```lichen
-D = struct{.tag Int}
-((5 ? D(.tag 1)) ? D(.tag 2))
+D := _x => {.tag @any : Int}
+((5 ? D{.tag 1}) ? D{.tag 2})
 ```
 
 ```text
@@ -199,8 +190,8 @@ rest. So a new perspective keeps an old doc, and a new doc keeps an old
 perspective:
 
 ```lichen
-D = struct{.tag Int}
-((5 # 8 ? D(.tag 1)) # 4)
+D := _x => {.tag @any : Int}
+((5 # 8 ? D{.tag 1}) # 4)
 ```
 
 ```text
@@ -227,8 +218,8 @@ the compiler walks them positionally.
   a doc `?`; a mark `~` is metadata, not an attribute.
 - A perspective claims parallel uniformity; a requirement `q` accepts a
   provider `n` exactly when `q` divides `n`.
-- An unannotated value is `0` and satisfies every requirement; an
-  unannotated parameter requires `0` and refuses an annotated argument.
+- An unannotated parameter declares no requirement and accepts any
+  argument; a requirement of `0` accepts only a `0`.
 - A new perspective replaces the old one after validating it, and an
   annotation replaces only the slots it spells.
 - A compound's perspective is the meet (`gcd`) of its parts.
@@ -241,8 +232,8 @@ the compiler walks them positionally.
 1. Print `(5 # 8)` and explain both halves.
 2. Write a function whose parameter requires `# 4`, and call it with `# 8`
    and with `# 3`. Which call holds?
-3. Explain why `g = x => x; g (5 # 8)` is refused, and what declaration
-   would make it hold.
+3. Explain why `f := x => x; f (5 # 8)` holds, and what declaration would
+   make it fail.
 4. Check that `((5 # 8) # 4)` holds and `((5 # 4) # 8)` does not, and state
    the divisibility test each one performs.
 5. Attach two docs to one value and show which one survives.

@@ -210,14 +210,14 @@ fn goto_definition(uri: &str, id: u32, line: u32, character: u32) -> String {
 fn a_burst_of_edits_runs_the_frontend_once() {
     let mut server = Server::start();
     let uri = "file:///burst.lichen";
-    server.send(&did_open(uri, "a = 1\na\n"));
+    server.send(&did_open(uri, "a := 1\na\n"));
     let _opened = server.next_publish();
 
     for version in 2..=6 {
-        let text = format!("a = 1\nb{version} = a + 1\nb{version}\n");
+        let text = format!("a := 1\nb{version} := a + 1\nb{version}\n");
         server.send(&did_change(uri, version, &text));
     }
-    server.send(&did_change(uri, 7, "a = 1\nb = unknown_name\nb\n"));
+    server.send(&did_change(uri, 7, "a := 1\nb := unknown_name\nb\n"));
 
     let publishes = server.publishes(QUIET);
     assert_eq!(
@@ -243,7 +243,7 @@ fn a_burst_of_edits_runs_the_frontend_once() {
 #[test]
 fn an_edit_to_an_imported_file_refreshes_the_answer() {
     let dir = temp_dir("dep");
-    write(&dir, "math.lichen", "succ = x => x + 1\n");
+    write(&dir, "math.lichen", "succ := x => x + 1\n");
     let main = write(
         &dir,
         "main.lichen",
@@ -271,7 +271,7 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
     );
 
     // Only the import changes; the document the editor holds is untouched.
-    write(&dir, "math.lichen", "succ = x => x + 1\nextra = 7\n");
+    write(&dir, "math.lichen", "succ := x => x + 1\nextra := 7\n");
 
     let after = server.request(3, &completion(&uri, 3, 3, 5));
     assert!(
@@ -296,7 +296,8 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
 #[test]
 fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
     let dir = temp_dir("prelude");
-    let main = write(&dir, "main.lichen", "add [\"a\", \"b\"]\n");
+    // The prelude expects numeric operands; a pair of strings fails in it.
+    let main = write(&dir, "main.lichen", "add (\"a\", \"b\")\n");
     let uri = Url::from_file_path(&main).unwrap().to_string();
 
     let mut server = Server::start();
@@ -311,7 +312,7 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
         "the first publish is the document's, got {document}"
     );
     assert!(
-        !document.contains("the refinement's predicate did not answer 1"),
+        !document.contains("does not satisfy {Int, Float}"),
         "the built-in's failure must not be published against the document: {document}"
     );
 
@@ -322,7 +323,7 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
         "the built-in's failure is published against its own file, got {builtin}"
     );
     assert!(
-        builtin.contains("the refinement's predicate did not answer 1"),
+        builtin.contains("does not satisfy {Int, Float}"),
         "the failure inside the built-in should be reported there, got {builtin}"
     );
 
@@ -346,10 +347,10 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
 fn a_closed_document_publishes_nothing_further() {
     let mut server = Server::start();
     let uri = "file:///closing.lichen";
-    server.send(&did_open(uri, "a = 1\na\n"));
+    server.send(&did_open(uri, "a := 1\na\n"));
     let _opened = server.next_publish();
 
-    server.send(&did_change(uri, 2, "a = 1\nb = unknown_name\nb\n"));
+    server.send(&did_change(uri, 2, "a := 1\nb := unknown_name\nb\n"));
     server.send(&did_close(uri));
 
     let publishes = server.publishes(QUIET);

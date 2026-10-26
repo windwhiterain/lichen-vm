@@ -1,10 +1,12 @@
 # Function types, and a struct type's nominal identity
 
-> Status: **current.** A written arrow lowers to a *function*, so a function's
-> type is the function itself (`f : f`) and there is only one representation of a
-> function type. Two functions unify the way two arrays do. A struct type's
-> nominal identity **is its written occurrence**, minted while the graph is built,
-> so one written occurrence is one type however many times it is evaluated.
+> Status: **current.** A function's type is the function itself (`f : f`) and
+> there is only one representation of a function type. Two functions unify the
+> way two arrays do. A signature is written by a **function template** — a
+> real function value — and unified with plain `=`, which applies nothing; the
+> thin arrow `->` is gone from the language. A struct's nominal identity is the
+> **name table its value carries**, so one written occurrence is one type
+> however many times it is evaluated.
 >
 > This note absorbs the still-true halves of *"A function's type is the function
 > itself"* (the `f : f` half; its arrow half is what this note replaces) and of
@@ -12,23 +14,38 @@
 >
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (the function/array unify
 > arm, the function-type recognisers, the signature reads),
-> `crates/lichen-highlevel/src/checker/lambda.rs` (`check_signature`, and the
-> `check_lam` wiring that makes a lambda's type its own expr),
-> `crates/lichen-highlevel/src/checker.rs` (`struct_type_type`,
-> `fresh_nominal_id`, `struct_marker_node`),
-> `crates/lichen-highlevel/src/checker/structs.rs` (the struct type's emitting
-> sites), `crates/lichen-highlevel/src/shape.rs`
-> (`STRUCT_MARKER_ID_SLOT`, `low_type_of`'s function arm),
+> `crates/lichen-highlevel/src/checker/lambda.rs` (`check_lam` and the wiring
+> that makes a lambda's type its own expr),
+> `crates/lichen-highlevel/src/checker/templates.rs` (the unify, and the
+> direction it takes),
+> `crates/lichen-highlevel/src/checker/structs.rs` (the struct value's header
+> and its emitting sites), `crates/lichen-highlevel/src/shape.rs`
+> (`low_type_of`'s function arm),
 > `crates/lichen-render` (the `dom -> cod` spelling), and `crates/lichen-compute`
 > (the kernel signature readers).
 > Open questions are in [What is open](#what-is-open).
 
-## One representation: a written arrow is a function
+## One representation: a function template is a function
 
-`A -> B` in a type position compiles to a **real function** — `_: A => _: B`,
-a lambda whose parameter is annotated `A` and whose return is annotated `B`
-(`Checker::check_signature`). The surface syntax is unchanged; only the lowering
-is.
+**There is no thin arrow.** `A -> B` is not a token in the language, and the
+written-arrow form is retired. A signature is stated by a **function
+template**: a real function value written where a function would be, such as
+`(x : Int => _: Int)` — the parameter with its annotation, `=>`, and the
+result. A constraint on a function is the ordinary unify, `f = (x : Int =>
+_: Int)`, so a function is constrained by the same rule as every other
+requirement: the actual's **signature** is unified with the template's, and the
+actual's own body is kept
+(`crates/lichen-highlevel/src/checker/templates.rs`).
+
+Plain `=` is the spelling, not `<:`. The match operator applies its right
+hand side exactly once, and a function template is not a constructor to apply:
+it states a signature, not a requirement to be produced. A `<:` whose right
+hand side is a function template would apply that template and unify the
+actual with its **result**.
+
+Because the template *is* a function, the one-representation property this
+note records survives the change of spelling: there is no second shape for a
+function's type, and a signature is never a distinct term.
 
 A function value's *own* type is then the same thing, and it needs no second
 node: `check_lam` binds the function expr's type cell to the expr itself, so a
@@ -55,8 +72,15 @@ Two consequences, and both are deliberate:
   `Function::return_type` — the return's *type* cell, because `r#return` may be
   an unevaluated operation node whose own slots do not name the type. An apply
   clones those two cells fresh per call and never binds the template, so a
-  function's signature is let-polymorphic: `f = x => x` accepts `1` and `1.5` in
-  turn, and an annotation checks a clone rather than specialising the template.
+  function's signature is let-polymorphic: `f := x => x` accepts `1` and `1.5`
+  in turn, and an annotation checks a clone rather than specialising the
+  template.
+
+The template's *return* position is an ordinary expression, which is how the
+placeholder spells "a result of this type": `(x : Int => _: Int)` states a
+function of one `Int` whose result is a hole of type `Int`. The hole is filled
+by the actual function the match supplies.
+
 
 `Type` is the **terminal** of the chain, not a supertype: there is no subtyping
 relation anywhere (`Int` is not `<: Type`; a compound type is typed by its kind),
@@ -117,7 +141,18 @@ merge, not conflict. `Module::function_identity` follows `Function::static_origi
 `function_identity_equal` compares identities. Without it, a re-export unified
 against its original compared two `Function` values and conflicted.
 
-## A struct type's nominal identity is its written occurrence
+## A struct's nominal identity is its written occurrence
+
+> **The encoding below is the pre-template one.** A struct *type expression*
+> is retired: a struct is now a **value**, and the identity rides in the
+> **value's own header**, `[name table, nominal id, fields…]`
+> (`crates/lichen-highlevel/src/checker/structs.rs`, `struct_value_node`).
+> The rule this section records is unchanged: one written occurrence is one
+> nominal type, and the name table is what carries it, because a table
+> compares by **identity**. Measured: two struct constructors written apart
+> produce instances that do not unify — `expected Table, found Table` — while
+> two instances of one constructor do. See [value templates](value-templates.md)
+> for the migration and the book's Chapter 8 for the surface.
 
 A struct type expression compiles to the expr `[shape, kind]`, and its nominal
 identity is a marker of the form
@@ -130,7 +165,9 @@ marker  = [ payload, TypeStruct ]
 kind    = [ marker, K ]
 ```
 
-`Checker::struct_type_type` is the single construction point, and the `id` is the
+`Checker::struct_type_type` was the single construction point of that encoding;
+today's is `Checker::struct_value_node`
+(`crates/lichen-highlevel/src/checker/structs.rs`), and the `id` is the
 **written occurrence itself** (`Checker::fresh_nominal_id` takes the
 [`ExprId`]): the checker writes `TypeId(occurrence)` into the node rather than
 allocating an operator to compute one. That is what makes one written occurrence
@@ -169,14 +206,18 @@ of one expression applied to one argument, and they must unify.
 
 ## What is open
 
-- **The frozen written-arrow reduction is closed.** A written arrow annotation in
-  a frozen module used to collapse the parameter's cell onto the `Function`
-  marker; the imported wrapper and its local control now render identically and
+- **The frozen written-arrow reduction is closed, and the arrow is gone.** A
+  written arrow annotation in a frozen module used to collapse the parameter's
+  cell onto the `Function` marker; the imported wrapper and its local control
+  now render identically and
   `crates/lichen-language/tests/language/frozen_function_type.rs` passes. A written arrow
   in a frozen module is therefore *not* a live cause of anything, and the two
   compute tests the old reading parked now run. What remains of that family is
   measured, with its reproductions, in
-  [the kernel parameter's class](kernel-parameter-class.md).
+  [the kernel parameter's class](kernel-parameter-class.md). The arrow form
+  itself has since been **retired from the language**: a frozen module now
+  states a signature with a **function template** (`(x : Int => _: Int)`) and
+  unifies it with plain `=`, so there is no written arrow left to be frozen.
 - **The function arm is a second implementation of the array rule.** It descends
   with a fresh `path` and `steps`, has no early break, and records a failed child
   **twice** — once at the child and once at the function-type level — so the same
@@ -211,7 +252,9 @@ of one expression applied to one argument, and they must unify.
   **values** passing through, not merely their types. The pattern the apply's
   function-ness guard builds is a real function for the same reason: a function type
   is the only function type there is, so no second shape is left for a pattern to
-  wear.
+  wear. The thin arrow was later **removed from the language altogether**; the
+  function template carries the same two sides, so the representation this
+  measurement settled on is the one that survived.
 - The function's own term is one node, not a separate type node beside the expr: a
   distinct `[Function(fid), ftype]` would be value-equal to the expr
   `[Function(fid), ftype]` and collide with it under the apply clone's topology

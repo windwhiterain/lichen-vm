@@ -250,9 +250,6 @@ impl<P: Program> Module<P> {
                                             let element = array[index].node;
                                             match element {
                                                 Dyn(element) => {
-                                                    self.alias_read(node, element);
-                                                    // An element that is its own class never re-enters evaluation; the class's
-                                                    // committed value answers it.
                                                     if self.equality_representative(element)
                                                         == self.equality_representative(node)
                                                     {
@@ -268,10 +265,14 @@ impl<P: Program> Module<P> {
                                                             _ => self.node_value(Dyn(rep)),
                                                         }
                                                     } else {
-                                                        self.evaluate_node(
+                                                        let value = self.evaluate_node(
                                                             Dyn(element),
                                                             Some(block),
-                                                        )
+                                                        );
+                                                        if value.is_none() {
+                                                            self.alias_read(node, element);
+                                                        }
+                                                        value
                                                     }
                                                 }
                                                 // A static element is immutable: no class to join, and its value caches here like any
@@ -338,6 +339,7 @@ impl<P: Program> Module<P> {
                         };
                         match callee.as_enum() {
                             Some(LowValue::Function(function)) => {
+                                let function = self.resolve_constructor(function);
                                 // Both cross as **refs**: unify reads a frozen side
                                 // by value, so nothing is materialized.
                                 let argument = operands[1].node;
@@ -449,6 +451,47 @@ impl<P: Program> Module<P> {
                         }
                     }
                     _ => unreachable!("TableGet operand must be an array of [table, key]"),
+                }
+            }
+            Some(LowOperator::Unify) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("Unify expects an operand array of [actual, expected]")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(items)) = operand.as_enum() else {
+                    unreachable!("Unify operand must be an array of [actual, expected]")
+                };
+                // SAFETY: the operand array is live for this operation.
+                let items = unsafe { items.items() };
+                if items.len() < 2 {
+                    unreachable!("Unify expects an operand array of [actual, expected]")
+                }
+                let actual = if let Some(slot) = items[0]
+                    .node
+                    .dynamic()
+                    .and_then(|node| self.expr_value_half(node))
+                {
+                    if self.evaluate_node(Dyn(slot), Some(block)).is_none() {
+                        return self.ran_undecided(node);
+                    }
+                    self.node_value(items[0].node)
+                } else {
+                    self.evaluate_node(items[0].node, Some(block))
+                };
+                let Some(actual) = actual else {
+                    return self.ran_undecided(node);
+                };
+                if self.evaluate_node(items[1].node, Some(block)).is_none() {
+                    return self.ran_undecided(node);
+                }
+                let before = self.unify_errors.len();
+                self.unify_ref(items[0].node, items[1].node);
+                if self.unify_errors.len() == before {
+                    Some(actual)
+                } else {
+                    Some(P::Value::from(LowValue::Error))
                 }
             }
             Some(LowOperator::External { library, instance }) => {
@@ -739,6 +782,11 @@ impl<P: Program> Module<P> {
     /// answer cannot report undecided itself, so its operand's verdict is folded
     /// in at the deep walk. Each position's verdict is read through
     /// [`Self::ref_is_undecided`].
+    ///
+    /// # Invariant
+    /// An array's **template** position holds the layout, not content, so its verdict is
+    /// not read: the element template of an array instance is `@any` more often than
+    /// not, and that must not leave the instance's own elements undecided.
     fn value_is_undecided(
         &self,
         cache: &mut StaticModuleCache<P>,
@@ -757,7 +805,7 @@ impl<P: Program> Module<P> {
                 if unsafe { array.items() }.iter().any(|item| item.shallow)
                     || unsafe { array.items() }
                         .iter()
-                        .any(|item| self.ref_is_undecided(cache, item.node))
+                        .any(|item| !item.template && self.ref_is_undecided(cache, item.node))
         ) || matches!(
             view,
             Some(LowValue::Table(table))

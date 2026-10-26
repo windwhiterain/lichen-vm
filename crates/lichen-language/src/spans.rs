@@ -66,6 +66,26 @@ pub(crate) fn shift_expr(
             shift_expr(left, old_starts, new_starts, delta);
             shift_expr(right, old_starts, new_starts, delta);
         }
+        // `a = b`: the actual value and the expected one.
+        Expr::Unify {
+            actual,
+            expected,
+            span,
+        } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(actual, old_starts, new_starts, delta);
+            shift_expr(expected, old_starts, new_starts, delta);
+        }
+        // `actual <: template`: the actual and the template it is matched against.
+        Expr::TemplateUnify {
+            actual,
+            template,
+            span,
+        } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(actual, old_starts, new_starts, delta);
+            shift_expr(template, old_starts, new_starts, delta);
+        }
         Expr::If {
             condition,
             then_branch,
@@ -129,19 +149,7 @@ pub(crate) fn shift_expr(
                 shift_expr(attribute, old_starts, new_starts, delta);
             }
         }
-        Expr::Arrow {
-            parameter_type,
-            return_type,
-            span,
-        } => {
-            shift(span, old_starts, new_starts, delta);
-            shift_expr(parameter_type, old_starts, new_starts, delta);
-            shift_expr(return_type, old_starts, new_starts, delta);
-        }
-        Expr::Tuple(elements, span)
-        | Expr::TypeTuple(elements, span)
-        | Expr::Array(elements, span)
-        | Expr::Set(elements, span) => {
+        Expr::Tuple(elements, span) | Expr::Set(elements, span) => {
             shift(span, old_starts, new_starts, delta);
             for element in elements {
                 shift_expr(element, old_starts, new_starts, delta);
@@ -156,10 +164,11 @@ pub(crate) fn shift_expr(
             shift_expr(key, old_starts, new_starts, delta);
             shift_expr(value, old_starts, new_starts, delta);
         }
-        Expr::StructType(fields, span) => {
+        // `{.a e1, …}`: the struct template's fields.
+        Expr::StructValue { fields, span } => {
             shift(span, old_starts, new_starts, delta);
             for field in fields {
-                shift_expr(&mut field.ty, old_starts, new_starts, delta);
+                shift_expr(&mut field.value, old_starts, new_starts, delta);
             }
         }
         Expr::StructInst {
@@ -173,6 +182,28 @@ pub(crate) fn shift_expr(
                 shift_expr(&mut field.value, old_starts, new_starts, delta);
             }
         }
+        // `[template, length]`: the array template and its length.
+        Expr::Array {
+            template,
+            length,
+            span,
+        } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(template, old_starts, new_starts, delta);
+            shift_expr(length, old_starts, new_starts, delta);
+        }
+        // `template[e1, …]`: the array instance's template and its elements.
+        Expr::ArrayInst {
+            template,
+            elements,
+            span,
+        } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(template, old_starts, new_starts, delta);
+            for element in elements {
+                shift_expr(element, old_starts, new_starts, delta);
+            }
+        }
         Expr::Table(entries, span) => {
             shift(span, old_starts, new_starts, delta);
             for (key, value) in entries {
@@ -183,15 +214,6 @@ pub(crate) fn shift_expr(
         Expr::Shallow(inner, _, span) => {
             shift(span, old_starts, new_starts, delta);
             shift_expr(inner, old_starts, new_starts, delta);
-        }
-        Expr::TypeArray {
-            element_type,
-            length,
-            span,
-        } => {
-            shift(span, old_starts, new_starts, delta);
-            shift_expr(element_type, old_starts, new_starts, delta);
-            shift_expr(length, old_starts, new_starts, delta);
         }
         Expr::Block {
             statements,

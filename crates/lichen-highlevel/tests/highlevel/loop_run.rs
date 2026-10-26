@@ -5,8 +5,8 @@
 //! the same value, differing only in what the expansion can afford.
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::BinOp;
-use lichen_highlevel::program::ProgramImpl;
+use lichen_highlevel::ir::{BinOp, ExprKind};
+use lichen_highlevel::program::{HighProgramLiteral, ProgramImpl, TupleTemplateLit};
 use lichen_lowlevel::BudgetExhausted;
 use lichen_testkit::{Probe, Writer};
 
@@ -28,8 +28,13 @@ fn sum_to(marked: bool, count: usize) -> Probe<ProgramImpl> {
     let recursive = w.app("recursive", sum_to, next);
     let branches = w.tuple("branches", &[recursive, second]);
     let body = w.field("body", branches, condition);
-    let int_ty = w.int_type("int_ty");
-    let expr_ty = w.type_tuple("expr_ty", &[int_ty, int_ty]);
+    // The parameter's domain is the shared `Tuple` template: the layout, not
+    // a type that carries the elements.
+    let expr_ty = w.hole("expr_ty");
+    w.fill(
+        expr_ty,
+        ExprKind::Literal(HighProgramLiteral::from(TupleTemplateLit)),
+    );
     let sum_to = w.close_binding_typed(sum_to, s, expr_ty, body, marked);
     let argument = w.tuple("argument", &[w.int("count", count), w.int("acc", 0)]);
     let root = w.app("root", sum_to, argument);

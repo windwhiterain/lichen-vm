@@ -22,8 +22,8 @@ use diagnostics::{Unclosed, diag_from, unclosed_delimiter};
 pub use error_blocks::collect_error_blocks;
 
 use crate::ast::{
-    BinOp, Binding, BlockStmt, Expr, PrefixOp, Program, RecordField, Stmt, StructField,
-    StructInstArg, TypeConst,
+    BinOp, Binding, BlockStmt, Expr, PrefixOp, Program, RecordField, Stmt, StructFieldValue,
+    TypeConst,
 };
 
 /// A parse diagnostic: a message plus its source position; widened to the
@@ -450,7 +450,7 @@ fn statement<'a, Er: GrammarError<'a>>(
     ))
 }
 
-/// `['@loop'] ['@cache'] ['let'] name = expr` — a binding, with three
+/// `['@loop'] ['@cache'] ['let'] name := expr` — a binding, with three
 /// independent marks.
 fn binding<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
@@ -466,10 +466,10 @@ fn binding<'a, Er: GrammarError<'a>>(
                 .then(choice((
                     token(TokenKind::KwLet)
                         .ignore_then(name())
-                        .then_ignore(token(TokenKind::Equals))
+                        .then_ignore(token(TokenKind::ColonEquals))
                         .map(|n| (n, true)),
                     name()
-                        .then_ignore(token(TokenKind::Equals))
+                        .then_ignore(token(TokenKind::ColonEquals))
                         .map(|n| (n, false)),
                 )))
                 .map(|(cached, (n, restrictive))| (n, restrictive, cached.is_some())),
@@ -738,47 +738,41 @@ fn expression<'a, Er: GrammarError<'a>>(
             )
             .boxed();
 
-        // `->`, right-associative.
-        let term3 = table_find
+        // `=` and `<:` are left-associative, between comparisons and annotations.
+        let unify = table_find
             .clone()
-            .then(
-                token(TokenKind::Arrow)
-                    .ignore_then(operand(tokens, table_find.clone()))
-                    .repeated()
-                    .collect::<Vec<_>>(),
+            .foldl(
+                choice((
+                    token(TokenKind::Equals).to(UnifyOp::Plain),
+                    token(TokenKind::TemplateUnify).to(UnifyOp::Template),
+                ))
+                .then(operand(tokens, table_find.clone()))
+                .repeated(),
+                |lhs, (op, rhs)| unify_op(lhs, op, rhs),
             )
-            .map(|(first, rest)| {
-                fold_right(first, rest, |lhs, rhs| {
-                    let span = lhs.span();
-                    Expr::Arrow {
-                        parameter_type: Box::new(lhs),
-                        return_type: Box::new(rhs),
-                        span,
-                    }
-                })
-            });
+            .boxed();
 
         // `:` `#` `!` `?` at the same precedence, right-associative; each right
-        // side parses at the `->` level.
+        // side parses at the unify level.
         let piece = choice((
             token(TokenKind::Colon)
-                .ignore_then(operand(tokens, term3.clone()))
+                .ignore_then(operand(tokens, unify.clone()))
                 .map(AnnPiece::Type),
             token(TokenKind::Hash)
-                .ignore_then(operand(tokens, term3.clone()))
+                .ignore_then(operand(tokens, unify.clone()))
                 .map(AnnPiece::Perspective),
             token(TokenKind::Bang)
-                .ignore_then(operand(tokens, term3.clone()))
+                .ignore_then(operand(tokens, unify.clone()))
                 .map(AnnPiece::Refinement),
             token(TokenKind::Question)
-                .ignore_then(operand(tokens, term3.clone()))
+                .ignore_then(operand(tokens, unify.clone()))
                 .map(AnnPiece::Doc),
             token(TokenKind::Tilde)
                 .ignore_then(mark_payload())
                 .map(AnnPiece::Mark),
         ));
         let term4 = choice((
-            term3
+            unify
                 .clone()
                 .then(piece.clone().repeated().collect::<Vec<_>>())
                 .map(|(first, rest)| fold_annotations(first, rest)),
@@ -864,6 +858,71 @@ fn expression<'a, Er: GrammarError<'a>>(
                             value
                         }
                     },
+                    Expr::Unify {
+                        actual,
+                        expected,
+                        span,
+                    } => match *actual {
+                        Expr::Name(parameter, parameter_span, _) => {
+                            let parameter_value =
+                                Expr::Name(parameter.clone(), parameter_span, None);
+                            let r#return = Box::new(Expr::Block {
+                                statements: vec![Stmt::Expr(Expr::Unify {
+                                    actual: Box::new(parameter_value),
+                                    expected,
+                                    span,
+                                })],
+                                expr: Box::new(body),
+                                span,
+                            });
+                            Expr::Lambda {
+                                parameter,
+                                parameter_span,
+                                parameter_binder: None,
+                                parameter_type: None,
+                                parameter_perspective: None,
+                                r#return,
+                                span,
+                            }
+                        }
+                        value => {
+                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
+                            value
+                        }
+                    },
+                    Expr::TemplateUnify {
+                        actual,
+                        template,
+                        span,
+                    } => match *actual {
+                        Expr::Name(parameter, parameter_span, _) => {
+                            // Desugar into a body statement, not a parameter channel.
+                            let parameter_value =
+                                Expr::Name(parameter.clone(), parameter_span, None);
+                            let r#return = Box::new(Expr::Block {
+                                statements: vec![Stmt::Expr(Expr::TemplateUnify {
+                                    actual: Box::new(parameter_value),
+                                    template,
+                                    span,
+                                })],
+                                expr: Box::new(body),
+                                span,
+                            });
+                            Expr::Lambda {
+                                parameter,
+                                parameter_span,
+                                parameter_binder: None,
+                                parameter_type: None,
+                                parameter_perspective: None,
+                                r#return,
+                                span,
+                            }
+                        }
+                        value => {
+                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
+                            value
+                        }
+                    },
                     other => {
                         emit.emit(Er::message(me.span(), "expected a name before '=>'"));
                         other
@@ -886,20 +945,31 @@ fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
     }
 }
 
-/// Right-fold `first (op rhs)*` into `op(first, op(rhs₁, … op(rhsₙ₋₁, rhsₙ)))`.
-fn fold_right<F>(first: Expr, rest: Vec<Expr>, combine: F) -> Expr
-where
-    F: Fn(Expr, Expr) -> Expr,
-{
-    let mut it = rest.into_iter().rev();
-    let mut acc = match it.next() {
-        Some(rhs) => rhs,
-        None => return first,
-    };
-    for rhs in it {
-        acc = combine(rhs, acc);
+/// Which unify the expression level's `=` and `<:` spell.
+#[derive(Clone, Copy, Debug)]
+enum UnifyOp {
+    /// `=` — the plain unify of an actual and an expected value.
+    Plain,
+    /// `<:` — apply the template constructor to `_` before the unify.
+    Template,
+}
+
+/// Fold a unify operator into its [`Expr`] node, spanning from the left
+/// operand.
+fn unify_op(left: Expr, operator: UnifyOp, right: Expr) -> Expr {
+    let span = left.span();
+    match operator {
+        UnifyOp::Plain => Expr::Unify {
+            actual: Box::new(left),
+            expected: Box::new(right),
+            span,
+        },
+        UnifyOp::Template => Expr::TemplateUnify {
+            actual: Box::new(left),
+            template: Box::new(right),
+            span,
+        },
     }
-    combine(first, acc)
 }
 
 /// Keep the first body of a `=>` chain and drop the rest.
@@ -1012,7 +1082,7 @@ fn kw_atom<'a, Er: GrammarError<'a>>(
         .or(token(TokenKind::KwSet)
             .ignore_then(token(TokenKind::Glue).ignored().or_not())
             .ignore_then(choice((set_value, set_type))))
-        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .then(postfix_parser(tokens, expr).repeated().collect::<Vec<_>>())
         .map(|(atom, postfixes)| {
             postfixes
                 .into_iter()
@@ -1026,7 +1096,7 @@ fn postfix_atom<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     primary_parser(tokens, expr.clone())
-        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .then(postfix_parser(tokens, expr).repeated().collect::<Vec<_>>())
         .map(|(atom, postfixes)| {
             postfixes
                 .into_iter()
@@ -1034,26 +1104,40 @@ fn postfix_atom<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// The postfix forms, chained left: `[` is an index and `(` a slot read or an
-/// instantiation.
+/// The postfix forms, chained left: `[` is an array read or an instance, `(` a
+/// tuple read, and `{` a struct instance.
+///
+/// # Invariant
+/// Every postfix delimiter is **glued** to the atom it follows, so a spaced
+/// delimiter is an ordinary grouping and the two spellings never mean the same
+/// thing.
 fn postfix_parser<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Postfix, Ex<'a, Er>> + Clone {
     let glue = token(TokenKind::Glue).ignored();
+    // An instance's element may carry the `@shallow` marker, as the retired
+    // array literal's element did.
+    let element = shallow_marked(tokens, expr.clone());
     choice((
         token(TokenKind::Dot)
             .ignore_then(name())
             .map(|(field_name, _)| Postfix::DotName(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LBracket))
-            .ignore_then(expr.clone())
+            .ignore_then(comma_list(element))
             .then_ignore(token(TokenKind::RBracket))
-            .map(Postfix::Index),
+            .map(Postfix::Bracket),
         glue.clone()
             .ignore_then(token(TokenKind::LParen))
-            .ignore_then(struct_inst_fields(expr))
+            .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RParen))
             .map(Postfix::Paren),
+        glue.clone()
+            .ignore_then(token(TokenKind::LBrace))
+            .ignore_then(struct_field_list(expr.clone()))
+            .then_ignore(token(TokenKind::RBrace))
+            .map(Postfix::Brace),
     ))
 }
 
@@ -1066,30 +1150,35 @@ fn apply_postfix(acc: Expr, p: Postfix) -> Expr {
             name,
             span,
         },
-        Postfix::Index(index) => Expr::Index {
-            array: Box::new(acc),
-            index: Box::new(index),
-            span,
-        },
-        Postfix::Paren((fields, saw_comma)) => {
-            // A single comma-free expression is the slot read; every empty
-            // or comma-bearing form instantiates.
-            if fields.len() == 1 && !saw_comma && fields[0].name.is_none() {
-                let mut iter = fields.into_iter();
-                let only = iter.next().unwrap();
-                Expr::FieldRead {
-                    container: Box::new(acc),
-                    key: Box::new(only.value),
+        Postfix::Bracket((elements, saw_comma)) => {
+            // A single comma-free element reads the array; every other shape
+            // instantiates the template it is written on.
+            if elements.len() == 1 && !saw_comma {
+                let mut iter = elements.into_iter();
+                let index = iter.next().unwrap();
+                Expr::Index {
+                    array: Box::new(acc),
+                    index: Box::new(index),
                     span,
                 }
             } else {
-                Expr::StructInst {
-                    callee: Box::new(acc),
-                    fields,
+                Expr::ArrayInst {
+                    template: Box::new(acc),
+                    elements,
                     span,
                 }
             }
         }
+        Postfix::Paren(key) => Expr::FieldRead {
+            container: Box::new(acc),
+            key: Box::new(key),
+            span,
+        },
+        Postfix::Brace(fields) => Expr::StructInst {
+            callee: Box::new(acc),
+            fields,
+            span,
+        },
     }
 }
 
@@ -1125,6 +1214,11 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             token(TokenKind::KwFloat).map(|t| Expr::TypeConst(TypeConst::Float, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
+            // The builtin templates: `Tuple`, `Array` and `Struct` are values,
+            // not spellings of a type.
+            token(TokenKind::KwTuple).map(|t| Expr::TypeConst(TypeConst::Tuple, t.span)),
+            token(TokenKind::KwArray).map(|t| Expr::TypeConst(TypeConst::Array, t.span)),
+            token(TokenKind::KwStruct).map(|t| Expr::TypeConst(TypeConst::Struct, t.span)),
             // `_` is its own token, never a name: it can appear as a value but
             // cannot be bound.
             token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),
@@ -1136,11 +1230,10 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             // enclosing list is never taken by a nested literal's element.
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
-            array_literal(tokens, expr.clone()),
-            tuple_slots(tokens, expr.clone()),
+            array_template(tokens, expr.clone()),
+            // Try a struct value before a block; a leading `.name` distinguishes them.
+            struct_value(tokens, expr.clone()),
             block(tokens, expr.clone()),
-            struct_type(tokens, expr.clone()),
-            array_type(tokens, expr.clone()),
             if_expr(tokens, expr.clone()),
         )))
         .labelled("an expression")
@@ -1150,25 +1243,26 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
 #[derive(Clone, Debug)]
 enum Postfix {
     DotName(String),
-    Index(Expr),
-    Paren((Vec<StructInstArg>, bool)),
+    /// The `[` payload: the elements and whether a separator followed them.
+    Bracket((Vec<Expr>, bool)),
+    /// The `(` payload: the one index a tuple read takes.
+    Paren(Expr),
+    /// The `{` payload: the struct instance's fields.
+    Brace(Vec<StructFieldValue>),
 }
 
-/// `.name expr` or a plain expression — one instantiation field argument.
-fn struct_inst_field<'a, Er: GrammarError<'a>>(
+/// `.name expr` — one field of a struct value or a struct instance.
+///
+/// # Invariant
+/// A field is always named: the name is the field's identity, so a struct
+/// value and a struct instance spell their fields the same way.
+fn struct_field_value<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, StructInstArg, Ex<'a, Er>> + Clone {
-    choice((
-        token(TokenKind::Dot)
-            .ignore_then(name())
-            .then(expr.clone())
-            .map(|((name, _span), value)| StructInstArg {
-                name: Some(name),
-                value,
-            }),
-        expr.clone()
-            .map(|value| StructInstArg { name: None, value }),
-    ))
+) -> impl Parser<'a, In<'a>, StructFieldValue, Ex<'a, Er>> + Clone {
+    token(TokenKind::Dot)
+        .ignore_then(name())
+        .then(expr.clone())
+        .map(|((name, _span), value)| StructFieldValue { name, value })
 }
 
 /// A comma-separated list of zero or more items, runs tolerated — plus whether
@@ -1190,8 +1284,8 @@ fn comma_list<'a, T, Er: GrammarError<'a>>(
         )
         .then(separator_run())
         .map(|((first, rest), trailing)| {
-            // A separator between items or after the last means instantiation; a
-            // bare `A(1)` is the slot read.
+            // A separator between items or after the last means the list is
+            // written out; a bare single item is the plain form.
             let saw_comma = !rest.is_empty() || !trailing.is_empty();
             let mut items = Vec::new();
             if let Some(first) = first {
@@ -1202,23 +1296,21 @@ fn comma_list<'a, T, Er: GrammarError<'a>>(
         })
 }
 
-/// The content of an adjacent `(` in an instantiation position, plus whether
-/// any comma appeared.
-fn struct_inst_fields<'a, Er: GrammarError<'a>>(
+/// The field list of a struct value or a struct instance.
+fn struct_field_list<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), Ex<'a, Er>> + Clone {
-    comma_list(struct_inst_field(expr))
+) -> impl Parser<'a, In<'a>, Vec<StructFieldValue>, Ex<'a, Er>> + Clone {
+    comma_list(struct_field_value(expr)).map(|(fields, _saw_separator)| fields)
 }
 
-/// The content of an adjacent `(`: expressions plus whether any comma appeared.
+/// The content of a `(`: expressions plus whether any comma appeared.
 fn paren_fields<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), Ex<'a, Er>> + Clone {
     comma_list(expr)
 }
 
-/// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value (`tuple{…}`
-/// spells the tuple type).
+/// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value.
 fn paren<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
@@ -1262,28 +1354,43 @@ fn native_call<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// `[e1, …, en]` — an array literal, where an element may carry the `@shallow`
-/// marker.
-fn array_literal<'a, Er: GrammarError<'a>>(
+/// `[template, length]` — an array template's two operands.
+///
+/// # Invariant
+/// The template has exactly two parts: the element template and the length.
+/// An array *value* is an instance of a template, written `template[…]`.
+fn array_template<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let element = shallow_marked(tokens, expr.clone());
     token(TokenKind::LBracket)
         .ignore_then(element.clone())
-        .then(
-            separators_between()
-                .ignore_then(element.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
+        .then(separators_between().ignore_then(element.clone()))
         .then(separator_run())
         .then_ignore(token(TokenKind::RBracket))
-        .map_with(|((first, rest), _trailing), me| {
-            Expr::Array(
-                std::iter::once(first).chain(rest).collect(),
-                span_at(tokens, me.span().start),
-            )
+        .map_with(|((template, length), _trailing), me| Expr::Array {
+            template: Box::new(template),
+            length: Box::new(length),
+            span: span_at(tokens, me.span().start),
+        })
+}
+
+/// `{.a e, …}` — a struct value: the fields carry their own names.
+///
+/// # Invariant
+/// The field list is empty or starts with a `.name`, so a struct value and a
+/// block are told apart by the first token inside the brace.
+fn struct_value<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
+    token(TokenKind::LBrace)
+        .ignore_then(struct_field_list(expr))
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|fields, me| Expr::StructValue {
+            fields,
+            span: span_at(tokens, me.span().start),
         })
 }
 
@@ -1366,36 +1473,6 @@ fn table_type_atom<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// A keyword-led tuple type, `tuple{slot, …}`.
-///
-/// # Invariant
-/// A slot is `value : type`, so a top-level `:` makes an element a value slot; an
-/// element without one is a bare type expression, its value the wildcard `@any`.
-/// See `docs/notes/compound-element-slots.md`.
-fn tuple_slots<'a, Er: GrammarError<'a>>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
-    token(TokenKind::KwTuple)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
-        .ignore_then(expr.clone())
-        .then(
-            separators_between()
-                .ignore_then(expr.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(separator_run())
-        .then_ignore(token(TokenKind::RBrace))
-        .map_with(|((first, rest), _trailing), me| {
-            Expr::TypeTuple(
-                std::iter::once(first).chain(rest).collect(),
-                span_at(tokens, me.span().start),
-            )
-        })
-}
-
 /// An array element with an optional `@shallow` prefix; the marker wraps it
 /// as [`Expr::Shallow`].
 fn shallow_marked<'a, Er: GrammarError<'a>>(
@@ -1434,53 +1511,6 @@ fn shallow_depth<'a, Er: GrammarError<'a>>() -> impl Parser<'a, In<'a>, usize, E
                 .labelled("an integer depth"),
         )
         .then_ignore(token(TokenKind::RParen))
-}
-
-/// One `struct{…}` field: `.name type`, or a bare (positional) type.
-fn struct_field<'a, Er: GrammarError<'a>>(
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, StructField, Ex<'a, Er>> + Clone {
-    let named = token(TokenKind::Dot)
-        .ignore_then(name())
-        .then(expr.clone())
-        .map(|((n, _span), ty)| StructField { name: Some(n), ty });
-    let unnamed = expr.map(|ty| StructField { name: None, ty });
-    choice((named, unnamed))
-}
-
-/// `struct{…}` — a nominal struct type; the field list is optional (`struct{}`).
-fn struct_type<'a, Er: GrammarError<'a>>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
-    let field = struct_field(expr.clone());
-    token(TokenKind::KwStruct)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
-        // The separator flag is the instantiation split's, not a struct type's.
-        .ignore_then(comma_list(field).map(|(fields, _saw_separator)| fields))
-        .then_ignore(token(TokenKind::RBrace))
-        .map_with(|fields, me| Expr::StructType(fields, span_at(tokens, me.span().start)))
-}
-
-/// `array{T, n}` — the array type, keyword-led like `struct{…}`, with exactly
-/// two fields.
-fn array_type<'a, Er: GrammarError<'a>>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
-    token(TokenKind::KwArray)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
-        .ignore_then(expr.clone())
-        .then(separators_between().ignore_then(expr.clone()))
-        .then(separator_run())
-        .then_ignore(token(TokenKind::RBrace))
-        .map_with(|((element_type, length), _trailing), me| Expr::TypeArray {
-            element_type: Box::new(element_type),
-            length: Box::new(length),
-            span: span_at(tokens, me.span().start),
-        })
 }
 
 /// `@gc e` — `e` compiled into a scope of its own, released once `e`

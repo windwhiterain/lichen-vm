@@ -19,18 +19,18 @@ use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 fn program() -> String {
     r#"
 --- compute = import "compute.lichen" ---
-AIn  = struct{.x (compute.Buf Float)}
-AOut = struct{.y (compute.Buf Float)}
-APar = struct{.n Int, .cols Int, .taps Int, .in AIn, .out AOut}
-sum_raw = (c : APar) => {
-  i = compute.range c.n
-  row = compute.row c
-  col = compute.col c
-  rows = (c.n / c.cols)
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + int2float (min (max (row + (s(0) - 1) / 3 - 1) 0) (rows - 1) * c.cols + (min (max (col + (s(0) - 1) % 3 - 1) 0) (c.cols - 1)))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+AIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
+AOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
+APar := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .in AIn _, .out AOut}
+sum_raw := (c <: APar) => {
+  i := compute.range c.n
+  row := compute.row c
+  col := compute.col c
+  rows := (c.n / c.cols)
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + int2float (min (max (row + (s(0) - 1) / 3 - 1) 0) (rows - 1) * c.cols + (min (max (col + (s(0) - 1) % 3 - 1) 0) (c.cols - 1)))) ~ "combine" ~ "element"))
+  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
-sums = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" AOut
+sums := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (AOut _)
 sums
 "#
     .to_string()
@@ -44,17 +44,17 @@ sums
 fn terms(expression: &str) -> String {
     let template = r#"
 --- compute = import "compute.lichen" ---
-TIn  = struct{.x (compute.Buf Float)}
-TOut = struct{.y (compute.Buf Float)}
-TPar = struct{.n Int, .cols Int, .in TIn, .out TOut}
-term_raw = (c : TPar) => {
-  i = compute.range c.n
-  row = compute.row c
-  col = compute.col c
-  rows = (c.n / c.cols)
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (int2float @EXPR@)))
+TIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
+TOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
+TPar := _x => {.n @any : Int, .cols @any : Int, .in TIn _, .out TOut}
+term_raw := (c <: TPar) => {
+  i := compute.range c.n
+  row := compute.row c
+  col := compute.col c
+  rows := (c.n / c.cols)
+  compute.write (compute.Write{.to c.out.y, .at i, .value (int2float @EXPR@)})
 }
-kterm = compute.parallel term_raw "gpu" TOut
+kterm := compute.parallel term_raw "gpu" (TOut _)
 kterm
 "#;
     template.replace("@EXPR@", expression)

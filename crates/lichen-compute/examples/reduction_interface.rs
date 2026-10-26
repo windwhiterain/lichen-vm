@@ -249,7 +249,7 @@ consumer_raw = (k : Par2) => {
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-element_raw = (p : tuple{Float, Float}) => (p(0) * p(1)) ~ "element"
+element_raw = (p <: (_x => (@any : Float, @any : Float))) => (p(0) * p(1)) ~ "element"
 (compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" Out,
  compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity)") "cpu" Out2,
  compute.jit (element_raw ~ "claim:Reduction(element)"))

@@ -1,9 +1,9 @@
 ---
   order = "3"
-  output = "(struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g struct{.f Type, .g …}}}, (1, (Int, (1, …))), (Int, (1, …))): tuple{TypeStruct, TypeStruct, struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g …}}}"
+  output = "((@any, (@any, …)), (@any, (@any, …)), (1, (Int, …)), (Int, (1, …))): Tuple"
 ---
-A = struct{.f Int, .g B}
-B = struct{.f Type, .g A}
-a = A(1, b)
-b = B(Int, a)
+A := _x => {.f @any : Int, .g (B _)}
+B := _x => {.f @any : Type, .g (A _)}
+a := A{.f 1, .g b}
+b := B{.f Int, .g a}
 (A , B, a, b)

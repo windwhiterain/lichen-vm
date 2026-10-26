@@ -13,47 +13,47 @@ use lichen_compute::language::new_store;
 /// The kernel: `y[i + off] = x[i]`, with the offset a runtime scalar leaf beside the extent.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  = struct{.x (compute.Buf Int)}
-POut = struct{.y (compute.Buf Int)}
-PPar = struct{.n Int, .off Int, .in PIn, .out POut}
-PArg = struct{.n Int, .off Int, .I PIn}
-append_raw = (c : PPar) => {
-  i = compute.range c.n
-  v = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Int)
-  compute.write ((compute.Write _)(.to c.out.y, .at (i + c.off), .value v))
+PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _}))}
+POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
+PPar := _x => {.n @any : Int, .off @any : Int, .in PIn _, .out POut}
+PArg := _x => {.n @any : Int, .off @any : Int, .I PIn _}
+append_raw := (c <: PPar) => {
+  i := compute.range c.n
+  v := (compute.read (compute.Read{.from c.in.x, .at i}) : Int)
+  compute.write (compute.Write{.to c.out.y, .at (i + c.off), .value v})
 }
-append = compute.parallel append_raw "gpu" POut
-x = (compute.buffer ([1, 2, 3, 4] : array{Int, 4}) : (compute.Buf Int))
+append := compute.parallel append_raw "gpu" (POut _)
+x := (compute.buffer ([@any : Int, 4][1, 2, 3, 4] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
 "#;
 
 /// (a) The control: offset 0, collected at the extent. Hand answer `[1, 2, 3, 4]`.
 const OFFSET_ZERO: &str = r#"
-out = (compute.plrun append ((PArg)(.n 4, .off 0, .I PIn(.x x))) : POut)
-compute.collect out.y : array{Int, 4}
+out := (compute.plrun append ((PArg){.n 4, .off 0, .I PIn{.x x}}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// (b) The question: offset 4, collected at eight — the output's length against the extent's.
 const OFFSET_FOUR_WIDE: &str = r#"
-out = (compute.plrun append ((PArg)(.n 4, .off 4, .I PIn(.x x))) : POut)
-compute.collect out.y : array{Int, 8}
+out := (compute.plrun append ((PArg){.n 4, .off 4, .I PIn{.x x}}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// (c) The same launch collected at four: does the declared array or the extent win?
 const OFFSET_FOUR_NARROW: &str = r#"
-out = (compute.plrun append ((PArg)(.n 4, .off 4, .I PIn(.x x))) : POut)
-compute.collect out.y : array{Int, 4}
+out := (compute.plrun append ((PArg){.n 4, .off 4, .I PIn{.x x}}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// (d) A control for (b): an offset landing **half** inside the extent, answer `[0, 0, 1, 2]`.
 const OFFSET_TWO: &str = r#"
-out = (compute.plrun append ((PArg)(.n 4, .off 2, .I PIn(.x x))) : POut)
-compute.collect out.y : array{Int, 4}
+out := (compute.plrun append ((PArg){.n 4, .off 2, .I PIn{.x x}}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// (e) A control for the declared length: offset 0 collected at eight, the same four numbers.
 const OFFSET_ZERO_WIDE: &str = r#"
-out = (compute.plrun append ((PArg)(.n 4, .off 0, .I PIn(.x x))) : POut)
-compute.collect out.y : array{Int, 8}
+out := (compute.plrun append ((PArg){.n 4, .off 0, .I PIn{.x x}}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// What the raw runner renders for `body`, or how it refused.

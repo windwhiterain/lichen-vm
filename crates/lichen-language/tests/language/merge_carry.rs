@@ -13,7 +13,7 @@ fn a_merge_carries_the_decided_type_to_a_member_added_after_the_commit() {
     // The written type makes the read checkable; the body's write is the
     // commit the apply's join follows.
     let (module, value, root_ty) = common::evaluate(
-        "f = (x : tuple{Int, Int}) => {\n  a = x(0) + x(0)\n  p = x: tuple{Int, Int}\n  a\n}\nf (10, 20)",
+        "T := _x => (@any : Int, @any : Int)\nf := (x <: T) => {\n  a := x(0) + x(0)\n  p := x <: T\n  a\n}\nf (10, 20)",
     );
     assert_eq!(
         value,

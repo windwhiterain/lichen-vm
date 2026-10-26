@@ -19,6 +19,7 @@ pub use crate::loop_conversion::{
 pub use crate::resolve::{Define, Selection};
 pub use crate::static_module::Rehome;
 pub(crate) use crate::static_module::StaticModuleCache;
+pub use crate::template::{TemplateBoundary, TemplateInstance};
 
 pub mod ancestors;
 mod apply;
@@ -36,6 +37,7 @@ mod registry;
 pub mod resolve;
 mod static_module;
 mod table;
+mod template;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
@@ -140,16 +142,24 @@ pub enum LowShape {
     Table(Box<Option<LowShape>>, Box<Option<LowShape>>),
 }
 
-/// One element of a structural array value: its node and its `shallow` marker.
+/// One element of a structural array value: its node and its two markers.
 ///
 /// # Invariant
 /// `shallow` is inert metadata — structure and unification ignore it — but it travels
 /// through GC and apply clones, and [`Module::evaluate_node_deep`] skips a marked
 /// element's subtree.
+///
+/// # Invariant
+/// `template` marks the **element template** slot of an array instance: the position
+/// that carries the layout rather than one of the user elements. Its content is not
+/// key content — the table's hash and [`Module::key_eq`] read the slot's presence and
+/// never its value — and the flag travels with the payload through clone, GC, freeze
+/// and the artifact codec.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArrayItem {
     pub node: AnyNodeId,
     pub shallow: bool,
+    pub template: bool,
 }
 
 impl ArrayItem {
@@ -158,6 +168,20 @@ impl ArrayItem {
         ArrayItem {
             node,
             shallow: false,
+            template: false,
+        }
+    }
+
+    /// The **element template** slot of an array instance.
+    ///
+    /// # Invariant
+    /// The slot holds the array's layout, not one of its user elements, so a reader
+    /// that compares keys reads the slot's presence and not its value.
+    pub fn template(node: AnyNodeId) -> Self {
+        ArrayItem {
+            node,
+            shallow: false,
+            template: true,
         }
     }
 }
@@ -280,6 +304,9 @@ pub enum LowOperator {
     /// - `operand[0]`: function.
     /// - `operand[1]`: argument.
     Apply,
+    /// - `operand[0]`: actual expression, evaluated first.
+    /// - `operand[1]`: expected requirement.
+    Unify,
     /// - `operand[0]`: table.
     /// - `operand[1]`: key.
     ///
@@ -979,6 +1006,10 @@ pub struct Module<P: Program> {
     pub element_types: HashMap<NodeId, AnyNodeId>,
     /// The clone's return expr of each type-side apply, keyed by the apply node.
     pub applied_exprs: HashMap<NodeId, NodeId>,
+    /// The apply that produced each returned value, for constructor recovery.
+    pub apply_result_owners: HashMap<NodeId, NodeId>,
+    /// A wildcard constructor's per-instantiation implementation.
+    pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each type-side apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
     /// The value-side apply of a call, keyed by its type-side apply.
@@ -1122,6 +1153,12 @@ pub struct Module<P: Program> {
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
+    /// Function templates whose value body is open in this application chain.
+    ///
+    /// # Invariant
+    /// `Check` never enters a template already open in the chain; `Evaluate`
+    /// does not use this guard.
+    pub(crate) value_templates: HashSet<FunctionId>,
     /// The module's **attribute-layout registry**: one entry per schema tail.
     ///
     /// # Invariant
@@ -1226,6 +1263,8 @@ pub struct StaticModule<P: Program> {
     pub key: ModuleKey,
     pub nodes: Vec<StaticNode<P>>,
     pub functions: Vec<StaticFunction>,
+    /// The apply that produced each returned value, preserved for constructor recovery.
+    pub apply_result_owners: HashMap<LocalNodeId, LocalNodeId>,
     /// The flattened payload arena: array item slices and ext-value bytes, deduped by `(ptr, len)`.
     pub arena: Vec<u8>,
     /// The frozen module's **attribute-layout registry**, copied verbatim from the source.

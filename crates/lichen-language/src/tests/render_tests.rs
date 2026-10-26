@@ -56,32 +56,21 @@ fn a_node_the_module_no_longer_holds_renders_without_panicking() {
 #[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
     // The message uses the CLI's type spellings, not the raw `TypeInt → TypeInt`.
-    let report = crate::compile("5 : Int -> Int");
+    let report = crate::compile("5 <: (x : Int => _: Int)");
     assert_eq!(
         report.diagnostics[0].message,
-        "expected Int -> Int, found Int"
+        "expected Int => Int, found Int"
     );
 }
 
 #[test]
 fn an_array_element_conflict_renders_undecided_arrow_cells() {
     // The found side is the lambda's arrow shape, its two cells sharing one name.
-    let report = crate::compile("[1, x => x]");
+    let report = crate::compile("[Int, 2][Int, x => x]");
     assert_eq!(
         report.diagnostics[0].message,
-        "expected Int, found ?a -> ?a"
+        "expected Int, found ?a => ?a"
     );
-}
-
-#[test]
-fn a_struct_conflict_keeps_the_nominal_ids() {
-    // Two source occurrences are different nominal types, so the message keeps
-    // each side's nominal id.
-    let report = crate::compile(
-        "s1 = struct{.f Int, .g Int}; s2 = struct{.f Int, .g Int}; [s1(1, 2), s2(1, 2)]",
-    );
-    let message = &report.diagnostics[0].message;
-    assert!(message.contains("struct{.f Int, .g Int}#"), "{}", message);
 }
 
 #[test]
@@ -105,28 +94,28 @@ fn output(source: &str) -> String {
 }
 
 #[test]
-fn a_struct_type_value_renders_in_type_syntax() {
-    // The raw shape is `[Int, Type]`; read against its kind it prints as source.
+fn a_struct_template_renders_as_its_field_tuple() {
+    // The template's fields are its own values; its type is the shared layout.
     assert_eq!(
-        output("A = struct{.f Int, .t Type}\nA"),
-        "struct{.f Int, .t Type}: TypeStruct"
+        output("A := {.f @any : Int, .t @any : Type}\nA"),
+        "(@any, @any): Struct"
     );
 }
 
 #[test]
 fn a_struct_instance_renders_its_field_tuple() {
     assert_eq!(
-        output("A = struct{.f Int, .t Type}\na = A(1, Int)\n(A, a, a.f, a.t)"),
-        "(struct{.f Int, .t Type}, (1, Int), 1, Int): tuple{TypeStruct, struct{.f Int, .t Type}, Int, Type}"
+        output("A := {.f @any : Int, .t @any : Type}\na := A{.f 1, .t Int}\n(A, a, a.f, a.t)"),
+        "((@any, @any), (1, Int), 1, Int): Tuple"
     );
 }
 
 #[test]
 fn a_single_field_struct_instance_keeps_the_tuple_comma() {
-    // A one-element tuple's comma `(1,)` shows even though the source `B(1)` has none.
+    // A one-element tuple's comma `(1,)` shows even though the source has none.
     assert_eq!(
-        output("B = struct{.f Int}\nb = B(1,)\n(B, b)"),
-        "(struct{.f Int}, (1,)): tuple{TypeStruct, struct{.f Int}}"
+        output("B := {.f @any : Int}\nb := B{.f 1}\n(B, b)"),
+        "((@any,), (1,)): Tuple"
     );
 }
 
@@ -134,19 +123,20 @@ fn a_single_field_struct_instance_keeps_the_tuple_comma() {
 fn a_tuple_value_renders_with_parens() {
     // The type says tuple, so the value reads as the source tuple, not
     // the raw `[1, Int]` array layout.
-    assert_eq!(output("(1, Int)"), "(1, Int): tuple{Int, Type}");
+    assert_eq!(output("(1, Int)"), "(1, Int): Tuple");
 }
 
 #[test]
 fn an_array_value_keeps_brackets() {
-    assert_eq!(output("[1, 2, 3]"), "[1, 2, 3]: array{Int, 3}");
+    assert_eq!(output("[@any : Int, 3][1, 2, 3]"), "[1, 2, 3]: Array");
 }
 
 #[test]
-fn a_compound_type_value_renders_in_type_syntax() {
-    // A type expression's value is the type, so it reads in type syntax.
-    assert_eq!(output("tuple{Int, Type}"), "tuple{Int, Type}: TypeTuple");
-    assert_eq!(output("array{Int, 3}"), "array{Int, 3}: TypeArray");
+fn a_layout_constant_prints_with_its_own_type() {
+    // The layout constants are values; each prints with the type it carries.
+    assert_eq!(output("Tuple"), "Tuple: Type");
+    assert_eq!(output("Array"), "Array: Type");
+    assert_eq!(output("Struct"), "Struct: Struct");
     assert_eq!(output("set{Int}"), "set{Int}: SetType");
 }
 
@@ -158,28 +148,27 @@ fn a_set_and_a_table_value_render_their_own_syntax() {
         "table{Int, string}: ?"
     );
     assert_eq!(
-        output("t = table(1 ==> \"a\")\nt"),
+        output("t := table(1 ==> \"a\")\nt"),
         "table(1 ==> \"a\"): table{Int, string}"
     );
 }
 
 #[test]
-fn a_written_arrow_is_a_function() {
-    // A type-position arrow lowers to a real function; the value half and the
-    // type half both state its signature.
-    assert_eq!(output("Int -> Int"), "Int => Int: Int -> Int");
+fn a_function_template_is_a_function() {
+    // A function template is a real function; both halves state its signature.
+    assert_eq!(output("x : Int => _: Int"), "Int => Int: Int => Int");
 }
 
 #[test]
 fn a_type_second_slot_does_not_collapse_an_array() {
     // The raw `[head, K]` heuristic would drop the head; the type chain keeps both.
-    assert_eq!(output("(1, Type)"), "(1, Type): tuple{Int, Type}");
+    assert_eq!(output("(1, Type)"), "(1, Type): Tuple");
 }
 
 #[test]
 fn a_function_value_prints_its_signature() {
-    assert_eq!(output("x => x"), "?a => ?a: ?a -> ?a");
-    assert_eq!(output("f = x => x\nf"), "?a => ?a: ?a -> ?a");
+    assert_eq!(output("x => x"), "?a => ?a: ?a => ?a");
+    assert_eq!(output("f := x => x\nf"), "?a => ?a: ?a => ?a");
 }
 
 // --- `type_of` as an ordinary lichen function ----------------------------
@@ -189,7 +178,7 @@ fn a_function_value_prints_its_signature() {
 
 /// `source` with the standard library's `type_of` bound ahead of it.
 fn with_type_of(source: &str) -> String {
-    output(&format!("type_of = x => {{t = _; x: t; t}}\n{source}"))
+    output(&format!("type_of := x => {{t := _; x: t; t}}\n{source}"))
 }
 
 #[test]
@@ -199,25 +188,22 @@ fn type_of_reads_the_operands_type() {
     assert_eq!(with_type_of("type_of 1"), "Int: Type");
     assert_eq!(
         with_type_of("(type_of (1), type_of Int, type_of Type)"),
-        "(Int, Type, Type): tuple{Type, Type, Type}"
+        "(Int, Type, Type): Tuple"
     );
 }
 
 #[test]
 fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
-    assert_eq!(with_type_of("f = type_of\nf 1"), "Int: Type");
-    assert_eq!(with_type_of("g = x => type_of x\ng 2"), "Int: Type");
-    assert_eq!(with_type_of("type_of (x => x)"), "?a => ?a: ?a -> ?a");
+    assert_eq!(with_type_of("f := type_of\nf 1"), "Int: Type");
+    assert_eq!(with_type_of("g := x => type_of x\ng 2"), "Int: Type");
+    assert_eq!(with_type_of("type_of (x => x)"), "?a => ?a: ?a => ?a");
 }
 
 #[test]
 fn type_of_reads_compound_types() {
-    assert_eq!(with_type_of("type_of [1, 2]"), "array{Int, 2}: TypeArray");
-    assert_eq!(
-        with_type_of("type_of (1, Int)"),
-        "tuple{Int, Type}: TypeTuple"
-    );
+    assert_eq!(with_type_of("type_of [@any, 2][1, 2]"), "Array: Type");
+    assert_eq!(with_type_of("type_of (1, Int)"), "Tuple: Type");
     assert_eq!(with_type_of("type_of (type_of (1))"), "Type: Type");
 }
 

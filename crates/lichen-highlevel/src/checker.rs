@@ -47,7 +47,9 @@ mod lambda;
 mod native_call;
 mod operators;
 mod structs;
+mod templates;
 mod tuples;
+mod values;
 
 // These macros expand the kind-marker registry list into marker plumbing.
 
@@ -151,6 +153,8 @@ where
     /// The enclosing lambdas' parameters, innermost last: an attribute naming
     /// one of their fields is a **reference**.
     current_parameters: Vec<ExprId>,
+    /// Placeholder callees for which constructor recovery succeeded.
+    placeholder_constructors: std::collections::HashSet<ExprId>,
     /// The `@gc` expressions this build compiled.
     ///
     /// # Invariant
@@ -193,17 +197,22 @@ where
     ///
     /// # Invariant
     ///
-    /// Empty by construction: a written arrow lowers to a function, so `Ctx::arrow`
-    /// has no call site and no node is registered here (see
-    /// docs/notes/function-type-merge.md). The printer's bare `[in, out]` arrow arm
-    /// therefore never fires, and no reading depends on this being non-empty.
+    /// Empty by construction: the language has no arrow type, so no node is
+    /// registered here. The printer's bare `[in, out]` arrow arm therefore never
+    /// fires, and no reading depends on this being non-empty.
     arrows: HashSet<NodeId>,
     /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,
     /// Each apply's **type-only** application, keyed by the apply's expression.
     type_applies: HashMap<ExprId, NodeId>,
-    /// Each bare `@shallow` position's `(type application, result type cell)`.
-    shallow_types: Vec<(NodeId, NodeId)>,
+    /// Each marked position's `(type application, tail cell, inner type)`.
+    ///
+    /// # Invariant
+    /// The type application is the marked call's own, and it is `None` for an
+    /// element that is not a call. The tail cell is the position's declared
+    /// type, and the inner type is the element's own: the tail closes on the
+    /// inner one once the application has decided it.
+    shallow_types: Vec<(Option<NodeId>, NodeId, NodeId)>,
     /// The wrapper nodes this checker builds for `@shallow(n)` elements.
     ///
     /// # Invariant
@@ -216,6 +225,8 @@ where
     /// # Invariant
     /// No span is stored on a node, which is what lets the graph be shared.
     node_edges: HashMap<NodeId, Loc>,
+    /// An array read's internal `i + 1` subscript, mapped to the source `i`.
+    array_subscripts: HashMap<NodeId, NodeId>,
     /// The read whose derived nodes are being built.
     ///
     /// # Invariant
@@ -242,12 +253,6 @@ where
     /// Each carries a source-blind [`Loc`] and the budget the guard recorded:
     /// the build reports such a statement as an error, never a panic.
     nonterminating: Vec<NonTerminating>,
-    /// A forced callee evaluation already hit the VM's apply/depth guard once.
-    ///
-    /// # Invariant
-    /// Never force again: a refused walk leaves the graph partly evaluated, so
-    /// the build's statement pass reports the non-termination.
-    force_failed: bool,
     // The installed shared kind-marker nodes, one per marker.
     markers: Markers,
     /// The shared `[int, Type]` type expression every literal's expr carries.
@@ -258,6 +263,27 @@ where
     /// The shared `[string, Type]` type expression, paired into every `Str`
     /// literal.
     string_type: NodeId,
+    /// The shared **`Tuple` template** — the `[TupleType, Type]` expression every
+    /// tuple value's type is.
+    ///
+    /// # Invariant
+    /// One node for the whole program: a tuple value's type is this node, so a
+    /// read can require the tuple layout by unifying with it, and two tuple
+    /// values are one type.
+    tuple_template: NodeId,
+    /// The shared **`Array` template** — the `[ArrayType, Type]` expression every
+    /// array value's type is.
+    ///
+    /// # Invariant
+    /// One node, as [`Self::tuple_template`]'s is.
+    array_template: NodeId,
+    /// The shared **`Struct` template** — the self-referential `[StructType, ↺]`
+    /// expression every struct value's type is.
+    ///
+    /// # Invariant
+    /// Its type slot is itself: the struct layout closes on itself, so the
+    /// template needs no second node and no payload.
+    struct_template: NodeId,
     /// The shared wildcard value node: a compound type's unconstrained positions.
     ///
     /// # Invariant
@@ -392,6 +418,8 @@ where
     pub apply_edges: HashMap<NodeId, ApplyEdge>,
     /// The runtime-attribution edges (see [`Checker::node_edges`]).
     pub node_edges: HashMap<NodeId, Loc>,
+    /// An array read's internal subscript, mapped to its source subscript.
+    pub array_subscripts: HashMap<NodeId, NodeId>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
     /// How a failed assert of each registered condition should read (see
@@ -573,6 +601,7 @@ where
             function_stack: Vec::new(),
             function_of: HashMap::new(),
             current_parameters: Vec::new(),
+            placeholder_constructors: std::collections::HashSet::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
@@ -586,17 +615,20 @@ where
             shallow_types: Vec::new(),
             shallow_regions: HashSet::new(),
             node_edges: HashMap::new(),
+            array_subscripts: HashMap::new(),
             read_site: None,
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
 
             lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
-            force_failed: false,
             markers: Markers::default(),
             int_type: NodeId::default(),
             float_type: NodeId::default(),
             string_type: NodeId::default(),
+            tuple_template: NodeId::default(),
+            array_template: NodeId::default(),
+            struct_template: NodeId::default(),
             any_value: NodeId::default(),
             type_expr: NodeId::default(),
             zero_value: NodeId::default(),
@@ -611,11 +643,28 @@ where
         checker.module.evaluate_node_deep(checker.int_type, None);
         checker.module.evaluate_node_deep(checker.float_type, None);
         checker.module.evaluate_node_deep(checker.string_type, None);
+        // The compound templates are concrete before the definition pass.
+        checker
+            .module
+            .evaluate_node_deep(checker.tuple_template, None);
+        checker
+            .module
+            .evaluate_node_deep(checker.array_template, None);
+        checker
+            .module
+            .evaluate_node_deep(checker.struct_template, None);
         let root = checker.ir.root;
         // Type-check every user-written top-level statement, then the final root.
         let stmt_roots = checker.ir.stmt_roots.clone();
+        let mut evaluated_lambdas = 0;
         for &s in &stmt_roots {
             checker.check_expr(s);
+            // Later statements read the shallow types their predecessors decide.
+            for &func_node in &checker.lambda_value_nodes[evaluated_lambdas..] {
+                checker.module.evaluate_node_deep(func_node, None);
+            }
+            evaluated_lambdas = checker.lambda_value_nodes.len();
+            checker.resolve_shallow_types();
         }
         let root_term = checker.check_expr(root);
         let root_ty = checker.state[root]
@@ -632,23 +681,14 @@ where
             let expression = ExprId(index as u32);
             let is_type = matches!(
                 checker.ir[expression].kind,
-                ExprKind::TypeFunction { .. }
-                    | ExprKind::TypeTuple(_)
-                    | ExprKind::TypeSet(_)
-                    | ExprKind::TypeTable(_)
-                    | ExprKind::TypeStruct { .. }
-                    | ExprKind::TypeArray { .. }
+                ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
             );
             if is_type && let Some(term) = checker.state[expression].term {
                 checker.module.evaluate_node_deep(term, None);
             }
         }
         // A `@shallow` mark is on the value; its element's type is applied here, and an open tail then closes.
-        let shallow_types = std::mem::take(&mut checker.shallow_types);
-        for (type_apply, tail) in shallow_types {
-            checker.module.evaluate_node_deep(type_apply, None);
-            checker.close_shallow_tail(tail);
-        }
+        checker.resolve_shallow_types();
         // The definition pass: run the program so the apply-time checks fire.
         if mode == Mode::Evaluate && !checker.check_failed() {
             // Its order is user-visible, so functions are sorted by the IR
@@ -809,6 +849,7 @@ where
             arrows: checker.arrows,
             apply_edges: checker.apply_edges,
             node_edges: checker.node_edges,
+            array_subscripts: checker.array_subscripts,
             user_asserts: checker.user_asserts,
             assert_spellings: checker.assert_spellings,
 
@@ -837,6 +878,8 @@ where
         }
         self.arrows.retain(|&node| live(node));
         self.node_edges.retain(|&node, _| live(node));
+        self.array_subscripts
+            .retain(|&node, source| live(node) && live(*source));
         self.apply_edges.retain(|&node, _| live(node));
         self.user_asserts.retain(|&node| live(node));
         self.assert_spellings.retain(|&node, _| live(node));
@@ -901,6 +944,11 @@ where
         self.int_type = self.kind_expr(root, self.markers.int_marker);
         self.float_type = self.kind_expr(root, self.markers.float_marker);
         self.string_type = self.kind_expr(root, self.markers.string_marker);
+        // The compound **templates**: the shared layout expressions a
+        // compound value's type is.
+        self.tuple_template = self.kind_expr(root, self.markers.tuple_type_marker);
+        self.array_template = self.kind_expr(root, self.markers.array_type_marker);
+        self.struct_template = self.self_referential_template(root);
         // The positional-read constants, the subscripts of `Index(expr, 0)` and
         // `Index(expr, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
@@ -911,6 +959,9 @@ where
         let defaults = vec![cell; crate::shape::EXPR_ATTR_BASE + P::Attr::ORDER.len()];
         let defaults = self.module.alloc_array(&defaults, root);
         self.module.set_default_attributes(defaults);
+        // The full width, for the operators that build an expression of their own.
+        let full_width = self.full_width_layout();
+        self.module.record_full_width_layout(full_width);
     }
 
     /// The shared `USize(0)` node — the `Index(expr, 0)` subscript every value
@@ -918,7 +969,47 @@ where
     pub(super) fn zero(&self) -> NodeId {
         self.zero_value
     }
+    /// The shared **`Tuple` template** — the `[TupleType, Type]` expression.
+    pub(super) fn tuple_template(&self) -> NodeId {
+        self.tuple_template
+    }
 
+    /// The shared **`Array` template** — the `[ArrayType, Type]` expression.
+    pub(super) fn array_template(&self) -> NodeId {
+        self.array_template
+    }
+
+    /// The shared **`Struct` template** — the `[StructType, ↺]` expression.
+    pub(super) fn struct_template(&self) -> NodeId {
+        self.struct_template
+    }
+
+    /// A **self-referential** template expression `[marker, ↺]`: its type slot
+    /// is itself.
+    ///
+    /// # Invariant
+    /// The type slot is the node itself, so the layout closes on itself and no
+    /// second node carries it — the universe is built the same way.
+    fn self_referential_template(&mut self, block: BlockId) -> NodeId {
+        let template = self.alloc_node(block, None, None);
+        let mut items = vec![
+            ArrayItem::new(AnyNodeId::Dynamic(self.markers.type_struct_marker)),
+            ArrayItem::new(AnyNodeId::Dynamic(template)),
+        ];
+        items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(self.any_value)),
+            P::Attr::ORDER.len(),
+        ));
+        let layout = self.full_width_layout();
+        self.module.write_node_value(
+            template,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                self.module.alloc_array(&items, block),
+                layout,
+            )))),
+        );
+        template
+    }
     /// The shared `USize(1)` node — the `Index(expr, 1)` subscript every type
     /// read uses.
     pub(super) fn one(&self) -> NodeId {
@@ -1051,6 +1142,33 @@ where
         self.array_node_with_layout(block, ids, 0)
     }
 
+    /// An array instance's value: shallow flags are per item; slot 0 is the template.
+    ///
+    /// # Invariant
+    /// The flags are the items' own, so a marked position is the item a deep
+    /// pass skips: the mask is on the item, not on the node that holds it.
+    /// The first slot holds the array's **element template** — the layout, not one of
+    /// the user elements — so it carries the template marker: a key comparison reads
+    /// that slot's presence and never its value.
+    pub(super) fn array_instance_node(
+        &mut self,
+        block: BlockId,
+        ids: &[NodeId],
+        mask: &[bool],
+    ) -> NodeId {
+        let items: Vec<ArrayItem> = ids
+            .iter()
+            .zip(mask.iter())
+            .enumerate()
+            .map(|(index, (&node, &shallow))| ArrayItem {
+                node: AnyNodeId::Dynamic(node),
+                shallow,
+                template: index == 0,
+            })
+            .collect();
+        self.array_value_node(block, items, 0)
+    }
+
     /// [`Self::array_node`] with the array's **attribute layout**.
     ///
     /// # Invariant
@@ -1067,6 +1185,12 @@ where
             .iter()
             .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
             .collect();
+        self.array_value_node(block, items, layout)
+    }
+
+    /// The array **value** node over `items`, with the array's attribute
+    /// layout.
+    fn array_value_node(&mut self, block: BlockId, items: Vec<ArrayItem>, layout: u32) -> NodeId {
         self.alloc_node(
             block,
             None,
@@ -1125,26 +1249,6 @@ where
         })
     }
 
-    /// [`Self::array_node`] with the per-position `~` markers of a shallow
-    /// array; an all-`false` set is the unmarked form.
-    fn array_node_masked(&mut self, block: BlockId, ids: &[NodeId], mask: &[bool]) -> NodeId {
-        let items: Vec<ArrayItem> = ids
-            .iter()
-            .zip(mask.iter())
-            .map(|(&node, &shallow)| ArrayItem {
-                node: AnyNodeId::Dynamic(node),
-                shallow,
-            })
-            .collect();
-        self.alloc_node(
-            block,
-            None,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, block).into(),
-            ))),
-        )
-    }
-
     /// A layout-carrying masked array: the shallow wrapper.
     ///
     /// # Invariant
@@ -1157,6 +1261,7 @@ where
             .map(|(&node, &shallow)| ArrayItem {
                 node: AnyNodeId::Dynamic(node),
                 shallow,
+                template: false,
             })
             .collect();
         let any = self.any();
@@ -1175,6 +1280,23 @@ where
         );
         self.shallow_regions.insert(node);
         node
+    }
+
+    /// Whether a node holds a shallow mark's expr: a wrapper this check built,
+    /// or a clone of one.
+    ///
+    /// # Invariant
+    /// A clone instantiates the template's wrapper, so the origin chain answers
+    /// for it; the set holds the wrappers the check built.
+    pub(super) fn is_shallow_region(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            if self.shallow_regions.contains(&node) {
+                return true;
+            }
+            current = self.module.node_origin(node);
+        }
+        false
     }
 
     pub fn op_node(
@@ -1321,42 +1443,6 @@ where
         (shape, kind, expr)
     }
 
-    /// The struct marker node `[payload, TypeStruct]`, the type slot holding the
-    /// `TypeStruct` atom.
-    ///
-    /// # Invariant
-    /// The tag is a fact the graph carries, never a shape a reader guesses; this
-    /// is the one construction point, including the deferred instantiation's
-    /// pin, whose payload cells all stay open.
-    fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
-        let payload = self.array_node(self.current_block, &[id, names, names_in_order]);
-        let tag = self.type_struct_marker_node();
-        self.slot_expr(self.current_block, payload, tag)
-    }
-
-    /// The struct-kind requirement a decided-tier read states: `[[payload,
-    /// TypeStruct], K]`, with the payload left open.
-    ///
-    /// # Invariant
-    /// It names the tag, never the payload's shape, so it checks `TypeStruct`
-    /// rather than guessing that any marker-shaped array is a struct; it is the
-    /// struct analogue of the tuple read's `[TypeTuple, K]` unify.
-    fn struct_kind_requirement(&mut self) -> NodeId {
-        let payload = self.fresh_cell();
-        let marker = self.slot_expr(self.current_block, payload, self.type_struct_marker_node());
-        self.kind_expr(self.current_block, marker)
-    }
-
-    /// The **tuple kind** a positional read requires of its container.
-    fn tuple_kind_requirement(&mut self) -> NodeId {
-        self.kind_expr(self.current_block, self.markers.tuple_type_marker)
-    }
-
-    /// The **array kind** an index read requires of its container.
-    fn array_kind_requirement(&mut self) -> NodeId {
-        self.kind_expr(self.current_block, self.markers.array_type_marker)
-    }
-
     /// A struct type's nominal id node: one value per written struct type
     /// occurrence, minted while the graph is built.
     ///
@@ -1370,53 +1456,6 @@ where
         self.value_node(P::Value::type_id_value(occurrence.0 as usize))
     }
 
-    /// The struct type's encoding — the one construction point for the layout
-    /// [`crate::shape`] documents but never builds.
-    ///
-    /// # Invariant
-    /// The identity is a build-time value ([`Self::fresh_nominal_id`]). The marker
-    /// is deep-evaluated **here**, not in a later phase: the build's own later
-    /// statements read the struct type and see this pin's verdict. Deferring it
-    /// makes two applications of one constructor unify their name tables by
-    /// identity and refuse the program — measured. See
-    /// docs/notes/function-type-merge.md.
-    fn struct_type_type(
-        &mut self,
-        id: NodeId,
-        field_tys: &[NodeId],
-        field_names: &[Option<&'static str>],
-    ) -> (NodeId, NodeId, NodeId) {
-        let shape = self.array_node(self.current_block, field_tys);
-        let names = self.build_struct_names(field_names);
-        let names_in_order = self.build_struct_names_in_order(field_names);
-        let marker = self.struct_marker_node(id, names, names_in_order);
-        self.module.evaluate_node_deep(marker, None);
-        let kind = self.kind_expr(self.current_block, marker);
-        let wrapper = self.slot_expr(self.current_block, shape, kind);
-        (shape, kind, wrapper)
-    }
-
-    /// A lazy structural read down a constant index `path`: the nested `Index`
-    /// chain that resolves when `base` binds.
-    fn lazy_index_path(&mut self, base: NodeId, path: &[usize]) -> NodeId {
-        let mut node = base;
-        for &slot in path {
-            let index = match slot {
-                0 => self.zero(),
-                1 => self.one(),
-                _ => self.usize_node(slot),
-            };
-            let ops = self.array_node(self.current_block, &[node, index]);
-            node = self.op_node(
-                self.current_block,
-                P::Operator::from(LowOperator::Index),
-                Some(ops),
-            );
-            self.stamp_read_node(node);
-        }
-        node
-    }
-
     /// The children of a variadic expression kind.
     ///
     /// # Invariant
@@ -1426,14 +1465,12 @@ where
     fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
-            | ExprKind::TypeTuple(range)
             | ExprKind::TypeSet(range)
             | ExprKind::TypeTable(range)
-            | ExprKind::Array(range)
             | ExprKind::Set(range)
-            | ExprKind::ShallowArray { range, .. }
             | ExprKind::Table(range) => range,
-            ExprKind::TypeStruct { fields, .. } => fields,
+            ExprKind::Struct { fields, .. } => fields,
+            ExprKind::ArrayInst { elements, .. } => elements,
             ExprKind::NativeCall { args, .. } => args,
             ExprKind::Prefix { operands, .. } => operands,
             ExprKind::Literal(_)
@@ -1445,13 +1482,13 @@ where
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
             | ExprKind::Gc { .. }
+            | ExprKind::Unify { .. }
             | ExprKind::Index { .. }
             | ExprKind::Field { .. }
             | ExprKind::NamedField { .. }
             | ExprKind::Find { .. }
             | ExprKind::Annotation { .. }
-            | ExprKind::TypeFunction { .. }
-            | ExprKind::TypeArray { .. }
+            | ExprKind::Array { .. }
             | ExprKind::Placeholder
             | ExprKind::ErrorBlock
             | ExprKind::Static { .. } => {
@@ -1459,16 +1496,6 @@ where
             }
         };
         self.ir.children[range.start as usize..range.end as usize].to_vec()
-    }
-
-    /// The per-element `~` depths of a shallow array, one per child of
-    /// [`Self::range_children`].
-    fn range_depths(&self, e: ExprId) -> Vec<usize> {
-        let range = match self.ir[e].kind {
-            ExprKind::ShallowArray { depths, .. } => depths,
-            _ => unreachable!("expected a shallow array expression kind"),
-        };
-        self.ir.depths[range.start as usize..range.end as usize].to_vec()
     }
 
     /// The value of an expression: element 0 of its expr.
@@ -1602,13 +1629,13 @@ where
             } => self.check_binop(e, operator, left, right),
             ExprKind::Prefix { operator, operands } => self.check_prefix(e, operator, operands),
             ExprKind::Instantiate {
-                type_expr,
+                template,
                 value,
                 names,
             } => {
                 let arg_names: Vec<Option<&'static str>> =
                     self.ir.struct_names[names.start as usize..names.end as usize].to_vec();
-                self.check_instantiate(e, type_expr, value, &arg_names)
+                self.check_instantiate(e, template, value, &arg_names)
             }
             ExprKind::Record { value, names } => {
                 let field_names: Vec<Option<&'static str>> =
@@ -1621,23 +1648,17 @@ where
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                // Compile both sides in the enclosing scope, ahead of the
-                // signature's shell.
-                let parameter_ty = self.check_type_element(parameter);
-                let return_ty = self.check_type_element(return_type);
-                self.check_signature(e, parameter_ty, return_ty)
-            }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
-            ExprKind::TypeTuple(_) => self.check_tuple_type(e),
-            ExprKind::TypeStruct { .. } => self.check_type_struct(e),
-            ExprKind::Array(_) => self.check_array_term(e),
+            ExprKind::Struct { fields, names } => self.check_struct_value(e, fields, names),
+            ExprKind::Array { template, length } => self.check_array_template(e, template, length),
+            ExprKind::ArrayInst {
+                template,
+                elements,
+                depths,
+            } => self.check_array_inst(e, template, elements, depths),
             ExprKind::Set(_) => self.check_set_term(e),
             ExprKind::Table(_) => self.check_table_term(e),
-            ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
+            ExprKind::Unify { actual, expected } => self.check_unify_expr(e, actual, expected),
             ExprKind::ErrorBlock => {
                 // A recovered-error region: an opaque leaf whose cells are never
                 // unified, so nothing inside reports a type error.
@@ -1671,10 +1692,6 @@ where
                 self.state[e].ty = Some(ty_cell);
                 expr
             }
-            ExprKind::TypeArray {
-                element_type,
-                length,
-            } => self.check_array_type(e, element_type, length),
             ExprKind::TypeSet(_) => self.check_set_type(e),
             ExprKind::TypeTable(_) => self.check_table_type(e),
             ExprKind::Static { export } => {
@@ -1854,6 +1871,18 @@ where
 
     fn string_type(&self) -> NodeId {
         self.string_type
+    }
+
+    fn tuple_template(&self) -> NodeId {
+        Checker::tuple_template(self)
+    }
+
+    fn array_template(&self) -> NodeId {
+        Checker::array_template(self)
+    }
+
+    fn struct_template(&self) -> NodeId {
+        Checker::struct_template(self)
     }
 
     // The 9 marker-node accessors — registry-derived.

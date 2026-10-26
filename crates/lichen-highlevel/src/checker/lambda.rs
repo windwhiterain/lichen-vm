@@ -198,87 +198,6 @@ where
         expr
     }
 
-    /// The **signature** a type-position `A -> B` lowers to: a real
-    /// function; see `docs/notes/function-type-merge.md`.
-    ///
-    /// # Invariant
-    /// `domain` and `codomain` compile before the shell opens, so their nodes
-    /// belong to the enclosing template and are cloned per call. A signature is
-    /// never applied, only unified against, so its body is the bare return expr.
-    pub(super) fn check_signature(
-        &mut self,
-        e: ExprId,
-        domain: NodeId,
-        codomain: NodeId,
-    ) -> NodeId {
-        let (expr, func_node) = self.signature_node(Some(e), domain, codomain);
-        self.state[e].term = Some(expr);
-        self.state[e].val = Some(func_node);
-        self.state[e].ty = Some(expr);
-        expr
-    }
-
-    /// The graph half of [`Self::check_signature`]; the apply's
-    /// function-ness guard needs a signature **pattern** too.
-    ///
-    /// # Invariant
-    /// The pattern is a real function: a function type is the only function
-    /// type there is, so there is no second shape for a pattern to wear. A
-    /// pattern has no expression, so it registers no `function_of` entry.
-    fn signature_node(
-        &mut self,
-        e: Option<ExprId>,
-        domain: NodeId,
-        codomain: NodeId,
-    ) -> (NodeId, NodeId) {
-        let return_block = self.module.add_block(None);
-        let saved = self.current_block;
-        self.current_block = return_block;
-        let parent = self.current_function();
-        let function = self.module.begin_function(return_block, parent);
-        if let Some(e) = e {
-            self.function_of.insert(e, function);
-        }
-        self.function_stack.push((function, e));
-        // Both value positions are unconstrained: a signature states types, and
-        // the wildcard is what an unstated value is.
-        let parameter_value = self.fresh_cell();
-        let parameter_type = self.fresh_cell();
-        let parameter = self.slot_expr(return_block, parameter_value, parameter_type);
-        // The domain is unified *into* the parameter's type slot, so a function
-        // unified against it binds the two.
-        self.module.unify(parameter_type, domain);
-        let return_value = self.fresh_cell();
-        let body = self.slot_expr(return_block, return_value, codomain);
-        self.module.finish_function(function, body, parameter);
-        self.module.functions[function].return_type = codomain;
-        let func_node = self.alloc_node(return_block, None, None);
-        self.module.write_node_value(
-            func_node,
-            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
-                function,
-            )))),
-        );
-        let ty_cell = self.fresh_cell();
-        // The paired term `[Function(fid), ↺]`, written once: a value a slot holds is
-        // never replaced.
-        let expr = self.alloc_node(return_block, None, None);
-        let items = [
-            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
-            ArrayItem::new(AnyNodeId::Dynamic(expr)),
-        ];
-        self.module.write_node_value(
-            expr,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block).into(),
-            ))),
-        );
-        self.module.unify(ty_cell, expr);
-        self.function_stack.pop();
-        self.current_block = saved;
-        (expr, func_node)
-    }
-
     /// The argument's field a certificate names: an `Index` of the bound
     /// parameter clone carries the field position.
     ///
@@ -424,12 +343,10 @@ where
         let arguments = self.range_children(value);
         let names = self.ir.struct_names[names_start..names_end].to_vec();
         let written = if names.iter().any(|name| name.is_some()) {
-            let ty = self.state[argument].ty?;
-            let table = crate::shape::struct_names_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )?;
+            // The name table is the instance value's own first slot: the layout
+            // lives in the value.
+            let value = self.value_of(argument);
+            let table = self.struct_name_table(value)?;
             let field = self.module.name_table_name(table, position)?;
             names.iter().position(|name| *name == Some(field))
         } else {
@@ -517,9 +434,7 @@ where
         // A **decided** non-function callee is refused here; an
         // undecided one waits for the runtime apply.
         if self.type_is_concrete(function_ty) && !self.module.is_function_type(function_ty) {
-            let d = self.fresh_cell();
-            let c = self.fresh_cell();
-            let (fn_ty, _) = self.signature_node(None, d, c);
+            let fn_ty = self.function_pattern();
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // **The body's own requirements are replayed here**, where the caller's slot
@@ -560,6 +475,12 @@ where
             P::Operator::from(LowOperator::Apply),
             Some(type_operands),
         );
+        self.module
+            .apply_result_owners
+            .insert(value_apply, value_apply);
+        self.module
+            .apply_result_owners
+            .insert(type_apply, type_apply);
         self.type_applies.insert(e, type_apply);
         // The call's value-side apply is recorded against its type side
         // (`docs/notes/apply-type-side-check.md`).
@@ -687,5 +608,54 @@ where
             }
         }
         node
+    }
+
+    /// A fresh **function pattern**: a real function whose own cells are open.
+    ///
+    /// # Invariant
+    /// The pattern's parameter and return are fresh cells, so it states
+    /// nothing: it says "a function", not "this function". It is a real
+    /// function object — the shape a lambda has — and not a second shape for
+    /// a function type.
+    fn function_pattern(&mut self) -> NodeId {
+        let return_block = self.module.add_block(None);
+        let saved = self.current_block;
+        self.current_block = return_block;
+        let parent = self.current_function();
+        let function = self.module.begin_function(return_block, parent);
+        self.function_stack.push((function, None));
+        // Both value positions are unconstrained: the pattern states no
+        // requirement at all.
+        let parameter_value = self.fresh_cell();
+        let parameter_type = self.fresh_cell();
+        let parameter = self.slot_expr(return_block, parameter_value, parameter_type);
+        let return_value = self.fresh_cell();
+        let return_type = self.fresh_cell();
+        let body = self.slot_expr(return_block, return_value, return_type);
+        self.module.finish_function(function, body, parameter);
+        self.module.functions[function].return_type = return_type;
+        let func_node = self.alloc_node(return_block, None, None);
+        self.module.write_node_value(
+            func_node,
+            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
+                function,
+            )))),
+        );
+        // The paired term `[Function(fid), ↺]`: the self-reference is what
+        // makes it a function type.
+        let expr = self.alloc_node(return_block, None, None);
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
+            ArrayItem::new(AnyNodeId::Dynamic(expr)),
+        ];
+        self.module.write_node_value(
+            expr,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, return_block).into(),
+            ))),
+        );
+        self.function_stack.pop();
+        self.current_block = saved;
+        expr
     }
 }

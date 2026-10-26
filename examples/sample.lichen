@@ -82,8 +82,8 @@
     which is where the arithmetic above stops being free. The guard \
     `(read >= s(1)) & ((s(0) - 1) != first)` is refused twice over: `&` answers *`BitAnd has no \
     float form: a kernel's float operators are + - * / and the four order comparisons, not % or \
-    the bitwise operators`*, and writing the `and` in `Float` answers the **type checker**, not \
-    the kernel, with *`expected Float, found Int`*. **What does run** is the second fold wholly in \
+    the bitwise operators`*, and writing the `and` in `Float` answers the **type checker**, not the \
+    kernel, with *`expected Float, found Int`*. **What does run** is the second fold wholly in \
     `Int`: `float2int` on the read, the guard \
     `(1 * (ri >= s(1))) * (1 * ((s(0) - 1) != first))`, and the same lerp for the best. On \
     `[3, 9, 4, 6]` it answers `([1.0], [3.0])` — rank one at `1`, the `9`, rank two at `3`, the `6` \
@@ -132,29 +132,29 @@
     `code-audit.md` P1-42's `wontfix:D17`, that a `compute.write` is **the value of an output \
     position and not an effect** — which is why this body is one lane per output with exactly one \ The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[3.0, 2.0, 3.0, 0.0, 3.0]: array{Float, 5}"
+  output = "[3.0, 2.0, 3.0, 0.0, 3.0]: Array"
 ---
-Row  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
-Pick = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
-Par  = struct{.n Int, .w Int, .in Row}
-Arg  = struct{.n Int, .w Int, .I Row}
-greedy_raw = (k : Par) => {
-  lane = compute.range k.n
-  base = lane * k.w
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Pick)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0))))))))
+Row := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
+Pick := _x => {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
+Par := _x => {.n @any : Int, .w @any : Int, .in (Row _)}
+Arg := _x => {.n @any : Int, .w @any : Int, .I (Row _)}
+greedy_raw := (k <: Par) => {
+  lane := compute.range k.n
+  base := lane * k.w
+  @loop fold := s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read (compute.Read{.from k.in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read (compute.Read{.from k.in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  b_p := compute.buf (compute.BufParam{.type Float, .length k.n})
+  Pick{.p (compute.write (compute.Write{.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))}
 }
-greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
-Fill = struct{.n Int}
-scoresBuf = struct{.scores (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
-fill_scores_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 20))
-  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
-  ((scoresBuf)(.scores (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+greedy := compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" (Pick _)
+Fill := _x => {.n @any : Int}
+scoresBuf := _x => {.scores (compute.Buf (compute.BufParam{.type Float, .length 20}))}
+fill_scores_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 20})
+  v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
+  scoresBuf{.scores (compute.write (compute.Write{.to d, .at i, .value v}))}
 }
-fill_scores = compute.parallel fill_scores_raw "cpu" scoresBuf
-scores = (compute.plrun fill_scores ((Fill)(.n 20)) : scoresBuf).scores
-out = (compute.plrun greedy ((Arg)(.n 5, .w 4, .I Row(.x scores))) : Pick)
-compute.collect out.p : array{Float, 5}
+fill_scores := compute.parallel fill_scores_raw "cpu" (scoresBuf _)
+scores := (compute.plrun fill_scores (Fill{.n 20}) <: scoresBuf).scores
+out := (compute.plrun greedy (Arg{.n 5, .w 4, .I (Row{.x scores})}) <: Pick)
+compute.collect out.p : Array

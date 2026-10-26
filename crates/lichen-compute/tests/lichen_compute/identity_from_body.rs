@@ -47,35 +47,35 @@ const A_ROW_OF_POSITIVES: &str = "int2float i";
 /// group and the data is a fill kernel's output
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn fold_over(combine: &str, seed: &str, data_at_i: &str) -> String {
-    let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
+    let read = "(compute.read (compute.Read{.from k.in.b, .at s(0) - 1}) : Float)";
     format!(
         r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Par = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, {combine} ~ "combine")
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, {seed} ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, {combine} ~ "combine")
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (i + 1, {seed} ~ "identity")}}))}})
 }}
-kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step = (s : Par) => {{
-  compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
+step := (s <: Par) => {{
+  compute.plrun kernel (compute.A{{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
-built = compute.graph step
-Fill = struct{{.n Int}}
-fill_raw = (c : Fill) => {{
-  i = compute.range c.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length {count}))
-  ((Out)(.z (compute.write ((compute.Write _)(.to y, .at i, .value ({data_at_i} ~ "element"))))))
+built := compute.graph step
+Fill := _x => {{.n @any : Int}}
+fill_raw := (c <: Fill) => {{
+  i := compute.range c.n
+  y := compute.buf (compute.BufParam{{.type Float, .length {count}}})
+  ((Out){{.z (compute.write (compute.Write{{.to y, .at i, .value ({data_at_i} ~ "element")}}))}})
 }}
-filler = compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" Out
-data = (compute.plrun filler ((Fill)(.n {count})) : Out)
-out = compute.collect (compute.graphrun built ({count}, data.z))
+filler := compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" (Out _)
+data := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)
+out := compute.collect (compute.graphrun built ({count}, data.z))
 out
 "#,
         combine = combine.replace("READ", read),

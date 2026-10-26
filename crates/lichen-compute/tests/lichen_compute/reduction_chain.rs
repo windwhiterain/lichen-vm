@@ -4,18 +4,15 @@
 use super::common;
 
 use super::common::LANES;
-use lichen_compute::compute::{
-    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, write_fused_kernel,
-};
+use lichen_compute::compute::{FusedKernel, write_fused_kernel};
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id, marked_value};
 use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Expr, Reduction};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
-    LaneWidth, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging, TargetFacts,
-    fragment_digest,
+    IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth, Plan,
+    ScalarClass, Slice, Space, Staging, TargetFacts, fragment_digest,
 };
 use lichen_lowlevel::Module;
 
@@ -105,16 +102,16 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {PADDED_COUNT})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {PADDED_COUNT})))}}
-Par = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
 k
 "#
     )
@@ -304,7 +301,7 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
     fragment
         .check_plan(&plan)
         .unwrap_or_else(|refusal| panic!("the fragment stages what the plan says: {refusal}"));
-    let artifact = write_fused_kernel(&FusedKernel {
+    let _artifact = write_fused_kernel(&FusedKernel {
         fragment,
         claim: None,
         plan: plan.clone(),

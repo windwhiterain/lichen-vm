@@ -1,4 +1,4 @@
-//! Tuple terms, tuple type expressions, and the type-position helper.
+//! Tuple terms and the element slot algebra the set and the table types use.
 
 use super::*;
 use crate::shape;
@@ -8,43 +8,26 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
+    /// A tuple value `(e1, …, en)`.
+    ///
+    /// # Invariant
+    /// The value is the elements' **own exprs** and the type is the shared
+    /// `Tuple` template: the layout lives in the value, so a read takes an
+    /// element's type and attributes from the element itself.
     pub(super) fn check_tuple_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
-        let mut vals = Vec::new();
-        let mut slots = Vec::new();
+        let mut vals = Vec::with_capacity(elements.len());
         for &el in &elements {
             self.check_expr(el);
             // An element is a complete slot: the term is the value expr.
             vals.push(self.state[el].term.expect("an element is compiled"));
-            let ty = self.state[el].ty;
-            let attrs = self.element_attr_slots(el);
-            slots.push(self.element_slot(None, ty, Some(attrs)));
         }
-        // A tuple: `[values, [[slot…], [TupleType, Type]]]`.
         let value = self.array_node(self.current_block, &vals);
-        let shape = self.array_node(self.current_block, &slots);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let ty_node = self.tuple_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
-        expr
-    }
-
-    /// A tuple type expression: each element's slot is a full term.
-    pub(super) fn check_tuple_type(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut slots = Vec::new();
-        for &el in &elements {
-            slots.push(self.element_slot_of(el));
-        }
-        let shape = self.array_node(self.current_block, &slots);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let expr = self.slot_expr(self.current_block, shape, kind);
-        self.state[e].term = Some(expr);
-        self.state[e].val = Some(shape);
-        self.state[e].ty = Some(kind);
         expr
     }
 
@@ -133,60 +116,5 @@ where
             }
         }
         slots
-    }
-
-    /// A compound shape's **element types**, in order: each slot's type position,
-    /// as a fresh array.
-    ///
-    /// # Invariant
-    /// A shape element is a slot, so a positional field-type list is each slot's
-    /// type. An undecided shape has no items to read, so the list is built lazily
-    /// — one `Index(Index(shape, i), 1)` per position, `arity` of them — and a
-    /// static ref is materialized into the current block.
-    pub(super) fn slot_types_of(&mut self, shape: NodeId, arity: usize) -> NodeId {
-        // SAFETY: `shape` is a live node of this module; nothing in this crate
-        // calls `Module::drop_block`.
-        let nodes: Vec<AnyNodeId> = unsafe { self.module.array_items(shape) }
-            .map(|items| items.iter().map(|item| item.node).collect())
-            .unwrap_or_default();
-        if nodes.is_empty() {
-            let mut tys = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let index = self.usize_node(i);
-                let ops = self.array_node(self.current_block, &[shape, index]);
-                let element = self.op_node(
-                    self.current_block,
-                    P::Operator::from(LowOperator::Index),
-                    Some(ops),
-                );
-                let type_ops = self.array_node(self.current_block, &[element, self.one()]);
-                let ty = self.op_node(
-                    self.current_block,
-                    P::Operator::from(LowOperator::Index),
-                    Some(type_ops),
-                );
-                tys.push(ty);
-            }
-            return self.array_node(self.current_block, &tys);
-        }
-        let mut tys = Vec::with_capacity(nodes.len());
-        for node in nodes {
-            let ty = shape::slot_type(&self.module, node).unwrap_or(node);
-            tys.push(self.module.as_dynamic(ty, self.current_block));
-        }
-        self.array_node(self.current_block, &tys)
-    }
-
-    /// The type an expression contributes in a type position — a struct field, a
-    /// tuple-type element, a function-type side.
-    ///
-    /// # Invariant
-    /// A term put in a type position unifies as its own value expr, which never
-    /// unifies with its type: `struct{.f Int, .g b}` fails, `struct{.f Int, .g B}`
-    /// works. An expression that carries attributes denotes the annotated value's
-    /// term instead; see `docs/notes/operator-polymorphism.md` §3.
-    pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {
-        self.check_expr(el);
-        self.type_denotation(el, None)
     }
 }

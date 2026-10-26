@@ -11,7 +11,7 @@ use lichen_utils::extend::AsEnum;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
-    render_struct_fields_named, struct_type_named_fields, value_label,
+    render_struct_fields_named, struct_value_named_fields, value_label,
 };
 
 // --- the extension-vocabulary render hook -----------------------------------
@@ -221,6 +221,22 @@ pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) 
 // Re-render the highlevel's facts in the CLI's vocabulary, through one shared
 // printer so a class keeps one `?a` name.
 
+/// Print the recorded leaf value when it has a standalone spelling; otherwise
+/// keep the original operand's node rendering.
+fn mismatch_side<P>(
+    printer: &mut TypePrinter<'_, P>,
+    value: Option<P::Value>,
+    node: NodeId,
+) -> String
+where
+    P: HighProgram + 'static,
+    P::Value: ValueType,
+{
+    value
+        .and_then(|value| printer.diagnostic_value(value))
+        .unwrap_or_else(|| printer.node(node))
+}
+
 /// Re-render a checker diagnostic's message from the highlevel's facts.
 ///
 /// # Invariant
@@ -240,8 +256,8 @@ where
         | DiagKind::Guard => {
             format!(
                 "expected {}, found {}",
-                printer.node(d.b),
-                printer.node(d.a)
+                mismatch_side(printer, d.value_b, d.b),
+                mismatch_side(printer, d.value_a, d.a)
             )
         }
 
@@ -267,24 +283,16 @@ where
             "this package's export is not a value — a package must end in a value".to_string()
         }
         DiagKind::NamedField => {
-            let fields = struct_type_named_fields(printer.module(), d.a);
+            // The report names the container's **value** — where the field names
+            // live — and its type beside it.
+            let fields = struct_value_named_fields(printer.module(), AnyNodeId::Dynamic(d.a));
             let container = match fields {
-                Some(_) => printer.node(d.a),
+                Some(_) => printer.node(d.b),
                 None => container_spelling(printer, d),
             };
             let base = format!("no field with this name in the struct type {container}");
-            // A value container carries no type term, so its table supplies the clause.
             let Some(fields) = fields else {
-                let names = kind_name_table(printer.module(), d.b)
-                    .and_then(|table| table_names(printer.module(), table));
-                let clause = match (d.field.as_deref(), names) {
-                    (Some(name), Some(names)) => crate::suggest::did_you_mean(name, names),
-                    _ => None,
-                };
-                return match clause {
-                    Some(clause) => format!("{base}{clause}"),
-                    None => base,
-                };
+                return base;
             };
             with_field_suggestion(d, base, fields)
         }
@@ -292,11 +300,12 @@ where
             let base = match &d.field {
                 Some(name) => format!(
                     "no field named {name} in the struct type {}",
-                    printer.node(d.a)
+                    printer.node(d.b)
                 ),
-                None => format!("no such field in the struct type {}", printer.node(d.a)),
+                None => format!("no such field in the struct type {}", printer.node(d.b)),
             };
-            let Some(fields) = struct_type_named_fields(printer.module(), d.a) else {
+            let Some(fields) = struct_value_named_fields(printer.module(), AnyNodeId::Dynamic(d.a))
+            else {
                 return base;
             };
             with_field_suggestion(d, base, fields)
@@ -304,19 +313,19 @@ where
         DiagKind::StructDuplicateField => match &d.field {
             Some(name) => format!(
                 "duplicate field {name} in the struct type {}",
-                printer.node(d.a)
+                printer.node(d.b)
             ),
-            None => format!("duplicate field in the struct type {}", printer.node(d.a)),
+            None => format!("duplicate field in the struct type {}", printer.node(d.b)),
         },
         DiagKind::StructMissingField => match &d.field {
             Some(name) => format!(
                 "missing field {name} in the struct type {}",
-                printer.node(d.a)
+                printer.node(d.b)
             ),
-            None => format!("missing a field in the struct type {}", printer.node(d.a)),
+            None => format!("missing a field in the struct type {}", printer.node(d.b)),
         },
         DiagKind::StructExcessField => {
-            format!("too many fields for the struct type {}", printer.node(d.a))
+            format!("too many fields for the struct type {}", printer.node(d.b))
         }
         DiagKind::StructAnonymousField => {
             "cannot name a field — the struct has no named fields".to_string()
@@ -469,43 +478,6 @@ where
         Some(clause) => format!("{base}{clause}"),
         None => base,
     }
-}
-
-/// The struct type's name table, read from the kind path (`kind[0][0][1]`).
-fn kind_name_table<P: HighProgram>(module: &Module<P>, kind: NodeId) -> Option<AnyNodeId>
-where
-    P::Value: ValueType,
-{
-    let at = |node: AnyNodeId, index: usize| -> Option<AnyNodeId> {
-        // SAFETY: live module payloads, read only; no block is released here.
-        unsafe { module.array_items_of(node) }
-            .and_then(|items| items.get(index))
-            .map(|item| item.node)
-    };
-    let marker = at(AnyNodeId::Dynamic(kind), 0)?;
-    let payload = at(marker, 0)?;
-    at(payload, 1)
-}
-
-/// The names in a struct type's name table, in the table's own order.
-fn table_names<P: HighProgram>(module: &Module<P>, table: AnyNodeId) -> Option<Vec<&'static str>>
-where
-    P::Value: ValueType,
-{
-    let LowValue::Table(table) = module.node_value(table)?.as_enum()? else {
-        return None;
-    };
-    // SAFETY: the table is a live module payload, read only; no block is released here.
-    let items = unsafe { table.items() };
-    Some(
-        items
-            .iter()
-            .filter_map(|item| match module.node_value(item.key)?.as_enum()? {
-                LowValue::Str(name) => Some(name),
-                _ => None,
-            })
-            .collect(),
-    )
 }
 
 /// A refused named read's container: the type printer, or a struct type value's value print.

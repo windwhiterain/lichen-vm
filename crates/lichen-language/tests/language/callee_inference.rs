@@ -22,18 +22,18 @@ fn refused(source: &str) -> (String, DiagKind) {
     (first.message.clone(), kind)
 }
 
-/// A **named** type-function parameter: `_x` binds, and `x.type`/`x.length`
-/// read the parameter's own fields.
+/// A **named** struct template: its fields are the requirements, and
+/// `x.type`/`x.length` read the parameter's own fields.
 #[test]
 fn a_named_type_function_parameter_and_its_field_reads() {
     assert_eq!(
         output(
-            "Param = _x => struct{.type _, .length _}\n\
-             buf = (x : (Param _)) => (x.type, x.length)\n\
-             buf ((Param _)(.type Float, .length 192))"
+            "Param := _x => {.type @any, .length @any}\n\
+             buf := (x <: Param) => (x.type, x.length)\n\
+             buf (Param{.type Float, .length 192})"
         ),
-        "(Float, 192): tuple{Type, Int}",
-        "the two reads on `(Param _)` answer the instance's own fields"
+        "(Float, 192): Tuple",
+        "the two reads on `Param` answer the instance's own fields"
     );
 }
 
@@ -43,13 +43,13 @@ fn a_named_type_function_parameter_and_its_field_reads() {
 fn an_instantiation_whose_callee_is_inferred() {
     assert_eq!(
         output(
-            "Param = _x => struct{.type _, .length _}\n\
-             BufT  = x : (Param _) => struct{.type x.type, .length x.length}\n\
-             buf   = (x : (Param _)) => x\n\
-             e     = buf _(.type Float, .length 192)\n\
+            "Param := _x => {.type @any, .length @any}\n\
+             BufT  := (x <: Param) => {.type x.type, .length x.length}\n\
+             buf   := (x <: Param) => x\n\
+             e     := buf _{.type Float, .length 192}\n\
              e"
         ),
-        "(Float, 192): struct{.type Type, .length Int}",
+        "(Float, 192): Struct",
         "the callee is the parameter's own type, so the instance is that type"
     );
 }
@@ -59,7 +59,7 @@ fn an_instantiation_whose_callee_is_inferred() {
 #[test]
 fn an_instantiation_whose_callee_is_not_decided_is_refused() {
     let (message, kind) =
-        refused("Param = _x => struct{.type _, .length _}\ne = _(.type Float, .length 192)");
+        refused("Param := _x => {.type @any, .length @any}\ne := _{.type Float, .length 192}");
     assert_eq!(kind, DiagKind::InstantiateCalleeUndetermined);
     assert_eq!(
         message,
@@ -67,7 +67,7 @@ fn an_instantiation_whose_callee_is_not_decided_is_refused() {
          type where the instantiation is written"
     );
     // A decided expected type that is not a struct is a non-struct callee.
-    let (message, kind) = refused("f = (x : Int) => x\ne = f _(.a 1)");
+    let (message, kind) = refused("f := (x : Int) => x\ne := f _{.a 1}");
     assert_eq!(kind, DiagKind::InstantiateCallee);
     assert!(
         message.contains("must be a struct type"),

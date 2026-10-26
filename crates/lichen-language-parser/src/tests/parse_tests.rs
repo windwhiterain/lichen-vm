@@ -32,7 +32,7 @@ fn bindings(program: &Program) -> Vec<&Binding> {
 
 #[test]
 fn a_program_records_statement_token_ranges() {
-    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    let tokens = lex("a := 1\nb := 2\na + b").tokens;
     let program = parse(&tokens).program;
     // One per statement, plus one for the final expression: the token-index
     // range `[start, end)` each parse consumed.
@@ -47,20 +47,25 @@ fn a_program_records_statement_token_ranges() {
 
 #[test]
 fn a_program_is_bindings_followed_by_the_final_expression() {
-    let tokens = lex("a = [1, 2]; b = 0; a[b]").tokens;
+    let tokens = lex("a := [1, 2]; b := 0; a[b]").tokens;
     let program = parse(&tokens).program;
     let binds = bindings(&program);
     assert_eq!(binds.len(), 2);
     assert_eq!(binds[0].name, "a");
     assert_eq!(binds[1].name, "b");
-    assert!(matches!(binds[0].value, Expr::Array(..)));
+    assert!(matches!(binds[0].value, Expr::Array { .. }));
     assert!(matches!(program.expr, Some(Expr::Index { .. })));
+    // `=` is an expression-level unify, never a binding.
+    let tokens = lex("a = 1").tokens;
+    let program = parse(&tokens).program;
+    assert!(bindings(&program).is_empty(), "`=` binds no name");
+    assert!(matches!(program.expr, Some(Expr::Unify { .. })));
 }
 
 #[test]
 fn a_region_over_the_whole_stream_equals_the_statement_sequence() {
     // Ends in an expression so the program parses cleanly.
-    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    let tokens = lex("a := 1\nb := 2\na + b").tokens;
     let program = parse(&tokens).program;
     // The program's `statements` (all but the last) plus the final expression
     // as its own block statement.
@@ -83,9 +88,9 @@ fn a_region_over_the_whole_stream_equals_the_statement_sequence() {
 
 #[test]
 fn a_region_parses_a_middle_window() {
-    let tokens = lex("a = 1\nb = 2\nc = a + b").tokens;
-    // The tokens: a = 1 SEP b = 2 SEP c = a + b EOF.
-    // Statement "b = 2" spans token indices 4..7.
+    let tokens = lex("a := 1\nb := 2\nc := a + b").tokens;
+    // The tokens: a := 1 SEP b := 2 SEP c := a + b EOF.
+    // Statement "b := 2" spans token indices 4..7.
     let (region_stmts, errors) = parse_statement_region(&tokens, 4, 7);
     assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
     assert_eq!(region_stmts.len(), 1);
@@ -97,7 +102,7 @@ fn a_region_parses_a_middle_window() {
 
 #[test]
 fn a_traced_region_reports_absolute_token_ranges() {
-    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    let tokens = lex("a := 1\nb := 2\na + b").tokens;
     // The whole-stream region must produce the same per-statement ranges as
     // the whole-program parser.
     let (stmts, ranges, errors) = parse_statement_region_traced(&tokens, 0, tokens.len() - 1);
@@ -116,7 +121,7 @@ fn a_traced_region_reports_absolute_token_ranges() {
 fn a_region_recovering_over_a_broken_window_still_produces_statements() {
     // An unclosed `(` makes the trailing statement an error block, which the
     // region parser must still return, recovered.
-    let source = "a = 1\n(2";
+    let source = "a := 1\n(2";
     let tokens = lex(source).tokens;
     let whole_program = parse(&tokens).program;
     let (region_stmts, _) = parse_statement_region(&tokens, 0, tokens.len() - 1);
@@ -138,23 +143,23 @@ fn a_region_recovering_over_a_broken_window_still_produces_statements() {
 fn a_trailing_binding_program_is_a_record_program() {
     // A program whose last statement is a binding has no tail: it is a record
     // program (a module).
-    let tokens = lex("a = 5").tokens;
+    let tokens = lex("a := 5").tokens;
     let program = parse(&tokens).program;
     assert!(program.expr.is_none(), "no tail on a record program");
     assert_eq!(program.statements.len(), 1);
     assert!(matches!(program.statements[0].stmt, Stmt::Binding(..)));
     // A bare expression before a trailing binding is a positional field.
-    let tokens = lex("5; a = 1").tokens;
+    let tokens = lex("5; a := 1").tokens;
     let program = parse(&tokens).program;
     assert!(program.expr.is_none());
     assert_eq!(program.statements.len(), 2);
     // A multi-statement record program.
-    let tokens = lex("a = 1; 5; a = 2").tokens;
+    let tokens = lex("a := 1; 5; a := 2").tokens;
     let program = parse(&tokens).program;
     assert!(program.expr.is_none());
     assert_eq!(program.statements.len(), 3);
     // A trailing separator after a binding is still a record program.
-    let tokens = lex("a = 1;").tokens;
+    let tokens = lex("a := 1;").tokens;
     let program = parse(&tokens).program;
     assert!(program.expr.is_none());
     assert_eq!(program.statements.len(), 1);
@@ -163,19 +168,19 @@ fn a_trailing_binding_program_is_a_record_program() {
 #[test]
 fn statement_errors_carry_spans() {
     // A binding without a value.
-    let err = parse_err("a = ; 5");
+    let err = parse_err("a := ; 5");
     assert_eq!(
         err.message,
         "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
-    assert_eq!(err.span, Some((1, 5)));
+    assert_eq!(err.span, Some((1, 6)));
 }
 
 #[test]
 fn bare_expressions_are_statements_anywhere() {
     // 5; a = 1; a — an expression before and between bindings; the last
     // statement is the final expression.
-    let tokens = lex("5; a = 1; 6; a").tokens;
+    let tokens = lex("5; a := 1; 6; a").tokens;
     let program = parse(&tokens).program;
     assert_eq!(program.statements.len(), 3);
     assert!(matches!(program.statements[0].stmt, Stmt::Expr(..)));
@@ -192,7 +197,7 @@ fn bare_expressions_are_statements_anywhere() {
 
 #[test]
 fn newlines_separate_statements() {
-    let tokens = lex("a = [1, 2]\nb = 0\na[b]").tokens;
+    let tokens = lex("a := [1, 2]\nb := 0\na[b]").tokens;
     let program = parse(&tokens).program;
     let binds = bindings(&program);
     assert_eq!(binds.len(), 2);
@@ -200,13 +205,13 @@ fn newlines_separate_statements() {
     assert_eq!(binds[1].name, "b");
     assert!(matches!(program.expr, Some(Expr::Index { .. })));
     // A trailing newline after the final expression is not an error.
-    parse(&lex("a = 1\na\n").tokens);
+    parse(&lex("a := 1\na\n").tokens);
     // `;` and newlines mix, and consecutive separators are empty
     // statements.
-    let tokens = lex("a = 1;\nb = 2; c = 3\nc").tokens;
+    let tokens = lex("a := 1;\nb := 2; c := 3\nc").tokens;
     assert_eq!(bindings(&parse(&tokens).program).len(), 3);
     // Leading newlines (e.g. a top-of-file comment's) are skipped.
-    let tokens = lex("\n\na = 1\na").tokens;
+    let tokens = lex("\n\na := 1\na").tokens;
     assert_eq!(bindings(&parse(&tokens).program).len(), 1);
 }
 
@@ -218,38 +223,28 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         panic!("expected a tuple")
     };
     assert_eq!(elements.len(), 2);
-    let Expr::TypeArray {
-        element_type,
-        length,
-        ..
-    } = parse_ok("array{Int,\n2}")
+    let Expr::Array {
+        template, length, ..
+    } = parse_ok("[Int,\n2]")
     else {
-        panic!("expected an array type")
+        panic!("expected an array template")
     };
-    assert!(matches!(*element_type, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(*template, Expr::TypeConst(TypeConst::Int, _)));
     assert!(matches!(*length, Expr::Int(2, _)));
     // The remaining list forms, one item per line.
     assert!(matches!(
-        parse_ok("[1,\n2]"),
-        Expr::Array(elements, _) if elements.len() == 2
+        parse_ok("T[1,\n2]"),
+        Expr::ArrayInst { elements, .. } if elements.len() == 2
     ));
     assert!(matches!(
-        parse_ok("tuple{Int,\nstring}"),
-        Expr::TypeTuple(elements, _) if elements.len() == 2
-    ));
-    assert!(matches!(
-        parse_ok("struct{Int,\nstring}"),
-        Expr::StructType(fields, _) if fields.len() == 2
-    ));
-    assert!(matches!(
-        parse_ok("A(1,\n2)"),
+        parse_ok("S{.a 1,\n.b 2}"),
         Expr::StructInst { fields, .. } if fields.len() == 2
     ));
     assert!(matches!(
         parse_ok("table(1 ==> 2,\n3 ==> 4)"),
         Expr::Table(entries, _) if entries.len() == 2
     ));
-    // The two new *type* forms write their slots in braces, one per line.
+    // The two *type* forms write their slots in braces, one per line.
     assert!(matches!(
         parse_ok("set{\nInt}"),
         Expr::TypeSet(element, _)
@@ -268,7 +263,7 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         Expr::Tuple(elements, _) if elements.len() == 1
     ));
     assert!(matches!(
-        parse_ok("A(1,\n)"),
+        parse_ok("S{.a 1,\n}"),
         Expr::StructInst { fields, .. } if fields.len() == 1
     ));
 }
@@ -302,29 +297,7 @@ fn application_is_left_associative() {
 }
 
 #[test]
-fn arrows_are_right_associative() {
-    let Expr::Arrow {
-        parameter_type,
-        return_type,
-        ..
-    } = parse_ok("Int -> Int -> Int")
-    else {
-        panic!("expected an arrow")
-    };
-    assert!(matches!(
-        *parameter_type,
-        Expr::TypeConst(TypeConst::Int, _)
-    ));
-    assert!(matches!(*return_type, Expr::Arrow { .. }));
-}
-
-#[test]
-fn annotation_binds_looser_than_arrow_and_apply() {
-    let Expr::Annotation { value, r#type, .. } = parse_ok("5 : Int -> Int") else {
-        panic!("expected an annotation")
-    };
-    assert!(matches!(*value, Expr::Int(5, _)));
-    assert!(matches!(*r#type.as_deref().unwrap(), Expr::Arrow { .. }));
+fn annotation_binds_looser_than_apply() {
     let Expr::Annotation { value, .. } = parse_ok("x y : Int") else {
         panic!("expected an annotation")
     };
@@ -368,11 +341,6 @@ fn an_annotated_parameter_is_a_lambda() {
             ..
         }
     ));
-    // The annotation can be a compound type: x : Int -> Int => e.
-    let Expr::Lambda { parameter_type, .. } = parse_ok("x : Int -> Int => x") else {
-        panic!("expected a lambda")
-    };
-    assert!(matches!(parameter_type, Some(t) if matches!(*t, Expr::Arrow { .. })));
     // x : Int alone (no `=>`) stays an annotation.
     assert!(matches!(parse_ok("x : Int"), Expr::Annotation { .. }));
     // An annotated lambda parenthesized is the same form.
@@ -383,6 +351,38 @@ fn an_annotated_parameter_is_a_lambda() {
             ..
         }
     ));
+    // A parameter template desugars into the body: `x <: T => e` is
+    // `x => { x <: T; e }` (`docs/notes/value-templates.md`).
+    let Expr::Lambda {
+        parameter,
+        parameter_type,
+        r#return,
+        ..
+    } = parse_ok("x <: T => x")
+    else {
+        panic!("expected a lambda")
+    };
+    assert_eq!(parameter, "x");
+    assert!(
+        parameter_type.is_none(),
+        "the template is not a parameter type"
+    );
+    let Expr::Block {
+        statements, expr, ..
+    } = *r#return
+    else {
+        panic!("expected a block body")
+    };
+    assert_eq!(statements.len(), 1);
+    let Stmt::Expr(Expr::TemplateUnify {
+        actual, template, ..
+    }) = &statements[0]
+    else {
+        panic!("expected a template unify")
+    };
+    assert!(matches!(actual.as_ref(), Expr::Name(n, _, _) if n == "x"));
+    assert!(matches!(template.as_ref(), Expr::Name(n, _, _) if n == "T"));
+    assert!(matches!(*expr, Expr::Name(n, _, _) if n == "x"));
 }
 
 #[test]
@@ -400,72 +400,51 @@ fn parens_are_always_tuple_values() {
 }
 
 #[test]
-fn the_tuple_type_is_keyword_led() {
-    let Expr::Annotation { r#type, .. } = parse_ok("x : tuple{Int, Type}") else {
-        panic!("expected an annotation")
-    };
-    assert!(matches!(*r#type.as_deref().unwrap(), Expr::TypeTuple(..)));
-    let Expr::TypeTuple(elements, _) = parse_ok("tuple{Int, Type}") else {
-        panic!("expected a type tuple")
+fn the_tuple_is_a_value_and_only_a_value() {
+    // `(Int, Type)` is a tuple value; there is no separate tuple type form
+    // any more.
+    let Expr::Tuple(elements, _) = parse_ok("(Int, Type)") else {
+        panic!("expected a tuple")
     };
     assert_eq!(elements.len(), 2);
-    // A type tuple is an atom, so it applies as an argument directly.
-    let Expr::Apply { argument, .. } = parse_ok("f (tuple{Int, Type})") else {
+    // A tuple value is an atom, so it applies as an argument directly.
+    let Expr::Apply { argument, .. } = parse_ok("f (Int, Type)") else {
         panic!("expected an apply")
     };
-    assert!(matches!(*argument, Expr::TypeTuple(..)));
-}
-
-#[test]
-fn struct_types_are_positional_fields_in_braces() {
-    let Expr::StructType(fields, _) = parse_ok("struct{Int, Int -> Int}") else {
-        panic!("expected a struct type")
-    };
-    assert_eq!(fields.len(), 2);
-    assert!(matches!(fields[0].ty, Expr::TypeConst(TypeConst::Int, _)));
-    assert!(matches!(fields[1].ty, Expr::Arrow { .. }));
-    // all fields are unnamed (positional).
-    assert!(fields.iter().all(|f| f.name.is_none()));
-    // a single field is the newtype form.
+    assert!(matches!(*argument, Expr::Tuple(..)));
+    // The tuple's template is the builtin `Tuple` constant.
     assert!(matches!(
-        parse_ok("struct{Int}"),
-        Expr::StructType(f, _) if f.len() == 1
+        parse_ok("Tuple"),
+        Expr::TypeConst(TypeConst::Tuple, _)
     ));
-    // struct types are first-class values: an apply argument, a binding.
-    let Expr::Apply { argument, .. } = parse_ok("f (struct{Int})") else {
-        panic!("expected an apply")
-    };
-    assert!(matches!(*argument, Expr::StructType(..)));
-    // A tuple-type field uses the keyword-led tuple form; a paren tuple
-    // is a value.
-    let Expr::StructType(fields, _) = parse_ok("struct{tuple{Int, Type}}") else {
-        panic!("expected a struct type")
-    };
-    assert!(matches!(fields[0].ty, Expr::TypeTuple(..)));
-    let Expr::StructType(fields, _) = parse_ok("struct{(Int, Type)}") else {
-        panic!("expected a struct type")
-    };
-    assert!(matches!(fields[0].ty, Expr::Tuple(..)));
 }
 
 #[test]
-fn struct_types_carry_optional_field_names() {
-    // `struct{.a Int, .b Type}` — named fields.
-    let Expr::StructType(fields, _) = parse_ok("struct{.a Int, .b Type}") else {
-        panic!("expected a struct type")
+fn a_struct_value_names_its_fields() {
+    // `{.a 1, .b 2}` — a struct value: every field is named.
+    let Expr::StructValue { fields, .. } = parse_ok("{.a 1, .b 2}") else {
+        panic!("expected a struct value")
     };
     assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].name.as_deref(), Some("a"));
-    assert!(matches!(fields[0].ty, Expr::TypeConst(TypeConst::Int, _)));
-    assert_eq!(fields[1].name.as_deref(), Some("b"));
-    assert!(matches!(fields[1].ty, Expr::TypeConst(TypeConst::Type, _)));
-    // a name is optional per field — a mixed struct parses.
-    let Expr::StructType(fields, _) = parse_ok("struct{.a Int, Type}") else {
-        panic!("expected a struct type")
+    assert_eq!(fields[0].name, "a");
+    assert!(matches!(fields[0].value, Expr::Int(1, _)));
+    assert_eq!(fields[1].name, "b");
+    assert!(matches!(fields[1].value, Expr::Int(2, _)));
+    // A struct value is an atom, so it applies as an argument directly.
+    let Expr::Apply { argument, .. } = parse_ok("f ({.a 1})") else {
+        panic!("expected an apply")
     };
-    assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].name.as_deref(), Some("a"));
-    assert!(fields[1].name.is_none());
+    assert!(matches!(*argument, Expr::StructValue { .. }));
+    // An empty struct value is the `{}` form; the empty block is gone.
+    let Expr::StructValue { fields, .. } = parse_ok("{}") else {
+        panic!("expected a struct value")
+    };
+    assert!(fields.is_empty());
+    // The struct's template is the builtin `Struct` constant.
+    assert!(matches!(
+        parse_ok("Struct"),
+        Expr::TypeConst(TypeConst::Struct, _)
+    ));
 }
 
 #[test]
@@ -500,80 +479,35 @@ fn named_field_read_is_dot_postfix() {
 }
 
 #[test]
-fn struct_instantiation_is_adjacent_parens() {
-    // `C(f1, f2)` — the `(` directly after the callee (no space) is
-    // struct instantiation, not a function apply.
-    let Expr::StructInst { callee, fields, .. } = parse_ok("A(1, Int)") else {
+fn struct_instantiation_is_an_adjacent_brace() {
+    // `S{.a 1, .b 2}` — the `{` is adjacent to the callee (no space) and
+    // names the fields it fills.
+    let Expr::StructInst { callee, fields, .. } = parse_ok("S{.a 1, .b Int}") else {
         panic!("expected a struct instance")
     };
-    assert!(matches!(*callee, Expr::Name(n, _, _) if n == "A"));
+    assert!(matches!(*callee, Expr::Name(n, _, _) if n == "S"));
     assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name, "a");
     assert!(matches!(fields[0].value, Expr::Int(1, _)));
+    assert_eq!(fields[1].name, "b");
     assert!(matches!(
         fields[1].value,
         Expr::TypeConst(TypeConst::Int, _)
     ));
-    // a single field carries a trailing comma — the bare `A(1)` is the
-    // positional slot read.
+    // A field-less struct instance parses: `S{}`.
     assert!(matches!(
-        parse_ok("A(1,)"),
-        Expr::StructInst { fields, .. } if fields.len() == 1
-    ));
-    // A field-less struct instance parses in both spellings: `A()` and `A(,)`.
-    assert!(matches!(
-        parse_ok("A()"),
+        parse_ok("S{}"),
         Expr::StructInst { fields, .. } if fields.is_empty()
     ));
-    assert!(matches!(
-        parse_ok("A(,)"),
-        Expr::StructInst { fields, .. } if fields.is_empty()
-    ));
-    // the bare single-expression paren is the slot read, not an
-    // instantiation.
-    let Expr::FieldRead { container, key, .. } = parse_ok("A(1)") else {
-        panic!("expected a slot read")
+    // A spaced brace is not an instantiation: it is an apply of a struct value.
+    let Expr::Apply { argument, .. } = parse_ok("S {.a 1}") else {
+        panic!("expected an apply")
     };
-    assert!(matches!(*container, Expr::Name(n, _, _) if n == "A"));
-    assert!(matches!(*key, Expr::Int(1, _)));
-    // the callee may be an inline struct type.
-    let Expr::StructInst { callee, .. } = parse_ok("struct{Int, Int}(1, 2)") else {
-        panic!("expected a struct instance")
-    };
-    assert!(matches!(*callee, Expr::StructType(..)));
+    assert!(matches!(*argument, Expr::StructValue { .. }));
 }
 
 #[test]
-fn struct_instantiation_carries_optional_field_names() {
-    // `A(.x 1, .y Int)` — a leading `.` names an argument; a bare expression
-    // is a positional argument.
-    let Expr::StructInst { fields, .. } = parse_ok("A(.x 1, .y Int)") else {
-        panic!("expected a struct instance")
-    };
-    assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].name.as_deref(), Some("x"));
-    assert!(matches!(fields[0].value, Expr::Int(1, _)));
-    assert_eq!(fields[1].name.as_deref(), Some("y"));
-    assert!(matches!(
-        fields[1].value,
-        Expr::TypeConst(TypeConst::Int, _)
-    ));
-    // mixed positional and named
-    let Expr::StructInst { fields, .. } = parse_ok("A(1, .y Int)") else {
-        panic!("expected a struct instance")
-    };
-    assert_eq!(fields[0].name, None);
-    assert!(matches!(fields[0].value, Expr::Int(1, _)));
-    assert_eq!(fields[1].name.as_deref(), Some("y"));
-    // a single named argument is an instantiation, never the positional slot
-    // read.
-    assert!(matches!(
-        parse_ok("A(.x 1)"),
-        Expr::StructInst { fields, .. } if fields.len() == 1 && fields[0].name.as_deref() == Some("x")
-    ));
-}
-
-#[test]
-fn spaced_parens_are_apply_not_struct_instantiation() {
+fn spaced_parens_are_apply_not_a_tuple_read() {
     // `f (1, 2)` — a space before the `(` — is a function apply whose
     // argument is the tuple.
     let Expr::Apply { argument, .. } = parse_ok("f (1, 2)") else {
@@ -584,48 +518,83 @@ fn spaced_parens_are_apply_not_struct_instantiation() {
     assert!(matches!(parse_ok("f x"), Expr::Apply { .. }));
     // a spaced single field is an apply of the grouped value.
     assert!(matches!(parse_ok("A (1)"), Expr::Apply { .. }));
+    // a glued paren is the tuple read, never an apply.
+    let Expr::FieldRead { container, key, .. } = parse_ok("A(1)") else {
+        panic!("expected a tuple read")
+    };
+    assert!(matches!(*container, Expr::Name(n, _, _) if n == "A"));
+    assert!(matches!(*key, Expr::Int(1, _)));
 }
 
 #[test]
-fn struct_type_errors_carry_spans() {
-    let err = parse_err("struct");
-    assert_eq!(err.span, Some((1, 7)));
-    let err = parse_err("struct{");
-    assert_eq!(err.span, Some((1, 8)));
-    // `struct{}` — an empty field list — is a struct type, not an error.
-    let Expr::StructType(fields, span) = parse_ok("struct{}") else {
-        panic!("expected a struct type")
+fn struct_value_errors_carry_spans() {
+    // A struct value's brace must close.
+    let err = parse_err("{.a 1");
+    assert_eq!(err.span, Some((1, 6)));
+    // `{}` — an empty field list — is a struct value, not an error.
+    let Expr::StructValue { fields, span } = parse_ok("{}") else {
+        panic!("expected a struct value")
     };
     assert!(fields.is_empty());
     assert_eq!(span, (1, 1));
-    let err = parse_err("struct{Int");
-    assert_eq!(err.span, Some((1, 11)));
 }
 
 #[test]
-fn the_array_type_keyword() {
-    // `array{T, n}` — the keyword-led array type.
-    let Expr::TypeArray {
-        element_type,
-        length,
-        ..
-    } = parse_ok("array{Int, 3}")
+fn the_array_template_is_a_binary_form() {
+    // `[template, length]` — the array template.
+    let Expr::Array {
+        template, length, ..
+    } = parse_ok("[Int, 3]")
     else {
-        panic!("expected an array type")
+        panic!("expected an array template")
     };
-    assert!(matches!(*element_type, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(*template, Expr::TypeConst(TypeConst::Int, _)));
     assert!(matches!(*length, Expr::Int(3, _)));
-    // The element type is itself recursive: `array{array{Int, 2}, 3}`.
-    let Expr::TypeArray { element_type, .. } = parse_ok("array{array{Int, 2}, 3}") else {
-        panic!("expected an array type")
+    // The template is itself recursive: `[[Int, 2], 3]`.
+    let Expr::Array { template, .. } = parse_ok("[[Int, 2], 3]") else {
+        panic!("expected an array template")
     };
-    assert!(matches!(*element_type, Expr::TypeArray { .. }));
-    // A `[` right after an expression is an index, never an array
-    // literal — an array argument needs parens.
+    assert!(matches!(*template, Expr::Array { .. }));
+    // A `[` right after an expression is an index, never a template — an
+    // array argument needs parens.
     let Expr::Apply { argument, .. } = parse_ok("f ([1, 2])") else {
         panic!("expected an apply")
     };
-    assert!(matches!(*argument, Expr::Array(..)));
+    assert!(matches!(*argument, Expr::Array { .. }));
+    // The array's template is the builtin `Array` constant.
+    assert!(matches!(
+        parse_ok("Array"),
+        Expr::TypeConst(TypeConst::Array, _)
+    ));
+}
+
+#[test]
+fn an_array_instance_is_a_glued_bracket() {
+    // `T[1, 2]` — an instance of the template `T`.
+    let Expr::ArrayInst {
+        template, elements, ..
+    } = parse_ok("T[1, 2]")
+    else {
+        panic!("expected an array instance")
+    };
+    assert!(matches!(*template, Expr::Name(n, _, _) if n == "T"));
+    assert_eq!(elements.len(), 2);
+    // A trailing separator makes a single-element instance.
+    let Expr::ArrayInst { elements, .. } = parse_ok("T[1,]") else {
+        panic!("expected an array instance")
+    };
+    assert_eq!(elements.len(), 1);
+    // An empty instance has no elements.
+    let Expr::ArrayInst { elements, .. } = parse_ok("T[]") else {
+        panic!("expected an array instance")
+    };
+    assert!(elements.is_empty());
+    // An instance's element may carry the `@shallow` marker.
+    let Expr::ArrayInst { elements, .. } = parse_ok("T[@shallow x,]") else {
+        panic!("expected an array instance")
+    };
+    assert_eq!(elements.len(), 1);
+    assert!(matches!(elements[0], Expr::Shallow(..)));
 }
 
 #[test]
@@ -635,28 +604,28 @@ fn the_index_postfix() {
     };
     assert!(matches!(*array, Expr::Name(..)));
     assert!(matches!(*index, Expr::Int(0, _)));
-    // A spaced `[` is a fresh array literal: `a [0]` is an application.
-    assert!(matches!(parse_ok("a [0]"), Expr::Apply { .. }));
+    // A spaced `[` is a fresh array template: `a [0, 1]` is an application.
+    assert!(matches!(
+        parse_ok("a [0, 1]"),
+        Expr::Apply {
+            argument,
+            ..
+        } if matches!(*argument, Expr::Array { .. })
+    ));
     // Chained: a[0][1] = (a[0])[1].
     let Expr::Index { array, .. } = parse_ok("a[0][1]") else {
         panic!("expected an index")
     };
     assert!(matches!(*array, Expr::Index { .. }));
-    // An array literal is indexable: ([1, 2])[1].
+    // An array template is indexable: ([1, 2])[1].
     let Expr::Index { array, .. } = parse_ok("([1, 2])[1]") else {
         panic!("expected an index")
     };
-    assert!(matches!(*array, Expr::Array(..)));
+    assert!(matches!(*array, Expr::Array { .. }));
 }
 
 #[test]
 fn index_errors_carry_spans() {
-    // `a[]` applies `a` to an empty array literal.
-    let err = parse_err("a[]");
-    assert_eq!(
-        err.message,
-        "expected '@shallow', '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found ']'"
-    );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
 }
@@ -697,14 +666,6 @@ fn an_underscore_is_a_placeholder_in_type_and_term_position() {
         panic!("expected an annotation")
     };
     assert!(matches!(*r#type.as_deref().unwrap(), Expr::Placeholder(_)));
-    // Nested: `x : Int -> _` — the arrow's return is a placeholder.
-    let Expr::Annotation { r#type, .. } = parse_ok("x : Int -> _") else {
-        panic!("expected an annotation")
-    };
-    let Expr::Arrow { return_type, .. } = *r#type.expect("an arrow type") else {
-        panic!("expected an arrow type")
-    };
-    assert!(matches!(*return_type, Expr::Placeholder(_)));
     // In term position `_` is the same placeholder, not an ordinary name.
     assert!(matches!(parse_ok("_"), Expr::Placeholder(_)));
     // As an annotated *value*, `_` is the placeholder in the value slot.
@@ -715,7 +676,7 @@ fn an_underscore_is_a_placeholder_in_type_and_term_position() {
 }
 
 #[test]
-fn an_at_assert_prefix_parses_as_an_assert() {
+fn an_at_prefix_marker_parses_as_its_own_node() {
     let e = parse_ok("@assert (1 == 1)");
     let Expr::Assert { value, span } = e else {
         panic!("expected an assert, got {e:?}")
@@ -785,7 +746,7 @@ fn an_at_in_membership_test_parses_at_the_comparison_level() {
 fn a_block_is_bindings_followed_by_a_final_expression() {
     let Expr::Block {
         statements, expr, ..
-    } = parse_ok("{a = 1; a}")
+    } = parse_ok("{a := 1; a}")
     else {
         panic!("expected a block")
     };
@@ -800,14 +761,14 @@ fn a_block_is_bindings_followed_by_a_final_expression() {
     assert!(matches!(parse_ok("{5}"), Expr::Block { .. }));
     // Statements are graph-shared bindings, not just literals.
     assert!(matches!(
-        parse_ok("{a = [1, 2]; b = a[0]; b}"),
+        parse_ok("{a := [1, 2]; b := a[0]; b}"),
         Expr::Block { statements, .. } if statements.len() == 2
     ));
 }
 
 #[test]
 fn a_block_can_be_a_lambda_body() {
-    let Expr::Lambda { r#return, .. } = parse_ok("x => {a = x; a}") else {
+    let Expr::Lambda { r#return, .. } = parse_ok("x => {a := x; a}") else {
         panic!("expected a lambda")
     };
     assert!(matches!(*r#return, Expr::Block { .. }));
@@ -818,7 +779,7 @@ fn a_block_can_be_written_without_semicolons() {
     // {a = 1\nb = 2\nb} — newlines separate the block's statements.
     let Expr::Block {
         statements, expr, ..
-    } = parse_ok("{a = 1\nb = 2\nb}")
+    } = parse_ok("{a := 1\nb := 2\nb}")
     else {
         panic!("expected a block")
     };
@@ -833,40 +794,42 @@ fn a_block_can_be_written_without_semicolons() {
     assert_eq!(b.name, "b");
     assert!(matches!(*expr, Expr::Name(name, _, _) if name == "b"));
     // A trailing newline before the `}` is fine.
-    assert!(matches!(parse_ok("{a = 1\na\n}"), Expr::Block { .. }));
+    assert!(matches!(parse_ok("{a := 1\na\n}"), Expr::Block { .. }));
 }
 
 #[test]
 fn a_block_is_an_atom() {
-    let Expr::Apply { argument, .. } = parse_ok("f {a = 1; a}") else {
+    let Expr::Apply { argument, .. } = parse_ok("f {a := 1; a}") else {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Block { .. }));
     // Blocks nest.
-    let Expr::Block { expr, .. } = parse_ok("{{a = 1; a}}") else {
+    let Expr::Block { expr, .. } = parse_ok("{{a := 1; a}}") else {
         panic!("expected a block")
     };
     assert!(matches!(*expr, Expr::Block { .. }));
     // A block composes with postfix and annotation forms.
     assert!(matches!(
-        parse_ok("{a = 1; a}[0]"),
+        parse_ok("{a := 1; a}[0]"),
         Expr::Index { array, .. } if matches!(*array, Expr::Block { .. })
     ));
     assert!(matches!(
-        parse_ok("{a = 1; a} : Int"),
+        parse_ok("{a := 1; a} : Int"),
         Expr::Annotation { .. }
     ));
 }
 
 #[test]
 fn block_errors_carry_spans() {
-    let err = parse_err("{a = 1; a");
-    assert_eq!(err.span, Some((1, 10)));
-    // An empty block is not a block: the value expression is missing.
-    let err = parse_err("{}");
-    assert!(err.message.contains("found '}'"));
+    let err = parse_err("{a := 1; a");
+    assert_eq!(err.span, Some((1, 11)));
+    // The empty block is gone: `{}` is the empty struct value.
+    assert!(matches!(
+        parse_ok("{}"),
+        Expr::StructValue { fields, .. } if fields.is_empty()
+    ));
     // A block whose last statement is a binding is a struct-returning block.
-    let Expr::RecordBlock { fields, .. } = parse_ok("{a = 1}") else {
+    let Expr::RecordBlock { fields, .. } = parse_ok("{a := 1}") else {
         panic!("expected a struct-returning block");
     };
     assert_eq!(fields.len(), 1);
@@ -902,7 +865,7 @@ fn the_recovered_error_walk_does_not_overflow_a_shallow_caller_stack() {
 fn broken_statements_are_recovered() {
     // A broken binding value skips to the next separator and the rest of
     // the program is reached.
-    let tokens = lex("a = ; b = 2; 5").tokens;
+    let tokens = lex("a := ; b := 2; 5").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
@@ -912,13 +875,13 @@ fn broken_statements_are_recovered() {
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));
     // An unclosed paren in a value is recovered the same way.
-    let tokens = lex("a = (x; 5").tokens;
+    let tokens = lex("a := (x; 5").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));
     // A statement that cannot start is skipped entirely, and the parse
     // continues to the final expression.
-    let tokens = lex("a = 1; -> ; b = 2; b").tokens;
+    let tokens = lex("a := 1; => ; b := 2; b").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
     assert!(matches!(program.expr, Some(Expr::Name(name, _, _)) if name == "b"));
@@ -929,11 +892,10 @@ fn dangling_operators_are_recovered() {
     // A missing operand consumes the operator and recovers the operand as an
     // error node, with no cascade.
     let cases: &[(&str, (u32, u32))] = &[
-        ("a = 1 + ; b = 2; b", (1, 9)),
-        ("a = 1 <= ; b = 2; b", (1, 10)),
-        ("a = 1 -> ; b = 2; b", (1, 10)),
-        ("a = 1 : ; b = 2; b", (1, 9)),
-        ("a = x => ; b = 2; b", (1, 10)),
+        ("a := 1 + ; b := 2; b", (1, 10)),
+        ("a := 1 <= ; b := 2; b", (1, 11)),
+        ("a := 1 : ; b := 2; b", (1, 10)),
+        ("a := x => ; b := 2; b", (1, 11)),
     ];
     for (source, span) in cases {
         let tokens = lex(source).tokens;
@@ -957,10 +919,6 @@ fn dangling_operators_are_recovered() {
                 if matches!(**right, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
-            Expr::Arrow { return_type, .. }
-                if matches!(**return_type, Expr::Err { .. } | Expr::Placeholder(_))
-        ) || matches!(
-            &binding.value,
             Expr::Annotation { r#type, .. }
                 if matches!(*r#type.as_deref().unwrap(), Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
@@ -981,7 +939,7 @@ fn a_panicking_parse_leaves_the_worker_alive() {
     assert!(caught.is_err(), "the panic must reach the caller");
 
     // The worker still answers, and a real parse after it is unaffected.
-    let tokens = lex("a = 1\na\n").tokens;
+    let tokens = lex("a := 1\na\n").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
     assert!(
@@ -1001,6 +959,6 @@ fn parses_share_one_worker_thread() {
     assert_eq!(first, second, "the worker is reused rather than respawned");
     assert_ne!(first, here, "the parse runs off the caller's stack");
 
-    let tokens = lex("a = 1\na\n").tokens;
+    let tokens = lex("a := 1\na\n").tokens;
     assert!(parse(&tokens).errors.is_empty());
 }

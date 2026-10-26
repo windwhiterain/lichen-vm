@@ -1,9 +1,9 @@
 ---
   order = "3"
-  output = "(struct{.x Int, .y Type}, (1, Int), 1, Int, struct{.x Int}, (1,), 1): tuple{TypeStruct, struct{.x Int, .y Type}, Int, Type, TypeStruct, struct{.x Int}, Int}"
+  output = "((@any, @any), (1, Int), 1, Int, (@any,), (1,), 1): Tuple"
 ---
-A = struct{.x Int, .y Type}
-a = A(.x 1, .y Int)
-B = struct{.x Int}
-b = B(.x 1,)
+A := _x => {.x @any : Int, .y @any : Type}
+a := A{.x 1, .y Int}
+B := _x => {.x @any : Int}
+b := B{.x 1}
 (A, a, a.x, a.y, B, b, b.x)

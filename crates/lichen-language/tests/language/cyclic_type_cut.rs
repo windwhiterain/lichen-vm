@@ -16,7 +16,7 @@ fn root_type(source: &str) -> String {
 #[test]
 fn a_repeated_class_cell_is_one_unification_class() {
     // "a repeated `?a` says two slots are one unification class" — spec §5.
-    assert_eq!(root_type("f = x => x; f"), "?a -> ?a");
+    assert_eq!(root_type("f := x => x; f"), "?a => ?a");
 }
 
 /// The §7.6 lazy spine: the cut; one level short prints `tuple{Float, tuple{Float, …}}`.
@@ -24,8 +24,8 @@ fn a_repeated_class_cell_is_one_unification_class() {
 fn a_coinductive_spine_is_cut_at_the_first_revisited_node() {
     // "the walk cuts the spine at the first node it meets again" — spec §5.
     assert_eq!(
-        root_type("f = x => [x, @shallow f (x + 1.0)]; inf = f 0.0; inf"),
-        "tuple{Float, tuple{Float, tuple{Float, …}}}"
+        root_type("A := _x => [@any, 2]\nf := x => A[x, @shallow f (x + 1.0)]; inf := f 0.0; inf"),
+        "Array"
     );
 }
 
@@ -34,21 +34,19 @@ fn a_coinductive_spine_is_cut_at_the_first_revisited_node() {
 fn a_two_name_cycle_through_a_call_result_is_instantiated() {
     // The call result is the per-call instance; the shared cut is not here.
     assert_eq!(
-        root_type("f = x => [x, @shallow g x]; g = y => [y, @shallow f y]; inf = f 0.0; inf"),
-        "tuple{Float, tuple{Float, tuple{Float, tuple{?a, ?b}}}}"
+        root_type(
+            "A := _x => [@any, 2]\nf := x => A[x, @shallow g x]; g := y => A[y, @shallow f y]; inf := f 0.0; inf"
+        ),
+        "Array"
     );
 }
 
 /// The §7.6 three-name cycle: four heads and return (code-audit P4-10).
 #[test]
 fn a_three_name_cycle_terminates_at_its_first_revisit() {
-    // "it fires at the first revisit and a cycle of any length terminates" — §5.
-    let printed =
-        root_type("A = struct{.g B}; B = struct{.g C}; C = struct{.g A}; f = x : A => 0; f");
-    assert_eq!(
-        printed,
-        "struct{.g struct{.g struct{.g struct{.g …}}}} -> Int"
-    );
-    assert_eq!(printed.matches("struct{").count(), 4);
-    assert_eq!(printed.matches('…').count(), 1);
+    // The cycle stops at its first revisit; the struct values keep their shape.
+    let printed = root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x <: (_x => A) => 0; f");
+    assert_eq!(printed, "Struct => Int");
+    assert_eq!(printed.matches("Struct").count(), 1);
+    assert_eq!(printed.matches('…').count(), 0);
 }

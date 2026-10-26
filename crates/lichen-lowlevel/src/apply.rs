@@ -155,6 +155,13 @@ impl<P: Program> Module<P> {
         false
     }
 
+    /// Record an apply's returned expression and its value's owner.
+    pub(super) fn record_applied_expr(&mut self, node: NodeId, applied: NodeId) {
+        self.applied_exprs.insert(node, applied);
+        let value = self.expr_value_half(applied).unwrap_or(applied);
+        self.apply_result_owners.insert(value, node);
+    }
+
     /// Wire the apply result: cache the return expr, unify it with the cloned return
     /// node.
     ///
@@ -170,6 +177,7 @@ impl<P: Program> Module<P> {
         applied: NodeId,
         block: BlockId,
     ) -> Option<P::Value> {
+        self.record_applied_expr(node, applied);
         // The wildcard is not an answer to hand on: an apply that produced it is
         // undecided, exactly as a read of it is.
         if matches!(
@@ -201,6 +209,20 @@ impl<P: Program> Module<P> {
             _ => result,
         }
     }
+}
+
+/// Whether `clone` is a **plain cell**: no operator of its own and no answer.
+///
+/// # Invariant
+/// A plain cell owes no answer, so joining two of them cannot make a class
+/// member run early.  The template's other pairs are the runtime's own: a
+/// reader joins the cell it reads when the read runs
+/// ([`Module::alias_read`]), and the conditional's arms are one class that
+/// holds one arm's answer, so joining it early would put the conditional's
+/// result there.
+pub(super) fn clone_is_a_plain_cell<P: Program>(module: &Module<P>, clone: NodeId) -> bool {
+    let clone = &module.nodes[clone];
+    clone.operation.is_none() && clone.value.is_none()
 }
 
 /// Whether a value's own item slots are open — the `runned` policy; see

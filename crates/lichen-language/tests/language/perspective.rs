@@ -90,32 +90,32 @@ fn a_compound_annotation_rejects_a_mismatched_perspective() {
 #[test]
 fn an_identity_function_accepts_a_plain_argument() {
     // `id = x => x; id 5` — param reads 0, arg 0 → 0 ≡ 0 ✓.
-    assert!(ok("id = x => x; id 5"));
+    assert!(ok("id := x => x; id 5"));
 }
 
 #[test]
 fn an_unannotated_parameter_states_no_requirement() {
     // A parameter without `# p` is unconstrained (attributes.md).
-    assert!(ok("id = x => x; id (5 # 4)"));
+    assert!(ok("id := x => x; id (5 # 4)"));
 }
 
 #[test]
 fn an_annotated_parameter_accepts_a_matching_perspective() {
     // `f = x # 4 => x; f (5 # 4)` — the param declares 4; 4 ≡ 4 ✓.
-    assert!(ok("f = x # 4 => x; f (5 # 4)"));
+    assert!(ok("f := x # 4 => x; f (5 # 4)"));
 }
 
 #[test]
 fn an_annotated_parameter_accepts_a_uniform_argument() {
     // No perspective is the lattice top, encoded `0`; it is usable where `# 4`
     // is declared.
-    assert!(ok("f = x # 4 => x; f 5"));
+    assert!(ok("f := x # 4 => x; f 5"));
 }
 
 #[test]
 fn a_return_annotation_applies_to_the_result() {
     // The result is `5 # 4` — the body's annotation.
-    assert!(ok("g = x => (x # 4); g 5"));
+    assert!(ok("g := x => (x # 4); g 5"));
 }
 
 #[test]
@@ -130,14 +130,14 @@ fn mixed_type_and_perspective_annotations() {
 #[test]
 fn an_annotated_parameter_accepts_a_broader_perspective() {
     // The arg is uniform over 4, the param over 2, and 2 | 4.
-    assert!(ok("f = x # 2 => x; f (5 # 4)"));
+    assert!(ok("f := x # 2 => x; f (5 # 4)"));
 }
 
 #[test]
 fn an_annotated_parameter_rejects_an_incomparable_perspective() {
     // The arg is uniform over 2, the param over 4, and 4 ∤ 2.
-    assert!(!ok("f = x # 4 => x; f (5 # 2)"));
-    assert_eq!(message("f = x # 4 => x; f (5 # 2)"), "expected 4, found 2");
+    assert!(!ok("f := x # 4 => x; f (5 # 2)"));
+    assert_eq!(message("f := x # 4 => x; f (5 # 2)"), "expected 4, found 2");
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
 #[test]
 fn a_failed_read_in_an_attribute_renders_as_none() {
     // A failed read is a concrete empty value, spelled `none` and never `?a`.
-    let source = "f = x # 4 => x\nf (5 # [1,2][3])";
+    let source = "A := _x => [1, 2]\na := A[1, 1]\nf := x # 4 => x\nf (5 # a[3])";
     assert!(!ok(source));
     assert_eq!(message(source), "expected 4, found none");
 }
@@ -181,16 +181,16 @@ fn a_narrower_provider_rejects_a_broader_requirement() {
 #[test]
 fn an_annotation_over_a_bound_perspective_replaces_the_provider() {
     // The name reference provides 8, and 4 | 8.
-    assert!(ok("x = 1 # 8\nx # 4"));
-    assert_eq!(root_persp("x = 1 # 8\nx # 4"), 4);
+    assert!(ok("x := 1 # 8\nx # 4"));
+    assert_eq!(root_persp("x := 1 # 8\nx # 4"), 4);
 }
 
 #[test]
 fn an_annotation_over_a_bound_perspective_rejects_a_broader_requirement() {
     // `x = 1 # 8` then `x # 16` — the provider is 8; `# 16` requires uniform
     // over 16, and 16 ∤ 8 ✗.
-    assert!(!ok("x = 1 # 8\nx # 16"));
-    assert_eq!(message("x = 1 # 8\nx # 16"), "expected 16, found 8");
+    assert!(!ok("x := 1 # 8\nx # 16"));
+    assert_eq!(message("x := 1 # 8\nx # 16"), "expected 16, found 8");
 }
 
 // A callee's return perspective is its caller's: the call carries it.
@@ -199,18 +199,18 @@ fn an_annotation_over_a_bound_perspective_rejects_a_broader_requirement() {
 fn a_returned_perspective_reaches_the_call_site() {
     // `g` returns a value `# 2`, so a caller may require 2 or 1 but not 4.
     assert_eq!(
-        message("g = x => (x # 2)\n(g 3) # 4"),
+        message("g := x => (x # 2)\n(g 3) # 4"),
         "expected 4, found 2"
     );
-    assert!(ok("g = x => (x # 2)\n(g 3) # 2"));
-    assert!(ok("g = x => (x # 2)\n(g 3) # 1"));
+    assert!(ok("g := x => (x # 2)\n(g 3) # 2"));
+    assert!(ok("g := x => (x # 2)\n(g 3) # 1"));
 }
 
 #[test]
 fn a_returned_perspective_rides_a_chain_of_calls() {
     // The certificate is copied at each call site, so it survives two hops.
     assert_eq!(
-        message("g = x => (x # 2)\nh = y => (g y)\n(h 3) # 4"),
+        message("g := x => (x # 2)\nh := y => (g y)\n(h 3) # 4"),
         "expected 4, found 2"
     );
 }
@@ -218,28 +218,28 @@ fn a_returned_perspective_rides_a_chain_of_calls() {
 #[test]
 fn a_call_of_an_unannotated_return_carries_none() {
     // `g = x => x` states no return perspective; the call states none either.
-    assert!(ok("g = x => x\n(g 3) # 4"));
+    assert!(ok("g := x => x\n(g 3) # 4"));
 }
 
 #[test]
 fn a_wildcard_parameter_states_no_requirement() {
     // `#_` declares nothing, so no call pins the template: both orders accept.
-    assert!(ok("f = (x : Int # _) => x\nf (5 # 8)\nf (5 # 2)"));
-    assert!(ok("f = (x : Int # _) => x\nf (5 # 2)\nf (5 # 8)"));
+    assert!(ok("f := (x : Int # _) => x\nf (5 # 8)\nf (5 # 2)"));
+    assert!(ok("f := (x : Int # _) => x\nf (5 # 2)\nf (5 # 8)"));
 }
 
 #[test]
 fn a_plain_type_states_no_perspective_requirement() {
     // `x : T` names a type; the value's own certificate survives the annotation.
-    assert!(ok("x = 5 # 4\n(x : Int) # 4"));
-    assert!(ok("x = 5 # 8\n(x : Int) # 4"));
+    assert!(ok("x := 5 # 4\n(x : Int) # 4"));
+    assert!(ok("x := 5 # 8\n(x : Int) # 4"));
 }
 
 #[test]
 fn a_returned_perspective_survives_a_type_annotation() {
     // The call's constraint slot is kept when the call is annotated with a type.
     assert_eq!(
-        message("g = x => (x # 2)\ny = (g 3 : Int)\ny # 4"),
+        message("g := x => (x # 2)\ny := (g 3 : Int)\ny # 4"),
         "expected 4, found 2"
     );
 }
@@ -247,17 +247,17 @@ fn a_returned_perspective_survives_a_type_annotation() {
 #[test]
 fn a_lane_group_requirement_takes_only_a_group_uniform_value() {
     // A value the whole 32-lane group must agree on — a uniform load, a tile base.
-    assert!(ok("warp = 32\nf = (acc : Int # warp) => acc\nf 7"));
+    assert!(ok("warp := 32\nf := (acc : Int # warp) => acc\nf 7"));
     assert!(ok(
-        "warp = 32\nf = (acc : Int # warp) => acc\nx = 7\nf (x # 64)"
+        "warp := 32\nf := (acc : Int # warp) => acc\nx := 7\nf (x # 64)"
     ));
     assert_eq!(
-        message("warp = 32\nf = (acc : Int # warp) => acc\nf (0 # 1)"),
+        message("warp := 32\nf := (acc : Int # warp) => acc\nf (0 # 1)"),
         "expected 32, found 1"
     );
     // The lattice is divisibility: 32 and 6 are incomparable.
     assert_eq!(
-        message("warp = 32\nf = (acc : Int # warp) => acc\nf (0 # 6)"),
+        message("warp := 32\nf := (acc : Int # warp) => acc\nf (0 # 6)"),
         "expected 32, found 6"
     );
 }
@@ -265,7 +265,7 @@ fn a_lane_group_requirement_takes_only_a_group_uniform_value() {
 #[test]
 fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
     // The register shape: tile warp-uniform, fragment lane-varying, result finest.
-    let program = "wmma = (tile : Int # 32) => (fragment : Int) => tile + fragment\n";
+    let program = "wmma := (tile : Int # 32) => (fragment : Int) => tile + fragment\n";
     assert!(ok(&format!("{program}wmma 7 9")));
     assert_eq!(
         message(&format!("{program}wmma (0 # 1) 9")),
@@ -274,7 +274,7 @@ fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
     // No requirement form exists for the fragment: a uniform value is accepted.
     assert!(ok(&format!("{program}wmma 7 (0 # 64)")));
     assert_eq!(
-        message(&format!("{program}mma = wmma 7 (0 # 1)\nmma # 32")),
+        message(&format!("{program}mma := wmma 7 (0 # 1)\nmma # 32")),
         "expected 32, found 1"
     );
 }
@@ -283,14 +283,14 @@ fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
 fn a_body_provides_what_its_parameter_requires() {
     // A `# 1` parameter feeding a `# 32` requirement is refused (`32 | 1` fails).
     assert!(!ok(
-        "f = (x : Int # 32) => x\ng = (i : Int # 1) => f i\ng 0\n"
+        "f := (x : Int # 32) => x\ng := (i : Int # 1) => f i\ng 0\n"
     ));
     assert_eq!(
-        message("f = (x : Int # 32) => x\ng = (i : Int # 1) => f (i % 2)\ng 0\n"),
+        message("f := (x : Int # 32) => x\ng := (i : Int # 1) => f (i % 2)\ng 0\n"),
         "expected 32, found 1"
     );
     // The other direction holds: a `# 32` parameter satisfies the `# 32` requirement.
     assert!(ok(
-        "f = (x : Int # 32) => x\ng = (i : Int # 32) => f i\ng 0\n"
+        "f := (x : Int # 32) => x\ng := (i : Int # 32) => f i\ng 0\n"
     ));
 }

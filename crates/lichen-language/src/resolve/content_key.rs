@@ -7,11 +7,11 @@ use super::*;
 /// # Invariant
 ///
 /// Adding an [`Expr`] variant or changing any tag bumps this constant; there is
-/// no compatibility path, so the bump invalidates every cached key. `6` seeded
-/// the prelude, which renumbers every program's binders; `8` added the
-/// `Expr::TypeSet` and `Expr::TypeTable` variants, tags 36 and 37.
-/// See docs/notes/incremental-update.md §6.1.
-const KEY_FORMAT_VERSION: u64 = 8;
+/// no compatibility path, so the bump invalidates every cached key. `9` added
+/// the value-template variants (`Unify` 39, `TemplateUnify` 40, `Clone` 41,
+/// `StructValue` 42, `Array` 43, `ArrayInst` 44) and retired the compound-type
+/// ones. See docs/notes/incremental-update.md §6.1.
+const KEY_FORMAT_VERSION: u64 = 9;
 
 /// The tag that opens a path-written binder, so an id-written key can never alias one.
 const PATH_BINDER: u64 = 0x7061_7468_0000_0001;
@@ -212,6 +212,9 @@ impl KeyWriter<'_> {
                     crate::ast::TypeConst::Float => 3,
                     crate::ast::TypeConst::Type => 1,
                     crate::ast::TypeConst::String => 2,
+                    crate::ast::TypeConst::Tuple => 4,
+                    crate::ast::TypeConst::Array => 5,
+                    crate::ast::TypeConst::Struct => 6,
                 });
             }
             Expr::Name(_name, _, binder) => {
@@ -249,6 +252,22 @@ impl KeyWriter<'_> {
                 self.u(8);
                 self.expr(function);
                 self.expr(argument);
+            }
+            // `a = b`: the actual value and the expected one, in that order.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.u(39);
+                self.expr(actual);
+                self.expr(expected);
+            }
+            // `actual <: template`: the actual and the template it is matched against.
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.u(40);
+                self.expr(actual);
+                self.expr(template);
             }
             Expr::BinOp {
                 operator,
@@ -364,31 +383,8 @@ impl KeyWriter<'_> {
                     self.str(mark);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.u(17);
-                self.expr(parameter_type);
-                self.expr(return_type);
-            }
             Expr::Tuple(elems, _) => {
                 self.u(29);
-                self.u(elems.len() as u64);
-                for el in elems {
-                    self.expr(el);
-                }
-            }
-            Expr::TypeTuple(elems, _) => {
-                self.u(30);
-                self.u(elems.len() as u64);
-                for el in elems {
-                    self.expr(el);
-                }
-            }
-            Expr::Array(elems, _) => {
-                self.u(31);
                 self.u(elems.len() as u64);
                 for el in elems {
                     self.expr(el);
@@ -410,15 +406,32 @@ impl KeyWriter<'_> {
                 self.expr(key);
                 self.expr(value);
             }
-            Expr::StructType(fields, _) => {
-                self.u(18);
+            // `{.a e1, …}`: the struct template's fields, each with its name.
+            Expr::StructValue { fields, .. } => {
+                self.u(42);
                 self.u(fields.len() as u64);
-                for field in fields {
-                    self.b(field.name.is_some());
-                    if let Some(name) = &field.name {
-                        self.str(name);
-                    }
-                    self.expr(&field.ty);
+                for f in fields {
+                    self.str(&f.name);
+                    self.expr(&f.value);
+                }
+            }
+            // `[template, length]`: the array template and its length.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.u(43);
+                self.expr(template);
+                self.expr(length);
+            }
+            // `template[e1, …]`: the array instance's template and its elements.
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.u(44);
+                self.expr(template);
+                self.u(elements.len() as u64);
+                for el in elements {
+                    self.expr(el);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -426,10 +439,7 @@ impl KeyWriter<'_> {
                 self.expr(callee);
                 self.u(fields.len() as u64);
                 for f in fields {
-                    self.b(f.name.is_some());
-                    if let Some(name) = &f.name {
-                        self.str(name);
-                    }
+                    self.str(&f.name);
                     self.expr(&f.value);
                 }
             }
@@ -445,15 +455,6 @@ impl KeyWriter<'_> {
                 self.u(21);
                 self.u(*depth as u64);
                 self.expr(inner);
-            }
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.u(22);
-                self.expr(element_type);
-                self.expr(length);
             }
             Expr::Block {
                 statements, expr, ..

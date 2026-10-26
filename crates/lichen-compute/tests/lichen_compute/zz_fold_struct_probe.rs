@@ -29,34 +29,34 @@ fn recorded(body: &str) -> String {
 
 /// The ring kernel and its input, shared by both cases.
 const KERNEL: &str = r#"
-XIn  = struct{.x (compute.Buf Float)}
-XOut = struct{.y (compute.Buf Float)}
-XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
-XArg = struct{.n Int, .alpha Float, .I XIn}
-ring_raw = (c : XPar) => {
-  i = compute.range c.n
-  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
-  left = if i == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
-  right = if i == (c.n - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+XIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
+XOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
+XPar := _x => {.n @any : Int, .alpha @any : Float, .in XIn _, .out XOut}
+XArg := _x => {.n @any : Int, .alpha @any : Float, .I XIn _}
+ring_raw := (c <: XPar) => {
+  i := compute.range c.n
+  centre := (compute.read (compute.Read{.from c.in.x, .at i}) : Float)
+  left := if i == 0 then ((compute.read (compute.Read{.from c.in.x, .at (c.n - 1)}) : Float)) else ((compute.read (compute.Read{.from c.in.x, .at (i - 1)}) : Float))
+  right := if i == (c.n - 1) then ((compute.read (compute.Read{.from c.in.x, .at 0}) : Float)) else ((compute.read (compute.Read{.from c.in.x, .at (i + 1)}) : Float))
+  compute.write (compute.Write{.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
 }
-ring = compute.parallel ring_raw "cpu" XOut
-x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
-seed = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+ring := compute.parallel ring_raw "cpu" (XOut _)
+x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
+seed := (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct)
 "#;
 
 /// The fold as written: no annotation on the recursive function.
 const UNANNOTATED: &str = r#"
-@loop march = (s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut)))
-settled = march (2, seed)
-compute.collect settled.y : array{Float, 6}
+@loop march := (s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct)))
+settled := march (2, seed)
+compute.collect settled.y : Array
 "#;
 
 /// The same fold with the recursive function's type stated: the state is a struct.
 const ANNOTATED: &str = r#"
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut))) : tuple{Int, XOut} -> XOut)
-settled = march (2, seed)
-compute.collect settled.y : array{Float, 6}
+@loop march := ((s <: (_x => (@any : Int, XOut _))) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct)))
+settled := march (2, seed)
+compute.collect settled.y : Array
 "#;
 
 /// The same annotated fold with the field read **on the apply result**: `(march (2, seed)).y`.
@@ -65,8 +65,8 @@ compute.collect settled.y : array{Float, 6}
 /// The read's chains root at the container expr, so evaluating it forces the apply; before `096b75bb`
 /// this printed `raw none` even annotated, and it is the case that fix was measured against.
 const ANNOTATED_INLINE: &str = r#"
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut))) : tuple{Int, XOut} -> XOut)
-compute.collect (march (2, seed)).y : array{Float, 6}
+@loop march := ((s <: (_x => (@any : Int, XOut _))) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct)))
+compute.collect (march (2, seed)).y : Array
 "#;
 
 #[test]

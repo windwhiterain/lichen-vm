@@ -50,7 +50,7 @@ fn own_pass(source: &str) -> (Module<LangProgram>, LangValue) {
 #[test]
 fn an_operation_over_an_applied_parameter_reads_nothing_it_should_not() {
     // `x + 0` as the applied body: no read of the parameter may be recorded.
-    let (module, value) = own_pass("f = n => (x => x + 0) n; f 3");
+    let (module, value) = own_pass("f := n => (x => x + 0) n; f 3");
     assert!(
         read_failures(&module).is_empty(),
         "no read fails: {:?}",
@@ -63,7 +63,7 @@ fn an_operation_over_an_applied_parameter_reads_nothing_it_should_not() {
 fn the_cli_path_accepts_a_compiled_body() {
     // The prelude's operators index their operand array, so this is the shape that
     // reaches a library read.
-    for source in ["f = n => (x => x) n; f 3", "f = n => (x => 1) n; f 3"] {
+    for source in ["f := n => (x => x) n; f 3", "f := n => (x => 1) n; f 3"] {
         let mut store = PackageStore::<LangProgram>::new();
         let result =
             evaluate_raw_reporting::<LangProgram>(source, None, &mut store, PassReport::Silent);

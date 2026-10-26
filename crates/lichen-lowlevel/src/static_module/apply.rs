@@ -43,10 +43,14 @@ impl<P: Program> Module<P> {
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
+                in_parameter: false,
+                reconcile_cached_answer: false,
             };
-            let applied = self.static_node_apply(r#return, &mut ctx);
-            // The parameter is a walk entry point: an ignored one is still satisfied.
+            // Clone the parameter before the return so its fields share one instance.
+            ctx.in_parameter = true;
             self.static_node_apply(parameter, &mut ctx);
+            ctx.in_parameter = false;
+            let applied = self.static_node_apply(r#return, &mut ctx);
             // Each assert instantiates through the shared remap; a baked
             // condition is not re-registered.
             for index in 0..assert_count {
@@ -69,7 +73,10 @@ impl<P: Program> Module<P> {
                             .iter()
                             .map(|(&template, &clone)| (template, clone)),
                         |template| static_find(&ctx.module.nodes, template),
-                    );
+                    )
+                    .into_iter()
+                    .filter(|(_, clone)| crate::apply::clone_is_a_plain_cell(self, *clone))
+                    .collect();
                     crate::apply::unify_clone_groups(groups, |first, clone| {
                         self.unify(first, clone);
                     });
@@ -139,9 +146,11 @@ impl<P: Program> Module<P> {
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
+                in_parameter: false,
+                reconcile_cached_answer: false,
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
-            self.applied_exprs.insert(node, applied);
+            self.record_applied_expr(node, applied);
             remap = ctx.remap;
             minted = ctx.minted;
         }
@@ -250,6 +259,8 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted: HashMap::new(),
+            in_parameter: false,
+            reconcile_cached_answer: false,
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -284,6 +295,8 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted,
+            in_parameter: false,
+            reconcile_cached_answer: false,
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
@@ -336,7 +349,10 @@ impl<P: Program> Module<P> {
             let groups = crate::apply::regroup_clones(
                 remap.iter().map(|(&template, &clone)| (template, clone)),
                 |template| static_find(&module.nodes, template),
-            );
+            )
+            .into_iter()
+            .filter(|(_, clone)| crate::apply::clone_is_a_plain_cell(self, *clone))
+            .collect();
             crate::apply::unify_clone_groups(groups, |first, clone| {
                 self.unify(first, clone);
             });
@@ -369,6 +385,10 @@ impl<P: Program> Module<P> {
                     operator: operation.operator,
                     operand,
                 });
+            }
+            if let Some(owner) = module.apply_result_owners.get(&local).copied() {
+                let owner = self.clone_static_signature_node(module, owner, block, remap);
+                self.apply_result_owners.insert(clone, owner);
             }
             return clone;
         };
@@ -415,6 +435,10 @@ impl<P: Program> Module<P> {
             });
         }
         self.write_node_value(clone, Some(copied));
+        if let Some(owner) = module.apply_result_owners.get(&local).copied() {
+            let owner = self.clone_static_signature_node(module, owner, block, remap);
+            self.apply_result_owners.insert(clone, owner);
+        }
         clone
     }
 
@@ -425,9 +449,17 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&local) {
             return clone;
         }
+        if (ctx.in_parameter || ctx.reconcile_cached_answer)
+            && matches!(
+                ctx.module.read(local).and_then(|value| value.as_enum()),
+                Some(LowValue::Any)
+            )
+        {
+            return self.add_node(ctx.target, None, None);
+        }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
-        let (undecided, _runned, evaluated_deep, template_operation, template_shape) = (
+        let (undecided, _, evaluated_deep, template_operation, template_shape) = (
             node.undecided(),
             node.runned,
             node.evaluated_deep,
@@ -462,11 +494,19 @@ impl<P: Program> Module<P> {
             // The mapping runs only for a value that is kept: a dropped answer
             // must not clone a closure into the target block.
             let value = ctx.module.read(local);
+            let previous = ctx.reconcile_cached_answer;
+            ctx.reconcile_cached_answer |= template_operation.as_ref().is_some_and(|operation| {
+                matches!(
+                    AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                    Some(crate::LowOperator::Index)
+                )
+            }) && carried;
             let mapped = if carried {
                 value.map(|value| self.static_remap_value(value, ctx))
             } else {
                 None
             };
+            ctx.reconcile_cached_answer = previous;
             self.write_node_value(clone, mapped);
             // The claim follows `mapped`, not `carried`: an answer whose own
             // elements are open must not claim the run.
@@ -490,9 +530,21 @@ impl<P: Program> Module<P> {
                 });
             self.stamp_node_ran_if(clone, claimed);
         }
+        if template_operation.as_ref().is_some_and(|operation| {
+            matches!(
+                AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                Some(crate::LowOperator::Apply)
+            )
+        }) && let Some(value) = self.expr_value_half(clone)
+        {
+            self.apply_result_owners.insert(value, clone);
+        }
+        if let Some(owner) = ctx.module.apply_result_owners.get(&local).copied() {
+            let owner = self.static_node_apply(owner, ctx);
+            self.apply_result_owners.insert(clone, owner);
+        }
         clone
     }
-
     /// Are the elements of the answer a frozen template just handed this call still open?
     ///
     /// # Invariant
@@ -528,7 +580,8 @@ impl<P: Program> Module<P> {
         if let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum() {
             if sref.module == ctx.module.key
                 && sref.index != ctx.applied
-                && ctx.module.functions[sref.index.0].open_captures
+                && (ctx.module.functions[sref.index.0].open_captures
+                    || static_wildcard_constructor(&ctx.module, sref))
             {
                 return self.static_clone_function(sref, ctx);
             }
@@ -547,7 +600,21 @@ impl<P: Program> Module<P> {
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
-                            || ctx.module.nodes[sref.index.index].undecided()) =>
+                            || ctx.module.nodes[sref.index.index].undecided()
+                            || (ctx.in_parameter
+                                && matches!(
+                                    ctx.module
+                                        .read(sref.index)
+                                        .and_then(|value| value.as_enum()),
+                                    Some(LowValue::Any)
+                                ))
+                            || (ctx.reconcile_cached_answer
+                                && matches!(
+                                    ctx.module
+                                        .read(sref.index)
+                                        .and_then(|value| value.as_enum()),
+                                    Some(LowValue::Any)
+                                ))) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))
@@ -721,7 +788,9 @@ fn static_node_holds_open_closure<P: Program>(module: &StaticModule<P>, node: Lo
     };
     match value.as_enum() {
         Some(LowValue::Function(AnyFunctionId::Static(sref))) => {
-            sref.module == module.key && module.functions[sref.index.0].open_captures
+            sref.module == module.key
+                && (module.functions[sref.index.0].open_captures
+                    || static_wildcard_constructor(module, sref))
         }
         _ => false,
     }
@@ -733,6 +802,8 @@ struct StaticApplyCtx<P: Program> {
     target: BlockId,
     module: Arc<StaticModule<P>>,
     remap: HashMap<LocalNodeId, NodeId>,
+    in_parameter: bool,
+    reconcile_cached_answer: bool,
     /// The applied function: its own value node is the recursion self-reference and
     /// must stay baked.
     applied: StaticFunctionId,

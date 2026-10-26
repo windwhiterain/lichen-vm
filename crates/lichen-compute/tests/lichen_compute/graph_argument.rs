@@ -27,60 +27,60 @@ fn head() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Expr = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .b (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Side = struct{{.p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParE = struct{{.n Int, .in In}}
-scale_raw = (k : ParE) => {{
-  i = compute.range k.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
+Expr := _x => {{.a (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Side := _x => {{.p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParE := _x => {{.n @any : Int, .in In _}}
+scale_raw := (k <: ParE) => {{
+  i := compute.range k.n
+  y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
 }}
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-offset_raw = (k : Par2) => {{
-  i = compute.range k.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to y, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)) ~ "element"))))))
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" (OutE _)
+In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+offset_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutZ){{.z (compute.write (compute.Write{{.to y, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) + (compute.read (compute.Read{{.from k.in.p, .at i}}) : Float)) ~ "element")}}))}})
 }}
-offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
+offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" (OutZ _)
 "#
     )
 }
 
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
 const ONE_BUFFER: &str = r#"
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
+GArg := _x => {.n @any : Int, .in In _}
+step := (s <: GArg) => {
+  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
-built = compute.graph step
+built := compute.graph step
 built
 "#;
 
 /// The same step over an argument naming **two** buffers, both read.
 const TWO_BUFFERS: &str = r#"
-GArg = struct{.n Int, .in Expr}
-step = (s : GArg) => {
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.a))) : OutE)
-  compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.b, .p first.e)))
+GArg := _x => {.n @any : Int, .in Expr _}
+step := (s <: GArg) => {
+  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.a}}) : Struct)
+  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.b, .p first.e}})
 }
-built = compute.graph step
+built := compute.graph step
 built
 "#;
 
 /// The same step over an argument whose second buffer sits **outside** `.in`, unread.
 const MISPLACED_BUFFER: &str = r#"
-GArg = struct{.n Int, .in In, .q Side}
-step = (s : GArg) => {
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
+GArg := _x => {.n @any : Int, .in In _, .q Side}
+step := (s <: GArg) => {
+  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
-built = compute.graph step
+built := compute.graph step
 built
 "#;
 
@@ -91,19 +91,19 @@ built
 /// the whole of what an unannotated parameter gets: the body reads positions
 /// rather than role paths.
 const UNANNOTATED: &str = r#"
-step = ins => {
-  first = (compute.plrun scale ((compute.A In)(.n ins(0), .I In(.d ins(1)))) : OutE)
-  compute.plrun offset ((compute.A In2)(.n ins(0), .I In2(.d ins(2), .p first.e)))
+step := ins => {
+  first := (compute.plrun scale (compute.A{.n ins(0), .I In{.d ins(1)}}) : Struct)
+  compute.plrun offset (compute.A{.n ins(0), .I In2{.d ins(2), .p first.e}})
 }
-built = compute.graph step
+built := compute.graph step
 built
 "#;
 
 /// The recording, run over two buffers whose elements are `1 … COUNT` and `10 … COUNT + 9`.
 fn running() -> String {
     format!(
-        "{}\n{fill}count = ({count})\nfirst = (compute.plrun ones_filler ((Fill)(.n {count})) : \
-         OutE)\nsecond = (compute.plrun tens_filler ((Fill)(.n {count})) : OutE)\nout = \
+        "{}\n{fill}count :=  ({count})\nfirst := (compute.plrun ones_filler ((Fill){{.n {count}}}) : \
+         OutE)\nsecond := (compute.plrun tens_filler ((Fill){{.n {count}}}) : Struct)\nout := \
          compute.collect (compute.graphrun built (count, first.e, second.e))\nout\n",
         chain(TWO_BUFFERS),
         fill = filled(),
@@ -120,19 +120,19 @@ fn running() -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill = struct{{.n Int}}
-ones_raw = (c : Fill) => {{
-  i = compute.range c.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {one})))))
+Fill := _x => {{.n @any : Int}}
+ones_raw := (c <: Fill) => {{
+  i := compute.range c.n
+  y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
+  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value {one}}}))}})
 }}
-tens_raw = (c : Fill) => {{
-  i = compute.range c.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to y, .at i, .value {ten})))))
+tens_raw := (c <: Fill) => {{
+  i := compute.range c.n
+  y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
+  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value {ten}}}))}})
 }}
-ones_filler = compute.parallel ones_raw "cpu" OutE
-tens_filler = compute.parallel tens_raw "cpu" OutE
+ones_filler := compute.parallel ones_raw "cpu" (OutE _)
+tens_filler := compute.parallel tens_raw "cpu" (OutE _)
 "#,
         one = datum(1),
         ten = datum(10),
@@ -428,9 +428,7 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
     let report = compile(&chain(UNANNOTATED));
     assert!(
         !report.ok(),
-        "the step never names its parameter's type, so the program records no graph, and the check
-         fails on it: the entry says `fails_build`, and a program that answers nothing is what
-         that flag is for"
+        "the step never names its parameter's type, so the program records no graph, and the check\n         fails on it: the entry says `fails_build`, and a program that answers nothing is what\n         that flag is for"
     );
     let joined = report
         .diagnostics

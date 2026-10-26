@@ -33,22 +33,24 @@ A plugin may expose operations that are not expressible in the bare
 language. Its own source calls them with the `$` form:
 
 ```lichen std.lichen
-sort = a => {a: array{Int, _}; r = $sort(a); r: array{Int, _}; r}
+sort := a : Array => {r := $sort(a); r : Array; r}
 ```
 
 This is the whole of `lichen-std-native`'s source: `$sort` is a native
 operator the plugin registers, and the surrounding code is ordinary
-lichen. The `$` form is an atom — `$jit(f)`, `$launch(k, x)`,
+lichen — the wrapper states the layout it accepts and the layout it
+answers, which is all a compound needs now that the shape lives in the
+value (Chapter 7). The `$` form is an atom — `$jit(f)`, `$launch(k, x)`,
 `$noop()` — and it resolves only against the **private native-operator
 registry of the module being compiled**. The shipping compiler has no
 `sort` operator, so it refuses the same source:
 
 ```text
 error: unresolved native operator 'sort' — this module composes no plugin registering it
-  --> 1:36
+  --> 1:28
    |
- 1 | sort = a => {a: array{Int, _}; r = $sort(a); r: array{Int, _}; r}
-   |                                    ^
+ 1 | sort := a : Array => {r := $sort(a); r : Array; r}
+   |                            ^
 ```
 
 (The output continues with a cascade error, because the unresolved operator

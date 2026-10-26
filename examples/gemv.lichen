@@ -106,35 +106,34 @@
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "[14.0, 32.0, 50.0, 68.0]: array{Float, 4}"
 ---
-Gin  = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 12))), .x (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
-Gout = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
-Par  = struct{.n Int, .kdim Int, .in Gin}
-Arg  = struct{.n Int, .kdim Int, .I Gin}
-gemv_raw = (k : Par) => {
-  i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
-  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Gout)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity")))))))
+Gin  := _x => {.w (compute.Buf (compute.BufParam{.type Float, .length 12})), .x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Gout := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Par  := _x => {.n @any : Int, .kdim @any : Int, .in (Gin _)}
+gemv_raw := (k <: Par) => {
+  i := compute.range k.n
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read (compute.Read{.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  (Gout{.y (compute.write (compute.Write{.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))}))})
 }
-gemv = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
-Fill = struct{.n Int}
-wBuf = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 12)))}
-fill_w_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 12))
-  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0) + (if i == 8 then 9.0 else 0.0) + (if i == 9 then 10.0 else 0.0) + (if i == 10 then 11.0 else 0.0) + (if i == 11 then 12.0 else 0.0)
-  ((wBuf)(.w (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+gemv := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Gout _)
+Fill := _x => {.n @any : Int}
+wBuf := _x => {.w (compute.Buf (compute.BufParam{.type Float, .length 12}))}
+fill_w_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 12})
+  v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0) + (if i == 8 then 9.0 else 0.0) + (if i == 9 then 10.0 else 0.0) + (if i == 10 then 11.0 else 0.0) + (if i == 11 then 12.0 else 0.0)
+  (wBuf{.w (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_w = compute.parallel fill_w_raw "cpu" wBuf
-w = (compute.plrun fill_w ((Fill)(.n 12)) : wBuf).w
-xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
-fill_x_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 3))
-  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0)
-  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_w := compute.parallel fill_w_raw "cpu" (wBuf _)
+w := (compute.plrun fill_w (Fill{.n 12}) : Struct).w
+xBuf := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+fill_x_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 3})
+  v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0)
+  (xBuf{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_x = compute.parallel fill_x_raw "cpu" xBuf
-x = (compute.plrun fill_x ((Fill)(.n 3)) : xBuf).x
-out = (compute.plrun gemv ((Arg)(.n 4, .kdim 3, .I Gin(.w w, .x x))) : Gout)
-compute.collect out.y : array{Float, 4}
+fill_x := compute.parallel fill_x_raw "cpu" (xBuf _)
+x := (compute.plrun fill_x (Fill{.n 3}) : Struct).x
+out := (compute.plrun gemv (Par{.n 4, .kdim 3, .in (Gin{.w w, .x x})}) : Struct)
+compute.collect out.y : Array

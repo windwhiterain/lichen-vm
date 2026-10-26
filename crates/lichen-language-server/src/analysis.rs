@@ -24,7 +24,7 @@ use lichen_language::persist::ArtifactCodec;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
 use lichen_language::program::GcdOp;
-use lichen_language::render::{print_type_lang, print_value_lang, struct_type_named_fields};
+use lichen_language::render::{print_type_lang, print_value_lang, struct_value_named_fields};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::AnyNodeId;
 
@@ -421,7 +421,10 @@ where
                 && let Some(t) = build.state[eid].ty
             {
                 import_ty.insert(imp.span, print_type_lang(&build.module, t));
-                if let Some(names) = struct_type_named_fields(&build.module, t) {
+                // The field names live in the binding's own value.
+                if let Some(names) = build.state[eid].val.and_then(|value| {
+                    struct_value_named_fields(&build.module, AnyNodeId::Dynamic(value))
+                }) {
                     let fields = names
                         .into_iter()
                         .flatten()
@@ -482,9 +485,11 @@ where
                         Some(t) => print_type_lang(&build.module, t),
                         None => String::new(),
                     };
-                    // A concrete struct binding offers its fields after a `.`.
-                    if let Some(t) = ty_node
-                        && let Some(names) = struct_type_named_fields(&build.module, t)
+                    // A concrete struct binding offers its fields after a `.`; the
+                    // names live in the binding's own value.
+                    if let Some(value) = build.state[id].val
+                        && let Some(names) =
+                            struct_value_named_fields(&build.module, AnyNodeId::Dynamic(value))
                     {
                         struct_fields_by_stmt.insert(
                             i,
@@ -560,6 +565,26 @@ where
                     else {
                         continue;
                     };
+                    let ty = match build.state[eid].ty {
+                        Some(t) => print_type_lang(&build.module, t),
+                        None => String::new(),
+                    };
+                    let value = build.state[eid].val.and_then(|vn| {
+                        // An empty slot is a deferred binding: type only.
+                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
+                            print_value_lang(
+                                &build.module,
+                                v,
+                                build.state[eid].ty.unwrap_or_default(),
+                            )
+                        })
+                    });
+                    let snapshot = StatementValue {
+                        span: (0, 0),
+                        ty,
+                        value,
+                    };
+                    field_types.insert(name.to_string(), snapshot.clone());
                     let lichen_highlevel::ir::ExprKind::Static { .. } = build.ir[container].kind
                     else {
                         continue;
@@ -573,28 +598,8 @@ where
                     let Some(&module_name) = import_name_by_span.get(&container_span) else {
                         continue;
                     };
-                    let ty = import_ty
-                        .get(&container_span)
-                        .and_then(|mty| field_type_in_struct(mty, name))
-                        .unwrap_or_default();
-                    let value = build.state[eid].val.and_then(|vn| {
-                        // An empty slot is a deferred binding: type only.
-                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
-                            print_value_lang(
-                                &build.module,
-                                v,
-                                build.state[eid].ty.unwrap_or_default(),
-                            )
-                        })
-                    });
-                    module_field_types.insert(
-                        (module_name.to_string(), name.to_string()),
-                        StatementValue {
-                            span: (0, 0),
-                            ty,
-                            value,
-                        },
-                    );
+                    module_field_types
+                        .insert((module_name.to_string(), name.to_string()), snapshot);
                 }
                 (
                     statements,
@@ -1297,7 +1302,7 @@ impl DocIndex {
             let ty_kind = classify_token_kind(&t.kind);
             let (token_type, modifiers) = match &t.kind {
                 TokenKind::Name(_) if prev_was_dot => {
-                    // `a.name`, `struct{.name T}`, `C(.name v)` — a named field.
+                    // `a.name`, `{.name requirement}`, `S{.name value}` — a named field.
                     (SemanticTokenType::PROPERTY, Vec::new())
                 }
                 TokenKind::Name(_) => name_class
@@ -1406,79 +1411,6 @@ fn source_name(source: &PackageSource) -> String {
         .unwrap_or_else(|| source.path.display().to_string())
 }
 
-/// The type of the named field `field` inside a rendered `struct{...}` type.
-///
-/// # Invariant
-/// A field-access IR node's own type slot is a lazy cell, so an access on an
-/// imported module resolves its type from the module's rendered type instead.
-fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
-    let inner = struct_ty.strip_prefix("struct{")?;
-    // Find the matching `}` for the opening `{` (ignoring the `>` of `->`),
-    // then split the interior on top-level commas.
-    let body = match_close(inner)?;
-    for seg in split_top_level(body, ',') {
-        let seg = seg.trim();
-        let Some(rest) = seg.strip_prefix('.') else {
-            continue; // positional field, not named.
-        };
-        // A well-formed named field is `.name type`; skip a malformed segment.
-        let Some(name_end) = rest.find(|c: char| c.is_whitespace()) else {
-            continue;
-        };
-        if &rest[..name_end] == field {
-            return Some(rest[name_end..].trim().to_string());
-        }
-    }
-    None
-}
-
-/// The substring up to the `}` that closes an already-stripped `struct{...}`.
-/// The `>` of an arrow `->` is not a close.
-fn match_close(inner: &str) -> Option<&str> {
-    let bytes = inner.as_bytes();
-    let mut depth = 1;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' | b'<' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 {
-            return Some(&inner[..i]);
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Split `s` on `sep` at bracket depth 0 (over `()[]{}<>`, with the `>` of `->`
-/// ignored), returning the segments.
-fn split_top_level(s: &str, sep: char) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut depth = 0i32;
-    let bytes = s.as_bytes();
-    let mut start = 0;
-    let mut i = 0;
-    while i < s.len() {
-        let c = bytes[i] as char;
-        match c {
-            '(' | '[' | '{' | '<' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            '>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
-            _ if c == sep && depth == 0 => {
-                out.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    out.push(&s[start..]);
-    out
-}
-
 /// The token kinds needing no AST context; `classify_names` disambiguates the
 /// `Name`s.
 fn classify_token_kind(
@@ -1488,14 +1420,17 @@ fn classify_token_kind(
         TokenKind::Int(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Float(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Str(_) => Some((SemanticTokenType::STRING, Vec::new())),
-        // The builtin type constants are type-ish, not keywords.
-        TokenKind::KwInt | TokenKind::KwFloat | TokenKind::KwString | TokenKind::KwType => {
-            Some((SemanticTokenType::TYPE, Vec::new()))
-        }
-        TokenKind::KwStruct
-        | TokenKind::KwTable
-        | TokenKind::KwSet
+        // The builtin type constants are type-ish, not keywords.  `Tuple`,
+        // `Array` and `Struct` are the builtin templates.
+        TokenKind::KwInt
+        | TokenKind::KwFloat
+        | TokenKind::KwString
+        | TokenKind::KwType
+        | TokenKind::KwTuple
         | TokenKind::KwArray
+        | TokenKind::KwStruct => Some((SemanticTokenType::TYPE, Vec::new())),
+        TokenKind::KwTable
+        | TokenKind::KwSet
         | TokenKind::KwLet
         | TokenKind::KwIf
         | TokenKind::KwThen
@@ -1523,20 +1458,20 @@ fn classify_token_kind(
         | TokenKind::KwShallow
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
-        // `tuple` is a keyword-led type form, like `array`.
-        TokenKind::KwTuple
         // `@any` is the wildcard literal — a reserved form like `_`.
         | TokenKind::Any
         // `@gc` opens a block whose scope is released at the `}`.
         | TokenKind::KwGc => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
-        // Operators: arrows, annotations, separators-of-fields, and math.
-        TokenKind::Arrow
-        | TokenKind::FatArrow
+        // Operators: lambda/table arrows, annotations, fields, and math.
+        TokenKind::FatArrow
         | TokenKind::TableArrow
         | TokenKind::TableFindArrow
         | TokenKind::Colon
+        // `:=` binds a name; `<:` matches a value against a template.
+        | TokenKind::ColonEquals
+        | TokenKind::TemplateUnify
         | TokenKind::Hash
         | TokenKind::Question
         | TokenKind::Bang
@@ -1678,6 +1613,20 @@ impl<'a> NameClass<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -1715,25 +1664,30 @@ impl<'a> NameClass<'a> {
                     self.expr(p);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
-            }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for f in fields {
-                    self.expr(&f.ty);
+                    self.expr(&f.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -1754,14 +1708,6 @@ impl<'a> NameClass<'a> {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => {
@@ -1981,6 +1927,20 @@ impl Walk {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -2018,25 +1978,30 @@ impl Walk {
                     self.expr(p);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
-            }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for field in fields {
-                    self.expr(&field.ty);
+                    self.expr(&field.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -2057,14 +2022,6 @@ impl Walk {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => self.scope(statements, Some(expr)),
@@ -2313,6 +2270,20 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            // Every operand is walked: a name inside one resolves like any
+            // other.
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                self.expr(actual);
+                self.expr(expected);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                self.expr(actual);
+                self.expr(template);
+            }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -2350,25 +2321,30 @@ impl<'a> ScopeCapture<'a> {
                     self.expr(p);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.expr(parameter_type);
-                self.expr(return_type);
-            }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
             }
-            Expr::StructType(fields, _) => {
+            // `[template, length]` — the array template; `template[…]` — the
+            // instance filled with elements.
+            Expr::Array {
+                template, length, ..
+            } => {
+                self.expr(template);
+                self.expr(length);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                self.expr(template);
+                for el in elements {
+                    self.expr(el);
+                }
+            }
+            Expr::StructValue { fields, .. } => {
                 for f in fields {
-                    self.expr(&f.ty);
+                    self.expr(&f.value);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
@@ -2389,14 +2365,6 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.expr(element_type);
-                self.expr(length);
-            }
             Expr::Block {
                 statements, expr, ..
             } => self.scope(statements, Some(expr)),
@@ -2458,7 +2426,7 @@ mod tests {
 
     #[test]
     fn unresolved_name_is_reported() {
-        let d = doc("a = 1\nb = unknown\nb");
+        let d = doc("a := 1\nb := unknown\nb");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2473,7 +2441,7 @@ mod tests {
     #[test]
     fn unresolved_name_with_a_close_candidate_suggests_it() {
         // The block-wide binding `unknown` is in scope at the `unkown` use.
-        let d = doc("unknown = 1\nunkown");
+        let d = doc("unknown := 1\nunkown");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2505,7 +2473,7 @@ mod tests {
     fn completion_offers_in_scope_names_filtered_by_the_prefix() {
         // Typing `a` at the tail offers the block-wide `aa` (in scope) but not
         // `bb` (different prefix).
-        let d = doc("aa = 1\nbb = 2\na");
+        let d = doc("aa := 1\nbb := 2\na");
         let items = d.completion_at(Position {
             line: 2,
             character: 0,
@@ -2524,7 +2492,7 @@ mod tests {
     #[test]
     fn completion_is_scope_aware_a_block_local_is_not_offered_outside() {
         // Inside the block, `inner` is in scope and completes.
-        let d = doc("a = 1\n{inner = 2; inner}\ninner");
+        let d = doc("a := 1\n{inner := 2; inner}\ninner");
         let inside = d.completion_at(Position {
             line: 1,
             character: 12,
@@ -2548,9 +2516,9 @@ mod tests {
 
     #[test]
     fn completion_items_carry_a_worked_type_detail() {
-        // The binding `x = 3` has a concrete type `Int`, which the completion
+        // The binding `x := 3` has a concrete type `Int`, which the completion
         // surfaces as `detail`.
-        let d = doc("x = 3\nx");
+        let d = doc("x := 3\nx");
         let items = d.completion_at(Position {
             line: 1,
             character: 0,
@@ -2567,7 +2535,7 @@ mod tests {
     fn field_access_error_suggests_a_close_field() {
         // `point.sux` reads a field the container lacks; the diagnostic
         // appends the closest field name as a did-you-mean clause.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.sux\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.sux\n");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2583,7 +2551,7 @@ mod tests {
     #[test]
     fn completion_after_a_dot_offers_the_structs_fields() {
         // Typing `point.s` offers the struct's own field `sub`, never a bare name.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.s\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.s\n");
         let items = d.completion_at(Position {
             line: 1,
             character: 7,
@@ -2606,7 +2574,7 @@ mod tests {
     #[test]
     fn field_completion_is_filtered_by_the_typed_prefix() {
         // Typing `y` after `point.` offers only the field(s) sharing that prefix.
-        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.y\n");
+        let d = doc("point := {.x 1, .y 2, .sub 3}\npoint.y\n");
         let items = d.completion_at(Position {
             line: 1,
             character: 7,
@@ -2625,7 +2593,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let main_path = write(
             &dir,
@@ -2657,7 +2625,7 @@ mod tests {
 
     #[test]
     fn clean_source_has_no_diagnostics_and_one_binding() {
-        let d = doc("a = 1\n(a, a)");
+        let d = doc("a := 1\n(a, a)");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 1, "one binding");
         // The prelude's names are in scope but are **not** this document's
@@ -2676,7 +2644,7 @@ mod tests {
     fn a_prelude_name_use_jumps_into_the_builtins_own_file() {
         // `add` has no binding and no import: the prelude is seeded, and a
         // use resolves to the built-in's file.
-        let d = doc("add [1, 2]\n");
+        let d = doc("add (1, 2)\n");
         let def = d
             .definition_at(Position {
                 line: 0,
@@ -2695,7 +2663,7 @@ mod tests {
             "the jump should land in the built-in's file"
         );
         assert!(
-            file.code.contains("add = operands"),
+            file.code.contains("add := operands"),
             "the built-in's text is the record's: got {:?}",
             file.code
         );
@@ -2705,15 +2673,16 @@ mod tests {
 
         // A failure *inside* the built-in belongs to its file, not the document
         // (`docs/notes/core-prelude.md` §4).
-        let failing = doc("add [\"a\", \"b\"]\n");
+        let failing = doc("add (\"a\", \"b\")\n");
         let files = failing.file_diagnostics();
+        // The prelude's refusal is the operator's own class domain.
         assert!(
             files.iter().any(|file| {
                 file.path.file_name().is_some_and(|n| n == "core.lichen")
-                    && file.diagnostics.iter().any(|d| {
-                        d.message
-                            .contains("the refinement's predicate did not answer 1")
-                    })
+                    && file
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("does not satisfy {Int, Float}"))
             }),
             "expected the built-in's failure on the built-in's file, got {files:?}"
         );
@@ -2723,20 +2692,20 @@ mod tests {
     fn preprocessor_block_is_cut_out() {
         // A real lichen file opens with an `---…---` block; it must not leak into
         // the lexer or parser as code.
-        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na := 1\nb := 2\na + b\n");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 2, "two bindings (a, b)");
     }
 
     #[test]
     fn hover_resolves_a_use_to_its_binding() {
-        let d = doc("a = 1\nb = a + 1\nb");
+        let d = doc("a := 1\nb := a + 1\nb");
         // A use of `a` resolves to the binding; its hover shows the bound
-        // expr's `value : type` (a = 1 → 1 : Int).
+        // expr's `value : type` (a := 1 → 1 : Int).
         let (msg, _range) = d
             .hover_at(Position {
                 line: 1,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `a`");
         assert!(msg.contains("1 : Int"), "hover msg = {msg}");
@@ -2746,11 +2715,11 @@ mod tests {
     fn hover_on_a_non_binding_definition_reports_its_line() {
         // A lambda parameter is a definition but not a top-level statement, so
         // there is no `value : type` snapshot.
-        let d = doc("f = x => x\nf 1\n");
+        let d = doc("f := x => x\nf 1\n");
         let (msg, _) = d
             .hover_at(Position {
                 line: 0,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `x`");
         assert!(msg.contains("defined at line `1`"), "hover msg = {msg}");
@@ -2760,7 +2729,7 @@ mod tests {
     fn hover_renders_a_binding_value_and_type() {
         // A binding hover shows the bound expr's `value : type` — for the
         // binding's own name and for any use of it.
-        let d = doc("x = 3\ny = x + 4\nx + y\n");
+        let d = doc("x := 3\ny := x + 4\nx + y\n");
         // On the definition site of `x`: value 3 : Int.
         let (msg, _) = d
             .hover_at(Position {
@@ -2782,11 +2751,11 @@ mod tests {
 
     #[test]
     fn hover_on_unresolved_name_says_so() {
-        let d = doc("a = 1\nb = unknown");
+        let d = doc("a := 1\nb := unknown");
         let (msg, _) = d
             .hover_at(Position {
                 line: 1,
-                character: 4,
+                character: 5,
             })
             .expect("hover on `unknown`");
         assert!(msg.contains("unresolved name"), "hover msg = {msg}");
@@ -2794,7 +2763,7 @@ mod tests {
 
     #[test]
     fn definition_jumps_to_the_binding() {
-        let d = doc("a = 1\nb = a + 1\nb");
+        let d = doc("a := 1\nb := a + 1\nb");
         let def = d
             .definition_at(Position {
                 line: 2,
@@ -2814,7 +2783,7 @@ mod tests {
 
     #[test]
     fn definition_is_none_on_a_non_name() {
-        let d = doc("a = 1\na + 1\n");
+        let d = doc("a := 1\na + 1\n");
         // Cursor on the `1` literal in `a + 1` (line index 1, char 4).
         assert!(
             d.definition_at(Position {
@@ -2827,7 +2796,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_cover_the_source_and_stay_in_bounds() {
-        let d = doc("a = 1\nb = 2\na + b\n");
+        let d = doc("a := 1\nb := 2\na + b\n");
         let toks = d.semantic_tokens();
         assert!(!toks.is_empty(), "expected some semantic tokens");
         for t in &toks {
@@ -2842,7 +2811,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_classify_literals_operators_and_declarations() {
-        let d = doc("f = x => x + 1\nf 7\n");
+        let d = doc("f := x => x + 1\nf 7\n");
         let toks = d.semantic_tokens();
         let types = |t: &crate::lsp::SemanticTokenType| toks.iter().any(|x| &x.token_type == t);
         assert!(
@@ -2879,7 +2848,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_comment_the_preprocess_block() {
-        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na := 1\nb := 2\na + b\n");
         let toks = d.semantic_tokens();
         let comments: Vec<_> = toks
             .iter()
@@ -2911,17 +2880,17 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "---output = \"(Function, Function): struct{.succ Int -> Int, .add Int -> Int -> Int}\"---\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "---output = \"(Int => Int, Int => Int -> Int): Struct\"---\nsucc := x => x + 1\nadd := x => y => x + y\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "---math = import \"math.lichen\"\noutput = \"(Function, Function): struct{.double Int -> Int, .inc_twice Int -> Int}\"---\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
+            "---math = import \"math.lichen\"\noutput = \"(Int => Int, Int => Int): Struct\"---\ndouble := x => math.add x x\ninc_twice := x => math.succ (math.succ x)\n",
         );
         let main_path = write(
             &dir,
             "_.lichen",
-            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): tuple{Int, Int, Int}\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
+            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): Tuple\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
@@ -2939,7 +2908,7 @@ mod tests {
     fn new_with_cache_writes_imports_to_the_lichen_home() {
         // The settled imports are compiled into the device cache at `cache_root`.
         let dir = temp_dir("cachewrite");
-        write(&dir, "math.lichen", "{\n  succ = x => x + 1\n}\n");
+        write(&dir, "math.lichen", "succ := x => x + 1\n");
         let main_path = write(
             &dir,
             "main.lichen",
@@ -2981,7 +2950,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let main_path = write(
             &dir,
@@ -3001,7 +2970,12 @@ mod tests {
             })
             .expect("hover on `math`");
         assert!(msg.contains("imported module"), "module hover msg = {msg}");
-        assert!(msg.contains("Int -> Int"), "module hover type = {msg}");
+        // The module's **type** is the shared `Struct` layout; the field
+        // types live in the module's own value.
+        assert_eq!(
+            msg, "`math` — imported module : Struct",
+            "the module's type is the layout template"
+        );
 
         // The field `succ` (line 3, char 5): a field of the imported module —
         // its `value : type`, not "unresolved".
@@ -3011,7 +2985,7 @@ mod tests {
                 character: 5,
             })
             .expect("hover on `succ`");
-        assert!(msg.contains("Int -> Int"), "field hover msg = {msg}");
+        assert!(msg.contains("Int => Int"), "field hover msg = {msg}");
         assert!(!msg.contains("unresolved"), "field hover msg = {msg}");
 
         // Go-to-definition on the module use jumps to the import directive.
@@ -3056,7 +3030,7 @@ mod tests {
                     line: 6,
                     character: 6,
                 },
-                "Int -> Int",
+                "Int => Int",
             ),
             // `.inc_twice` field access on `geo`
             (
@@ -3064,7 +3038,7 @@ mod tests {
                     line: 6,
                     character: 33,
                 },
-                "Int -> Int",
+                "Int => Int",
             ),
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
@@ -3097,7 +3071,7 @@ mod tests {
             .map(|(_, ty)| ty.trim_end_matches('`'))
             .unwrap_or_else(|| panic!("the field renders its type; got {msg}"));
         let sides: Vec<&str> = rendered
-            .split("->")
+            .split("=>")
             .map(|side| side.trim().trim_end_matches('`').trim())
             .collect();
         assert_eq!(sides.len(), 2, "one arrow, domain to codomain: {msg}");
@@ -3114,8 +3088,8 @@ mod tests {
     #[test]
     fn local_struct_field_access_hovers_with_value_and_type() {
         // A field access on a *local* struct binding renders the field's
-        // value:type, from this file's struct-block field table.
-        let d = doc("point = { x = 1, y = 2 }\npoint.x\n");
+        // value:type, from the checked field read.
+        let d = doc("point := {.x 1, .y 2}\npoint.x\n");
         let (msg, _) = d
             .hover_at(Position {
                 line: 1,
@@ -3136,19 +3110,19 @@ mod tests {
         let math_path = write(
             &dir,
             "math.lichen",
-            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "succ := x => x + 1\nadd := x => y => x + y\n",
         );
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&math_path).unwrap(),
             Some(math_path.as_path()),
         );
 
-        // `succ` at line 1, char 2; `add` at line 2, char 2.
-        for (line, name) in [(1usize, "succ"), (2, "add")] {
+        // `succ` at line 0, char 0; `add` at line 1, char 0.
+        for (line, name) in [(0usize, "succ"), (1, "add")] {
             let (msg, _) = d
                 .hover_at(Position {
                     line: line as u32,
-                    character: 2,
+                    character: 0,
                 })
                 .unwrap_or_else(|| panic!("hover on `{name}`"));
             assert!(
@@ -3156,7 +3130,7 @@ mod tests {
                 "`{name}` should resolve; got {msg}"
             );
             assert!(
-                msg.contains("->"),
+                msg.contains("=>"),
                 "`{name}` should show its type; got {msg}"
             );
         }

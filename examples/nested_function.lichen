@@ -1,9 +1,10 @@
 ---
   order = "2"
-  output = "[1, 1]: array{Int, 2}"
+  output = "[1, 1]: Array"
 ---
-f1 = x => {
-    f2 = y => [y, y]
+Any2 := _x => [@any, 2]
+f1 := x => {
+    f2 := y => Any2[y, y]
     f2 x 
 }
 f1 1

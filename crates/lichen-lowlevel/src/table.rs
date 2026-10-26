@@ -43,6 +43,9 @@ const NULL_TOKEN: u64 = 0x6e75_6c6c_0000_000b; // "null"
 const ARRAY_SEED: u64 = 0xa22e_b3e1_0000_0004;
 /// The fold seed for a table's entry-key hashes.
 const TABLE_SEED: u64 = 0x7461_626c_0000_000c; // "tabl"
+/// The token an array's element-template slot folds in: the slot's presence is
+/// part of the key, its content is not.
+const TEMPLATE_TOKEN: u64 = 0x7465_6d70_0000_000d; // "temp"
 
 /// How far a key's canonical unfolding descends before it is cut with
 /// [`FRONTIER_TOKEN`].
@@ -178,6 +181,12 @@ impl<P: Program> Module<P> {
     ///
     /// One of the three [`KeyState`] outcomes, because *where* in the key the undecided
     /// content sits must not change the verdict.
+    ///
+    /// # Invariant
+    ///
+    /// An array's element-template slot is layout, not key content: in key mode its
+    /// value is not unfolded and its presence is folded in, so an array instance and a
+    /// tuple over the same user elements are two keys.
     fn hash_node(
         &self,
         id: AnyNodeId,
@@ -263,6 +272,11 @@ impl<P: Program> Module<P> {
                 // SAFETY: `array` is the payload of a live node of this module, and the
                 // unfolding only reads.
                 for item in unsafe { array.items() } {
+                    // Template slots contribute presence, not value, to key content.
+                    if item.template && mode == UnfoldMode::Key {
+                        hash = mix(hash ^ TEMPLATE_TOKEN);
+                        continue;
+                    }
                     // A compound's element is a slot: its value is the key content.
                     let item = self.element_value_node(item.node).unwrap_or(item.node);
                     match self.hash_node(item, unfolding, depth - 1, mode) {
@@ -403,6 +417,18 @@ impl<P: Program> Module<P> {
     /// hash table's equality must be pure. Stored keys are concrete by construction, so
     /// the comparison never meets an undecided cell. A table keys by identity, a
     /// function by its id.
+    ///
+    /// # Invariant
+    ///
+    /// An array's element-template slot is layout, not key content: the two sides must
+    /// agree that the slot is there, and its value is never read. So an array instance
+    /// and a tuple over the same user elements are two keys, while two array instances
+    /// over the same user elements and different element templates are one.
+    /// Structural equality of two live values, including compound fields.
+    pub fn structural_eq(&self, a: AnyNodeId, b: AnyNodeId) -> bool {
+        self.key_eq(a, b, &mut AncestorPairs::new())
+    }
+
     pub(crate) fn key_eq(
         &self,
         a: AnyNodeId,
@@ -424,6 +450,12 @@ impl<P: Program> Module<P> {
                     let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                     left.len() == right.len()
                         && left.iter().zip(right.iter()).all(|(ia, ib)| {
+                            // The element-template slot carries the layout, not the
+                            // key's content: its presence is compared, its value is
+                            // not read.
+                            if ia.template || ib.template {
+                                return ia.template == ib.template;
+                            }
                             // A compound's element is a slot: its value is the key content.
                             let ia = self.element_value_node(ia.node).unwrap_or(ia.node);
                             let ib = self.element_value_node(ib.node).unwrap_or(ib.node);

@@ -7,7 +7,7 @@ use lichen_language::compile;
 use lichen_language::program::LangValue;
 
 /// `type_of` from the standard library, bound ahead of every probed program.
-const TYPE_OF: &str = "type_of = x => {t = _; x: t; t}\n";
+const TYPE_OF: &str = "type_of := x => {t := _; x: t; t}\n";
 
 fn evaluate(source: &str) -> LangValue {
     let report = compile(source);
@@ -42,7 +42,8 @@ fn a_membership_test_compares_a_value_with_a_sets_members() {
 /// needs no type read at all.
 #[test]
 fn a_refinement_written_on_a_type_refines_the_class() {
-    let open = "Num = set(Int, Float)\nin_num = t => t @in Num\nf = x => { x : (_ ! in_num); x }\n";
+    let open =
+        "Num := set(Int, Float)\nin_num := t => t @in Num\nf := x => { x : (_ ! in_num); x }\n";
     let checked = |argument: &str| compile(&format!("{open}f {argument}")).ok();
     assert!(checked("5"), "`Int` is in the domain");
     assert!(
@@ -67,7 +68,7 @@ fn a_refinement_written_on_a_type_refines_the_class() {
     // A *concrete* class is enforced at the definition, not per application.
     let closed = |class: &str| {
         format!(
-            "Num = set(Int, Float)\nin_num = t => t @in Num\ng = x => {{ x : ({class} ! in_num); x }}\ng 5"
+            "Num := set(Int, Float)\nin_num := t => t @in Num\ng := x => {{ x : ({class} ! in_num); x }}\ng 5"
         )
     };
     assert_eq!(usize_of(&evaluate(&closed("Int"))), 5);
@@ -80,7 +81,7 @@ fn a_refinement_written_on_a_type_refines_the_class() {
 fn a_membership_test_matches_a_type_value_against_a_class_domain() {
     let probe = |argument: &str| {
         evaluate(&format!(
-            "{TYPE_OF}Num = set(Int, Float)\ntype_of {argument} @in Num"
+            "{TYPE_OF}Num := set(Int, Float)\ntype_of {argument} @in Num"
         ))
     };
     assert_eq!(usize_of(&probe("5")), 1, "the class `Int` is a member");

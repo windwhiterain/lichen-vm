@@ -119,7 +119,7 @@ fn an_unresolved_name_is_a_resolve_diagnostic() {
 #[test]
 fn an_unresolved_name_near_an_in_scope_name_suggests_it() {
     // `unknown` is a block-wide binding, so it is in scope for the typo `unkown`.
-    let err = compile_err("unknown = 1\nunkown");
+    let err = compile_err("unknown := 1\nunkown");
     assert_eq!(err.stage, Stage::Resolve);
     assert_eq!(
         err.message,
@@ -165,16 +165,16 @@ fn an_at_assert_prefix_compiles_to_an_assert() {
 
 #[test]
 fn a_block_compiles_to_its_final_expression() {
-    // {a = 1; a} — the block is its final expression's own node; the
+    // {a := 1; a} — the block is its final expression's own node; the
     // binding is pure sharing, not a new IR form.
-    let ir = compile_ok("{a = 1; a}");
+    let ir = compile_ok("{a := 1; a}");
     assert!(matches!(
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // The same holds through a lambda body: x => {y = x; y} is the
+    // The same holds through a lambda body: x => {y := x; y} is the
     // identity function, whose return is the parameter itself.
-    let ir = compile_ok("x => {y = x; y}");
+    let ir = compile_ok("x => {y := x; y}");
     let ExprKind::Function {
         parameter,
         r#return,
@@ -190,14 +190,14 @@ fn a_block_compiles_to_its_final_expression() {
 fn a_block_scopes_its_bindings() {
     // Inside the block the name is the inner binding; the program's own `2` is
     // wrapped into the root.
-    let ir = compile_ok("a = 2; {a = 1; a}");
+    let ir = compile_ok("a := 2; {a := 1; a}");
     assert!(matches!(
         kind(&ir, wrapped(&ir)),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // After the `}`, the block's bindings are gone: `{a = 1; a} a` applies the
+    // After the `}`, the block's bindings are gone: `{a := 1; a} a` applies the
     // block to the outer `a`.
-    let ir = compile_ok("a = 2; {a = 1; a} a");
+    let ir = compile_ok("a := 2; {a := 1; a} a");
     let ExprKind::Apply { function, argument } = kind(&ir, wrapped(&ir)) else {
         panic!("expected an apply")
     };
@@ -225,14 +225,14 @@ fn a_statement_expression_is_a_statement_root() {
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(5)))
     ));
     // A trailing statement identical to the final expression is not wrapped.
-    let ir = compile_ok("a = 1; a");
+    let ir = compile_ok("a := 1; a");
     assert!(matches!(
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     assert_eq!(ir.stmt_roots.len(), 1);
     // A bare expression statement between bindings is a statement root too.
-    let ir = compile_ok("a = 1; 5; a");
+    let ir = compile_ok("a := 1; 5; a");
     assert!(matches!(
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
@@ -268,19 +268,19 @@ fn an_annotated_parameter_rides_the_function() {
 
 #[test]
 fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
-    let err = compile_err("{a = 1; b}");
+    let err = compile_err("{a := 1; b}");
     assert_eq!(err.stage, Stage::Resolve);
     assert_eq!(err.message, "unresolved name 'b'");
-    assert_eq!(err.span, Some((1, 9)));
+    assert_eq!(err.span, Some((1, 10)));
     // A block's bindings don't leak out: the name is unresolved after `}`.
-    let err = compile_err("{a = 1; a} a");
+    let err = compile_err("{a := 1; a} a");
     assert_eq!(err.message, "unresolved name 'a'");
 }
 
 #[test]
 fn type_of_is_an_ordinary_binding() {
     // No `type_of` form: the standard library defines it as a plain lambda.
-    let ir = compile_ok("type_of = x => {t = _; x: t; t}\ntype_of");
+    let ir = compile_ok("type_of := x => {t := _; x: t; t}\ntype_of");
     let ExprKind::Function { parameter_type, .. } = kind(&ir, ir.root) else {
         panic!("the standard library's type_of is an ordinary lambda")
     };
@@ -290,7 +290,7 @@ fn type_of_is_an_ordinary_binding() {
 #[test]
 fn a_type_of_use_is_an_ordinary_application() {
     // A spaced paren is an argument; the adjacent `type_of(1)` is a slot read.
-    let source = "type_of = x => {t = _; x: t; t}\n";
+    let source = "type_of := x => {t := _; x: t; t}\n";
     let ir = compile_ok(&format!("{source}type_of (1)"));
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
         panic!("expected an apply")

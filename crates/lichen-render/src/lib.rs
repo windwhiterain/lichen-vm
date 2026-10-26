@@ -15,5 +15,5 @@ pub mod render;
 
 pub use render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
-    render_struct_fields_named, struct_type_named_fields, value_label,
+    render_struct_fields_named, struct_value_named_fields, value_label,
 };

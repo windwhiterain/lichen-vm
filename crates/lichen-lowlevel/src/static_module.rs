@@ -93,10 +93,12 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// Answered from the artifact's structure, never from a value: the body is
-    /// reachable by [`StaticFunctionRef`] whether or not anything evaluated —
-    /// what a routed apply needs when its argument is a read the kernel emits.
-    /// `None` for a body that computes no compute operator or more than one.
-    /// Routing is the prelude's: docs/notes/operator-polymorphism.md.
+    /// reachable by [`StaticFunctionRef`] whether or not anything evaluated.
+    /// `None` for a body that computes no operator or more than one.
+    ///
+    /// **A read's position is a subscript, not a computation**: a field read
+    /// computes `TableGet(names, name) + <base>`, not the body's operator
+    /// (`docs/notes/loop-conversion.md`).
     pub fn static_function_compute_operator(
         &self,
         function: StaticFunctionRef,
@@ -105,17 +107,34 @@ impl<P: Program> Module<P> {
         let module = self.static_module(key);
         let function = module.functions.get(function.index.0)?;
         let mut found: Option<(P::Operator, LocalNodeId)> = None;
-        let mut pending = vec![function.r#return];
-        let mut seen = std::collections::HashSet::new();
-        while let Some(local) = pending.pop() {
-            if !seen.insert(local) {
+        // Each entry says whether the node was reached as a read's position.
+        let mut pending = vec![(function.r#return, false)];
+        // A node first met as a position and later as a computation is a
+        // computation, so the walk visits it twice.
+        let mut seen: HashMap<LocalNodeId, bool> = HashMap::new();
+        // The nodes already counted, so a revisit does not count twice.
+        let mut counted: HashSet<LocalNodeId> = HashSet::new();
+        while let Some((local, position)) = pending.pop() {
+            if let Some(was_position) = seen.get(&local)
+                && (!*was_position || position)
+            {
                 continue;
             }
+            seen.insert(local, position);
             let node = module.nodes.get(local.index)?;
             if let Some(operation) = &node.operation {
-                if crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator).is_none() {
+                let low = crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator);
+                let read = matches!(
+                    low,
+                    Some(crate::LowOperator::Index | crate::LowOperator::TableGet)
+                );
+                if !position
+                    && (low.is_none() || matches!(low, Some(crate::LowOperator::External { .. })))
+                {
                     // **An operand-less call is no compute operator**: a nominal id reads none.
-                    if let Some(operand) = operation.operand {
+                    if let Some(operand) = operation.operand
+                        && counted.insert(local)
+                    {
                         // Two compute operators in one body have no single answer.
                         if found.is_some() {
                             return None;
@@ -124,7 +143,22 @@ impl<P: Program> Module<P> {
                     }
                 }
                 if let Some(operand) = operation.operand {
-                    pending.push(operand);
+                    // The operand array's items: for a read, the second one is the
+                    // position it reads at.
+                    if let Some(crate::LowValue::Array(array)) = module
+                        .read(operand)
+                        .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(&value))
+                    {
+                        // SAFETY: `array` is a payload of a value read out of a
+                        // live frozen module; nothing here releases an arena.
+                        for (index, item) in unsafe { array.items() }.iter().enumerate() {
+                            if let crate::AnyNodeId::Static(inner) = item.node
+                                && inner.module == key
+                            {
+                                pending.push((inner.index, position || (read && index == 1)));
+                            }
+                        }
+                    }
                 }
             } else if let Some(crate::LowValue::Array(array)) = node
                 .value
@@ -136,8 +170,21 @@ impl<P: Program> Module<P> {
                     if let crate::AnyNodeId::Static(inner) = item.node
                         && inner.module == key
                     {
-                        pending.push(inner.index);
+                        pending.push((inner.index, position));
                     }
+                }
+            }
+            // A constructor can place the operator in the returned cell's class
+            // rather than in its value graph.
+            for member in static_class_members(&module, local) {
+                let wildcard = module
+                    .nodes
+                    .get(member.index)
+                    .and_then(|member| member.value.as_ref())
+                    .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(value))
+                    .is_some_and(|value| matches!(value, crate::LowValue::Any));
+                if !wildcard {
+                    pending.push((member, position));
                 }
             }
         }
@@ -278,12 +325,79 @@ pub(crate) fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId)
     current
 }
 
+/// Whether a frozen function is `_x => _`: an open result independent of its parameter.
+pub(crate) fn static_wildcard_constructor<P: Program>(
+    module: &StaticModule<P>,
+    function: StaticFunctionRef,
+) -> bool {
+    if function.module != module.key {
+        return false;
+    }
+    let function = &module.functions[function.index.0];
+    let halves = |node| {
+        let LowValue::Array(array) = module.read(node)?.as_enum()? else {
+            return None;
+        };
+        // SAFETY: the payload belongs to the frozen module being read.
+        let items = unsafe { array.items() };
+        Some((items.first()?.node, items.get(1)?.node))
+    };
+    let open = |node| match node {
+        AnyNodeId::Static(sref) if sref.module == module.key => {
+            let node = &module.nodes[sref.index.index];
+            node.value.is_none() && node.operation.is_none()
+        }
+        _ => false,
+    };
+    let root = |node| match node {
+        AnyNodeId::Static(sref) if sref.module == module.key => {
+            Some(static_find(&module.nodes, sref.index))
+        }
+        _ => None,
+    };
+    let Some((return_value, _)) = halves(function.r#return) else {
+        return false;
+    };
+    let Some((parameter_value, parameter_type)) = halves(function.parameter) else {
+        return false;
+    };
+    let return_type = AnyNodeId::Static(StaticNodeId {
+        module: module.key,
+        index: function.return_type,
+    });
+    open(return_value)
+        && open(return_type)
+        && root(return_value) != root(parameter_value)
+        && root(return_type) != root(parameter_type)
+}
+
 /// The static identity of a node in `module`: what a host's tables key a cloned assert on.
 fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNodeId {
     AnyNodeId::Static(StaticNodeId {
         module: module.key,
         index: node,
     })
+}
+
+/// The cells in a frozen equality class, including its representative.
+fn static_class_members<P: Program>(
+    module: &StaticModule<P>,
+    node: LocalNodeId,
+) -> Vec<LocalNodeId> {
+    if module.nodes.get(node.index).is_none() {
+        return Vec::new();
+    }
+    let mut members = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = static_find(&module.nodes, node);
+    while seen.insert(current) {
+        members.push(current);
+        let Some(next) = module.nodes[current.index].equality.next() else {
+            break;
+        };
+        current = next;
+    }
+    members
 }
 
 /// Every module key a static ref in the module's solved values names — its frozen

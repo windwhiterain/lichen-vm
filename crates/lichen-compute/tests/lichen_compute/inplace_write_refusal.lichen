@@ -1,15 +1,22 @@
 ---
   compute = import "compute.lichen"
 ---
-In = struct{.k (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-Par = struct{.n Int, .in In, .out OutE}
-Arg = struct{.n Int, .I In}
-raw = (lane : Par) => {
-  i = compute.range lane.n
-  compute.write ((compute.Write _)(.to lane.in.k, .at i, .value (99.0 : Float)))
+In := _x => {.k (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+OutE := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+Par := _x => {.n @any : Int, .in In _}
+Arg := _x => {.n @any : Int, .I In _}
+Fill := _x => {.n @any : Int}
+fill := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 1})
+  ((In){.k (compute.write (compute.Write{.to d, .at i, .value 1.0}))})
 }
-k = compute.parallel raw "cpu" OutE
-kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
-out = (compute.plrun k ((Arg)(.n 4, .I In(.k kbuf))) : OutE)
-compute.collect kbuf
+filler := compute.parallel fill "cpu" (In _)
+raw := (lane <: Par) => {
+  i := compute.range lane.n
+  ((OutE){.e (compute.write (compute.Write{.to lane.in.k, .at i, .value (99.0 : Float)}))})
+}
+k := compute.parallel raw "cpu" (OutE _)
+kbuf := (compute.plrun filler ((Fill){.n 1}) : Struct)
+out := (compute.plrun k ((Arg){.n 1, .I In{.k kbuf.k}}) : Struct)
+compute.collect kbuf.k

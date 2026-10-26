@@ -69,39 +69,39 @@ fn program(step: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par  = struct{{.n Int, .in In}}
-producer_raw = (k : Par) => {{
-  i = compute.range k.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
+In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutR := _x => {{.r (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par  := _x => {{.n @any : Int, .in In _}}
+producer_raw := (k <: Par) => {{
+  i := compute.range k.n
+  d := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
+  ((OutR){{.r (compute.write (compute.Write{{.to d, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-consumer_raw = (k : Par2) => {{
-  i = compute.range k.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
+producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" (OutR _)
+In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+consumer_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  d := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  r := (compute.read (compute.Read{{.from k.in.p, .at 0}}) : Float)
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read (compute.Read{{.from k.in.d, .at s(0) - 1}}) : Float)) - r) ~ "element")) ~ "combine")
+  ((OutZ){{.z (compute.write (compute.Write{{.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")}}))}})
 }}
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg = struct{{.n Int, .in In}}
+consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (OutZ _)
+GArg := _x => {{.n @any : Int, .in In _}}
 {step}
-built = compute.graph step
+built := compute.graph step
 "#
     )
 }
 
 /// The one producer and one consumer whose output the function returns.
 fn two_stage() -> &'static str {
-    r#"step = (s : GArg) => {
-  first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
-  compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
+    r#"step := (s <: GArg) => {
+  first := (compute.plrun producer (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun consumer (compute.A{.n s.n, .I In2{.d s.in.d, .p first.r}})
 }"#
 }
 
@@ -113,8 +113,8 @@ fn recording() -> String {
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n {count})) : OutR)\n\
-         out = compute.collect (compute.graphrun built (count, data.r))\nout\n",
+        "{}\n{fill}count :=  ({count})\ndata := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)\n\
+         out := compute.collect (compute.graphrun built (count, data.r))\nout\n",
         program(two_stage()),
         fill = filled(),
         count = COUNT,
@@ -130,13 +130,13 @@ fn running() -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill = struct{{.n Int}}
-fill = (c : Fill) => {{
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
-  ((OutR)(.r (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+Fill := _x => {{.n @any : Int}}
+fill := (c <: Fill) => {{
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
+  ((OutR){{.r (compute.write (compute.Write{{.to d, .at i, .value (int2float i + 1.0)}}))}})
 }}
-filler = compute.parallel fill "cpu" OutR
+filler := compute.parallel fill "cpu" (OutR _)
 "#
     )
 }
@@ -146,10 +146,10 @@ fn fan_out() -> String {
     format!(
         "{}(producer, consumer, built)\n",
         program(
-            r#"step = (s : GArg) => {
-  first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
-  left = (compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r))) : OutZ)
-  right = (compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r))) : OutZ)
+            r#"step := (s <: GArg) => {
+  first := (compute.plrun producer (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
+  left := (compute.plrun consumer (compute.A{.n s.n, .I In2{.d s.in.d, .p first.r}}) : Struct)
+  right := (compute.plrun consumer (compute.A{.n s.n, .I In2{.d s.in.d, .p first.r}}) : Struct)
   (left, right)
 }"#
         )

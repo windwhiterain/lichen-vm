@@ -114,16 +114,16 @@ fn handshake_and_features() {
     );
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.lichen","languageId":"lichen","version":1,"text":"a = 1\nb = a + unknown\nb\n"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.lichen","languageId":"lichen","version":1,"text":"a := 1\nb := a + unknown\nb\n"}}}"#,
     );
     let diag = wait_for(&mut stdout, "publishDiagnostics");
     assert!(diag.contains("unresolved name"), "diagnostics = {diag}");
 
-    // hover on the `a` use (line 1, char 4): the binding hover shows
-    // the bound expr's `value : type` (`a = 1` → `1 : Int`).
+    // hover on the `a` use (line 1, char 5): the binding hover shows
+    // the bound expr's `value : type` (`a := 1` → `1 : Int`).
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":5}}}"#,
     );
     let hover = read_response(&mut stdout);
     assert!(hover.contains("\"id\":2"), "hover resp = {hover}");
@@ -144,11 +144,11 @@ fn handshake_and_features() {
         "definition resp = {definition}"
     );
 
-    // completion on the `a` use (line 1, char 4): the in-scope name `a` is
+    // completion on the `a` use (line 1, char 5): the in-scope name `a` is
     // offered, filtered to the typed prefix.
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":5}}}"#,
     );
     let completion = read_response(&mut stdout);
     assert!(
@@ -214,7 +214,7 @@ fn field_completion_after_a_dot() {
     );
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///field.lichen","languageId":"lichen","version":1,"text":"point = { x = 1, y = 2, sub = 3 }\npoint.s\n"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///field.lichen","languageId":"lichen","version":1,"text":"point := {.x 1, .y 2, .sub 3}\npoint.s\n"}}}"#,
     );
     let _diag = wait_for(&mut stdout, "publishDiagnostics");
 

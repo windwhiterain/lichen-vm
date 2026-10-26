@@ -20,7 +20,7 @@ use lichen_highlevel::program::{
 ///
 /// # Invariant
 /// The builders take `&self` over a `RefCell`, which is what lets a test nest
-/// them the way it reads: `w.array("k", &[w.int("a", 1), w.int("b", 2)])`. An
+/// them the way it reads: `w.array_inst("k", template, &[w.int("a", 1)])`. An
 /// `&mut self` builder forbids that and pushes every sub-expression into a
 /// `let` first, which is the whole point of a writer being writer-friendly.
 pub struct Writer<A = NoAttr, L = HighProgramLiteral> {
@@ -353,29 +353,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.range(name, elements, ExprKind::Tuple)
     }
 
-    /// `name = [T1, …, Tn]` — a tuple type.
-    pub fn type_tuple(&self, name: &str, elements: &[ExprId]) -> ExprId {
-        let range = self.push_children(elements);
-        self.named(name, ExprKind::TypeTuple(range))
-    }
-
-    /// `name = [a, b, …]` — an array literal, homogeneous by construction.
-    pub fn array(&self, name: &str, elements: &[ExprId]) -> ExprId {
-        let range = self.push_children(elements);
-        self.named(name, ExprKind::Array(range))
-    }
-
-    /// `name = Array(T, n)`.
-    pub fn type_array(&self, name: &str, element_type: ExprId, length: ExprId) -> ExprId {
-        self.named(
-            name,
-            ExprKind::TypeArray {
-                element_type,
-                length,
-            },
-        )
-    }
-
     /// `name = set{a, b, …}`.
     pub fn set(&self, name: &str, members: &[ExprId]) -> ExprId {
         let range = self.push_children(members);
@@ -401,38 +378,113 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.range(name, &interleaved, ExprKind::Table)
     }
 
-    /// `name = struct{.a T, .b U}` — the fresh nominal id lives in the kind,
-    /// never in the shape.
+    /// `name = [template, length]` — the array template: the element template
+    /// and the array's length.
     ///
     /// # Invariant
-    /// A `None` name is a field with no name-table entry, which the checker
-    /// refuses rather than reads positionally.
-    pub fn struct_type(&self, name: &str, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
+    /// The template has exactly two parts: an element template and a length.
+    /// An array *value* is an instance of a template, written
+    /// `template[…]`.
+    pub fn array_template(&self, name: &str, template: ExprId, length: ExprId) -> ExprId {
+        self.named(name, ExprKind::Array { template, length })
+    }
+
+    /// `name = template[e1, …, en]` — the array instance.
+    ///
+    /// # Invariant
+    /// The instance carries no `~` depth, so its depths range is **empty**:
+    /// an unmarked element is the depthless one.
+    pub fn array_inst(&self, name: &str, template: ExprId, elements: &[ExprId]) -> ExprId {
+        let element_range = self.push_children(elements);
+        self.named(
+            name,
+            ExprKind::ArrayInst {
+                template,
+                elements: element_range,
+                depths: ChildRange::EMPTY,
+            },
+        )
+    }
+
+    /// `name = template[e1, …, en]` — the instance, each element carrying its
+    /// `~` depth.
+    ///
+    /// # Invariant
+    /// The depths range holds one depth per element, index-aligned with the
+    /// elements: 0 unmarked, `usize::MAX` the bare `~`, n the value slot at
+    /// the first n levels of the element's type spine.
+    pub fn array_inst_depths(
+        &self,
+        name: &str,
+        template: ExprId,
+        elements: &[(ExprId, usize)],
+    ) -> ExprId {
+        let element_range = self.push_children(
+            &elements
+                .iter()
+                .map(|&(element, _)| element)
+                .collect::<Vec<_>>(),
+        );
+        let depth_start = self.ir.borrow_mut().depths.len() as u32;
+        self.ir
+            .borrow_mut()
+            .depths
+            .extend(elements.iter().map(|&(_, depth)| depth));
+        let depth_range = ChildRange {
+            start: depth_start,
+            end: self.ir.borrow_mut().depths.len() as u32,
+        };
+        self.named(
+            name,
+            ExprKind::ArrayInst {
+                template,
+                elements: element_range,
+                depths: depth_range,
+            },
+        )
+    }
+
+    /// `name = {.a e, .b e}` — the struct value: each field carries its name.
+    ///
+    /// # Invariant
+    /// The names range is index-aligned with the fields range, and a `None`
+    /// name is a field with no name-table entry, which the checker refuses
+    /// rather than reads positionally.
+    pub fn struct_value(&self, name: &str, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
         let elements: Vec<ExprId> = fields.iter().map(|&(element, _)| element).collect();
         let field_range = self.push_children(&elements);
-        let start = self.ir.borrow_mut().struct_names.len() as u32;
+        let name_start = self.ir.borrow_mut().struct_names.len() as u32;
         self.ir
             .borrow_mut()
             .struct_names
             .extend(fields.iter().map(|&(_, field)| field));
         let name_range = ChildRange {
-            start,
+            start: name_start,
             end: self.ir.borrow_mut().struct_names.len() as u32,
         };
         self.named(
             name,
-            ExprKind::TypeStruct {
+            ExprKind::Struct {
                 fields: field_range,
                 names: name_range,
             },
         )
     }
 
-    /// `name = S(a, b, …)` — `names` is index-aligned with `value`'s elements.
+    /// `name = actual = expected` — the plain unify.
+    ///
+    /// # Invariant
+    /// The actual value comes first and the expected one second: the order is
+    /// the unify's, and a reader may not swap them.
+    pub fn unify(&self, name: &str, actual: ExprId, expected: ExprId) -> ExprId {
+        self.named(name, ExprKind::Unify { actual, expected })
+    }
+
+    /// `name = S{…}` — `names` is index-aligned with `value`'s elements.
     pub fn instantiate(
         &self,
         name: &str,
-        type_expr: ExprId,
+        template: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
     ) -> ExprId {
@@ -445,7 +497,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(
             name,
             ExprKind::Instantiate {
-                type_expr,
+                template,
                 value,
                 names: name_range,
             },
@@ -469,15 +521,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
         )
     }
 
-    /// `name = T -> U` — a function type.
+    /// `name = p : T => (_ : U)` — a function template.
     pub fn type_function(&self, name: &str, parameter: ExprId, return_type: ExprId) -> ExprId {
-        self.named(
-            name,
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            },
-        )
+        let parameter_name = self.param(&format!("{name}_parameter"));
+        let return_value = self.hole(&format!("{name}_return"));
+        let body = self.annotate(&format!("{name}_codomain"), return_value, return_type);
+        self.lam_typed(name, parameter_name, Some(parameter), body, false)
     }
 
     /// `name = @gc e` — a scope of its own, released once `e` is decided.
@@ -509,37 +558,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// ref and not the value.
     pub fn static_ref(&self, name: &str, export: lichen_lowlevel::StaticNodeId) -> ExprId {
         self.named(name, ExprKind::Static { export })
-    }
-
-    /// `name = [v1, @shallow v2, @shallow(2) v3]`, each element carrying its
-    /// `~` depth.
-    ///
-    /// # Invariant
-    /// Typed like a tuple rather than an array: a homogeneous element type
-    /// would reject `[x, @shallow f(x+1)]`.
-    pub fn shallow_array(&self, name: &str, elements: &[(ExprId, usize)]) -> ExprId {
-        let element_range = self.push_children(
-            &elements
-                .iter()
-                .map(|&(element, _)| element)
-                .collect::<Vec<_>>(),
-        );
-        let start = self.ir.borrow_mut().depths.len() as u32;
-        self.ir
-            .borrow_mut()
-            .depths
-            .extend(elements.iter().map(|&(_, depth)| depth));
-        let depth_range = ChildRange {
-            start,
-            end: self.ir.borrow_mut().depths.len() as u32,
-        };
-        self.named(
-            name,
-            ExprKind::ShallowArray {
-                range: element_range,
-                depths: depth_range,
-            },
-        )
     }
 
     // --- finishing --------------------------------------------------------

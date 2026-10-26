@@ -48,58 +48,57 @@
     the RTX 3060 for both chains: the window arithmetic, the coefficient buffer, the clamped addresses and the guard are all right there."
   output = "([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]): tuple{array{Float, 25}, array{Float, 25}}"
 ---
-CIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 25))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length 9)))}
-COut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 25)))}
-CPar = struct{.n Int, .cols Int, .taps Int, .in CIn}
-CArg = struct{.n Int, .cols Int, .taps Int, .I CIn}
-convolve_raw = (c : CPar) => {
-  i = compute.range c.n
-  row = compute.row c
-  col = compute.col c
-  base = ((row - 1) * c.cols + (col - 1))
-  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))) : Float))) ~ "combine" ~ "element"))
-  ((COut)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (fold (c.taps, 0.0 ~ "identity")))))))
+CIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 25})), .w (compute.Buf (compute.BufParam{.type Float, .length 9}))}
+COut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 25}))}
+CPar := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .in (CIn _)}
+convolve_raw := (c <: CPar) => {
+  i := compute.range c.n
+  row := compute.row c
+  col := compute.col c
+  base := ((row - 1) * c.cols + (col - 1))
+  y := compute.buf (compute.BufParam{.type Float, .length c.n})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read (compute.Read{.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3)}) : Float))) ~ "combine" ~ "element"))
+  (COut{.y (compute.write (compute.Write{.to y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}))})
 }
-replicate_raw = (c : CPar) => {
-  i = compute.range c.n
-  row = compute.row c
-  col = compute.col c
-  rows = (c.n / c.cols)
-  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (min ((max (row + (s(0) - 1) / 3) 1) - 1) (rows - 1) * c.cols + (min ((max (col + (s(0) - 1) % 3) 1) - 1) (c.cols - 1))))) : Float))) ~ "combine" ~ "element"))
-  ((COut)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (fold (c.taps, 0.0 ~ "identity")))))))
+replicate_raw := (c <: CPar) => {
+  i := compute.range c.n
+  row := compute.row c
+  col := compute.col c
+  rows := (c.n / c.cols)
+  y := compute.buf (compute.BufParam{.type Float, .length c.n})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read (compute.Read{.from c.in.x, .at (min ((max (row + (s(0) - 1) / 3) 1) - 1) (rows - 1) * c.cols + (min ((max (col + (s(0) - 1) % 3) 1) - 1) (c.cols - 1)))}) : Float))) ~ "combine" ~ "element"))
+  (COut{.y (compute.write (compute.Write{.to y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}))})
 }
-convolve = compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "cpu" COut
-replicate = compute.parallel (replicate_raw ~ "claim:Reduction(combine,identity,element)") "cpu" COut
-XBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 25)))}
-WBuf = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 9)))}
-EBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 25)))}
-Fill = struct{.n Int}
-fill_x_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 25))
-  v = (if i == 12 then 8.0 else 0.0)
-  ((XBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+convolve := compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (COut _)
+replicate := compute.parallel (replicate_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (COut _)
+XBuf := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 25}))}
+WBuf := _x => {.w (compute.Buf (compute.BufParam{.type Float, .length 9}))}
+EBuf := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 25}))}
+Fill := _x => {.n @any : Int}
+fill_x_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 25})
+  v := (if i == 12 then 8.0 else 0.0)
+  (XBuf{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_w_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 9))
-  v = 0.125
-  ((WBuf)(.w (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_w_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 9})
+  v := 0.125
+  (WBuf{.w (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_e_raw = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Float, .length 25))
-  v = (if i == 9 then 8.0 else 0.0)
-  ((EBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+fill_e_raw := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Float, .length 25})
+  v := (if i == 9 then 8.0 else 0.0)
+  (EBuf{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
 }
-fill_x = compute.parallel fill_x_raw "cpu" XBuf
-fill_w = compute.parallel fill_w_raw "cpu" WBuf
-fill_e = compute.parallel fill_e_raw "cpu" EBuf
-x = (compute.plrun fill_x ((Fill)(.n 25)) : XBuf)
-weights = (compute.plrun fill_w ((Fill)(.n 9)) : WBuf)
-edge = (compute.plrun fill_e ((Fill)(.n 25)) : EBuf)
-blurred = (compute.plrun convolve ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x x.x, .w weights.w))) : COut)
-replicated = (compute.plrun replicate ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x edge.x, .w weights.w))) : COut)
-(compute.collect blurred.y : array{Float, 25}, compute.collect replicated.y : array{Float, 25})
+fill_x := compute.parallel fill_x_raw "cpu" (XBuf _)
+fill_w := compute.parallel fill_w_raw "cpu" (WBuf _)
+fill_e := compute.parallel fill_e_raw "cpu" (EBuf _)
+x := (compute.plrun fill_x (Fill{.n 25}) : Struct)
+weights := (compute.plrun fill_w (Fill{.n 9}) : Struct)
+edge := (compute.plrun fill_e (Fill{.n 25}) : Struct)
+blurred := (compute.plrun convolve (CPar{.n 25, .cols 5, .taps 9, .in (CIn{.x x.x, .w weights.w})}) : Struct)
+replicated := (compute.plrun replicate (CPar{.n 25, .cols 5, .taps 9, .in (CIn{.x edge.x, .w weights.w})}) : Struct)
+(compute.collect blurred.y : Array, compute.collect replicated.y : Array)

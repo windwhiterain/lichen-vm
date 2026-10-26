@@ -10,7 +10,7 @@ use lichen_utils::extend::AsEnum;
 fn a_cached_float_is_reused_and_reads_back_intact() {
     // The root is marked; the edit is in the unmarked binding before it, so dirty
     // propagation never reaches the cell.
-    let source = "@cache x = 1.5\nother = 1\nx\n";
+    let source = "@cache x := 1.5\nother := 1\nx\n";
     let mut session = BufferSession::<P>::with_source_id(source, "a.lichen");
 
     let first = session.compile();
@@ -26,7 +26,7 @@ fn a_cached_float_is_reused_and_reads_back_intact() {
     assert_eq!(first.cells.reused, 0);
 
     // A later build that skipped the marked binding's body.
-    let at = source.find("other = 1").expect("the unmarked binding") + "other = ".len();
+    let at = source.find("other := 1").expect("the unmarked binding") + "other := ".len();
     session.replace(at..at + 1, "2");
     let second = session.compile();
     assert!(

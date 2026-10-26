@@ -14,6 +14,12 @@ pub enum TypeConst {
     Float,
     String,
     Type,
+    /// `Tuple` — the builtin tuple template.
+    Tuple,
+    /// `Array` — the builtin array template.
+    Array,
+    /// `Struct` — the builtin struct template.
+    Struct,
 }
 
 /// A binary operator: unsigned `Int` arithmetic, or a comparison yielding
@@ -116,11 +122,24 @@ pub enum Expr {
         r#return: Box<Expr>,
         span: Span,
     },
-    /// `f x` — application; only a spaced `(` is an argument (see
-    /// [`Expr::StructInst`]).
+    /// `f x` — application; a glued `(` is a read, not an argument (see
+    /// [`Expr::FieldRead`]).
     Apply {
         function: Box<Expr>,
         argument: Box<Expr>,
+        span: Span,
+    },
+    /// `a = b` — a unify of two expressions: the actual value and the expected
+    /// one it is unified with.
+    Unify {
+        actual: Box<Expr>,
+        expected: Box<Expr>,
+        span: Span,
+    },
+    /// `actual <: template` — apply `template` to `_`, then unify with its result.
+    TemplateUnify {
+        actual: Box<Expr>,
+        template: Box<Expr>,
         span: Span,
     },
     /// `a op b` — a binary integer operation.
@@ -130,7 +149,8 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
-    /// `if cond then e1 else e2`; desugared to the lazy index `[e2, e1][cond]`.
+    /// `if cond then e1 else e2`; desugared to the lazy application
+    /// `(e2, e1)(cond)`.
     If {
         condition: Box<Expr>,
         then_branch: Box<Expr>,
@@ -160,14 +180,13 @@ pub enum Expr {
         span: Span,
     },
     /// `a(k)` — a positional slot read; the `(` is adjacent and holds one
-    /// expression (`a(1,)` is an instantiation).
+    /// expression.
     FieldRead {
         container: Box<Expr>,
         key: Box<Expr>,
         span: Span,
     },
-    /// `a.name` — a named field read; the name resolves through the struct
-    /// type's name table to a positional index.
+    /// `a.name` — a named field read through the struct value's name table.
     NamedFieldRead {
         container: Box<Expr>,
         name: String,
@@ -195,17 +214,8 @@ pub enum Expr {
         marks: Vec<String>,
         span: Span,
     },
-    /// `T1 -> T2` — a function type.
-    Arrow {
-        parameter_type: Box<Expr>,
-        return_type: Box<Expr>,
-        span: Span,
-    },
     /// `(e1, ..., en)` — a tuple value (always; no type/value mode).
     Tuple(Vec<Expr>, Span),
-    /// `tuple{T1, ..., Tn}` — a tuple type (the keyword-led form always produces
-    /// one).
-    TypeTuple(Vec<Expr>, Span),
     /// `set{E}` — a set type, whose one element is the element **slot**.
     TypeSet(Box<Expr>, Span),
     /// `table{K, V}` — a table type, whose two elements are the key and value
@@ -215,18 +225,31 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
-    /// `struct{.a Int, .b string}` — a nominal struct type; the field list is
-    /// optional (`struct{}`).
-    StructType(Vec<StructField>, Span),
-    /// `C(.x 1, .y Int)` — struct instantiation; the `(` is adjacent to the
-    /// callee (`C(e)` alone is a slot read).
+    /// `S{…}` — fill a struct value or template with field values.
     StructInst {
         callee: Box<Expr>,
-        fields: Vec<StructInstArg>,
+        fields: Vec<StructFieldValue>,
         span: Span,
     },
-    /// `[e1, ..., en]` — an array literal.
-    Array(Vec<Expr>, Span),
+    /// `{.a 1, .b 2}` — a struct value: the fields carry their own names.
+    StructValue {
+        fields: Vec<StructFieldValue>,
+        span: Span,
+    },
+    /// `[template, length]` — the array template: the element template and the
+    /// array's length.
+    Array {
+        template: Box<Expr>,
+        length: Box<Expr>,
+        span: Span,
+    },
+    /// `template[e1, ..., en]` — an array instance: the template and the
+    /// element values it is filled with.
+    ArrayInst {
+        template: Box<Expr>,
+        elements: Vec<Expr>,
+        span: Span,
+    },
     /// `table(k ==> v)` — a constant table literal; a key that is not
     /// concrete is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
@@ -235,12 +258,6 @@ pub enum Expr {
     Set(Vec<Expr>, Span),
     /// `@shallow e` — a shallow-marked position; `usize::MAX` is the bare form.
     Shallow(Box<Expr>, usize, Span),
-    /// `array{T, n}` — an array type: the element type `T` and the length `n`.
-    TypeArray {
-        element_type: Box<Expr>,
-        length: Box<Expr>,
-        span: Span,
-    },
     /// `{ stmt; …; expr }` — a scoped block whose value is its final expression.
     Block {
         statements: Vec<Stmt>,
@@ -265,15 +282,14 @@ pub enum Expr {
 /// separately).
 #[derive(Clone, Debug)]
 pub enum Stmt {
-    /// `name = value` — a graph-sharing binding.
+    /// `name := value` — a graph-sharing binding.
     Binding(Binding),
     /// A bare expression — evaluated for its type checks, its value
     /// discarded.
     Expr(Expr),
 }
 
-/// One statement binding: `name = value` (block-wide visible), or
-/// `let name = value` (visible only to later statements).
+/// A binding: `name := value`, or restrictive `let name := value`.
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub name: String,
@@ -282,8 +298,7 @@ pub struct Binding {
     /// The binding's own `BinderId`; unset by the parser.
     pub binder: Option<BinderId>,
     pub value: Expr,
-    /// `let` — the name is visible only to later statements (so `let a = a`
-    /// resolves the outer `a`).
+    /// `let` — visible only to later statements (`let a := a` uses outer `a`).
     pub restrictive: bool,
     /// `@cache` — a retained cell, whose identity is the binding's occurrence
     /// path (`docs/notes/incremental-update.md` §3).
@@ -293,18 +308,11 @@ pub struct Binding {
     pub looping: bool,
 }
 
-/// One field of a `struct{…}` type: an optional name plus the field's type.
+/// One field of a struct value or a struct instance: a `.name` and the
+/// field's value.
 #[derive(Clone, Debug)]
-pub struct StructField {
-    pub name: Option<String>,
-    pub ty: Expr,
-}
-
-/// One field argument of a struct instantiation: an optional `.name` plus the
-/// value.
-#[derive(Clone, Debug)]
-pub struct StructInstArg {
-    pub name: Option<String>,
+pub struct StructFieldValue {
+    pub name: String,
     pub value: Expr,
 }
 
@@ -372,6 +380,8 @@ impl Expr {
             Expr::Any(s) => *s,
             Expr::Lambda { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
+            Expr::Unify { span, .. } => *span,
+            Expr::TemplateUnify { span, .. } => *span,
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,
@@ -382,18 +392,16 @@ impl Expr {
             Expr::NamedFieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
-            Expr::Arrow { span, .. } => *span,
             Expr::Tuple(_, s) => *s,
-            Expr::TypeTuple(_, s) => *s,
             Expr::TypeSet(_, s) => *s,
             Expr::TypeTable { span, .. } => *span,
-            Expr::StructType(_, s) => *s,
             Expr::StructInst { span, .. } => *span,
-            Expr::Array(_, s) => *s,
+            Expr::StructValue { span, .. } => *span,
+            Expr::Array { span, .. } => *span,
+            Expr::ArrayInst { span, .. } => *span,
             Expr::Table(_, s) => *s,
             Expr::Set(_, s) => *s,
             Expr::Shallow(_, _, s) => *s,
-            Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
             Expr::RecordBlock { span, .. } => *span,
             Expr::Gc(_, s) => *s,

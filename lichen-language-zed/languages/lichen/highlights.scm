@@ -20,11 +20,9 @@
 (placeholder) @variable
 (type_constant) @type.builtin
 
-; named fields (`.name` reads, struct field / argument names)
+; named fields (`.name` reads, struct field names)
 (field_read name: (identifier) @property)
 (struct_field name: (identifier) @property)
-(call name: (identifier) @property)
-(parenthesized name: (identifier) @property)
 
 ; bindings / definitions
 (binding name: (identifier) @variable)
@@ -40,6 +38,7 @@
 "return" @keyword
 "@loop" @keyword
 "@assert" @keyword
+"@gc" @keyword
 "@in" @keyword
 "@shallow" @keyword
 
@@ -47,11 +46,9 @@
 ; capture name, so the literal is reached by its node rather than by its text.
 (wildcard) @constant.builtin
 
-; the type-led forms (`docs/language-spec.md` §2.1): `tuple{…}`, `struct{…}`,
-; `array{…}`, `set{…}`, `table{…, …}` are types, `set(…)` and `table(…)` values
-"tuple" @keyword.type
-"struct" @keyword.type
-"array" @keyword.type
+; the type-led forms (`docs/language-spec.md` §2.1): `set{…}` and `table{…, …}`
+; are types, `set(…)` and `table(…)` values.  The builtin templates `Tuple`,
+; `Array` and `Struct` are type constants, coloured above.
 "set" @keyword.type
 "table" @keyword.type
 
@@ -66,11 +63,9 @@
 
 ; operators (anonymous).  The full set is the language's, docs/notes/operators.md
 ; §1: `+ - * / %`, the six comparisons, the bitwise trio and `@in`.
-"->" @operator
 "=>" @operator
 "==>" @operator
 "<==" @operator
-"::" @operator
 ":" @operator
 "#" @operator
 "?" @operator
@@ -92,4 +87,6 @@
 "/" @operator
 "%" @operator
 "=" @operator
+":=" @operator
+"<:" @operator
 "." @operator

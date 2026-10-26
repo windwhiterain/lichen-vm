@@ -2,9 +2,15 @@
 //! `docs/notes/checker-encoding-instability.md`.
 //!
 //! # Invariant
-//! Every expression compiles to a `[value, type, attrs…]` expr, every kinded
-//! type expression to `[shape, [marker, universe]]`, and every type spine
-//! bottoms out at the self-referential universe `K = [Type, ↺]`.
+//! Every expression compiles to a `[value, type, attrs…]` expr and every type
+//! spine bottoms out at the self-referential universe `K = [Type, ↺]`.
+//!
+//! # Invariant
+//! **The compound values carry their own shape.** A tuple's value is its
+//! elements' exprs, an array's value the element template and the elements, and
+//! a struct's value the name table, the nominal id and the fields; the
+//! template types (`Tuple`, `Array`, `Struct`) name a layout and hold none. The
+//! offsets below are the one place those layouts are written down.
 //!
 //! # Invariant
 //! `LowShape` and `ScalarClass` are not unified: a shape is a structure (Tuple,
@@ -136,7 +142,7 @@ pub fn slot_width<P: HighProgram>() -> usize {
     EXPR_ATTR_BASE + P::Attr::ORDER.len()
 }
 
-// --- kinded-type layout: `[shape, kind]` with kind `[marker, universe]` ------
+// --- kinded-type layout: `[shape, kind]` ---
 
 /// Element 0 of a kinded type expression `[shape, kind]` — the shape, whose
 /// meaning is the kind's.
@@ -149,32 +155,35 @@ pub const KIND_MARKER_SLOT: usize = 0;
 /// Element 1 of a kind `[marker, universe]` — the universe the kind closes on.
 pub const KIND_UNIVERSE_SLOT: usize = 1;
 
-// --- struct marker: `[payload, TypeStruct]`, a normal type value -------------
-//
-// Its type read is the honest signal.
+// --- value layout: the compound values carry their own shape ---
 
-/// Element 0 of a struct marker — the marker's *value*: the payload
-/// `[TypeId, names, names_in_order]`.
-pub const STRUCT_MARKER_PAYLOAD_SLOT: usize = 0;
-/// Element 1 of a struct marker — the `TypeStruct` atom: the honest signal.
-pub const STRUCT_MARKER_TAG_SLOT: usize = 1;
-
-/// Element 0 of a struct marker's payload `[TypeId, names, names_in_order]` —
-/// the nominal type id.
-pub const STRUCT_MARKER_ID_SLOT: usize = 0;
-/// Element 1 of a struct marker's payload — the optional name→index table;
-/// `LowValue::Error` when absent.
-pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
-/// Element 2 of a struct marker's payload — the field names in definition
-/// order: the inverse of the name→index table.
-pub const STRUCT_MARKER_NAMES_ORDER_SLOT: usize = 2;
+/// A **tuple value**'s first element: the elements are its own items.
+pub const TUPLE_VALUE_ELEMENT_BASE: usize = 0;
+/// An **array value**'s element template — the slot `0` of `[template, …]`.
+///
+/// # Invariant
+/// The result's value is `[T's element template, the elements…]`, so a read
+/// of element `i` is the value's slot `i + 1`. The first slot is the element
+/// template, so it carries the template marker: the slot holds the layout and
+/// not a user element, and a key comparison reads its presence, never its
+/// value.
+pub const ARRAY_VALUE_TEMPLATE_SLOT: usize = 0;
+/// An **array value**'s first element: the template holds slot `0`.
+pub const ARRAY_VALUE_ELEMENT_BASE: usize = 1;
+/// A **struct value**'s name table — the name→field-index table.
+pub const STRUCT_VALUE_NAMES_SLOT: usize = 0;
+/// A **struct value**'s nominal id — the written occurrence's identity.
+pub const STRUCT_VALUE_ID_SLOT: usize = 1;
+/// A **struct value**'s first field: the name table and the nominal id hold
+/// the two slots before it.
+pub const STRUCT_VALUE_FIELD_BASE: usize = 2;
 
 // --- shape-half layout: each kind names its own shape positions --------------
 
-/// Element 0 of an **array type**'s `[element type, length]` shape.
-pub const ARRAY_TYPE_ELEMENT_SLOT: usize = 0;
-/// Element 1 of an array type's shape — a `USize` value slot.
-pub const ARRAY_TYPE_LENGTH_SLOT: usize = 1;
+/// Element 0 of a **buffer type**'s `[element type, length]` shape.
+pub const BUFFER_TYPE_ELEMENT_SLOT: usize = 0;
+/// Element 1 of a buffer type's shape — a `USize` value slot.
+pub const BUFFER_TYPE_LENGTH_SLOT: usize = 1;
 /// Element 0 of a **table type**'s `[key type, value type]` shape.
 pub const TABLE_TYPE_KEY_SLOT: usize = 0;
 /// Element 1 of a table type's shape.
@@ -183,29 +192,6 @@ pub const TABLE_TYPE_VALUE_SLOT: usize = 1;
 pub const FUNCTION_TYPE_DOMAIN_SLOT: usize = 0;
 /// Element 1 of a function type's shape.
 pub const FUNCTION_TYPE_CODOMAIN_SLOT: usize = 1;
-
-/// The lazy index path from a struct **type** to its name table — the `a.x`
-/// read walks it (`container_ty[1][0][0][1]`).
-pub const STRUCT_TYPE_NAMES_PATH: [usize; 4] = [
-    TYPE_KIND_SLOT,
-    KIND_MARKER_SLOT,
-    STRUCT_MARKER_PAYLOAD_SLOT,
-    STRUCT_MARKER_NAMES_SLOT,
-];
-
-/// The lazy index path from a TypeStruct **kind** to its definition-order
-/// names: the direct read of the kind node.
-///
-/// # Invariant
-/// Reading *its* slot 1 of a callee's `[shape, kind]` term would pull the
-/// shape half into the operand chain; that hazard needed the operand-forcing
-/// pass, which is gone, so this path is kept as the direct read rather than
-/// re-derived.
-pub const STRUCT_KIND_NAMES_ORDER_PATH: [usize; 3] = [
-    KIND_MARKER_SLOT,
-    STRUCT_MARKER_PAYLOAD_SLOT,
-    STRUCT_MARKER_NAMES_ORDER_SLOT,
-];
 
 /// The array items behind a dynamic node or a static ref — the raw read every
 /// accessor here is built on.
@@ -227,6 +213,42 @@ where
     };
     // SAFETY: as the `# Safety` contract states, `id`'s block outlives the read.
     Some(unsafe { array.items() })
+}
+
+/// The **items** of a compound value — the payload a value holds.
+///
+/// # Invariant
+/// A compound value's shape lives in its value and nowhere else, so this is the
+/// one reader of it: the offsets above say which item is which, and a caller
+/// never writes its own `+1` or `+2`.
+pub fn value_items<P: Program>(module: &Module<P>, value: AnyNodeId) -> Option<&'static [ArrayItem]>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    // SAFETY: `value` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    unsafe { array_items(module, value) }
+}
+
+/// The item of a compound value at `index`, or `None` when the value holds no
+/// such slot.
+pub fn value_item<P: Program>(
+    module: &Module<P>,
+    value: AnyNodeId,
+    index: usize,
+) -> Option<AnyNodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    Some(value_items(module, value)?.get(index)?.node)
+}
+
+/// How many items a compound value holds.
+pub fn value_len<P: Program>(module: &Module<P>, value: AnyNodeId) -> Option<usize>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    Some(value_items(module, value)?.len())
 }
 
 /// The shape slot of a kinded type expression `[shape, kind]`. `None` when
@@ -378,12 +400,58 @@ where
     is_arrow_type_any(module, universe, AnyNodeId::Dynamic(ty))
 }
 
-/// Whether `ty` is a struct type `[shape, [[payload, TypeStruct], K]]`, whose
-/// marker carries that tag.
+/// Whether `ty` is the **struct template** — the shared self-referential
+/// `[StructType, ↺]` expression.
+///
+/// # Invariant
+/// The template is recognised by its **value** (the struct marker) and by its
+/// type slot being itself: the struct layout closes on itself, so no second
+/// node carries it.
 pub fn is_struct_type_any<P: Program>(
+    module: &mut Module<P>,
+    _universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    template_is_any(module, ty, P::Value::type_struct_marker(), true)
+}
+
+/// Whether `ty` is the **tuple template** — the shared `[TupleType, Type]`
+/// expression.
+pub fn is_tuple_type_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
     ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    template_is_any(module, ty, P::Value::tuple_type_marker(), false)
+        && universe_is_any(module, universe, ty)
+}
+
+/// Whether `ty` is the **array template** — the shared `[ArrayType, Type]`
+/// expression.
+pub fn is_array_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    template_is_any(module, ty, P::Value::array_type_marker(), false)
+        && universe_is_any(module, universe, ty)
+}
+
+/// Whether `ty` holds the marker `marker` at its value slot.
+fn template_is_any<P: Program>(
+    module: &Module<P>,
+    ty: AnyNodeId,
+    marker: P::Value,
+    self_referential: bool,
 ) -> bool
 where
     P::Value: ValueType,
@@ -396,23 +464,27 @@ where
     if items.len() < 2 {
         return false;
     }
-    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
-    // in this crate calls `Module::drop_block`.
-    let Some(kind_items) = (unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }) else {
+    if node_value(module, items[EXPR_VALUE_SLOT].node) != Some(marker) {
         return false;
-    };
-    kind_items.len() >= 2
-        && is_universe_any(module, universe, kind_items[KIND_UNIVERSE_SLOT].node)
-        && is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node)
+    }
+    if !self_referential {
+        return true;
+    }
+    // The template's type slot is in its class, or aliases the same frozen expr.
+    if module.same_class(items[EXPR_TYPE_SLOT].node, ty) {
+        return true;
+    }
+    match (
+        node_value(module, items[EXPR_TYPE_SLOT].node),
+        node_value(module, ty),
+    ) {
+        (Some(slot), Some(template)) => slot == template,
+        _ => false,
+    }
 }
 
-/// Whether `ty` is a **tuple type** `[shape, [marker, K]]`, its kind carrying
-/// the tuple marker.
-pub fn is_tuple_type_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
+/// Whether `ty`'s type slot is the universe.
+fn universe_is_any<P: Program>(module: &mut Module<P>, universe: NodeId, ty: AnyNodeId) -> bool
 where
     P::Value: ValueType,
 {
@@ -421,61 +493,18 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    items.len() >= 2
-        && kind_marker_is_any(
-            module,
-            universe,
-            items[TYPE_KIND_SLOT].node,
-            P::Value::tuple_type_marker(),
-        )
-}
-
-/// Whether `ty` is an **array type** `[shape, [marker, K]]`, its kind carrying
-/// the array marker.
-pub fn is_array_type_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, ty) }) else {
+    if items.len() < 2 {
         return false;
-    };
-    items.len() >= 2
-        && kind_marker_is_any(
-            module,
-            universe,
-            items[TYPE_KIND_SLOT].node,
-            P::Value::array_type_marker(),
-        )
+    }
+    is_universe_any(module, universe, items[EXPR_TYPE_SLOT].node)
 }
 
-/// An array type's **length**: its shape's second position, which is a count and
-/// not an element slot.
-pub fn array_length<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    let shape = field_list(module, ty)?;
-    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    Some(
-        unsafe { array_items(module, shape) }?
-            .get(ARRAY_TYPE_LENGTH_SLOT)?
-            .node,
-    )
-}
-
-/// Whether `ty` is a **native buffer type** `[shape, [marker, K]]`, its kind carrying
-/// the buffer marker.
+/// Whether `ty` is a **native buffer type** `[shape, [marker, K]]`, its kind
+/// carrying the buffer marker.
 ///
 /// # Invariant
-/// The shape is `[element type, length]`, the shape an array type carries, so a buffer
-/// type and an array type differ only in the marker their kind holds.
+/// The shape is `[element type, length]`, the shape a buffer carries, so the
+/// shape's two positions are the buffer's own.
 pub fn is_buffer_type_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -507,108 +536,10 @@ where
     // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, shape) }?;
-    Some((items.first()?.node, items.get(1)?.node))
-}
-
-/// Whether a value is a struct marker: the expr `[payload, TypeStruct]`.
-///
-/// # Invariant
-/// The test is the **tag**, never the silhouette: the marker must be an
-/// ordinary two-element `[value, type]` expr whose [`STRUCT_MARKER_TAG_SLOT`]
-/// holds the `TypeStruct` atom. The payload is not inspected — its cells may
-/// still be undecided while the marker is being built.
-pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -> bool
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `marker` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, marker) }) else {
-        return false;
-    };
-    items.len() >= 2
-        && node_value(module, items[STRUCT_MARKER_TAG_SLOT].node)
-            == Some(P::Value::type_struct_marker())
-}
-
-/// Whether `ty` is a TypeStruct **kind** rather than a struct *type* — the
-/// requirement a field read's container states.
-pub fn is_type_struct_kind_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, ty) }) else {
-        return false;
-    };
-    items.len() >= 2
-        && is_universe_any(module, universe, items[KIND_UNIVERSE_SLOT].node)
-        && is_struct_marker_any(module, items[KIND_MARKER_SLOT].node)
-}
-
-/// The pieces of a struct **type term** every reader needs: the universe slot,
-/// the field list, and the name table.
-///
-/// # Invariant
-/// The universe *gate* is the caller's: `struct_names_any` recognises it by
-/// class equality and `field_names` by its self-referential cycle, and the walk
-/// lives here so the two cannot drift.
-fn struct_term_parts<P: Program>(
-    module: &Module<P>,
-    ty: AnyNodeId,
-) -> Option<(AnyNodeId, AnyNodeId, AnyHandle<[TableItem]>)>
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = unsafe { array_items(module, ty) }?;
-    if items.len() < 2 {
-        return None;
-    }
-    let shape = items[TYPE_SHAPE_SLOT].node;
-    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`.
-    let kind_items = unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }?;
-    if kind_items.len() < 2 {
-        return None;
-    }
-    // The struct marker `[payload, TypeStruct]`; the tag is the honest signal.
-    if !is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node) {
-        return None;
-    }
-    // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`.
-    let marker_items = unsafe { array_items(module, kind_items[KIND_MARKER_SLOT].node) }?;
-    // Its payload's name slot holds the name→index table.
-    // SAFETY: the payload item's node is a live node of `module`.
-    let payload_items =
-        unsafe { array_items(module, marker_items[STRUCT_MARKER_PAYLOAD_SLOT].node) }?;
-    let names_item = payload_items.get(STRUCT_MARKER_NAMES_SLOT)?;
-    match node_value(module, names_item.node).and_then(|v| v.as_enum()) {
-        Some(LowValue::Table(table)) => Some((kind_items[KIND_UNIVERSE_SLOT].node, shape, table)),
-        _ => None,
-    }
-}
-
-/// The struct's name→index table from a struct type value, or `None`.
-///
-/// # Invariant
-/// The universe is supplied by the caller: a checker has one, a lowering does
-/// not — [`field_names`] is this reader for that side.
-pub fn struct_names_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> Option<AnyHandle<[TableItem]>>
-where
-    P::Value: ValueType,
-{
-    let (universe_slot, _, table) = struct_term_parts(module, ty)?;
-    is_universe_any(module, universe, universe_slot).then_some(table)
+    Some((
+        items.get(BUFFER_TYPE_ELEMENT_SLOT)?.node,
+        items.get(BUFFER_TYPE_LENGTH_SLOT)?.node,
+    ))
 }
 
 // --- type references and field access ---------------------------------------
@@ -664,132 +595,6 @@ where
     P::Value: AsEnum<LowValue>,
 {
     shape_of(module, ty.term(module)?)
-}
-
-/// The type at field position `k` of a value type. See
-/// `docs/notes/checker-encoding-instability.md`.
-///
-/// # Invariant
-/// A compound type's shape element is an element **slot**, so a field's type is
-/// its type position for every kind. See
-/// `docs/notes/compound-element-slots.md`.
-pub fn field_type<P: Program>(module: &Module<P>, ty: TypeRef, k: usize) -> Option<AnyNodeId>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    let shape = field_list(module, ty)?;
-    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let element = unsafe { array_items(module, shape) }?.get(k)?.node;
-    slot_type(module, element)
-}
-
-/// The **named fields** of a struct type, in field order, or `None`.
-///
-/// # Invariant
-/// The universe is recognised by [`Module::is_self_referential`] — the
-/// `[Type, ↺]` cycle — because the callers that need this (a lowering, which
-/// has no universe handle to pass) are below the checker. The field count is
-/// the shape's own length, so a name whose index maps outside the field list
-/// is dropped rather than growing it.
-pub fn field_names<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<Vec<Option<&'static str>>>
-where
-    P::Value: ValueType,
-{
-    let (universe_slot, shape, table) = struct_term_parts(module, ty.term(module)?)?;
-    if !module.is_self_referential(universe_slot) {
-        return None;
-    }
-    // SAFETY: `shape` is a live node of `module`.
-    let field_count = unsafe { array_items(module, shape) }?.len();
-    let mut names: Vec<Option<&'static str>> = vec![None; field_count];
-    // SAFETY: `table` is the payload of the value read from the live node
-    // named by the marker payload's name slot.
-    for item in unsafe { table.items() } {
-        if let Some((name, index)) = module.name_table_entry(item)
-            && index < field_count
-        {
-            names[index] = Some(name);
-        }
-    }
-    Some(names)
-}
-
-/// The **named fields** and field-type list of the struct type a **slot** names.
-///
-/// # Invariant
-/// The slot's convention stays here: the term is the slot itself, a node that
-/// carries it at its value slot (an apply's answer), or either one as a class
-/// member answers through its representative. A caller above `lowlevel` never
-/// chooses among those spellings.
-pub fn struct_fields<P: Program>(
-    module: &Module<P>,
-    slot: AnyNodeId,
-) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
-where
-    P::Value: ValueType,
-{
-    for slot in type_slot_candidates(module, slot) {
-        for ty in [TypeRef::Term(slot), TypeRef::Slot(slot)] {
-            if let Some(names) = field_names(module, ty)
-                && let Some(shape) = field_list(module, ty)
-            {
-                return Some((names, shape));
-            }
-        }
-    }
-    None
-}
-
-/// The types of a field-type list's entries: an element is a slot, so a field's
-/// type is its type position.
-pub fn field_types<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<Vec<AnyNodeId>>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = unsafe { array_items(module, shape) }?;
-    Some(
-        items
-            .iter()
-            .map(|item| slot_type(module, item.node).unwrap_or(item.node))
-            .collect(),
-    )
-}
-
-/// The type node at `path` inside the struct type a slot names — a leaf's own
-/// type, resolved one field at a time.
-pub fn field_type_at<P: Program>(
-    module: &Module<P>,
-    slot: AnyNodeId,
-    path: &[usize],
-) -> Option<AnyNodeId>
-where
-    P::Value: ValueType,
-{
-    let mut at = slot;
-    for &index in path {
-        let (_, shape) = struct_fields(module, at)?;
-        at = field_types(module, shape)?.get(index).copied()?;
-    }
-    Some(at)
-}
-
-/// The spellings a type **slot** may wear: itself, and — for a class member — its
-/// representative first.
-fn type_slot_candidates<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Vec<AnyNodeId>
-where
-    P::Value: ValueType,
-{
-    let mut candidates = vec![slot];
-    if let AnyNodeId::Dynamic(node) = slot {
-        let representative = module.class_root(node);
-        if representative != node {
-            candidates.push(AnyNodeId::Dynamic(representative));
-        }
-    }
-    candidates
 }
 
 /// The **domain** a kernel function's parameter states, read from its type.
@@ -1006,33 +811,6 @@ where
         return None;
     }
     let marker = node_value(module, kind[KIND_MARKER_SLOT].node)?;
-    if marker == P::Value::tuple_type_marker()
-        || is_struct_marker_any(module, kind[KIND_MARKER_SLOT].node)
-    {
-        // A structure's shape is its positional field list: read as a tuple
-        // (`docs/notes/lowlevel-low-types.md`).
-
-        // SAFETY: `shape` is a live node of `module`; nothing in this crate
-        // calls `Module::drop_block`.
-        let elements = (unsafe { array_items(module, shape) })?;
-        return Some(LowShape::Tuple(
-            elements
-                .iter()
-                .map(|element| {
-                    slot_type(module, element.node).and_then(|ty| low_type_of_slot(module, ty))
-                })
-                .collect(),
-        ));
-    }
-    if marker == P::Value::array_type_marker() {
-        // An undecided element makes the whole shape undecided — a shape nobody
-        // states is not a shape of `None`.
-        return match low_type_of_array(module, shape) {
-            Some((Some(element), length)) => Some(LowShape::Array(Box::new(Some(element)), length)),
-            Some((None, length)) => Some(LowShape::Array(Box::new(None), length)),
-            None => None,
-        };
-    }
     if marker == P::Value::table_type_marker() {
         // A table type's shape is `[key slot, value slot]`.
 
@@ -1099,7 +877,6 @@ where
         || marker == P::Value::array_type_marker()
         || marker == P::Value::table_type_marker()
         || marker == P::Value::function_type_marker()
-        || is_struct_marker_any(module, kind[0].node)
 }
 
 /// The low type an expression's **type slot** names: a backend's seed for a
@@ -1144,33 +921,6 @@ where
         slot = value;
     }
     low_type_of(module, slot)
-}
-
-/// [`low_type_of`]'s array arm; `None` when the length is undecided.
-fn low_type_of_array<P: Program>(
-    module: &Module<P>,
-    shape: AnyNodeId,
-) -> Option<(Option<LowShape>, usize)>
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let parts = unsafe { array_items(module, shape) }?;
-    if parts.len() != 2 {
-        return None;
-    }
-    // An array's element position is a **slot**, so the element type is its type
-    // position.
-    let element = slot_type(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node)
-        .and_then(|ty| low_type_of_slot(module, ty));
-    let LowValue::USize(length) = module
-        .node_value(parts[ARRAY_TYPE_LENGTH_SLOT].node)?
-        .as_enum()?
-    else {
-        return None;
-    };
-    Some((element, length))
 }
 
 // --- diagnostic descent ---------------------------------------------------------

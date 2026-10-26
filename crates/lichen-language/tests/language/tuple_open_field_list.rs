@@ -1,5 +1,5 @@
-//! The tuple printer's undecided-field-list arm; see
-//! docs/notes/index-read-unify.md §7.6.
+//! The tuple type is the shared layout template; the field list lives in the
+//! value. See docs/notes/value-templates.md.
 
 use lichen_highlevel::program::ValueType;
 use lichen_language::compile;
@@ -32,8 +32,8 @@ impl Seed {
         )
     }
 
-    /// `None` leaves the shape slot value-less, which is what opens the list.
-    fn tuple_term(&mut self, fields: Option<&[AnyNodeId]>) -> NodeId {
+    /// A retired `[shape, kind]` tuple term; `None` leaves its field list open.
+    fn retired_tuple_term(&mut self, fields: Option<&[AnyNodeId]>) -> NodeId {
         let marker = self
             .module
             .add_node(self.block, None, Some(LangValue::tuple_type_marker()));
@@ -50,7 +50,7 @@ impl Seed {
 }
 
 fn seed() -> Seed {
-    let report = compile("f = x => x");
+    let report = compile("f := x => x");
     assert!(report.ok(), "the seed checks: {:?}", report.diagnostics);
     let build = report.build.expect("a build");
     Seed {
@@ -60,21 +60,20 @@ fn seed() -> Seed {
     }
 }
 
-/// No program in the language builds this: `f4c2b93a` removed the only
-/// front-end site that constructed one.
+/// A retired open field list prints as raw layout, not `tuple{…}`.
 #[test]
-fn an_undecided_field_list_reads_as_a_cell_beside_an_ellipsis() {
-    // The open arm's spelling, which `cyclic_type_cut.rs` also reaches by a cut.
+fn a_retired_field_list_reads_as_the_raw_layout() {
     let mut seed = seed();
-    let term = seed.tuple_term(None);
-    assert_eq!(print_type(&seed.module, term), "tuple{?a, …}");
+    let term = seed.retired_tuple_term(None);
+    assert_eq!(print_type(&seed.module, term), "raw[?a, Tuple]");
 }
 
-/// A decided field list prints no ellipsis, so the `…` names the arm itself.
+/// The same retired term with a decided field list: the list is a raw array of
+/// cells, and no ellipsis stands beside it.
 #[test]
-fn a_decided_field_list_reads_without_an_ellipsis() {
+fn a_retired_field_list_with_fields_reads_as_the_raw_layout() {
     let mut seed = seed();
     let cell = seed.module.add_node(seed.block, None, None);
-    let term = seed.tuple_term(Some(&[AnyNodeId::Dynamic(cell); 2]));
-    assert_eq!(print_type(&seed.module, term), "tuple{?a, ?a}");
+    let term = seed.retired_tuple_term(Some(&[AnyNodeId::Dynamic(cell); 2]));
+    assert_eq!(print_type(&seed.module, term), "raw[raw[?a, ?a], Tuple]");
 }

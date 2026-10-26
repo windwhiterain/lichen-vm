@@ -1,4 +1,4 @@
-Gauge = _x => struct{.v Int # 32}
-strict = (g : (Gauge _)) => g.v
-Choose = _p => struct{.v Int # _p}
-pick = (g : (Choose _)) => g.v
+Gauge := _x => {.v Int # 32}
+strict := (g <: Gauge) => g.v
+Choose := _p => {.v Int # _p}
+pick := (g <: Choose) => g.v

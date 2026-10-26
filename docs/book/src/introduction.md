@@ -26,11 +26,18 @@ represented as an expr of two graph nodes, its value and its type, and
 it are the same pass. That has three consequences you will meet again
 and again:
 
-- **Types are ordinary values.** `Int`, `Float`, `string`, `Type`, function
-  types, tuple types, and array types can be bound, passed to functions,
-  returned from functions, and stored in data structures. The language has
-  no separate type-level syntax with separate rules.
-- **`Type : Type` holds.** The chain `value → type → kind → …` closes in a
+- **Types are ordinary values.** `Int`, `Float`, `string`, `Type`, the three
+  layout types `Tuple`, `Array` and `Struct`, and a function's own type can
+  be bound, passed to functions, returned from functions, and stored in data
+  structures. The language has no separate type-level syntax with separate
+  rules.
+- **A compound's type says its layout; its value says its shape.** Every
+  tuple's type is `Tuple`, every array's is `Array`, and every struct's is
+  `Struct`. What the tuple's elements are, how long the array is, and what
+  the struct's fields are called are all read from the **value**. A
+  **constructor** is a function that returns a fresh requirement when it is
+  applied, and `<:` applies it once and unifies an actual with the result.
+- **`Type : Type` holds.** The chain `value → type → layout → …` closes in a
   cycle at `Type`, which is the terminal of every chain rather than a
   supertype of everything. There is no subtyping and no kind system: a
   "kinding error" is an ordinary type error. The flip side is that whether
@@ -63,10 +70,10 @@ The book is in four parts:
 1. **Learning lichen** — install, run, and write real programs. This part
    ends with everything a first program needs.
 2. **Values and types** — the model: the value/type expr, laziness, the
-   compound forms (tuples, arrays, structs, tables, sets), and types as
-   values.
+   compound forms (tuples, arrays, structs, tables, sets), the
+   constructors that state their shape, and types as values.
 3. **Types at work** — polymorphism, classes and refinements, recursive and
-   dependent types, attributes, and diagnostics.
+   dependent shapes, attributes, and diagnostics.
 4. **Building programs** — modules and packages, verifying programs, kernels
    and the compute layer, the toolchain, advanced features, and a final
    project.

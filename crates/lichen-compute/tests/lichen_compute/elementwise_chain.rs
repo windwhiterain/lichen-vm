@@ -28,15 +28,15 @@ const COUNT: usize = 8;
 fn scale() -> String {
     format!(
         r#"
-In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParE = struct{{.n Int, .in In}}
-scale_raw = (k : ParE) => {{
-  i = compute.range k.n
-  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
+In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParE := _x => {{.n @any : Int, .in In _}}
+scale_raw := (k <: ParE) => {{
+  i := compute.range k.n
+  e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutE){{.e (compute.write (compute.Write{{.to e, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
 }}
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" (OutE _)
 "#
     )
 }
@@ -55,23 +55,23 @@ fn chain() -> String {
   compute = import "compute.lichen"
 ---
 {scale}
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-consumer_raw = (k : Par2) => {{
-  i = compute.range k.n
-  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - r) ~ "element")) ~ "combine"))
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
+In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+consumer_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  r := (compute.read (compute.Read{{.from k.in.p, .at 0}}) : Float)
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) - r) ~ "element")) ~ "combine"))
+  ((OutZ){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg = struct{{.n Int, .in In}}
-step = (s : GArg) => {{
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
+consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (OutZ _)
+GArg := _x => {{.n @any : Int, .in In _}}
+step := (s <: GArg) => {{
+  first := (compute.plrun scale (compute.A{{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  compute.plrun consumer (compute.A{{.n s.n, .I In2{{.d s.in.d, .p first.e}}}})
 }}
-built = compute.graph step
+built := compute.graph step
 (scale, consumer, built)
 "#
     )
@@ -91,21 +91,21 @@ fn elementwise_chain() -> String {
   compute = import "compute.lichen"
 ---
 {scale}
-In2  = struct{{.p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutF = struct{{.f (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-rescale_raw = (k : Par2) => {{
-  i = compute.range k.n
-  f = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutF)(.f (compute.write ((compute.Write _)(.to f, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) * 3.0) ~ "element"))))))
+In2  := _x => {{.p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutF := _x => {{.f (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+rescale_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  f := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutF){{.f (compute.write (compute.Write{{.to f, .at i, .value (((compute.read (compute.Read{{.from k.in.p, .at i}}) : Float) * 3.0) ~ "element")}}))}})
 }}
-rescale = compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" OutF
-GArg = struct{{.n Int, .in In}}
-step = (s : GArg) => {{
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun rescale ((compute.A In2)(.n s.n, .I In2(.p first.e)))
+rescale := compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" (OutF _)
+GArg := _x => {{.n @any : Int, .in In _}}
+step := (s <: GArg) => {{
+  first := (compute.plrun scale (compute.A{{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  compute.plrun rescale (compute.A{{.n s.n, .I In2{{.p first.e}}}})
 }}
-built = compute.graph step
+built := compute.graph step
 (scale, rescale, built)
 "#
     )

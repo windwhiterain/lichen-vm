@@ -6,11 +6,8 @@ use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_compute::language::new_store;
 use lichen_compute::{ComputeValue, compute::graph};
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
-use lichen_kernel_ir::{
-    BufferSlot, KernelBody, KernelFragment, KernelInstr, Plan, ScalarClass, ScalarData, ValueDef,
-    compose,
-};
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
+use lichen_kernel_ir::{KernelBody, KernelFragment, KernelInstr, Plan, ValueDef, compose};
 use lichen_lowlevel::{AnyNodeId, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
@@ -22,7 +19,7 @@ const ABSORBED: u32 = 1;
 
 #[test]
 fn the_composed_chain_records_the_merged_body() {
-    let (instances, recorded) = compile(SOURCE).expect("the chain compiles");
+    let (instances, _recorded) = compile(SOURCE).expect("the chain compiles");
     let producer = instances[0].fragment.clone();
     let consumer = instances[1].fragment.clone();
 
@@ -196,34 +193,34 @@ const SOURCE: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-L = 8
-In   = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
-OutR = struct{.r (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
-Par  = struct{.n Int, .in In}
-producer_raw = (lane : Par) => {
-  at = compute.range lane.n
-  r = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) + s(1)) ~ "combine")
-  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at at, .value acc (lane.n, 0.0 ~ "identity"))))))
+L := 8
+In   := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length L}))}
+OutR := _x => {.r (compute.Buf (compute.BufParam{.type Float, .length L}))}
+Par  := _x => {.n @any : Int, .in In _}
+producer_raw := (lane <: Par) => {
+  at := compute.range lane.n
+  r := compute.buf (compute.BufParam{.type Float, .length lane.n})
+  @loop acc := s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((compute.read (compute.Read{.from lane.in.d, .at s(0) - 1}) : Float) + s(1)) ~ "combine")
+  ((OutR){.r (compute.write (compute.Write{.to r, .at at, .value acc (lane.n, 0.0 ~ "identity")}))})
 }
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
-In2  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
-OutZ = struct{.z (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
-Par2 = struct{.n Int, .in In2}
-consumer_raw = (lane : Par2) => {
-  running = (compute.read ((compute.Read _)(.from lane.in.p, .at 0)) : Float)
-  at = compute.range lane.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length lane.n))
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) - running) ~ "element")) ~ "combine")
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity"))))))
+producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" (OutR _)
+In2  := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length L})), .p (compute.Buf (compute.BufParam{.type Float, .length L}))}
+OutZ := _x => {.z (compute.Buf (compute.BufParam{.type Float, .length L}))}
+Par2 := _x => {.n @any : Int, .in In2 _}
+consumer_raw := (lane <: Par2) => {
+  running := (compute.read (compute.Read{.from lane.in.p, .at 0}) : Float)
+  at := compute.range lane.n
+  z := compute.buf (compute.BufParam{.type Float, .length lane.n})
+  @loop acc := s => if s(0) == 0 then s(1) else acc (s(0) - 1, (max s(1) (((compute.read (compute.Read{.from lane.in.d, .at s(0) - 1}) : Float) - running) ~ "element")) ~ "combine")
+  ((OutZ){.z (compute.write (compute.Write{.to z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity")}))})
 }
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
-  first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
-  compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
+consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutZ _)
+GArg := _x => {.n @any : Int, .in In _}
+step := (s <: GArg) => {
+  first := (compute.plrun producer (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun consumer (compute.A{.n s.n, .I In2{.d s.in.d, .p first.r}})
 }
-built = compute.graph step
+built := compute.graph step
 (producer, consumer, built)
 "#;
 

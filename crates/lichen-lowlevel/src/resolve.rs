@@ -446,6 +446,22 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether references share an equality class; equal content is not enough
+    /// across dynamic and frozen references.
+    pub fn same_class(&self, a: AnyNodeId, b: AnyNodeId) -> bool {
+        match (a, b) {
+            (AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b)) => {
+                self.class_root(a) == self.class_root(b)
+            }
+            (AnyNodeId::Static(a), AnyNodeId::Static(b)) if a.module == b.module => {
+                let module = self.static_module(a.module);
+                crate::static_module::static_find(&module.nodes, a.index)
+                    == crate::static_module::static_find(&module.nodes, b.index)
+            }
+            _ => false,
+        }
+    }
+
     /// The **type** half of a `[value, type]` expr node, as the expr's own reference.
     pub fn expr_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of `self`.

@@ -1,9 +1,10 @@
 ---
   order = "5"
   std = import "../lichen-std/_.lichen"
-  output = "(Int, Type, Int, array{Int, 2}, Type, 5): tuple{Type, Type, Type, TypeArray, Type, Int}"
+  output = "(Int, Type, Int, Array, Type, 5): Tuple"
 ---
-f = std.type_of
-g = x => std.type_of x
-n = 5 : std.type_of (1)
-(std.type_of (1), f Int, g 2, std.type_of [1, 2], std.type_of Type, n)
+Any2 := _x => [@any, 2]
+f := std.type_of
+g := x => std.type_of x
+n := 5 : std.type_of (1)
+(std.type_of (1), f Int, g 2, std.type_of Any2[1, 2], std.type_of Type, n)

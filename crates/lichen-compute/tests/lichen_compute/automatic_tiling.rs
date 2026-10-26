@@ -70,25 +70,25 @@ fn declared() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Par = struct{{.n Int, .in In}}
-Arg = struct{{.n Int, .I In}}
-GA  = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+Arg := _x => {{.n @any : Int, .I In _}}
+GA  := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
 }}
-kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step = (s : GA) => {{
-  compute.plrun kernel ((Arg)(.n s.n, .I In(.b s.in.b))) : Out
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
+step := (s <: GA) => {{
+  compute.plrun kernel ((Arg){{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
-built = compute.graph step
+built := compute.graph step
 {fill}
-data = (compute.plrun filler ((Fill)(.n {count})) : Data)
-out = compute.collect (compute.graphrun built ({count}, data.b))
+data := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)
+out := compute.collect (compute.graphrun built ({count}, data.b))
 out
 "#,
         fill = filled(),
@@ -106,14 +106,14 @@ out
 fn filled() -> String {
     format!(
         r#"
-Data = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {count})))}}
-Fill = struct{{.n Int}}
-fill = (c : Fill) => {{
-  i = compute.range c.n
-  b = compute.buf ((compute.BufParam _)(.type Float, .length {count}))
-  ((Data)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (int2float i + 1.0))))))
+Data := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
+Fill := _x => {{.n @any : Int}}
+fill := (c <: Fill) => {{
+  i := compute.range c.n
+  b := compute.buf (compute.BufParam{{.type Float, .length {count}}})
+  ((Data){{.b (compute.write (compute.Write{{.to b, .at i, .value (int2float i + 1.0)}}))}})
 }}
-filler = compute.parallel fill "cpu" Data
+filler := compute.parallel fill "cpu" (Data _)
 "#,
         count = COUNT,
     )
@@ -196,7 +196,7 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
 
     // The pass, installed from the program's own module, and the same program again.
     install_tiling(&module);
-    let (tiled_module, tiled_value, _root) = common::run(&source);
+    let (tiled_module, _tiled_value, _root) = common::run(&source);
     assert!(
         reports_a_tiling(&pass_report(&tiled_module)),
         "the pass reports the node it tiled and the algebra its own marks declared: {:?}",
@@ -349,7 +349,7 @@ fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
 
     // The floor, installed from that program's own module, and the same program again.
     install_floor(&module);
-    let (floored_module, floored_value, _root) = common::run(&source);
+    let (floored_module, _floored_value, _root) = common::run(&source);
     let report = pass_report(&floored_module);
     println!("the floor's run reported:\n  {}", report.join("\n  "));
 

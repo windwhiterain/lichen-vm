@@ -1,10 +1,10 @@
 ---
   order = "3"
-  output = "tuple{Type, Int} => Int: tuple{Type, Int} -> Int"
+  output = "Tuple => Int: Tuple => Int"
 ---
-f1 = x => x : Int
-f2 = x => {
-    x: tuple{Type, _}
+f1 := x => x : Int
+f2 := x => {
+    x <: (_x => (@any : Type, @any : _))
     f1 x(1)
 }
 f2

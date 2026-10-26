@@ -269,6 +269,13 @@ impl<P: Program> StaticModule<P> {
             key,
             nodes,
             functions,
+            apply_result_owners: module
+                .apply_result_owners
+                .iter()
+                .filter_map(|(value, apply)| {
+                    Some((node_map.get(value).copied()?, node_map.get(apply).copied()?))
+                })
+                .collect(),
             arena,
             attribute_layouts: module.attribute_layouts.clone(),
             default_attributes: module

@@ -11,15 +11,15 @@ A diagnostic names what went wrong, points at the source, and marks the
 column:
 
 ```lichen
-1 + "a"
+5 : Float
 ```
 
 ```text
-error: expected Int, found string
-  --> 1:5
+error: expected Float, found Int
+  --> 1:1
    |
- 1 | 1 + "a"
-   |     ^
+ 1 | 5 : Float
+   | ^
 ```
 
 Read it as three parts. The first line is the message: what was expected
@@ -46,16 +46,16 @@ error: unexpected character '@'
    |
  1 | @
    | ^
-error: expected a separator, 'return', 'pub', '@loop', 'cache', 'let', a name, '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program
-  --> 1:2
+error: expected a separator, 'return', 'pub', '@loop', '@cache', 'let', a name, '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program
+  --> 2:1
    |
- 1 | @
-   |  ^
+ 2 |
+   | ^
 error: the program could not be parsed
-  --> 1:2
+  --> 2:1
    |
- 1 | @
-   |  ^
+ 2 |
+   | ^
 ```
 
 One character produced three diagnostics, and the reason is the pipeline's
@@ -68,7 +68,7 @@ next property.
 ```
 
 ```text
-error: expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', or an expression, found the end of the program
+error: expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', or an expression, found a separator
   --> 1:4
    |
  1 | 3 :
@@ -97,15 +97,20 @@ error: unresolved name 'y'
 messages quote types, and it is the one most diagnostics come from:
 
 ```lichen
-5 : Float
+(5 : Float, "a" : Int)
 ```
 
 ```text
 error: expected Float, found Int
-  --> 1:1
+  --> 1:2
    |
- 1 | 5 : Float
-   | ^
+ 1 | (5 : Float, "a" : Int)
+   |  ^
+error: expected Int, found string
+  --> 1:13
+   |
+ 1 | (5 : Float, "a" : Int)
+   |             ^
 ```
 
 **Preprocessing** — a failure while reading the header block or importing a
@@ -139,23 +144,6 @@ error: unresolved name 'z'
    |     ^
 ```
 
-```lichen
-(1 + "a", 2 + "b")
-```
-
-```text
-error: expected Int, found string
-  --> 1:6
-   |
- 1 | (1 + "a", 2 + "b")
-   |      ^
-error: expected Int, found string
-  --> 1:15
-   |
- 1 | (1 + "a", 2 + "b")
-   |               ^
-```
-
 The lexer's recovery explains the rest of the `@` example's output: the
 skipped character leaves a gap, the parser reports what it expected at the
 gap, and the parse failure itself is reported once at the end of the
@@ -173,8 +161,9 @@ read:
 - `?a`, `?b` — open cells (Chapter 5). Cells in one unification class share
   a name, so two `?a`s in one message are the same cell.
 - `…` — a cycle cut (Chapter 12), never a truncation.
-- `struct{.x Int}#11` — a struct type's nominal identity (Chapter 8). Two
-  `#id`s are two types, however identical their fields look.
+- `expected Table, found Table` — two structs whose name tables differ, so
+  two nominal types (Chapter 8). The message names the table because the
+  table is where a struct's field names live.
 - `raw` — the printer's mark for a value whose **decided** type cannot be
   read as a form (an undecided value prints its cell's `?a`, the same name
   its type shows); it is a defect, never an answer (Chapter 5).
@@ -186,6 +175,9 @@ read:
   whose callee is not a function.
 - `table lookup missed — no entry for key 9` — a lookup that has no entry
   (Chapter 9).
+- `this tuple read cannot be checked: the container's type is not decided
+  here` — a read of a value whose layout the program never stated
+  (Chapter 7).
 
 The rule behind the list is that positions and values are named, never
 invented: a diagnostic quotes the source and the types the checker
@@ -197,19 +189,19 @@ actually holds.
 and fails the program otherwise. Its value and type are `e`'s:
 
 ```lichen
-n = 5
+n := 5
 (@assert (n <= 5), n)
 ```
 
 ```text
-(1, 5): tuple{Int, Int}
+(1, 5): Tuple
 ```
 
 The first tuple element is the comparison's value, `1`; the assert checked
 that it is `1` and passed it through. A condition that is not `1` fails:
 
 ```lichen
-n = 0
+n := 0
 @assert (n > 0)
 n
 ```
@@ -230,7 +222,7 @@ A condition inside a function is checked per application, because the
 parameter is decided per application. This holds:
 
 ```lichen
-f = x => { @assert (x > 0); x }
+f := x => { @assert (x > 0); x }
 f 1
 ```
 
@@ -241,16 +233,16 @@ f 1
 and this does not:
 
 ```lichen
-f = x => { @assert (x > 0); x }
+f := x => { @assert (x > 0); x }
 f 0
 ```
 
 ```text
 error: assertion failed: expected 1, found 0
-  --> 1:12
+  --> 1:13
    |
- 1 | f = x => { @assert (x > 0); x }
-   |            ^
+ 1 | f := x => { @assert (x > 0); x }
+   |             ^
 ```
 
 The diagnostic points at the assert, not at the call, because the assert
@@ -283,7 +275,7 @@ A refused computation is not a diagnostic (Chapter 6):
 ```
 
 ```text
-(none, 1): tuple{Int, Int}
+(none, 1): Tuple
 ```
 
 `1 / 0` has no value, so it answers `none` — with a reason the compiler
@@ -295,20 +287,17 @@ that could not be computed.
 ## One honest limit
 
 Almost every diagnostic has a position, but not all of them do. When the
-failing expression sits inside a desugared branch — an `if`'s untaken arm,
-for example — the position may not survive:
-
-```lichen
-if 1 == 1 then 1 else [1, 2][5]
-```
+failing check sits inside a part the compiler *built* rather than read —
+the elements of an array instance, for example — the position may not
+survive:
 
 ```text
 error: the build failed, but the failing check could not be attributed to an expression in this source
 ```
 
-The program is still refused — correctly, because the index is out of
-bounds — but the message says it could not be placed rather than guessing
-a position. This is the compiler's honest failure, not its normal one.
+The program is still refused — correctly, because the check inside it failed
+— but the message says it could not be placed rather than guessing a
+position. This is the compiler's honest failure, not its normal one.
 
 ## Summary
 
@@ -318,7 +307,7 @@ a position. This is the compiler's honest failure, not its normal one.
   which one refused the program.
 - The pipeline recovers, so one run reports as many problems as it can.
 - The message vocabulary is `expected`/`found`, open cells `?a`, cycle cuts
-  `…`, nominal ids `#id`, `raw`, notes, and suggestions.
+  `…`, a differing name table, `raw`, notes, and suggestions.
 - `@assert e` requires `e` to be `1`, passes its value through, binds
   between application and the binary operators, and a function's asserts
   are re-checked per application.
@@ -334,8 +323,8 @@ a position. This is the compiler's honest failure, not its normal one.
    each stage from its message.
 3. Write a function whose assert holds at one argument and fails at
    another.
-4. Explain the difference between `1 / 0` and `[1, 2][5]` in terms of what
-   stops the build.
+4. Explain the difference between `1 / 0` and `([@any : Int, 2][1, 2])[5]`
+   in terms of what stops the build.
 5. Read a diagnostic that contains `?a` and say which two positions share
    the cell.
 6. Write an assert whose condition is a comparison and one whose condition

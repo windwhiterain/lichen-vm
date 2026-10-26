@@ -7,7 +7,8 @@ use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
 use lichen_highlevel::shape;
 use lichen_lowlevel::codec::{OperatorCodec, Reader, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, ArrayItem, ArrayValue, BlockId, LowValue, Module, OperatorExt, Program,
+    AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic, LowValue, Module, NodeId,
+    OperatorExt, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -64,16 +65,42 @@ where
             };
             // SAFETY: `array` is the operand value's payload; its home block is
             // alive for all of `run`, so the slice stays valid.
+            let input = unsafe { array.items() };
+            let template = *input.first()?;
+            let element_type = input
+                .get(shape::ARRAY_VALUE_ELEMENT_BASE)
+                .and_then(|item| shape::slot_type(module, item.node))
+                .or_else(|| shape::slot_type(module, template.node));
             let mut values: Vec<usize> = Vec::new();
-            for item in unsafe { array.items() }.iter() {
+            for item in input
+                .get(shape::ARRAY_VALUE_ELEMENT_BASE..)
+                .unwrap_or_default()
+            {
                 // A compound element is a slot: the value is its first position.
                 let Some(element) = module.element_value_node(item.node) else {
-                    continue;
+                    return None;
                 };
-                if let Some(LowValue::USize(n)) =
-                    module.node_value(element).and_then(|value| value.as_enum())
+                let value = match module
+                    .evaluate_node_deep_ref(element, Some(block))
+                    .or_else(|| module.node_value(element))
                 {
-                    values.push(n);
+                    Some(value) => value,
+                    None => {
+                        return None;
+                    }
+                };
+                match value.as_enum() {
+                    Some(LowValue::USize(n)) => values.push(n),
+                    Some(LowValue::Error) => return Some(P::Value::from(LowValue::Error)),
+                    Some(LowValue::Any) => return None,
+                    _ => {
+                        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+                            "std.sort",
+                            None,
+                            "std.sort expects an array of Int elements".to_string(),
+                        ));
+                        return None;
+                    }
                 }
             }
             values.sort_unstable();
@@ -83,7 +110,13 @@ where
             let indices: Vec<u32> =
                 (0..width.saturating_sub(shape::EXPR_ATTR_BASE) as u32).collect();
             let layout = module.layout_with_indices(&indices)?;
-            let mut items: Vec<ArrayItem> = Vec::with_capacity(values.len());
+            let element_type = element_type.map(|node| module.as_dynamic(node, block));
+            let mut items: Vec<ArrayItem> = Vec::with_capacity(values.len() + 1);
+            // Preserve the input's element template, length, and template marker.
+            items.push(ArrayItem {
+                template: template.template,
+                ..ArrayItem::new(template.node)
+            });
             for n in values {
                 let value = module.add_node(
                     block,
@@ -92,7 +125,7 @@ where
                 );
                 let mut slot = vec![ArrayItem::new(AnyNodeId::Dynamic(value))];
                 slot.push(ArrayItem::new(AnyNodeId::Dynamic(
-                    module.add_node(block, None, None),
+                    element_type.unwrap_or_else(|| module.add_node(block, None, None)),
                 )));
                 for _ in indices.iter() {
                     let any = module.add_node(
@@ -117,6 +150,23 @@ where
                 handle.into(),
             )))
         })()
+    }
+
+    /// Evaluate even with open `@any` type cells; elements decide laziness.
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: BlockId,
+        module: &mut Module<P>,
+    ) -> Option<P::Value> {
+        let value = match operand {
+            Some(node) => {
+                module.evaluate_node_deep(node, Some(block));
+                module.node_value(AnyNodeId::Dynamic(node))?
+            }
+            None => P::Value::from(LowValue::Error),
+        };
+        self.run(value, block, module)
     }
 }
 

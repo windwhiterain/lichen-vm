@@ -83,12 +83,20 @@ struct ApplyCtx<'a> {
     parameter: NodeId,
     /// The parameter expr's value slot: re-minted per call, and never carried into.
     parameter_slot: Option<NodeId>,
+    /// Whether this walk is instantiating the parameter; wildcard cells become holes only here.
+    in_parameter: bool,
     /// Template keys a minted walk inserted; the enclosing pass drops them with the
     /// mint, so it groups only its own clones.
     minted_keys: Option<&'a mut Vec<NodeId>>,
     /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
     /// a closure's fresh id.
     tag: Option<FunctionId>,
+    /// The closure memo: a cell's own closure, and the reach it is on.
+    ///
+    /// # Invariant
+    /// One entry per cell the pass judges, so the proof runs once per cell and
+    /// a cycle among decided cells is settled by the first verdict.
+    closure: HashMap<NodeId, Option<bool>>,
     remap: &'a mut HashMap<NodeId, NodeId>,
     /// A source [`FunctionId`] → the fresh closure this walk minted for it.
     ///
@@ -143,26 +151,35 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
-        let Some(instantiation) =
-            self.instantiate(function, argument, block, node, ParameterCheck::Value)
-        else {
-            // A failed parameter check leaves the apply's result unknown:
-            // the body must not run under a mismatched argument.
+        let template = self.functions[function].template.unwrap_or(function);
+        if self.report_type_side_failures && self.value_templates.contains(&template) {
             return None;
-        };
-        let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
-        // A closure's type cell is the call's own; the expr sync below owns the verdict.
-        if let Some(cell) = cell
-            && let Some(codomain) = self.expr_type_item(instantiation.applied)
-        {
-            self.evaluate_node(codomain, Some(block));
-            if !self.is_function_type_ref(codomain) {
-                let before = self.unify_errors.len();
-                self.unify_ref(cell, codomain);
-                self.unify_errors.truncate(before);
-            }
         }
-        self.wire_apply_result(node, result, instantiation.applied, block)
+        self.value_templates.insert(template);
+        let result = (|| {
+            let Some(instantiation) =
+                self.instantiate(function, argument, block, node, ParameterCheck::Value)
+            else {
+                // A failed parameter check leaves the apply's result unknown:
+                // the body must not run under a mismatched argument.
+                return None;
+            };
+            let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
+            // A closure's type cell is the call's own; the expr sync below owns the verdict.
+            if let Some(cell) = cell
+                && let Some(codomain) = self.expr_type_item(instantiation.applied)
+            {
+                self.evaluate_node(codomain, Some(block));
+                if !self.is_function_type_ref(codomain) {
+                    let before = self.unify_errors.len();
+                    self.unify_ref(cell, codomain);
+                    self.unify_errors.truncate(before);
+                }
+            }
+            self.wire_apply_result(node, result, instantiation.applied, block)
+        })();
+        self.value_templates.remove(&template);
+        result
     }
 
     /// Apply a function's **type** where its value is not concrete yet.
@@ -202,7 +219,7 @@ impl<P: Program> Module<P> {
         let applied = instantiation.applied;
         // The clone's return expr: the applied call's own expr, which states the
         // attribute as the source return does.
-        self.applied_exprs.insert(node, applied);
+        self.record_applied_expr(node, applied);
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
         // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
@@ -265,6 +282,60 @@ impl<P: Program> Module<P> {
                 false
             }
         }
+    }
+
+    /// Resolve a wildcard constructor to the implementation inferred for this instantiation.
+    pub fn resolve_constructor(&self, function: AnyFunctionId) -> AnyFunctionId {
+        let mut current = function;
+        for _ in 0..64 {
+            let Some(next) = self.constructor_bindings.get(&current).copied() else {
+                break;
+            };
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        current
+    }
+
+    /// Whether `function` is `_x => _`: an open result independent of its parameter.
+    pub(crate) fn is_wildcard_constructor(&self, function: AnyFunctionId) -> bool {
+        let function = match function {
+            AnyFunctionId::Dynamic(function) => function,
+            AnyFunctionId::Static(function) => {
+                let module = self.static_module(function.module);
+                return crate::static_module::static_wildcard_constructor(&module, function);
+            }
+        };
+        let Some(function) = self.functions.get(function) else {
+            return false;
+        };
+        let function = function;
+        if !self.nodes.contains_key(function.r#return)
+            || !self.nodes.contains_key(function.parameter)
+            || !self.nodes.contains_key(function.return_type)
+        {
+            return false;
+        }
+        let Some(return_value) = self.expr_value_half(function.r#return) else {
+            return false;
+        };
+        let Some(parameter_value) = self.expr_value_half(function.parameter) else {
+            return false;
+        };
+        let Some(parameter_type) = self.expr_type_half(function.parameter) else {
+            return false;
+        };
+        let return_type = function.return_type;
+        if !self.nodes.contains_key(return_type) {
+            return false;
+        }
+        let open = |node| self.nodes[node].operation.is_none() && self.class_value(node).is_none();
+        open(return_value)
+            && open(return_type)
+            && self.class_root(return_value) != self.class_root(parameter_value)
+            && self.class_root(return_type) != self.class_root(parameter_type)
     }
 
     /// Instantiate `function`'s template for `argument`: clone the return expr, then
@@ -331,15 +402,19 @@ impl<P: Program> Module<P> {
             applied: function,
             parameter,
             parameter_slot,
+            in_parameter: false,
             minted_keys: None,
             tag: self.nodes[node].function,
+            closure: HashMap::new(),
             remap: &mut remap,
             minted: &mut minted,
         };
         // The parameter is a walk entry point: its unify fires even when the body
         // never references it.  Idempotent.
-        let applied = self.node_apply(r#return, &mut ctx);
+        ctx.in_parameter = true;
         self.node_apply(parameter, &mut ctx);
+        ctx.in_parameter = false;
+        let applied = self.node_apply(r#return, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
@@ -356,14 +431,18 @@ impl<P: Program> Module<P> {
         }
         // The clone is unified with the argument, not replaced by it, so the binding propagates.
         if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-            // Re-establish the template's class topology among the fresh singleton clones.
+            // Re-establish the template's class topology among the fresh singleton
+            // clones — among the plain cells only.
             if ctx.remap.len() > 1 {
                 let groups = crate::apply::regroup_clones(
                     ctx.remap
                         .iter()
                         .map(|(&template, &clone)| (template, clone)),
                     |template| disjoint::find(&mut self.nodes, template),
-                );
+                )
+                .into_iter()
+                .filter(|(_, clone)| crate::apply::clone_is_a_plain_cell(self, *clone))
+                .collect();
                 crate::apply::unify_clone_groups(groups, |first, clone| {
                     self.unify(first, clone);
                 });
@@ -476,6 +555,32 @@ impl<P: Program> Module<P> {
         image
     }
 
+    /// The template root a clone instantiates: the top of its origin chain.
+    ///
+    /// # Invariant
+    /// The chain stops at a released origin: the origin edge is not a keep-alive
+    /// edge, so the collector may take the node it names, and the last live node
+    /// of the chain is the template root then. A live node's own block outlives
+    /// it, so the root's block is a live block.
+    fn template_root(&self, node: NodeId, origin: Option<NodeId>) -> NodeId {
+        let mut root = node;
+        let mut next = origin;
+        let mut hops = 0;
+        while let Some(origin) = next {
+            // The chain stops where the collector took the node.
+            if !self.nodes.contains_key(origin) {
+                break;
+            }
+            root = origin;
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+            next = self.nodes[root].origin;
+        }
+        root
+    }
+
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
@@ -494,9 +599,14 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        // One shared node: each reach mints its own undecided cell, never a cached one.
+        // A wildcard is carried into ordinary values; a parameter template
+        // receives a fresh undecided cell instead.
         if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
-            return self.add_node(ctx.target, None, None);
+            let fresh = self.add_node(ctx.target, None, None);
+            if !ctx.in_parameter {
+                self.write_node_value(fresh, value);
+            }
+            return fresh;
         }
         // A closure is instantiated from its template, whose body a clone never names.
         let member = self.template_member(function, ctx)
@@ -510,20 +620,7 @@ impl<P: Program> Module<P> {
         // The clone computes the same thing, so the source's class low type seeds it.
         let low_shape = self.class_low_shape(node);
         // The template root a clone instantiates, whose block may still be a scope.
-        let template_root = {
-            let mut root = node;
-            let mut next = origin;
-            let mut hops = 0;
-            while let Some(origin) = next {
-                root = origin;
-                hops += 1;
-                if hops > 64 {
-                    break;
-                }
-                next = self.nodes[root].origin;
-            }
-            root
-        };
+        let template_root = self.template_root(node, origin);
         // Only a template's own fact is proven; a computed value is that call's.
         let template_decided = template_root == node
             || (self.nodes[template_root].value.is_some()
@@ -534,15 +631,22 @@ impl<P: Program> Module<P> {
             && operation.is_none()
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
+        // A **closed** cell is shared: decided content, closed all the way down.
+        let rehomed = matches!(
+            value.and_then(|value| value.as_enum()),
+            Some(LowValue::Function(_))
+        );
+        let closed = !rehomed && self.template_content_is_closed(node, None, &mut ctx.closure);
         // A scope's content is this call's; a clone of a scope's node is scoped too.
         let scoped = self.blocks[block].parent.is_some()
             || self.blocks[self.nodes[template_root].block]
                 .parent
                 .is_some();
         // Judged against the call's anchor, so one call gives a node one answer.
-        let depends_on_parameter = node == ctx.parameter
+        let depends_on_parameter = ctx.in_parameter
+            || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
-            || !proven_concrete
+            || (!proven_concrete && !closed)
             || scoped
             || self.value_holds_foreign_function(value, ctx.anchor);
         if !depends_on_parameter {
@@ -606,6 +710,23 @@ impl<P: Program> Module<P> {
             && mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
         self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
+        if self.nodes[clone]
+            .operation
+            .as_ref()
+            .is_some_and(|operation| {
+                matches!(
+                    AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                    Some(crate::LowOperator::Apply)
+                )
+            })
+            && let Some(value) = self.expr_value_half(clone)
+        {
+            self.apply_result_owners.insert(value, clone);
+        }
+        if let Some(owner) = self.apply_result_owners.get(&node).copied() {
+            let owner = self.node_apply(owner, ctx);
+            self.apply_result_owners.insert(clone, owner);
+        }
         // A clone is a singleton class here, so the slot write *is* the class write.
         self.nodes[clone].low_shape = low_shape;
         // A mark is **not** copied onto the clone: the anchor handoff is
@@ -646,23 +767,39 @@ impl<P: Program> Module<P> {
                 P::Value::from(LowValue::Array(items_addressed))
             }
             Some(LowValue::Table(table)) => {
-                // The entry nodes clone like array items; the stored hash travels verbatim.
-
+                // A remap that changes no entry preserves the table's identity.
+                let mut changed = false;
                 // SAFETY: `table` is `value`'s live payload and this pass releases no block.
                 let items: Vec<TableItem> = unsafe { table.items() }
                     .iter()
-                    .map(|&item| TableItem {
-                        key: match item.key {
+                    .map(|&item| {
+                        let key = match item.key {
                             AnyNodeId::Static(_) => item.key,
                             Dyn(node) => Dyn(self.node_apply(node, ctx)),
-                        },
-                        value: match item.value {
+                        };
+                        let value = match item.value {
                             AnyNodeId::Static(_) => item.value,
                             Dyn(node) => Dyn(self.node_apply(node, ctx)),
-                        },
-                        hash: item.hash,
+                        };
+                        let key_is_unchanged = matches!(
+                            (self.node_value(key), self.node_value(item.key)),
+                            (Some(mapped), Some(original)) if mapped == original
+                        );
+                        let value_is_unchanged = matches!(
+                            (self.node_value(value), self.node_value(item.value)),
+                            (Some(mapped), Some(original)) if mapped == original
+                        );
+                        changed |= !key_is_unchanged || !value_is_unchanged;
+                        TableItem {
+                            key,
+                            value,
+                            hash: item.hash,
+                        }
                     })
                     .collect();
+                if !changed {
+                    return value;
+                }
                 P::Value::from(LowValue::Table(self.alloc_table(&items, target)))
             }
             // A static function value is frozen: its captures are static, so it is referenced in
@@ -732,8 +869,10 @@ impl<P: Program> Module<P> {
                     applied: function,
                     parameter,
                     parameter_slot,
+                    in_parameter: false,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
+                    closure: HashMap::new(),
                     remap: ctx.remap,
                     minted,
                 };

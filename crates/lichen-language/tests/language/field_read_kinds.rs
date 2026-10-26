@@ -49,8 +49,11 @@ fn undecided_read(source: &str, form: &str) -> Option<(u32, u32)> {
 #[test]
 fn a_paren_read_of_a_deferred_array_is_refused_at_the_read() {
     assert_eq!(
-        undecided_read("f = x => x(0)\nf [10, 20]", "tuple read"),
-        Some((1, 5)),
+        undecided_read(
+            "f := x => x(0)\nA := _x => [@any, 2]\nf A[10, 20]",
+            "tuple read"
+        ),
+        Some((1, 6)),
         "the caret is the container, not the read"
     );
 }
@@ -58,10 +61,10 @@ fn a_paren_read_of_a_deferred_array_is_refused_at_the_read() {
 /// A decided container is refused where it stands, naming both **kinds**.
 #[test]
 fn a_paren_read_of_a_decided_array_is_refused() {
-    let (message, kind) = refused("l = [10, 20]\nl(0)");
+    let (message, kind) = refused("A := _x => [@any, 2]\nl := A[10, 20]\nl(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
-        message.contains("TypeTuple") && message.contains("TypeArray"),
+        message.contains("Tuple") && message.contains("Array"),
         "the same stated requirement: {message}"
     );
 }
@@ -69,10 +72,11 @@ fn a_paren_read_of_a_decided_array_is_refused() {
 /// A struct instance is not a tuple, and its fields are read by name.
 #[test]
 fn a_paren_read_of_a_struct_instance_is_refused() {
-    let (message, kind) = refused("S = struct{.x Int, .y Type}\ns = S(.x 1, .y Int)\ns(0)");
+    let (message, kind) =
+        refused("S := _x => {.x @any : Int, .y @any : Type}\ns := S{.x 1, .y Int}\ns(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
-        message.contains("TypeTuple") && message.contains("TypeStruct"),
+        message.contains("Tuple") && message.contains("Struct"),
         "the requirement is the tuple kind, the found side the struct's: {message}"
     );
 }
@@ -80,67 +84,66 @@ fn a_paren_read_of_a_struct_instance_is_refused() {
 /// The read itself is unaffected: a tuple's slot reads, at any arity.
 #[test]
 fn a_paren_read_of_a_tuple_resolves() {
-    assert_eq!(output("l = (10, 20)\nl(0)"), "10: Int");
-    assert_eq!(output("l = (10, 20, 30)\nl(2)"), "30: Int");
+    assert_eq!(output("l := (10, 20)\nl(0)"), "10: Int");
+    assert_eq!(output("l := (10, 20, 30)\nl(2)"), "30: Int");
 }
 
 /// The array read is the mirror, refused on a tuple. The parameter's written
 /// type is what decides the container.
 #[test]
 fn a_bracket_read_of_a_tuple_is_refused() {
-    let (message, kind) = refused("f = (x : tuple{Int, Int}) => x[0]\nf (10, 20)");
+    let (message, kind) =
+        refused("T := _x => (@any : Int, @any : Int)\nf := (x <: T) => x[0]\nf (10, 20)");
     assert_eq!(
         kind,
         DiagKind::Guard,
         "the same decided tier the tuple read uses"
     );
     assert!(
-        message.contains("expected TypeArray") && message.contains("TypeTuple"),
+        message.contains("expected Array") && message.contains("Tuple"),
         "the array requirement refuses a tuple: {message}"
     );
 }
 
 // --- every struct field is named -----------------------------------------
 
-/// An unnamed field has no read, so the definition is refused.
+/// An unnamed brace group is a block, not a struct instance, so it checks.
 #[test]
 fn an_unnamed_struct_field_is_refused() {
-    let report = compile("A = struct{Int, Type}\nA");
-    assert!(!report.ok(), "the definition is refused");
-    let first = &report.diagnostics[0];
-    assert_eq!(
-        first.check.as_ref().expect("a checker diagnostic").kind,
-        DiagKind::StructFieldName
+    let report = compile("A := {Int, Type}\nA");
+    assert!(
+        report.ok(),
+        "the brace group is a block: {:?}",
+        report.diagnostics
     );
-    assert_eq!(first.span, Some((1, 12)), "the caret is the unnamed field");
 }
 
 /// A block's fields are its bindings; a bare expression is an ordinary statement.
 #[test]
 fn a_bare_expression_in_a_block_is_not_a_field() {
-    assert_eq!(output("a = { 1; x = 2 }\na"), "(2,): struct{.x Int}");
-    assert_eq!(output("a = { 1; x = 2 }\na.x"), "2: Int");
+    assert_eq!(output("a := { 1; x := 2 }\na"), "(2,): Struct");
+    assert_eq!(output("a := { 1; x := 2 }\na.x"), "2: Int");
 }
 
 /// The named forms are untouched, and a struct instance reads by name.
 #[test]
 fn a_named_struct_and_a_named_block_read_by_name() {
     assert_eq!(
-        output("A = struct{.f Int, .g Type}\na = A(.f 1, .g Type)\n(a.f, a.g)"),
-        "(1, Type): tuple{Int, Type}"
+        output("A := _x => {.f @any : Int, .g @any : Type}\na := A{.f 1, .g Type}\n(a.f, a.g)"),
+        "(1, Type): Tuple"
     );
     assert_eq!(
-        output("a = { x = 1; y = Int }\n(a.x, a.y)"),
-        "(1, Int): tuple{Int, Type}"
+        output("a := { x := 1; y := Int }\n(a.x, a.y)"),
+        "(1, Int): Tuple"
     );
 }
 
 /// `.a` states the container's kind; an array is not a struct.
 #[test]
 fn a_named_read_of_an_array_is_refused() {
-    let (message, kind) = refused("l = [10, 20]\nl.a");
+    let (message, kind) = refused("A := _x => [@any, 2]\nl := A[10, 20]\nl.a");
     assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeStruct, found TypeArray");
+    assert_eq!(message, "expected Struct, found Array");
 }
 
 // --- the deferred `.a`: no read until the container's type is decided ------
@@ -150,8 +153,11 @@ fn a_named_read_of_an_array_is_refused() {
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
     assert_eq!(
-        undecided_read("f = x => x.a\nf [10, 20]", "field read"),
-        Some((1, 5)),
+        undecided_read(
+            "f := x => x.a\nA := _x => [@any, 2]\nf A[10, 20]",
+            "field read",
+        ),
+        Some((1, 6)),
         "the caret is the container, not the read"
     );
 }
@@ -161,14 +167,16 @@ fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
 #[test]
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
-        output("S = struct{.a Int, .b string}\nf = (x : S) => x.a\nf (S(.a 1, .b \"h\"))"),
+        output(
+            "S := _x => {.a @any : Int, .b @any : string}\nf := (x <: S) => x.a\nf (S{.a 1, .b \"h\"})"
+        ),
         "1: Int"
     );
     // A block's type is decided where it stands; its struct type is nominal
     // per occurrence, so no annotation names it.
     assert_eq!(
-        output("k = { a = 1; b = 2 }\n(k.a, k.b)"),
-        "(1, 2): tuple{Int, Int}"
+        output("k := { a := 1; b := 2 }\n(k.a, k.b)"),
+        "(1, 2): Tuple"
     );
 }
 
@@ -176,10 +184,10 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
 /// has a read.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
-    for source in ["f = x => x.a\nf (1, 2)", "f = x => x.a\nf 5"] {
+    for source in ["f := x => x.a\nf (1, 2)", "f := x => x.a\nf 5"] {
         assert_eq!(
             undecided_read(source, "field read"),
-            Some((1, 5)),
+            Some((1, 6)),
             "{source:?} names the container the read would have used"
         );
     }

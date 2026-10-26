@@ -29,16 +29,16 @@ fn producer() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Gate  = struct{{.g (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-SiluA = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParA  = struct{{.n Int, .in Gate}}
-silu_raw = (k : ParA) => {{
-  i = compute.range k.n
-  g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
-  a = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((SiluA)(.a (compute.write ((compute.Write _)(.to a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element"))))))
+Gate  := _x => {{.g (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+SiluA := _x => {{.a (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParA  := _x => {{.n @any : Int, .in Gate _}}
+silu_raw := (k <: ParA) => {{
+  i := compute.range k.n
+  g := (compute.read (compute.Read{{.from k.in.g, .at i}}) : Float)
+  a := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((SiluA){{.a (compute.write (compute.Write{{.to a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")}}))}})
 }}
-silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
+silu := compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" (SiluA _)
 silu
 "#
     )

@@ -14,7 +14,7 @@ type ShipsDoc = Doc<LangProgram>;
 fn statement_values_report_type_and_concrete_value() {
     // `x` and `y` are statements; the trailing `y` is the final expression and
     // is NOT a statement root.
-    let doc = ShipsDoc::new("x = 3\ny = x + 4\ny\n");
+    let doc = ShipsDoc::new("x := 3\ny := x + 4\ny\n");
     let vals = doc.statement_values();
     assert_eq!(
         vals.len(),
@@ -22,11 +22,11 @@ fn statement_values_report_type_and_concrete_value() {
         "x and y are the two statements; got {vals:#?}"
     );
 
-    // x = 3 → type Int, value "3": a literal is a concrete value at check time.
+    // x := 3 → type Int, value "3": a literal is a concrete value at check time.
     assert!(vals[0].ty.contains("Int"), "x type = {:?}", vals[0].ty);
     assert_eq!(vals[0].value.as_deref(), Some("3"));
 
-    // y = x + 4 → type Int, no value: a routed operator is a lazy call
+    // y := x + 4 → type Int, no value: a routed operator is a lazy call
     // (`docs/notes/operator-polymorphism.md` §7.1).
     assert!(vals[1].ty.contains("Int"), "y type = {:?}", vals[1].ty);
     assert_eq!(
@@ -37,12 +37,12 @@ fn statement_values_report_type_and_concrete_value() {
 
 #[test]
 fn statement_at_finds_the_containing_statement() {
-    let doc = ShipsDoc::new("x = 3\ny = x + 4\ny\n");
-    // byte offset 0 is inside `x = 3`.
+    let doc = ShipsDoc::new("x := 3\ny := x + 4\ny\n");
+    // byte offset 0 is inside `x := 3`.
     let s0 = doc.statement_at(0).expect("first statement at offset 0");
     assert_eq!(s0.value.as_deref(), Some("3"));
-    // `x = 3\n` is 6 bytes, so offset 6 starts `y = x + 4`; no value, as above.
-    let s1 = doc.statement_at(6).expect("second statement at offset 6");
+    // `x := 3\n` is 7 bytes, so offset 7 starts `y := x + 4`; no value, as above.
+    let s1 = doc.statement_at(7).expect("second statement at offset 7");
     assert!(s1.ty.contains("Int"), "y type = {:?}", s1.ty);
     assert_eq!(
         s1.value, None,
@@ -54,24 +54,24 @@ fn statement_at_finds_the_containing_statement() {
 fn a_lazy_binding_reports_type_but_no_value() {
     // `paradox` is referenced only in an unselected `if` branch: its value
     // stays deferred, so the snapshot reports `None`.
-    let source = "U = Type
-D = (x => x) Type
-sb = A => r => a => z => r (z A r) a
-le = i => x => x (A => r => a => i (sb A r a))
-induct = i => x => (le i x) -> (i x)
-WF = z => if 1 then 5 else induct (z U le)
-I = x => D -> Int
-omega = i => y => y WF (x => y (sb U le x))
-lemma = x => p => q => q I p (i => q (y => i (sb U le y)))
-lemma2 = x => (x I lemma) (i => x (y => i (sb U le y)))
-paradox = lemma2 omega
+    let source = "U := Type
+D := (x => x) Type
+sb := A => r => a => z => r (z A r) a
+le := i => x => x (A => r => a => i (sb A r a))
+induct := i => x => (p : (le i x) => _ : (i x))
+WF := z => if 1 then 5 else induct (z U le)
+I := x => (d : D => _ : Int)
+omega := i => y => y WF (x => y (sb U le x))
+lemma := x => p => q => q I p (i => q (y => i (sb U le y)))
+lemma2 := x => (x I lemma) (i => x (y => i (sb U le y)))
+paradox := lemma2 omega
 if 0 then (paradox : Int) else 5";
     let doc = ShipsDoc::new(source);
     let vals = doc.statement_values();
     // The `paradox` binding is the last statement (the `if` is the final expr).
     let paradox = vals.last().expect("a paradox statement");
     assert!(
-        paradox.ty.contains("Int") || paradox.ty.contains("->"),
+        paradox.ty.contains("Int") || paradox.ty.contains("=>"),
         "paradox type = {:?}",
         paradox.ty
     );
@@ -92,22 +92,10 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
-    // Check decides `k_double`'s cells; `k_outer`'s `.O` stays open (`raw none`).
-    for (sv, (value, ty)) in vals.iter().zip([
-        (
-            "(raw none, Int, Int)",
-            "struct{.native raw[?a, ?b], .I Type, .O Type}",
-        ),
-        (
-            "(raw none, Int, raw none)",
-            "struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}",
-        ),
-    ]) {
-        // The two field values are type constants, so their own types name them.
-        assert_eq!(sv.value.as_deref(), Some(value), "value = {:?}", sv.value);
-        // The type is read where it is decided: the input and output fields hold
-        // types, so their own type is the universe.
-        assert_eq!(sv.ty, ty, "type = {:?}", sv.ty);
+    // Deferred native kernels have no value and open call-result type cells.
+    for sv in vals {
+        assert_eq!(sv.ty, "?a", "the native result type is open: {sv:?}");
+        assert_eq!(sv.value, None, "the native result is deferred: {sv:?}");
     }
 
     // The hover on the `k_double` binding renders the snapshot's `value : type`.
@@ -117,11 +105,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
             character: 0,
         })
         .expect("hover on k_double");
-    assert_eq!(
-        hover,
-        "`k_double` — `(raw none, Int, Int) : \
-         struct{.native raw[?a, ?b], .I Type, .O Type}`"
-    );
+    assert_eq!(hover, "`k_double` — `?a`");
 }
 
 /// The named type variables (`?a`, …) a rendered line mentions, in order.
@@ -161,44 +145,34 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_cache(source, Some(&dir), None, &native_packages());
 
-    // `jit` at line 5 (0-based): "k_double = compute.jit (y : Int => y + y)" —
-    // char 19.
+    // `jit` at line 5 (0-based): "k_double := compute.jit (y : Int => y + y)" —
+    // char 20.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 5,
-            character: 19,
+            character: 20,
         })
         .expect("hover on `jit`");
-    // The same twelve cells are named twice: the value's signature, then the type.
-
-    // A frozen module's type lambdas claim cells first, so the letters begin
-    // wherever they begin.
+    assert!(hover.contains(".jit"), "the hover names `jit`: {hover}");
+    assert!(hover.contains("=>"), "the signature uses `=>`: {hover}");
+    assert!(
+        hover.contains("Struct"),
+        "the kernel type is the layout: {hover}"
+    );
+    assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
+    assert!(
+        !hover.contains("raw[Function"),
+        "the function is not raw: {hover}"
+    );
     let cells = type_variables(&hover);
     assert_eq!(
         cells.len(),
-        24,
-        "jit names twelve cells twice, once per half: {hover}"
+        2,
+        "jit names its input and output cells: {hover}"
     );
-    for half in [0, 12] {
-        assert_eq!(
-            (&cells[half + 8], &cells[half + 9]),
-            (&cells[half + 1], &cells[half + 2]),
-            "`.I`'s domain and codomain are the parameter's own cells: {hover}"
-        );
-        assert_eq!(
-            (&cells[half + 10], &cells[half + 11]),
-            (&cells[half + 4], &cells[half + 5]),
-            "`.O`'s domain and codomain are the return's own cells: {hover}"
-        );
-        assert_ne!(
-            cells[half],
-            cells[half + 1],
-            "the wrapper's two arguments are distinct cells: {hover}"
-        );
-    }
-    assert!(
-        hover.contains(".I") && hover.contains(".O") && !hover.contains(".sig"),
-        "a kernel's signature is named as the struct's `.I`/`.O` fields: {hover}"
+    assert_ne!(
+        cells[0], cells[1],
+        "the wrapper's input and output cells are distinct: {hover}"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.
@@ -210,15 +184,26 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 9,
         })
         .expect("hover on `launch`");
+    assert!(
+        hover.contains(".launch"),
+        "the hover names `launch`: {hover}"
+    );
+    assert!(
+        hover.contains("Struct =>"),
+        "the kernel parameter is a struct: {hover}"
+    );
+    assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
     let cells = type_variables(&hover);
-    // The type alone: each codomain repeats its domain's cells by name.
-    assert_eq!(
-        cells.len(),
-        12,
-        "launch names the kernel struct's cells in its type: {hover}"
+    assert!(
+        cells.len() >= 2,
+        "the symbolic codomain keeps named cells: {hover}"
     );
     let mut distinct = cells.clone();
     distinct.sort();
     distinct.dedup();
-    assert_eq!(distinct.len(), 8, "the type names its own cells: {hover}");
+    assert_eq!(
+        distinct.len(),
+        cells.len(),
+        "the symbolic codomain does not merge distinct cells: {hover}"
+    );
 }

@@ -66,13 +66,13 @@ about this model in full.)
 ## Statements, separators, and the tail
 
 A program is a **block**: a sequence of statements followed, optionally,
-by a tail expression. A statement is either a binding (`name = expr`) or a
-bare expression. The block's value is its tail, so the following program
+by a tail expression. A statement is either a binding (`name := expr`) or
+a bare expression. The block's value is its tail, so the following program
 has the value of `x + y`:
 
 ```lichen
-x = 2
-y = 3
+x := 2
+y := 3
 x + y
 ```
 
@@ -87,11 +87,11 @@ Statements are separated by a newline, a semicolon, or a comma. All three
 lex to the same separator, so these programs are identical:
 
 ```lichen
-x = 2; y = 3; x + y
+x := 2; y := 3; x + y
 ```
 
 ```lichen
-x = 2, y = 3, x + y
+x := 2, y := 3, x + y
 ```
 
 The quantity of separators never matters: blank lines and trailing
@@ -101,22 +101,27 @@ middle of an expression. An expression ends where a separator begins, so
 a lambda body has to start on the same line as its `=>`. Chapter 3 goes
 through the consequences.
 
-A binding is not an assignment. `x = 2` gives the name `x` the value of
+A binding is not an assignment. `x := 2` gives the name `x` the value of
 the expression `2`, and every use of the name is that same value, shared
 as one node in the program's graph. A name may be bound again in the same
 block only with care, and a function may call itself only as a call;
 Chapter 3 states the rules.
 
+> **Note**: the binding operator is `:=`, and `=` is a different thing
+> entirely: `=` *unifies* two expressions, asking them to agree
+> (Chapter 5). The two never overlap — a name on the left of `:=` is a
+> binding, and `=` is written between two expressions.
+
 A program that ends in a binding, with no tail expression, is a **record
 program**: its value is an anonymous struct of its bindings.
 
 ```lichen
-a = 1
-b = 2
+a := 1
+b := 2
 ```
 
 ```text
-(1, 2): struct{.a Int, .b Int}
+(1, 2): Struct
 ```
 
 That shape is how a lichen library file exports its names; Chapter 8
@@ -176,6 +181,7 @@ directory works (Chapter 16).
 
 - A lichen program is a block: statements, then an optional tail. Its value
   is the tail's value.
+- A binding is `name := expr`; `=` is the unify of two expressions.
 - The compiler prints `value: type`, because every expression is an expr.
 - Newlines, semicolons, and commas are all the same separator.
 - There are no comments; prose lives in the `---...---` header block.

@@ -76,7 +76,7 @@ fn a_table_arrow_separates_a_table_entry() {
 #[test]
 fn arrows_and_punctuation() {
     assert_eq!(
-        kinds("(a, b) : A -> B <3>"),
+        kinds("(a, b) : A ==> B <3>"),
         vec![
             TokenKind::LParen,
             TokenKind::Name("a".to_string()),
@@ -84,7 +84,7 @@ fn arrows_and_punctuation() {
             TokenKind::RParen,
             TokenKind::Colon,
             TokenKind::Name("A".to_string()),
-            TokenKind::Arrow,
+            TokenKind::TableArrow,
             TokenKind::Name("B".to_string()),
             TokenKind::LAngle,
             TokenKind::Int(3),
@@ -95,7 +95,7 @@ fn arrows_and_punctuation() {
 }
 
 #[test]
-fn int_and_type_are_keywords_but_not_prefixes() {
+fn the_type_constants_are_keywords_but_not_prefixes() {
     assert_eq!(
         kinds("Int Type Int2 int"),
         vec![
@@ -103,6 +103,17 @@ fn int_and_type_are_keywords_but_not_prefixes() {
             TokenKind::KwType,
             TokenKind::Name("Int2".to_string()),
             TokenKind::Name("int".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+    // Builtin templates are keywords; longer names stay names.
+    assert_eq!(
+        kinds("Tuple Array Struct Tuple2"),
+        vec![
+            TokenKind::KwTuple,
+            TokenKind::KwArray,
+            TokenKind::KwStruct,
+            TokenKind::Name("Tuple2".to_string()),
             TokenKind::Eof,
         ]
     );
@@ -212,6 +223,16 @@ fn operators_and_keywords_lex() {
             TokenKind::Eof,
         ]
     );
+    // `:=` is one token, distinct from `:` and `=`.
+    assert_eq!(
+        kinds("a := 1"),
+        vec![
+            TokenKind::Name("a".to_string()),
+            TokenKind::ColonEquals,
+            TokenKind::Int(1),
+            TokenKind::Eof,
+        ]
+    );
 }
 
 #[test]
@@ -225,6 +246,16 @@ fn angle_brackets_lex_as_their_own_tokens() {
             TokenKind::RAngle,
             TokenKind::Name("a".to_string()),
             TokenKind::RAngle,
+            TokenKind::Name("b".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+    // `<:` is one token, distinct from `<` and `<==`.
+    assert_eq!(
+        kinds("a <: b"),
+        vec![
+            TokenKind::Name("a".to_string()),
+            TokenKind::TemplateUnify,
             TokenKind::Name("b".to_string()),
             TokenKind::Eof,
         ]
@@ -434,6 +465,32 @@ fn glue_marks_a_glued_delimiter_only() {
             TokenKind::LParen,
             TokenKind::Int(1),
             TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
+    // The brace glues too: it is the struct instance's delimiter.
+    assert_eq!(
+        kinds_all("S{.a 1}"),
+        vec![
+            TokenKind::Name("S".to_string()),
+            TokenKind::Glue,
+            TokenKind::LBrace,
+            TokenKind::Dot,
+            TokenKind::Name("a".to_string()),
+            TokenKind::Int(1),
+            TokenKind::RBrace,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds_all("S {.a 1}"),
+        vec![
+            TokenKind::Name("S".to_string()),
+            TokenKind::LBrace,
+            TokenKind::Dot,
+            TokenKind::Name("a".to_string()),
+            TokenKind::Int(1),
+            TokenKind::RBrace,
             TokenKind::Eof,
         ]
     );

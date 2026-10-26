@@ -41,32 +41,32 @@ fn program() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {ELEMENTS})))}}
-OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-ParE = struct{{.n Int, .in In}}
-scale_raw = (k : ParE) => {{
-  i = compute.range k.n
-  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
+In  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {ELEMENTS}}}))}}
+OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParE := _x => {{.n @any : Int, .in In _}}
+scale_raw := (k <: ParE) => {{
+  i := compute.range k.n
+  e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutE){{.e (compute.write (compute.Write{{.to e, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
 }}
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {ELEMENTS}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
-Par2 = struct{{.n Int, .in In2}}
-expr_raw = (k : Par2) => {{
-  i = compute.range k.n
-  left = (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)
-  right = (compute.read ((compute.Read _)(.from k.in.p, .at i + 1)) : Float)
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((left + right) ~ "element"))))))
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" (OutE _)
+In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {ELEMENTS}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := _x => {{.n @any : Int, .in In2 _}}
+expr_raw := (k <: Par2) => {{
+  i := compute.range k.n
+  left := (compute.read (compute.Read{{.from k.in.p, .at i}}) : Float)
+  right := (compute.read (compute.Read{{.from k.in.p, .at i + 1}}) : Float)
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  ((OutZ){{.z (compute.write (compute.Write{{.to z, .at i, .value ((left + right) ~ "element")}}))}})
 }}
-expr = compute.parallel (expr_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg = struct{{.n Int, .in In}}
-step = (s : GArg) => {{
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  compute.plrun expr ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
+expr := compute.parallel (expr_raw ~ "claim:Elementwise(element)") "gpu" (OutZ _)
+GArg := _x => {{.n @any : Int, .in In _}}
+step := (s <: GArg) => {{
+  first := (compute.plrun scale (compute.A{{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  compute.plrun expr (compute.A{{.n s.n, .I In2{{.d s.in.d, .p first.e}}}})
 }}
-built = compute.graph step
+built := compute.graph step
 "#
     )
 }
@@ -83,7 +83,7 @@ fn recording() -> String {
 /// The recording as a program that runs it and answers, over `elements` data elements.
 fn running_recording(elements: usize) -> String {
     format!(
-        "{recording}\ncount = ({count})\n{fill}data = (compute.plrun filler ((Fill)(.n {elements})) : In)\nout = \
+        "{recording}\ncount := ({count})\n{fill}data :=  (compute.plrun filler ((Fill){{.n {elements}}}) : Struct)\nout := \
          compute.collect (compute.graphrun built (count, data.d))\nout\n",
         recording = recording(),
         fill = fill(elements),
@@ -101,13 +101,13 @@ fn running_recording(elements: usize) -> String {
 fn fill(elements: usize) -> String {
     format!(
         r#"
-Fill = struct{{.n Int}}
-fill_raw = (c : Fill) => {{
-  i = compute.range c.n
-  y = compute.buf ((compute.BufParam _)(.type Float, .length {elements}))
-  ((In)(.d (compute.write ((compute.Write _)(.to y, .at i, .value {table})))))
+Fill := _x => {{.n @any : Int}}
+fill_raw := (c <: Fill) => {{
+  i := compute.range c.n
+  y := compute.buf (compute.BufParam{{.type Float, .length {elements}}})
+  ((In){{.d (compute.write (compute.Write{{.to y, .at i, .value {table}}}))}})
 }}
-filler = compute.parallel fill_raw "cpu" In
+filler := compute.parallel fill_raw "cpu" (In _)
 "#,
         table = table(elements),
     )
@@ -448,7 +448,7 @@ fn the_merge_copies_the_producer_cone_once_per_read_at_that_read_s_address() {
 /// composed body says which node the device dispatched. `DEFINED` is how many leading elements
 /// both runs define; a test with no device returns without asserting.
 fn device_triple() {
-    let name = std::thread::current()
+    let _name = std::thread::current()
         .name()
         .unwrap_or("recompute_reads")
         .to_string();

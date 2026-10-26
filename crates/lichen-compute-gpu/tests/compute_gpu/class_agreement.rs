@@ -239,6 +239,14 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
              value for the emitter to have a class for",
         ),
         (
+            "OutputReadCall",
+            "an output read's class is the class of the **output buffer** it names, and this \
+             guard's fragment declares its one output in the module's class on purpose — the \
+             class that must not be reported — so the emitter answers the module's class where \
+             the instruction states its own, and the guard would read its own setup as a \
+             disagreement",
+        ),
+        (
             "BufferAtomicAddCall",
             "the atomic's, for the same reason and by the same shape: `produces()` is 0 and the \
              emission allocates the result id SPIR-V requires without pushing a slot for it, so \
@@ -291,6 +299,7 @@ fn every_variant() -> Vec<(&'static str, KernelInstr)> {
         KernelInstr::Sin,
         KernelInstr::Cos,
         KernelInstr::BufferReadCall(ScalarClass::Int),
+        KernelInstr::OutputReadCall(ScalarClass::Int),
         KernelInstr::BufferWriteCall(ScalarClass::Int),
         KernelInstr::BufferAtomicAddCall(ScalarClass::Int),
         KernelInstr::SliceReadCall(ScalarClass::Int),

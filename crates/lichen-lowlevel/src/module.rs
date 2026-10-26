@@ -67,6 +67,8 @@ impl<P: Program> Module<P> {
             full_width_layout: None,
             element_types: HashMap::new(),
             applied_exprs: HashMap::new(),
+            apply_result_owners: HashMap::new(),
+            constructor_bindings: HashMap::new(),
             apply_exprs: HashMap::new(),
             applied_parameters: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
@@ -93,6 +95,7 @@ impl<P: Program> Module<P> {
             pattern_seen: Vec::new(),
             stamp_depth: 0,
             deep_depth: 0,
+            value_templates: HashSet::new(),
             budget_exhausted: None,
             report_type_side_failures: false,
             // The empty layout is entry 0 from the first moment, so a plain value array's

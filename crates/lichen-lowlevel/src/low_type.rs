@@ -118,6 +118,8 @@ impl<P: Program> Module<P> {
                 };
                 (*value).clone()
             }
+            // `Unify(actual, _)` yields the actual expression's type.
+            LowOperator::Unify => self.low_type_of_node(self.operand_at(node, 0)?),
             // A loaded library's entry states no class: its result is opaque here.
             LowOperator::External { .. } => return None,
         }

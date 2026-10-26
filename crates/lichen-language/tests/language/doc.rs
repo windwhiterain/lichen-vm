@@ -6,15 +6,15 @@ use super::common;
 use lichen_language::compile;
 use lichen_language::run::evaluate;
 
-/// `Doc = struct{.name string, .description string}` — a user-made 2-field
-/// struct.
-const DOC: &str = "Doc = struct{.name string, .description string}\n";
+/// `Doc := _x => {.name @any : string, .description @any : string}` — a
+/// user-made 2-field struct.
+const DOC: &str = "Doc := _x => {.name @any : string, .description @any : string}\n";
 
 /// The doc rides the expression's attribute slot, not its value.
 #[test]
 fn a_doc_annotation_evaluates_cleanly() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}5 ? Doc(.name \"five\", .description \"an int\")"
+        "{DOC}5 ? Doc{{.name \"five\", .description \"an int\"}}"
     ));
     assert_eq!(common::usize_of(&value), 5);
 }
@@ -23,7 +23,7 @@ fn a_doc_annotation_evaluates_cleanly() {
 #[test]
 fn a_doc_argument_to_a_plain_function_is_accepted() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}f = x => x\nf (7 ? Doc(.name \"seven\", .description \"x\"))"
+        "{DOC}f := x => x\nf (7 ? Doc{{.name \"seven\", .description \"x\"}})"
     ));
     assert_eq!(common::usize_of(&value), 7);
 }
@@ -32,7 +32,7 @@ fn a_doc_argument_to_a_plain_function_is_accepted() {
 #[test]
 fn a_doc_annotation_never_reports_a_diagnostic() {
     assert!(compile(&format!(
-        "{DOC}(1 ? Doc(.name \"x\", .description \"a\"), 2 ? Doc(.name \"y\", .description \"b\"))"
+        "{DOC}(1 ? Doc{{.name \"x\", .description \"a\"}}, 2 ? Doc{{.name \"y\", .description \"b\"}})"
     ))
     .ok());
 }
@@ -42,7 +42,7 @@ fn a_doc_annotation_never_reports_a_diagnostic() {
 fn a_doc_annotation_overrides_a_prior_one() {
     assert!(
         compile(&format!(
-            "{DOC}a = 5 ? Doc(.name \"a\", .description \"first\")\nb = a ? Doc(.name \"b\", .description \"second\")\nb"
+            "{DOC}a := 5 ? Doc{{.name \"a\", .description \"first\"}}\nb := a ? Doc{{.name \"b\", .description \"second\"}}\nb"
         ))
         .ok(),
         "re-annotating a doc'd value must not error"
@@ -53,7 +53,7 @@ fn a_doc_annotation_overrides_a_prior_one() {
 #[test]
 fn a_doc_rides_a_struct_definition() {
     let src = format!(
-        "{DOC}Point = struct{{.x Int, .y Int}} ? Doc(.name \"Point\", .description \"a point\")\n(Point, Point(1, 2))"
+        "{DOC}Point := _x => {{.x @any : Int, .y @any : Int}} ? Doc{{.name \"Point\", .description \"a point\"}}\n(Point, Point{{.x 1, .y 2}})"
     );
     assert!(
         compile(&src).ok(),
@@ -65,7 +65,7 @@ fn a_doc_rides_a_struct_definition() {
 #[test]
 fn two_differing_docs_in_one_array_do_not_conflict() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}[1 ? Doc(.name \"x\", .description \"a\"), 2 ? Doc(.name \"y\", .description \"b\")][0]"
+        "{DOC}A := _x => [@any, 2]\nA[1 ? Doc{{.name \"x\", .description \"a\"}}, 2 ? Doc{{.name \"y\", .description \"b\"}}][0]"
     ));
     assert_eq!(common::usize_of(&value), 1);
 }
@@ -76,7 +76,7 @@ fn two_differing_docs_in_one_array_do_not_conflict() {
 fn a_perspective_and_a_doc_coexist_on_one_expression() {
     assert!(
         compile(&format!(
-            "{DOC}f = x # 4 => x\nf (5 # 4 ? Doc(.name \"five\", .description \"a\"))"
+            "{DOC}f := x # 4 => x\nf (5 # 4 ? Doc{{.name \"five\", .description \"a\"}})"
         ))
         .ok(),
         "a matching perspective with a doc must check"
@@ -87,7 +87,7 @@ fn a_perspective_and_a_doc_coexist_on_one_expression() {
 #[test]
 fn reinterpret_the_perspective_replaces_it_and_preserves_the_doc() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}(5 # 8 ? Doc(.name \"five\", .description \"a\")) # 4"
+        "{DOC}(5 # 8 ? Doc{{.name \"five\", .description \"a\"}}) # 4"
     ));
     assert_eq!(common::usize_of(&value), 5);
 }
@@ -97,7 +97,7 @@ fn reinterpret_the_perspective_replaces_it_and_preserves_the_doc() {
 #[test]
 fn reinterpret_the_doc_preserves_the_perspective() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}(5 # 8 ? Doc(.name \"a\", .description \"first\")) ? Doc(.name \"b\", .description \"second\")"
+        "{DOC}(5 # 8 ? Doc{{.name \"a\", .description \"first\"}}) ? Doc{{.name \"b\", .description \"second\"}}"
     ));
     assert_eq!(common::usize_of(&value), 5);
 }
@@ -106,7 +106,7 @@ fn reinterpret_the_doc_preserves_the_perspective() {
 #[test]
 fn a_perspective_added_to_a_doc_value_keeps_the_doc() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}(5 ? Doc(.name \"five\", .description \"a\")) # 4"
+        "{DOC}(5 ? Doc{{.name \"five\", .description \"a\"}}) # 4"
     ));
     assert_eq!(common::usize_of(&value), 5);
 }
@@ -117,7 +117,7 @@ fn a_perspective_added_to_a_doc_value_keeps_the_doc() {
 fn a_broader_perspective_requirement_does_not_weaken_a_doc() {
     assert!(
         !compile(&format!(
-            "{DOC}(5 # 4 ? Doc(.name \"five\", .description \"a\")) # 8"
+            "{DOC}(5 # 4 ? Doc{{.name \"five\", .description \"a\"}}) # 8"
         ))
         .ok(),
         "the perspective constraint must still reject a mismatched requirement"
@@ -130,7 +130,7 @@ fn a_broader_perspective_requirement_does_not_weaken_a_doc() {
 fn a_doc_does_not_weaken_a_perspective_mismatch() {
     assert!(
         !compile(&format!(
-            "{DOC}f = x # 4 => x\nf (5 # 2 ? Doc(.name \"five\", .description \"a\"))"
+            "{DOC}f := x # 4 => x\nf (5 # 2 ? Doc{{.name \"five\", .description \"a\"}})"
         ))
         .ok(),
         "the perspective constraint must still reject a mismatched argument"
@@ -141,7 +141,7 @@ fn a_doc_does_not_weaken_a_perspective_mismatch() {
 #[test]
 fn a_partial_doc_is_a_struct_arity_error() {
     assert!(
-        !compile(&format!("{DOC}5 ? Doc(.name \"five\")")).ok(),
+        !compile(&format!("{DOC}5 ? Doc{{.name \"five\")")).ok(),
         "a Doc missing its .description field must be an arity error"
     );
 }
@@ -153,12 +153,15 @@ fn attributes_render_only_when_present() {
     assert_eq!(evaluate("5").unwrap(), "5: Int");
     assert_eq!(evaluate("5 # 4").unwrap(), "5 # 4: Int");
     assert_eq!(
-        evaluate(&format!("{DOC}5 ? Doc(.name \"five\", .description \"a\")")).unwrap(),
+        evaluate(&format!(
+            "{DOC}5 ? Doc{{.name \"five\", .description \"a\"}}"
+        ))
+        .unwrap(),
         "5 ? name = \"five\", description = \"a\": Int"
     );
     assert_eq!(
         evaluate(&format!(
-            "{DOC}5 # 4 ? Doc(.name \"five\", .description \"a\")"
+            "{DOC}5 # 4 ? Doc{{.name \"five\", .description \"a\"}}"
         ))
         .unwrap(),
         "5 # 4 ? name = \"five\", description = \"a\": Int"

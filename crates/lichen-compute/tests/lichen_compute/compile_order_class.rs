@@ -29,36 +29,36 @@ use lichen_utils::extend::AsEnum;
 /// No parameter carries an `.out` group: the body declares its buffer with
 /// `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
-QK = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
-Scored = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
-ParS = struct{.n Int, .keys Int, .dim Int, .in QK}
-ArgS = struct{.n Int, .keys Int, .dim Int, .I QK}
-scores_raw = (k : ParS) => {
-  i = compute.range k.n
-  query = compute.row k
-  key = compute.col k
-  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.q, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((Scored)(.s (compute.write ((compute.Write _)(.to z, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element"))))))
+QK := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 192}))}
+Scored := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 192}))}
+ParS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .in QK _}
+ArgS := _x => {.n @any : Int, .keys @any : Int, .dim @any : Int, .I QK _}
+scores_raw := (k <: ParS) => {
+  i := compute.range k.n
+  query := compute.row k
+  key := compute.col k
+  @loop dot := s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read (compute.Read{.from k.in.q, .at (query * k.dim + s(0) - 1)}) : Float) * (compute.read (compute.Read{.from k.in.q, .at (key * k.dim + s(0) - 1)}) : Float)) ~ "combine")
+  z := compute.buf (compute.BufParam{.type Float, .length k.n})
+  ((Scored){.s (compute.write (compute.Write{.to z, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")}))})
 }
-scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
-QSV = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
-OutA = struct{.o (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
-ParA = struct{.n Int, .dim Int, .keys Int, .in QSV}
-ArgA = struct{.n Int, .dim Int, .keys Int, .I QSV}
-attend_raw = (k : ParA) => {
-  i = compute.range k.n
-  query = compute.row k
-  column = compute.col k
-  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) ~ "element")) ~ "combine")
-  m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
-  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
-  denominator = den (k.keys, 0.0 ~ "identity")
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  ((OutA)(.o (compute.write ((compute.Write _)(.to z, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element"))))))
+scores := compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (Scored _)
+QSV := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 192})), .v (compute.Buf (compute.BufParam{.type Float, .length 192}))}
+OutA := _x => {.o (compute.Buf (compute.BufParam{.type Float, .length 192}))}
+ParA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .in QSV _}
+ArgA := _x => {.n @any : Int, .dim @any : Int, .keys @any : Int, .I QSV _}
+attend_raw := (k <: ParA) => {
+  i := compute.range k.n
+  query := compute.row k
+  column := compute.col k
+  @loop top := s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) ~ "element")) ~ "combine")
+  m := top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
+  @loop den := s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) - m) ~ "element")) ~ "combine")
+  denominator := den (k.keys, 0.0 ~ "identity")
+  @loop acc := s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read (compute.Read{.from k.in.s, .at (query * k.keys + s(0) - 1)}) : Float) - m) ~ "element") * (compute.read (compute.Read{.from k.in.v, .at ((s(0) - 1) * k.dim + column)}) : Float)) ~ "combine", s(2))
+  z := compute.buf (compute.BufParam{.type Float, .length k.n})
+  ((OutA){.o (compute.write (compute.Write{.to z, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")}))})
 }
-attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutA
+attend := compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (OutA _)
 "#;
 
 /// The same two kernels, and nothing that dispatches them.
@@ -77,13 +77,13 @@ const CONTROL: &str = "(scores, attend)\n";
 /// `step` names `attend` in its body and `compute.graph` forces both kernels while
 /// the recording is open, so this module compiles them in the opposite order to
 /// [`CONTROL`] over byte-identical kernel declarations.
-const STEP: &str = r#"QKV = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .k (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
-GArg = struct{.lanes Int, .on Int, .keys Int, .dim Int, .in QKV}
-step = (a : GArg) => {
-  scale = (compute.plrun scores ((ArgS)(.n a.lanes, .keys a.keys, .dim a.dim, .I QK(.q a.in.q))) : Scored)
-  (compute.plrun attend ((ArgA)(.n a.on, .dim a.dim, .keys a.keys, .I QSV(.s scale.s, .v a.in.v))) : OutA)
+const STEP: &str = r#"QKV := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length 192})), .k (compute.Buf (compute.BufParam{.type Float, .length 192})), .v (compute.Buf (compute.BufParam{.type Float, .length 192}))}
+GArg := _x => {.lanes @any : Int, .on @any : Int, .keys @any : Int, .dim @any : Int, .in QKV _}
+step := (a <: GArg) => {
+  scale := (compute.plrun scores ((ArgS){.n a.lanes, .keys a.keys, .dim a.dim, .I QK{.q a.in.q}}) : Struct)
+  (compute.plrun attend ((ArgA){.n a.on, .dim a.dim, .keys a.keys, .I QSV{.s scale.s, .v a.in.v}}) : Struct)
 }
-built = compute.graph step
+built := compute.graph step
 built
 "#;
 

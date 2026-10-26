@@ -24,7 +24,7 @@ fn unclosed_clause(message: &str) -> Option<&str> {
 
 #[test]
 fn an_unclosed_paren_names_the_delimiter_and_the_line_it_was_opened_on() {
-    let diag = first_diagnostic("x = (1 +\n2\n");
+    let diag = first_diagnostic("x := (1 +\n2\n");
     assert_eq!(
         unclosed_clause(&diag.message),
         Some("unclosed '(' opened on line 1"),
@@ -35,7 +35,7 @@ fn an_unclosed_paren_names_the_delimiter_and_the_line_it_was_opened_on() {
 
 #[test]
 fn an_unclosed_brace_names_the_delimiter_and_the_line_it_was_opened_on() {
-    let diag = first_diagnostic("x = { a = 1;\n");
+    let diag = first_diagnostic("x := { a := 1;\n");
     assert_eq!(
         unclosed_clause(&diag.message),
         Some("unclosed '{' opened on line 1"),
@@ -46,7 +46,7 @@ fn an_unclosed_brace_names_the_delimiter_and_the_line_it_was_opened_on() {
 
 #[test]
 fn an_unclosed_bracket_names_the_delimiter_and_the_line_it_was_opened_on() {
-    let diag = first_diagnostic("x = [1,\n");
+    let diag = first_diagnostic("x := [1, 0,\n");
     assert_eq!(
         unclosed_clause(&diag.message),
         Some("unclosed '[' opened on line 1"),
@@ -57,7 +57,7 @@ fn an_unclosed_bracket_names_the_delimiter_and_the_line_it_was_opened_on() {
 
 #[test]
 fn the_open_line_is_the_line_the_delimiter_stands_on_not_the_line_it_ends() {
-    let diag = first_diagnostic("x = 1;\ny = (2 +\n3\n");
+    let diag = first_diagnostic("x := 1;\ny := (2 +\n3\n");
     assert_eq!(
         unclosed_clause(&diag.message),
         Some("unclosed '(' opened on line 2"),
@@ -80,10 +80,10 @@ fn the_head_of_a_cascade_names_the_unclosed_delimiter_when_a_later_one_does() {
 
 #[test]
 fn a_balanced_delimiter_never_reports_as_unclosed() {
-    assert!(diagnostics("x = (1 + 2)").is_empty());
-    assert!(diagnostics("x = [1, 2]").is_empty());
-    assert!(diagnostics("x = { a = 1; }").is_empty());
-    for diag in diagnostics("x = (1) + [2] * { a = 3; }") {
+    assert!(diagnostics("x := (1 + 2)").is_empty());
+    assert!(diagnostics("x := [1, 2]").is_empty());
+    assert!(diagnostics("x := { a := 1; }").is_empty());
+    for diag in diagnostics("x := (1) + [2, 0] * { a := 3; }") {
         assert!(
             unclosed_clause(&diag.message).is_none(),
             "a balanced delimiter must not be called unclosed: {message}",
@@ -94,7 +94,7 @@ fn a_balanced_delimiter_never_reports_as_unclosed() {
 
 #[test]
 fn a_wrong_token_where_no_delimiter_is_missing_is_not_called_unclosed() {
-    let diag = first_diagnostic("x = (1 + )");
+    let diag = first_diagnostic("x := (1 + )");
     assert_eq!(
         unclosed_clause(&diag.message),
         None,
@@ -106,7 +106,7 @@ fn a_wrong_token_where_no_delimiter_is_missing_is_not_called_unclosed() {
 #[test]
 fn the_unclosed_clause_is_added_to_the_message_and_not_stolen_from_the_labels() {
     // Naming the delimiter prepends a clause; the label record must survive.
-    let diag = first_diagnostic("x = (1 +\n2\n");
+    let diag = first_diagnostic("x := (1 +\n2\n");
     assert!(
         diag.message.contains("expected"),
         "the label record must survive: {message}",

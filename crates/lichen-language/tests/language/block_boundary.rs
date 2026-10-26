@@ -77,15 +77,15 @@ fn violations(module: &Module<LangProgram>) -> Vec<(NodeId, BlockId, NodeId, Blo
 #[test]
 fn the_checker_builds_every_cross_block_reference_to_outlive_its_referrer() {
     let corpus = [
-        "@gc { a = 1; b = 2 }",
-        "x = @gc { a = 2; b = 3; a + b }\nx",
-        "x = @gc { f = y => y + 1\n5 }\nx",
-        "f = n => @gc { a = n + 1\nb = a * 2\nb }\nf 3 + f 4",
-        "y = [@gc (x => x + 1)]\n(y[0]) 3",
-        "mk = n => @gc { f = x => x + n\nf }\na = mk 1\nb = a 2\nb",
-        "x = [@gc 1, 2]\nx[0]",
-        "x = if 1 then @gc 1 else 2\nx",
-        "let a = 2\nlet b = 3\na + b",
+        "@gc { a := 1; b := 2 }",
+        "x := @gc { a := 2; b := 3; a + b }\nx",
+        "x := @gc { f := y => y + 1\n5 }\nx",
+        "f := n => @gc { a := n + 1\nb := a * 2\nb }\nf 3 + f 4",
+        "A := _x => [@any, 1]\ny := A[@gc (x => x + 1),]\n(y[0]) 3",
+        "mk := n => @gc { f := x => x + n\nf }\na := mk 1\nb := a 2\nb",
+        "A := _x => [@any, 2]\nx := A[@gc 1, 2]\nx[0]",
+        "x := if 1 then @gc 1 else 2\nx",
+        "let a := 2\nlet b := 3\na + b",
     ];
     for source in corpus {
         let report = compile(source);

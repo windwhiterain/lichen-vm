@@ -19,26 +19,26 @@ use super::common;
 /// (`docs/notes/kernel-buffer-declarations.md`).
 const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
-Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
-Par = struct{.n Int, .taps Int}
-Arg = struct{.n Int, .taps Int}
-raw = (c : Par) => {
-  i = compute.range c.n
+Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+Par := _x => {.n @any : Int, .taps @any : Int}
+Arg := _x => {.n @any : Int, .taps @any : Int}
+raw := (c <: Par) => {
+  i := compute.range c.n
 @BODY@
 }
-k = compute.parallel raw "cpu" Out
-out = (compute.plrun k ((Arg)(.n 2, .taps 3)) : Out)
-compute.collect out.y : array{Float, 2}
+k := compute.parallel raw "cpu" (Out _)
+out := (compute.plrun k ((Arg){.n 2, .taps 3}) : Struct)
+compute.collect out.y : Array
 "#;
 
 /// One plain write: the control the fold is compared against.
-const CONTROL: &str = r#"  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
-  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 2.0)))))"#;
+const CONTROL: &str = r#"  y := compute.buf (compute.BufParam{.type Float, .length c.n})
+  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value 2.0}))})"#;
 
 /// A fold whose step writes the countdown into the buffer it carries.
-const LOOP: &str = r#"  y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _)(.to s(1), .at i, .value (int2float s(0))))))
-  ((Out)(.y (fold (c.taps, y))))"#;
+const LOOP: &str = r#"  y := compute.buf (compute.BufParam{.type Float, .length c.n})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+  ((Out){.y (fold (c.taps, y))})"#;
 
 /// The elements the program answers.
 fn answer(body: &str) -> Vec<f32> {

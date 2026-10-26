@@ -20,15 +20,15 @@ fn head() -> String {
   order = "30"
   compute = import "compute.lichen"
 ---
-Out = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))}
-Fill = struct{.n Int}
-fill = (c : Fill) => {
-  i = compute.range c.n
-  d = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
-  ((Out)(.b (compute.write ((compute.Write _)(.to d, .at i, .value (i + 1))))))
+Out := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Fill := _x => {.n @any : Int}
+fill := (c <: Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Int, .length c.n})
+  ((Out){.b (compute.write (compute.Write{.to d, .at i, .value (i + 1)}))})
 }
-filler = compute.parallel fill "cpu" Out
-b = (compute.plrun filler ((Fill)(.n 3)) : Out)
+filler := compute.parallel fill "cpu" (Out _)
+b := (compute.plrun filler ((Fill){.n 3}) : Struct)
 "#
     .to_string()
 }
@@ -36,7 +36,7 @@ b = (compute.plrun filler ((Fill)(.n 3)) : Out)
 /// The program: one buffer read at an index.
 fn program() -> String {
     let head = head();
-    format!("{head}\nr = compute.read ((compute.Read _)(.from BUFFER, .at 1))\nr\n")
+    format!("{head}\nr := compute.read (compute.Read{{.from BUFFER, .at 1}})\nr\n")
 }
 
 /// `source` compiled and checked, never run.
@@ -97,17 +97,10 @@ fn an_imported_requirement_judges_like_an_inline_one() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Gauge = _x => struct{.v Int # 32}
-strict = (g : (Gauge _)) => g.v
-strict ((Gauge _)(.v (5 # 1)))
-",
+        "Gauge := _x => {.v Int # 32}\nstrict := (g <: Gauge) => g.v\nstrict (Gauge{.v (5 # 1)})\n",
     );
     let imported = compile_at(
-        "---
-  gauge = import \"gauge.lichen\"
----
-gauge.strict ((gauge.Gauge _)(.v (5 # 1)))
-",
+        "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.strict (gauge.Gauge{.v (5 # 1)})\n",
         Some(&base),
     );
     let inline_messages: Vec<String> = inline
@@ -151,17 +144,10 @@ fn an_imported_open_requirement_is_bound_at_the_call() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Choose = _p => struct{.v Int # _p}
-pick = (g : (Choose _)) => g.v
-pick ((Choose 32)(.v (5 # 1)))
-",
+        "Choose := _p => {.v Int # _p}\npick := (g <: Choose) => g.v\npick ((Choose 32){.v (5 # 1)})\n",
     );
     let imported = compile_at(
-        "---
-  gauge = import \"gauge.lichen\"
----
-gauge.pick ((gauge.Choose 32)(.v (5 # 1)))
-",
+        "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.pick ((gauge.Choose 32){.v (5 # 1)})\n",
         Some(&base),
     );
     let inline_messages: Vec<String> = inline
@@ -194,7 +180,7 @@ gauge.pick ((gauge.Choose 32)(.v (5 # 1)))
 fn read() -> String {
     let head = head();
     format!(
-        "{head}\nr = compute.read ((compute.Read _)(.from (b.b # BUFFER), .at INDEX))\n(r # DEMAND)\n"
+        "{head}\nr := compute.read (compute.Read{{.from (b.b # BUFFER), .at INDEX}})\n(r # DEMAND)\n"
     )
 }
 
@@ -202,7 +188,7 @@ fn read() -> String {
 fn write() -> String {
     let head = head();
     format!(
-        "{head}\nw = compute.write ((compute.Write _)(.to (b.b # BUFFER), .at INDEX, .value (0 # 1)))\n(w # DEMAND)\n"
+        "{head}\nw := compute.write (compute.Write{{.to (b.b # BUFFER), .at INDEX, .value (0 # 1)}})\n(w # DEMAND)\n"
     )
 }
 
@@ -294,7 +280,7 @@ fn a_write_returns_the_input_buffer_perspective() {
 fn a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it() {
     let head = head();
     let source = format!(
-        "{head}\nuse = (x : (compute.Buf ((compute.BufParam _)(.type Int, .length 3)))) => compute.read ((compute.Read _)(.from x, .at 1))\nuse (b.b # 1)\n"
+        "{head}\nuse := (x : (compute.Buf (compute.BufParam{{.type Int, .length 3}}))) => compute.read (compute.Read{{.from x, .at 1}})\nuse (b.b # 1)\n"
     );
     let report = compile(&source);
     assert!(

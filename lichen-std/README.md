@@ -19,15 +19,15 @@ functions) is the module's export.  `import "std"` binds that module; fields
 are accessed as `std.add`, `std.succ`, and so on.
 
 `std.type_of` is the type read: `std.type_of (1)` is `Int : Type`,
-`std.type_of [1, 2]` is `array{Int, 2}`, and in a type position it *is* the
-operand's type, so `5 : std.type_of (5)` checks.  It is an ordinary lichen
+`std.type_of [@any, 2][1, 2]` is `array{Int, 2}`, and in a type position it *is*
+the operand's type, so `5 : std.type_of (5)` checks.  It is an ordinary lichen
 function —
 
 ```lichen
-type_of = x => {t = _; x: t; t}
+type_of := x => {t := _; x: t; t}
 ```
 
 — the placeholder binds the cell, the annotation unifies it with the
 argument's type, and the body returns it.  That is why it lives here and not
 in the language: nothing about it needs compiler support.  Bind it
-(`type_of = std.type_of`) or pass it like any other function value.
+(`type_of := std.type_of`) or pass it like any other function value.

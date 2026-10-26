@@ -2,6 +2,6 @@
   order = "10"
   output = "5 # 4 ? tag = 7: Int"
 ---
-Doc = struct{.tag Int}
-five = 5 # 8 ? Doc(.tag 7)
+Doc := _x => {.tag @any : Int}
+five := 5 # 8 ? Doc{.tag 7}
 five # 4

@@ -185,6 +185,7 @@ impl OperatorExt<TestProgram> for TestOperator {
                 // them through `AsEnum` before falling through.
                 TestOperator::LowOperator(LowOperator::Index)
                 | TestOperator::LowOperator(LowOperator::Apply)
+                | TestOperator::LowOperator(LowOperator::Unify)
                 | TestOperator::LowOperator(LowOperator::TableGet)
                 | TestOperator::LowOperator(LowOperator::External { .. }) => {
                     unreachable!("structural operators are dispatched by the VM")
@@ -317,6 +318,7 @@ fn array_node(
         .map(|(i, &node)| ArrayItem {
             node: lichen_lowlevel::AnyNodeId::Dynamic(node),
             shallow: mask.is_some_and(|mask| mask[i]),
+            template: false,
         })
         .collect();
     m.add_node(

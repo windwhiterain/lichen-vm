@@ -2,8 +2,8 @@
 //! record-program.md.
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::ExprId;
-use lichen_highlevel::program::ProgramImpl;
+use lichen_highlevel::ir::{ExprId, ExprKind};
+use lichen_highlevel::program::{AnyLit, HighProgramLiteral, ProgramImpl};
 use lichen_testkit::{Probe, Writer};
 
 /// The diagnostic kinds a program reports, written by `build`.
@@ -25,24 +25,64 @@ fn value_of(build: impl FnOnce(&Writer) -> ExprId, what: &str) -> usize {
     probe.usize_of(what)
 }
 
+/// An array instance of `values` — the compound key a table hashes by content.
+///
+/// # Invariant
+/// The element template is the wildcard bound to `Int`, so the array states
+/// its element type in the template and not in its type: every array shares
+/// the one `Array` layout.
+///
+/// The instance's own content holds that wildcard, so the instance is
+/// **undecided** as a whole: a table drops such a key rather than hashing it,
+/// and this helper is for the keys whose *type* is what the test reads.
+fn int_array(w: &Writer, name: &str, values: &[usize]) -> ExprId {
+    let literal = w.hole(&format!("{name}_element_value"));
+    w.fill(literal, ExprKind::Literal(HighProgramLiteral::from(AnyLit)));
+    let element = w.annotate(
+        &format!("{name}_element"),
+        literal,
+        w.int_type(&format!("{name}_int_ty")),
+    );
+    let template = w.array_template(
+        &format!("{name}_template"),
+        element,
+        w.int(&format!("{name}_len"), values.len()),
+    );
+    let elements: Vec<ExprId> = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| w.int(&format!("{name}_{index}"), *value))
+        .collect();
+    w.array_inst(name, template, &elements)
+}
+
+/// A tuple of `values` — the compound key a table hashes by content.
+///
+/// # Invariant
+/// The tuple's value is the elements' own terms, so its content is decided
+/// and the key can be hashed.
+fn int_tuple(w: &Writer, name: &str, values: &[usize]) -> ExprId {
+    let elements: Vec<ExprId> = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| w.int(&format!("{name}_{index}"), *value))
+        .collect();
+    w.tuple(name, &elements)
+}
+
 #[test]
 fn a_table_literal_checks_and_reads_by_deep_key() {
     // The query key is a separate node group; deep-content keys make them equal.
     for (first, second, expected) in [(1usize, 2usize, 3usize), (4, 5, 6)] {
         let answer = value_of(
             |w| {
-                let one = w.int("k0", first);
-                let two = w.int("k1", second);
                 let three = w.int("v0", expected);
-                let four = w.int("k2", 1);
-                let five = w.int("k3", 2);
                 let six = w.int("v1", 4);
-                let a = w.array("key_a", &[one, two]);
-                let b = w.array("key_b", &[four, five]);
+                let a = int_tuple(w, "key_a", &[first, second]);
+                let b = int_tuple(w, "key_b", &[1, 2]);
                 let table = w.table("table", &[(a, three), (b, six)]);
-                let p0 = w.int("p0", first);
-                let p1 = w.int("p1", second);
-                w.find("read", table, w.array("probe_key", &[p0, p1]))
+                let probe_key = int_tuple(w, "probe_key", &[first, second]);
+                w.find("read", table, probe_key)
             },
             "read",
         );
@@ -66,11 +106,10 @@ fn an_empty_table_misses() {
 #[test]
 fn a_miss_is_a_recorded_error() {
     let found = kinds(|w| {
-        let one = w.int("one", 1);
-        let two = w.int("two", 2);
         let three = w.int("three", 3);
-        let table = w.table("table", &[(w.array("key", &[one, two]), three)]);
-        let miss = w.array("miss", &[w.int("seven", 7), w.int("eight", 8)]);
+        let key = int_tuple(w, "key", &[1, 2]);
+        let table = w.table("table", &[(key, three)]);
+        let miss = int_tuple(w, "miss", &[7, 8]);
         w.find("read", table, miss)
     });
     assert_eq!(found, vec![DiagKind::TableMiss]);
@@ -93,13 +132,13 @@ fn an_undecided_key_is_dropped_with_an_error() {
 
 #[test]
 fn table_keys_share_one_type() {
+    // An array's length is no longer part of its type, so the two keys
+    // differ by their **layout**: an array and a tuple.
     let found = kinds(|w| {
-        let one = w.int("one", 1);
-        let two = w.int("two", 2);
         let three = w.int("three", 3);
-        let short = w.array("short_key", &[one, two]);
-        let long = w.array("long_key", &[one, two, three]);
         let four = w.int("four", 4);
+        let short = int_array(w, "short_key", &[1, 2]);
+        let long = w.tuple("long_key", &[w.int("one", 1), w.int("two", 2), three]);
         w.table("table", &[(short, w.int("v0", 3)), (long, four)])
     });
     assert!(
@@ -111,10 +150,8 @@ fn table_keys_share_one_type() {
 #[test]
 fn table_values_share_one_type() {
     let found = kinds(|w| {
-        let one = w.int("one", 1);
-        let two = w.int("two", 2);
-        let key = w.array("key", &[one, two]);
-        let other = w.array("other_key", &[w.int("four", 4), w.int("five", 5)]);
+        let key = int_array(w, "key", &[1, 2]);
+        let other = int_array(w, "other_key", &[4, 5]);
         let type_value = w.int_type("type_value");
         w.table("table", &[(key, w.int("v0", 3)), (other, type_value)])
     });
@@ -177,17 +214,11 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
 fn a_failed_read_key_never_phantom_matches() {
     // Both keys are failed reads: the entry is dropped and the lookup misses.
     let found = kinds(|w| {
-        let out_of_bounds = w.index(
-            "source_read",
-            w.array("source_key", &[w.int("one", 1), w.int("two", 2)]),
-            w.int("five", 5),
-        );
+        let source_key = int_array(w, "source_key", &[1, 2]);
+        let out_of_bounds = w.index("source_read", source_key, w.int("five", 5));
         let table = w.table("table", &[(out_of_bounds, w.int("three", 3))]);
-        let bad = w.index(
-            "probe_key",
-            w.array("probe_source", &[w.int("nine", 9)]),
-            w.int("seven", 7),
-        );
+        let probe_source = int_array(w, "probe_source", &[9]);
+        let bad = w.index("probe_key", probe_source, w.int("seven", 7));
         w.find("read", table, bad)
     });
     assert!(

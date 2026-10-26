@@ -17,21 +17,24 @@
 ## 1. The module
 
 ```lichen
-Num = set(Int, Float)
-in_num = t => t @in Num
-add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
+Num := set(Int, Float)
+in_num := t => t @in Num
+let Pair := _x => (_ ! in_num, _ ! in_num)
+add := operands => { operands <: Pair; operands(0) + operands(1) }
 -- …and one binding per remaining polymorphic operator
 ```
 
-Ten bindings: the class domain `Num`, the predicate `in_num` that consults it,
-and one per polymorphic operator (`add`, `sub`, `mul`, `div`, `less`, `greater`,
-`less_or_equal`, `greater_or_equal`). Every one is an ordinary lichen
-definition — no compiler support, no native call — and the **contract** is the
-class refinement `(_ ! in_num)` inside the operand array's element type, whose
-predicate is applied to the operand's *type* (`in_num = t => t @in Num`), so no
-type read is involved. The one-argument operand group is what gives the operator
-its **tie** (the array's shared element type) and its **arity** (the array's
-length).
+Eleven bindings: the class domain `Num`, the predicate `in_num` that consults it,
+the shared constructor `Pair`, and one per polymorphic operator (`add`, `sub`,
+`mul`, `div`, `less`, `greater`, `less_or_equal`, `greater_or_equal`). Every one
+is an ordinary lichen definition — no compiler support, no native call — and
+the **contract** is the class refinement `(_ ! in_num)` inside the operand
+tuple's two positions, whose predicate is applied to the operand's *type*
+(`in_num = t => t @in Num`), so no type read is involved. `Pair` is a
+**constructor**: the match `operands <: Pair` applies it once, and the two
+positions it returns are the requirements the operands must meet. The
+two-element operand group is what gives the operator its **tie** (the group is
+homogeneous) and its **arity** (the group has two positions).
 
 The unit is a **package**: its bindings are the fields of its exported record, so
 a program that wants the module value can also write `core = import "core"` and

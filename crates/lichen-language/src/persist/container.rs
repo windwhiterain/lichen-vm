@@ -127,6 +127,13 @@ where
             w.u64(node.index as u64);
         }
     }
+    let mut owners: Vec<_> = module.apply_result_owners.iter().collect();
+    owners.sort_unstable_by_key(|(value, _)| value.index);
+    w.u64(owners.len() as u64);
+    for (value, apply) in owners {
+        w.u64(value.index as u64);
+        w.u64(apply.index as u64);
+    }
     // The registry, in id order: a layout id indexes it, so a reordering
     // would re-read every frozen array's attributes.
     w.u64(module.attribute_layouts.len() as u64);
@@ -441,6 +448,15 @@ where
         });
     }
 
+    let owner_count = r.u64()? as usize;
+    let mut apply_result_owners = reserve(&r, owner_count, "apply result owners")?;
+    for _ in 0..owner_count {
+        let value = read_node_id(&mut r, node_count, "apply result value")?;
+        let apply = read_node_id(&mut r, node_count, "apply result owner")?;
+        apply_result_owners.push((value, apply));
+    }
+    let apply_result_owners = apply_result_owners.into_iter().collect();
+
     let layout_count = r.u64()? as usize;
     let mut attribute_layouts = reserve(&r, layout_count, "attribute layouts")?;
     for _ in 0..layout_count {
@@ -465,6 +481,7 @@ where
         key,
         nodes,
         functions,
+        apply_result_owners,
         arena,
         attribute_layouts,
         default_attributes,

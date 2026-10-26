@@ -43,6 +43,18 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(function, out);
                 walk_expr(argument, out);
             }
+            Expr::Unify {
+                actual, expected, ..
+            } => {
+                walk_expr(actual, out);
+                walk_expr(expected, out);
+            }
+            Expr::TemplateUnify {
+                actual, template, ..
+            } => {
+                walk_expr(actual, out);
+                walk_expr(template, out);
+            }
             Expr::BinOp { left, right, .. } => {
                 walk_expr(left, out);
                 walk_expr(right, out);
@@ -101,18 +113,7 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(r, out);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                walk_expr(parameter_type, out);
-                walk_expr(return_type, out);
-            }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _)
-            | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     walk_expr(el, out);
                 }
@@ -122,15 +123,29 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(key, out);
                 walk_expr(value, out);
             }
-            Expr::StructType(fields, _) => {
-                for field in fields {
-                    walk_expr(&field.ty, out);
+            Expr::StructValue { fields, .. } => {
+                for f in fields {
+                    walk_expr(&f.value, out);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
                 walk_expr(callee, out);
                 for f in fields {
                     walk_expr(&f.value, out);
+                }
+            }
+            Expr::Array {
+                template, length, ..
+            } => {
+                walk_expr(template, out);
+                walk_expr(length, out);
+            }
+            Expr::ArrayInst {
+                template, elements, ..
+            } => {
+                walk_expr(template, out);
+                for e in elements {
+                    walk_expr(e, out);
                 }
             }
             Expr::Table(entries, _) => {
@@ -140,14 +155,6 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 }
             }
             Expr::Shallow(inner, _, _) => walk_expr(inner, out),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                walk_expr(element_type, out);
-                walk_expr(length, out);
-            }
             Expr::Block {
                 statements, expr, ..
             } => {

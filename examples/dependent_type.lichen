@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "(1, Int): tuple{Int, Type}"
+  output = "(1, Int): Tuple"
 ---
-a = x => (1, Int)(x)
+a := x => (1, Int)(x)
 (a 0, a 1)

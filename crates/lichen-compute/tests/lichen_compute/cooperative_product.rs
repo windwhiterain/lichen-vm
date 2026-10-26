@@ -54,33 +54,33 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
   order = "30"
   compute = import "compute.lichen"
 ---
-A = struct{{.a (compute.Buf ((compute.BufParam _)(.type Int, .length {rows})))}}
-B = struct{{.b (compute.Buf ((compute.BufParam _)(.type Int, .length {steps})))}}
-C = struct{{.c (compute.Buf ((compute.BufParam _)(.type Int, .length {columns})))}}
-Fill = struct{{.n Int}}
-fill_a = (c : Fill) => {{
-  i = compute.range c.n
-  a = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
-  ((A)(.a (compute.write ((compute.Write _)(.to a, .at i, .value (i % 4))))))
+A := _x => {{.a (compute.Buf (compute.BufParam{{.type Int, .length {rows}}}))}}
+B := _x => {{.b (compute.Buf (compute.BufParam{{.type Int, .length {steps}}}))}}
+C := _x => {{.c (compute.Buf (compute.BufParam{{.type Int, .length {columns}}}))}}
+Fill := _x => {{.n @any : Int}}
+fill_a := (c <: Fill) => {{
+  i := compute.range c.n
+  a := compute.buf (compute.BufParam{{.type Int, .length c.n}})
+  ((A){{.a (compute.write (compute.Write{{.to a, .at i, .value (i % 4)}}))}})
 }}
-fill_b = (c : Fill) => {{
-  i = compute.range c.n
-  b = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
-  ((B)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (i % 3))))))
+fill_b := (c <: Fill) => {{
+  i := compute.range c.n
+  b := compute.buf (compute.BufParam{{.type Int, .length c.n}})
+  ((B){{.b (compute.write (compute.Write{{.to b, .at i, .value (i % 3)}}))}})
 }}
-fill_c = (c : Fill) => {{
-  i = compute.range c.n
-  cbuf = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
-  ((C)(.c (compute.write ((compute.Write _)(.to cbuf, .at i, .value (i % 5))))))
+fill_c := (c <: Fill) => {{
+  i := compute.range c.n
+  cbuf := compute.buf (compute.BufParam{{.type Int, .length c.n}})
+  ((C){{.c (compute.write (compute.Write{{.to cbuf, .at i, .value (i % 5)}}))}})
 }}
-ka = compute.parallel fill_a "cpu" A
-kb = compute.parallel fill_b "cpu" B
-kc = compute.parallel fill_c "cpu" C
-a = (compute.plrun ka ((Fill)(.n {a_len})) : A)
-b = (compute.plrun kb ((Fill)(.n {b_len})) : B)
-c = (compute.plrun kc ((Fill)(.n {c_len})) : C)
-product = (compute.mma (compute.Mma Int)(.s "{backend}", .a a.a, .b b.b, .c c.c))
-compute.collect product : array{{Int, {product_len}}}
+ka := compute.parallel fill_a "cpu" (A _)
+kb := compute.parallel fill_b "cpu" (B _)
+kc := compute.parallel fill_c "cpu" (C _)
+a := (compute.plrun ka ((Fill){{.n {a_len}}}) : Struct)
+b := (compute.plrun kb ((Fill){{.n {b_len}}}) : Struct)
+c := (compute.plrun kc ((Fill){{.n {c_len}}}) : Struct)
+product := (compute.mma compute.Mma{{.s "{backend}", .a a.a, .b b.b, .c c.c}})
+compute.collect product : Array
 "#,
         rows = ROWS,
         steps = STEPS,
@@ -88,7 +88,6 @@ compute.collect product : array{{Int, {product_len}}}
         a_len = a.len(),
         b_len = b.len(),
         c_len = c.len(),
-        product_len = ROWS * COLUMNS,
     )
 }
 
@@ -98,7 +97,7 @@ compute.collect product : array{{Int, {product_len}}}
 /// The requirement is spelled on the product's own annotation, so it is checked
 /// against the certificate `compute.mma` states — not against the buffers.
 fn source_with_requirement(requirement: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
-    let plain = "(compute.mma (compute.Mma Int)(.s \"cpu\", .a a.a, .b b.b, .c c.c))";
+    let plain = "(compute.mma compute.Mma{.s \"cpu\", .a a.a, .b b.b, .c c.c})";
     let program = source("cpu", a, b, c);
     let annotated = format!("({plain} # {requirement})");
     assert!(

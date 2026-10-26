@@ -292,14 +292,16 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// One dense arena for struct **field names**; `None` for a positional entry.
     ///
     /// # Invariant
-    /// It is index-aligned with both [`ExprKind::TypeStruct`]'s `fields` range and
-    /// [`ExprKind::Instantiate`]'s value tuple elements.
+    /// It is index-aligned with the `names` range of [`ExprKind::Struct`],
+    /// [`ExprKind::Instantiate`] and [`ExprKind::Record`], so a name and the
+    /// field it names are read at the same position.
     pub struct_names: Vec<Option<&'static str>>,
-    /// One dense arena for the `~` depths of [`ExprKind::ShallowArray`].
+    /// One dense arena for the `~` depths of an array instance.
     ///
     /// # Invariant
     /// One `usize` per element: 0 unmarked, `usize::MAX` the bare `~`, n the value
-    /// slot at the first n levels of the element's type spine.
+    /// slot at the first n levels of the element's type spine. It is index-aligned
+    /// with the elements of [`ExprKind::ArrayInst`].
     pub depths: Vec<usize>,
     pub root: ExprId,
     /// The block-wide binding placeholder ids — the only `ExprId`s whose subtree
@@ -408,23 +410,25 @@ pub enum ExprKind<L> {
         left: ExprId,
         right: ExprId,
     },
-    /// `{ type_expr, value, names }` — struct instantiation `s(1, 2)`.
+    /// `{ template, value, names }` — a struct instance `S{…}`.
     ///
     /// # Invariant
-    /// `names` is index-aligned with `value`'s tuple elements, so the checker can
-    /// reorder them to the definition's order against the struct type's name table.
-    /// The frontend recognises the glued comma-disciplined paren (`C()`, `C(,)`)
-    /// syntactically; the checker still validates that the callee is a struct kind.
+    /// `template` is the **struct value** the instance fills, not a type: the
+    /// instance clones it, so the clone's own fields are the requirements and
+    /// the template keeps its holes. `names` is index-aligned with `value`'s
+    /// tuple elements, so the checker can reorder them to the definition's order
+    /// against the clone's name table.
     Instantiate {
-        type_expr: ExprId,
+        template: ExprId,
         value: ExprId,
         names: ChildRange,
     },
     /// `{ value, names }` — a struct-returning block (`RecordBlock`).
     ///
     /// # Invariant
-    /// The checker builds an anonymous struct type from the value's element types,
-    /// so the block's value is a struct instance reading positionally or by name.
+    /// It is the frontend's own source of a struct value, and it shares the
+    /// struct's construction: the block's value is a struct value with the
+    /// block's names, never a second value layout.
     Record { value: ExprId, names: ChildRange },
     /// `assert(condition)` — a constraint, not a unify; the expression compiles to
     /// the condition itself.
@@ -486,20 +490,11 @@ pub enum ExprKind<L> {
         r#type: Option<ExprId>,
         attributes: ChildRange,
     },
-    /// `{ parameter, return_type }` — a function type, compiled to the kinded
-    /// arrow `[[in, out], [FunctionType, Type]]`.
-    TypeFunction {
-        parameter: ExprId,
-        return_type: ExprId,
-    },
-    /// A tuple instance `[v1, ..., vn]`.
+    /// A tuple instance `(e1, ..., en)`.
     ///
     /// # Invariant
     /// One type slot per element, so the elements may be heterogeneous.
     Tuple(ChildRange),
-    /// A tuple type expression `[T1, ..., Tn]`, kinded `[[T1, …, Tn],
-    /// [TupleType, Type]]`.
-    TypeTuple(ChildRange),
     /// A set type expression `set{E}`, kinded `[[element slot], [SetType,
     /// Type]]`.
     ///
@@ -514,21 +509,35 @@ pub enum ExprKind<L> {
     /// The two positions are the same key and value **slots** [`Self::Table`]
     /// builds, so a table type and a table value are one type.
     TypeTable(ChildRange),
-    /// A struct type expression; `names` is the parallel range into
-    /// [`IR::struct_names`].
+    /// An array **template** `[t, n]` — the element template and the array's
+    /// length.
     ///
     /// # Invariant
-    /// The *fresh nominal* id and the optional name table sit in the kind's marker
-    /// payload, never in the shape: `[[id, names, names_in_order], TypeStruct]`.
-    TypeStruct {
+    /// It is a value, not a type: its type is the shared `Array` template and
+    /// its value holds the element template and `n` fresh holes, so the holes
+    /// are the positions an instance fills.
+    Array { template: ExprId, length: ExprId },
+    /// An array instance `T[e1, ..., en]`.
+    ///
+    /// # Invariant
+    /// `depths` is index-aligned with `elements` and empty when no element is
+    /// `@shallow`-marked; a marked element's depth is the value slot's depth
+    /// along its type spine (`crate::ir::IR::depths`).
+    ArrayInst {
+        template: ExprId,
+        elements: ChildRange,
+        depths: ChildRange,
+    },
+    /// A struct **value** `{.a e1, .b e2}` — its fields and their names.
+    ///
+    /// # Invariant
+    /// `names` is index-aligned with `fields`, and a field is a complete
+    /// expression: the value holds the fields' own exprs, so a read takes an
+    /// element's type and attributes from the element itself.
+    Struct {
         fields: ChildRange,
         names: ChildRange,
     },
-    /// An array instance `[v1, ..., vn]`.
-    ///
-    /// # Invariant
-    /// Every element shares one type, unlike a [`Self::Tuple`]'s per-element slots.
-    Array(ChildRange),
     /// A set `set(a, b, …)`, homogeneous like an [`Self::Array`].
     ///
     /// # Invariant
@@ -543,16 +552,6 @@ pub enum ExprKind<L> {
     /// builds the table eagerly — keys must be deep-evaluated to hash them — and
     /// drops an entry whose key is not concrete.
     Table(ChildRange),
-    /// An array instance with `@shallow`-marked positions — `[v1, @shallow v2,
-    /// @shallow(2) v3]`.
-    ///
-    /// # Invariant
-    /// Typed like a tuple, not an [`Self::Array`]: a homogeneous element type
-    /// would reject `[x, @shallow f(x+1)]` with an `Int` head and a `Stream` tail.
-    ShallowArray {
-        range: ChildRange,
-        depths: ChildRange,
-    },
     /// `_` — an inference placeholder hole, usable in any position.
     ///
     /// # Invariant
@@ -567,12 +566,6 @@ pub enum ExprKind<L> {
     /// to an expr of fresh, never-unified cells, so it cannot emit a *type*-level
     /// "expected X, found Y" from inside itself.
     ErrorBlock,
-    /// The real array type `{ element_type, length }`, kinded
-    /// `[[element_type, length], [ArrayType, Type]]`.
-    TypeArray {
-        element_type: ExprId,
-        length: ExprId,
-    },
     /// A value imported from a package in the shared registry; the IR carries only
     /// the exported expr node ref.
     ///
@@ -598,6 +591,13 @@ pub enum ExprKind<L> {
     /// and every slot is the inner expression's, so the block boundary is the
     /// only thing the marker adds.
     Gc { inner: ExprId },
+    /// `a = b` — a unify of the actual with the expected.
+    ///
+    /// # Invariant
+    /// `actual` is the **found** side and `expected` the requirement; the two
+    /// are unified as whole terms, so a value is matched against a template
+    /// and not merely against its type.
+    Unify { actual: ExprId, expected: ExprId },
 }
 
 impl<L> ExprKind<L> {
@@ -638,14 +638,18 @@ impl<L> ExprKind<L> {
                 push(*right);
             }
             ExprKind::Instantiate {
-                type_expr, value, ..
+                template, value, ..
             } => {
-                push(*type_expr);
+                push(*template);
                 push(*value);
             }
             ExprKind::Record { value, .. } => push(*value),
             ExprKind::Assert { condition } => push(*condition),
             ExprKind::Gc { inner } => push(*inner),
+            ExprKind::Unify { actual, expected } => {
+                push(*actual);
+                push(*expected);
+            }
             ExprKind::Index { array, index } => {
                 push(*array);
                 push(*index);
@@ -665,33 +669,28 @@ impl<L> ExprKind<L> {
                 push(*value);
                 push_opt(r#type, &mut push);
             }
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                push(*parameter);
-                push(*return_type);
-            }
-            ExprKind::TypeArray {
-                element_type,
-                length,
-            } => {
-                push(*element_type);
+            ExprKind::Array { template, length } => {
+                push(*template);
                 push(*length);
             }
             ExprKind::Tuple(range)
-            | ExprKind::TypeTuple(range)
             | ExprKind::TypeSet(range)
             | ExprKind::TypeTable(range)
-            | ExprKind::Array(range)
             | ExprKind::Set(range)
             | ExprKind::Table(range)
-            | ExprKind::ShallowArray { range, .. }
-            | ExprKind::TypeStruct { fields: range, .. }
+            | ExprKind::Struct { fields: range, .. }
             | ExprKind::NativeCall { args: range, .. }
             | ExprKind::Prefix {
                 operands: range, ..
             } => {
+                out.extend_from_slice(&ir.children[range.start as usize..range.end as usize]);
+            }
+            ExprKind::ArrayInst {
+                template,
+                elements: range,
+                ..
+            } => {
+                push(*template);
                 out.extend_from_slice(&ir.children[range.start as usize..range.end as usize]);
             }
         }
@@ -713,14 +712,11 @@ impl<L> ExprKind<L> {
             | ExprKind::ErrorBlock
             | ExprKind::Static { .. }
             | ExprKind::Tuple(_)
-            | ExprKind::TypeTuple(_)
             | ExprKind::TypeSet(_)
             | ExprKind::TypeTable(_)
-            | ExprKind::TypeStruct { .. }
-            | ExprKind::Array(_)
+            | ExprKind::Struct { .. }
             | ExprKind::Set(_)
             | ExprKind::Table(_)
-            | ExprKind::ShallowArray { .. }
             | ExprKind::NativeCall { .. }
             | ExprKind::Prefix { .. } => {}
             ExprKind::Function {
@@ -752,14 +748,18 @@ impl<L> ExprKind<L> {
                 fix(right);
             }
             ExprKind::Instantiate {
-                type_expr, value, ..
+                template, value, ..
             } => {
-                fix(type_expr);
+                fix(template);
                 fix(value);
             }
             ExprKind::Record { value, .. } => fix(value),
             ExprKind::Assert { condition } => fix(condition),
             ExprKind::Gc { inner } => fix(inner),
+            ExprKind::Unify { actual, expected } => {
+                fix(actual);
+                fix(expected);
+            }
             ExprKind::Index { array, index } => {
                 fix(array);
                 fix(index);
@@ -781,20 +781,11 @@ impl<L> ExprKind<L> {
                     fix(r#type);
                 }
             }
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                fix(parameter);
-                fix(return_type);
-            }
-            ExprKind::TypeArray {
-                element_type,
-                length,
-            } => {
-                fix(element_type);
+            ExprKind::Array { template, length } => {
+                fix(template);
                 fix(length);
             }
+            ExprKind::ArrayInst { template, .. } => fix(template),
         }
     }
 }
@@ -888,10 +879,6 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc_variadic(elements, ExprKind::Tuple)
     }
 
-    pub fn alloc_type_tuple(&mut self, elements: &[ExprId]) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::TypeTuple)
-    }
-
     /// Allocate a set type `set{E}`: the element slot is the one child, and the
     /// kind alone makes it a set type.
     pub fn alloc_type_set(&mut self, element: ExprId) -> ExprId {
@@ -903,27 +890,30 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc_variadic(&[key, value], ExprKind::TypeTable)
     }
 
-    pub fn alloc_type_struct(&mut self, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
+    /// Allocate a struct **value**: its fields and their names.
+    pub fn alloc_struct(&mut self, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
         let field_range = extend_range(
             &mut self.children,
             fields.iter().map(|&(element, _)| element),
         );
         let name_range = extend_range(&mut self.struct_names, fields.iter().map(|&(_, name)| name));
-        self.alloc(ExprKind::TypeStruct {
+        self.alloc(ExprKind::Struct {
             fields: field_range,
             names: name_range,
         })
     }
 
+    /// Allocate a struct instance `S{…}`: the template it fills and the
+    /// arguments, with their names.
     pub fn alloc_instantiate(
         &mut self,
-        type_expr: ExprId,
+        template: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
     ) -> ExprId {
         let name_range = extend_range(&mut self.struct_names, names.iter().copied());
         self.alloc(ExprKind::Instantiate {
-            type_expr,
+            template,
             value,
             names: name_range,
         })
@@ -937,8 +927,32 @@ impl<A: AttrSpec, L> IR<A, L> {
         })
     }
 
-    pub fn alloc_array(&mut self, elements: &[ExprId]) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::Array)
+    /// Allocate an array **template** `[t, n]`: the element template and the
+    /// length.
+    pub fn alloc_array(&mut self, template: ExprId, length: ExprId) -> ExprId {
+        self.alloc(ExprKind::Array { template, length })
+    }
+
+    /// Allocate an array instance `T[…]`; `depths` is index-aligned with
+    /// `elements`.
+    pub fn alloc_array_inst(
+        &mut self,
+        template: ExprId,
+        elements: &[ExprId],
+        depths: &[usize],
+    ) -> ExprId {
+        let range = extend_range(&mut self.children, elements.iter().copied());
+        let depths = extend_range(&mut self.depths, depths.iter().copied());
+        self.alloc(ExprKind::ArrayInst {
+            template,
+            elements: range,
+            depths,
+        })
+    }
+
+    /// Allocate a unify `a = b`.
+    pub fn alloc_unify(&mut self, actual: ExprId, expected: ExprId) -> ExprId {
+        self.alloc(ExprKind::Unify { actual, expected })
     }
 
     /// Allocate a set literal: the members are variadic children, and the kind
@@ -954,16 +968,6 @@ impl<A: AttrSpec, L> IR<A, L> {
             entries.iter().flat_map(|&(key, value)| [key, value]),
         );
         self.alloc(ExprKind::Table(range))
-    }
-
-    /// Allocate a shallow-marked array, each element carrying its `~` depth.
-    pub fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)]) -> ExprId {
-        let range = extend_range(
-            &mut self.children,
-            elements.iter().map(|&(element, _)| element),
-        );
-        let depths = extend_range(&mut self.depths, elements.iter().map(|&(_, depth)| depth));
-        self.alloc(ExprKind::ShallowArray { range, depths })
     }
 
     fn alloc_variadic(
@@ -985,12 +989,12 @@ impl<A: AttrSpec, L> IR<A, L> {
     pub fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.expr[e.0 as usize].kind {
             ExprKind::Tuple(range)
-            | ExprKind::TypeTuple(range)
-            | ExprKind::Array(range)
+            | ExprKind::TypeSet(range)
+            | ExprKind::TypeTable(range)
             | ExprKind::Set(range)
-            | ExprKind::ShallowArray { range, .. }
             | ExprKind::Table(range) => range,
-            ExprKind::TypeStruct { fields, .. } => fields,
+            ExprKind::Struct { fields, .. } => fields,
+            ExprKind::ArrayInst { elements, .. } => elements,
             ExprKind::NativeCall { args, .. } => args,
             _ => {
                 debug_assert!(

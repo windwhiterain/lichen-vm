@@ -69,9 +69,30 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
             LangOperator::SortOp(op) => op.run(operand, block, module),
         }
     }
-}
 
-// The store's program carries its own codec, so `HostProgram` binds `NoPersist`.
+    // Mirror the composition's deferred dispatch to each leaf.
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: lichen_lowlevel::BlockId,
+        module: &mut lichen_lowlevel::Module<HostProgram>,
+    ) -> Option<LangValue> {
+        match self {
+            LangOperator::LowOperator(op) => {
+                <lichen_lowlevel::LowOperator as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::TypeOperator(op) => {
+                <lichen_highlevel::program::TypeOperator as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::GcdOp(op) => {
+                <lichen_perspective::GcdOp as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+            LangOperator::SortOp(op) => {
+                <lichen_std_native::SortOp as lichen_lowlevel::OperatorExt<HostProgram>>::run_deferred(op, operand, block, module)
+            }
+        }
+    }
+}
 impl ProgramCodecOf for HostProgram {
     type Codec = NoPersist;
 }
@@ -151,8 +172,14 @@ fn array_values(module: &Module<HostProgram>, value: &LangValue) -> Vec<LangValu
 }
 
 /// The `usize` elements of an array value, in order.
+///
+/// # Invariant
+/// An array value's first slot holds the element template, which names the
+/// layout and is never user data, so the elements are the rest.
 fn usize_array(module: &Module<HostProgram>, value: &LangValue) -> Vec<usize> {
-    array_values(module, value).iter().map(usize_of).collect()
+    let mut values = array_values(module, value);
+    values.remove(0);
+    values.iter().map(usize_of).collect()
 }
 
 #[test]
@@ -161,7 +188,8 @@ fn std_sort_sorts_a_usize_array() {
 ---
   std = import "std.lichen"
 ---
-std.sort [3, 1, 2]
+A := _x => [@any : Int, 3]
+std.sort A[3, 1, 2]
 "#);
     assert_eq!(
         usize_array(&module, &value),
@@ -178,7 +206,9 @@ fn std_sort_is_reusable_and_length_preserving() {
 ---
   std = import "std.lichen"
 ---
-(std.sort [4, 1, 3, 2], std.sort [9, 7])
+A4 := _x => [@any, 4]
+A2 := _x => [@any, 2]
+(std.sort A4[4, 1, 3, 2], std.sort A2[9, 7])
 "#);
     let expr = array_values(&module, &value);
     assert_eq!(
@@ -218,7 +248,8 @@ fn std_sort_rejects_a_non_int_array() {
 ---
   std = import "std.lichen"
 ---
-std.sort ["a", "b"]
+A := _x => [@any, 2]
+std.sort A["a", "b"]
 "#,
     );
     assert!(

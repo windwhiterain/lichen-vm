@@ -1,7 +1,8 @@
 ---
   order = "1"
-  output = "(1, 2, 1, Int): tuple{Int, Int, Int, Type}"
+  output = "(1, 2, 1, Int): Tuple"
 ---
-a = [1, 2]
-b = (1, Int)
+Any2 := _x => [@any, 2]
+a := Any2[1, 2]
+b := (1, Int)
 (a[0], a[1], b(0), b(1))

@@ -1,23 +1,20 @@
-//! Arrays, tables, and indexing: the array instance and type, and the element
+//! Arrays: the array **template**, the array **instance**, and the element
 //! read with its bounds.
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+use std::collections::HashSet;
 
+use lichen_lowlevel::{AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
+
+use lichen_utils::extend::AsEnum;
+
+use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{BinOp, ExprId};
+use crate::ir::{BinOp, ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
 use super::Checker;
 use crate::diagnostic::AssertSpelling;
-
-/// A **dynamic** node of a term read, `None` for a frozen static ref.
-fn dynamic_node(id: AnyNodeId) -> Option<NodeId> {
-    match id {
-        AnyNodeId::Dynamic(node) => Some(node),
-        AnyNodeId::Static(_) => None,
-    }
-}
 
 impl<P: HighProgram> Checker<P>
 where
@@ -27,12 +24,10 @@ where
     /// An array-element read `a[i]`. See `docs/notes/type-access.md`.
     ///
     /// # Invariant
-    /// The container's type is pinned to a fresh array type, so a non-array
-    /// fails here and an undecided one resolves at the call site's argument
-    /// unify. Its type is the pinned shape's element cell. It registers the
-    /// bounds assert `length <= i == 0`: a concrete index out of range fails
-    /// the assert pass, a lazy length keeps it pending for the apply clone to
-    /// re-check per argument.
+    /// The container's type is the shared `Array` template, so a non-array
+    /// fails here. The element is at `i + 1`: the array's first slot holds the
+    /// element template, and the elements follow it. The length is the value's
+    /// own length less one, which is the element count.
     pub(super) fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
@@ -40,58 +35,29 @@ where
         // A written annotation may be unevaluated.
         // Force it before deciding whether the read can be checked.
         self.module.evaluate_node_deep(array_ty, None);
-        // The requirement names the container's **kind**, never its type, so the
-        // container's type cell stays free.
         if self.type_is_concrete(array_ty) {
-            let kind = self.array_kind_requirement();
-            let container_kind = self.lazy_index_path(array_ty, &[shape::TYPE_KIND_SLOT]);
-            // The kind read runs first: an unevaluated `Index` holds no value, so
-            // a unify writes into its class and asks nothing.
-            self.module
-                .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
-            self.check_unify(container_kind, kind, self.loc(array, 1), DiagKind::Guard);
+            self.check_unify(
+                array_ty,
+                self.array_template(),
+                self.loc(array, 1),
+                DiagKind::Guard,
+            );
         } else if !self.is_loop_state(array) {
             return self.refuse_undecided_container(e, array, array_ty, "array read");
         }
-        // The element type and the length come out of the container's **own**
-        // shape; an undecided one keeps the lazy read.
-        let type_ref = shape::TypeRef::Term(AnyNodeId::Dynamic(array_ty));
-        let element = shape::field_type(&self.module, type_ref, shape::ARRAY_TYPE_ELEMENT_SLOT)
-            .and_then(dynamic_node);
-        let elem_cell = match element {
-            Some(element) => element,
-            None => self.lazy_index_path(
-                array_ty,
-                &[
-                    shape::TYPE_SHAPE_SLOT,
-                    shape::ARRAY_TYPE_ELEMENT_SLOT,
-                    shape::EXPR_TYPE_SLOT,
-                ],
-            ),
-        };
-        let length = shape::array_length(&self.module, type_ref).and_then(dynamic_node);
-        let len_cell = match length {
-            Some(length) => length,
-            None => self.lazy_index_path(
-                array_ty,
-                &[shape::TYPE_SHAPE_SLOT, shape::ARRAY_TYPE_LENGTH_SLOT],
-            ),
-        };
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let (element, value_node, element_ty) =
-            self.slot_read(array_ty, array_value, index_value, None);
-        // A read states its value's type node
-        // (`docs/notes/compound-element-slots.md`).
-        for node in [element, value_node] {
-            if node != element_ty {
-                self.module
-                    .record_element_type(node, AnyNodeId::Dynamic(element_ty));
-            }
-        }
-        let _ = elem_cell;
-        let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
+        // The element sits one slot past the template.
+        let element_index = self.plus(index_value);
+        self.array_subscripts.insert(element_index, index_value);
+        let position = self.constant_position(index).map(|at| at + 1);
+        let (element, value_node, ty_node) =
+            self.value_slot_read(array_value, element_index, position);
+        // The bounds assert: the element count is the value's own length less
+        // one.
+        let length = self.array_length_of(array_value);
+        let beyond_ops = self.array_node(self.current_block, &[length, index_value]);
         let beyond = self.op_node(
             self.current_block,
             P::Operator::from(TypeOperator::from(BinOp::Leq)),
@@ -104,38 +70,13 @@ where
             Some(in_range_ops),
         );
         self.register_assert(in_range, self.loc(e, 0), false, AssertSpelling::Condition);
-        // A tuple or struct element states its **own** type cell
-        // (`docs/notes/compound-element-slots.md`).
-        let read_ty = if self.container_is_tuple(array_ty) {
-            element_ty
-        } else {
-            elem_cell
-        };
-        let expr = self.element_expr(value_node, read_ty, element);
+        let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
-        self.state[e].ty = Some(read_ty);
+        self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
         self.state[e].attr = self.stated_element_slot(element);
         expr
-    }
-
-    /// Whether the container type names a **tuple or struct**: its elements are
-    /// slots that state their own types.
-    fn container_is_tuple(&self, ty: NodeId) -> bool {
-        let Some(kind) = shape::kind_of(&self.module, AnyNodeId::Dynamic(ty)) else {
-            return false;
-        };
-        let Some(marker) = shape::marker_of(&self.module, kind).and_then(dynamic_node) else {
-            return false;
-        };
-        let tuple_marker = self.module.node_value(AnyNodeId::Dynamic(marker));
-        let tuple = tuple_marker.is_some()
-            && tuple_marker
-                == self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(self.markers.tuple_type_marker));
-        tuple || shape::is_struct_marker_any(&self.module, AnyNodeId::Dynamic(marker))
     }
 
     /// A table read `t <== k`: the lowlevel `TableGet` reads the entry whose
@@ -183,46 +124,206 @@ where
         expr
     }
 
-    /// An array instance `[v1, …, vn]`:
-    /// `[values, [[element type, length], [ArrayType, Type]]]`.
+    /// An array **template** `[t, n]` — the element template and the length.
     ///
     /// # Invariant
-    /// The element type is a fresh cell unified with each element's type, so a
-    /// heterogeneous literal is an error rather than a type claiming one class
-    /// for elements that differ. The length slot holds the element count.
-    pub(super) fn check_array_term(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut vals = Vec::new();
-        let element_ty = self.fresh_cell();
-        for &el in &elements {
-            self.check_expr(el);
-            // An element is a complete slot: the term is the value expr.
-            vals.push(self.state[el].term.expect("an element is compiled"));
-            // Found = the element's type, expected = the shared cell: the first
-            // binds it, a later one that differs conflicts.
-            self.check_unify(
-                self.state[el].ty.unwrap(),
-                element_ty,
-                self.loc(el, 1),
-                DiagKind::ArrayElement,
-            );
-        }
-        let value = self.array_node(self.current_block, &vals);
-        let length = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(vals.len()))),
-        );
-        // A **slot** element, as a tuple's is: one serves every element.
-        let element = self.element_slot(None, Some(element_ty), None);
-        let shape = self.array_node(self.current_block, &[element, length]);
-        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let ty_node = self.slot_expr(self.current_block, shape, kind);
+    /// The value is computed, not built: the operator builds
+    /// `[template, hole × length]` when the length is evaluable and leaves the
+    /// value lazy when it is not. The holes are the positions an instance
+    /// fills, and each constructor application has its own.
+    pub(super) fn check_array_template(
+        &mut self,
+        e: ExprId,
+        template: ExprId,
+        length: ExprId,
+    ) -> NodeId {
+        self.check_expr(template);
+        self.check_expr(length);
+        let template_term = self.state[template]
+            .term
+            .expect("the element template is compiled");
+        let length_value = self.value_of(length);
+        let value = match self.constant_length(length) {
+            Some(count) => {
+                let mut items = Vec::with_capacity(count + 1);
+                items.push(ArrayItem::template(AnyNodeId::Dynamic(template_term)));
+                for _ in 0..count {
+                    items.push(ArrayItem::new(AnyNodeId::Dynamic(self.placeholder_term())));
+                }
+                self.array_value_node(self.current_block, items, 0)
+            }
+            None => {
+                let operands = self.array_node(self.current_block, &[template_term, length_value]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(TypeOperator::ArrayTemplate),
+                    Some(operands),
+                )
+            }
+        };
+        let ty_node = self.array_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// A fresh **placeholder expression** — the hole an array template's
+    /// element position is.
+    ///
+    /// # Invariant
+    /// It is the operator's own construction, so a template built here and one
+    /// built at run time have the same shape.
+    fn placeholder_term(&mut self) -> NodeId {
+        let width = P::Attr::ORDER.len();
+        let layout = self.full_width_layout();
+        crate::program::placeholder_expr(&mut self.module, self.current_block, width, layout)
+    }
+
+    /// The count a length expression states, when it states one.
+    fn constant_length(&self, length: ExprId) -> Option<usize> {
+        let value = self.state[length].val?;
+        match self
+            .module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|held| held.as_enum())
+        {
+            Some(LowValue::USize(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// An array **instance** `T[e1, …, en]`.
+    ///
+    /// # Invariant
+    /// The constructor is applied once. Every element unifies with the same
+    /// returned element requirement, and the returned length is checked
+    /// against the instance's count. No second clone is made.
+    pub(super) fn check_array_inst(
+        &mut self,
+        e: ExprId,
+        template: ExprId,
+        elements: crate::ir::ChildRange,
+        depths: crate::ir::ChildRange,
+    ) -> NodeId {
+        self.check_expr(template);
+        let template_ty = self.state[template].ty.unwrap();
+        self.module.evaluate_node_deep(template_ty, None);
+        if self.type_is_concrete(template_ty) {
+            self.check_unify(
+                template_ty,
+                self.array_template(),
+                self.loc(template, 1),
+                DiagKind::Guard,
+            );
+        } else if !self.is_loop_state(template) {
+            return self.refuse_undecided_container(e, template, template_ty, "array instance");
+        }
+        let element_ids: Vec<ExprId> =
+            self.ir.children[elements.start as usize..elements.end as usize].to_vec();
+        let element_depths: Vec<usize> =
+            self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
+        // The constructor application supplies the array value and its shape.
+        let template_value = self.array_constructor_value(template);
+        self.module
+            .evaluate_node(AnyNodeId::Dynamic(template_value), None);
+        let (requirement, template_count) = match self.template_shape(template_value) {
+            Some(shape) => shape,
+            None => {
+                // Only a length an enclosing lambda parameter decides may be
+                // deferred; any other undecided length is refused.
+                if !self.length_depends_on_parameter(template) {
+                    // An undecided clone states no shape, and no parameter
+                    // decides it: an unchecked requirement is worse than a
+                    // refusal.
+                    self.record_guard(
+                        template_ty,
+                        template_ty,
+                        self.loc(template, 0),
+                        DiagKind::Guard,
+                        Some("array instance"),
+                    );
+                    return self.refused_expr(e);
+                }
+                self.deferred_shape(template, template_value)
+            }
+        };
+        let mut values = Vec::with_capacity(element_ids.len());
+        let mut marked = Vec::with_capacity(element_ids.len());
+        for (index, &el) in element_ids.iter().enumerate() {
+            self.check_expr(el);
+            let depth = element_depths.get(index).copied().unwrap_or(0);
+            let element = self.state[el].term.expect("an element is compiled");
+            let (element, is_marked) = match depth {
+                0 => (element, false),
+                // The **bare** mark: the element's own value, held lazy, and the
+                // element's own type as the position's type.
+                usize::MAX => {
+                    let value = self.value_of(el);
+                    (self.marked_element(el, value, element), true)
+                }
+                // The **depth** form: the first `depth` levels of the element's
+                // type spine are masked.
+                depth => {
+                    let value = self.wrap_shallow(el, depth);
+                    (self.marked_element(el, value, element), true)
+                }
+            };
+            self.check_array_element(el, element, requirement);
+            values.push(element);
+            marked.push(is_marked);
+        }
+        // The count is the template's own length: a directed unify, so a
+        // mismatch is a diagnostic, not a bounds failure.
+        let count = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(values.len()))),
+        );
+        // The length is read first: a read of the parameter's cell joins
+        // the reader with it, so the unify below pins the cell.
+        self.compute_operands(count, template_count);
+        self.check_unify(
+            count,
+            template_count,
+            self.loc(e, 0),
+            DiagKind::ArrayElement,
+        );
+        // The result's value: the constructor's returned element template, then
+        // the elements.
+        let first = requirement;
+        let mut items = vec![first];
+        items.extend(values);
+        // A marked element is a masked item: the deep pass skips the position,
+        // so its value stays lazy until a read asks for it.
+        let mut mask = vec![false];
+        mask.extend(marked);
+        let value = self.array_instance_node(self.current_block, &items, &mask);
+        let ty_node = self.array_template();
+        let expr = self.expr_of(value, ty_node);
+        self.state[e].term = Some(expr);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
+        expr
+    }
+
+    /// A marked element's expr: its own value slot, and a type cell that
+    /// closes on the element's own type.
+    ///
+    /// # Invariant
+    /// The type cell is fresh and undecided, so the position states no type of
+    /// its own until the closure decides it. The value slot is the element's
+    /// own value, so a read of the position reads the element and not a
+    /// wrapper around it.
+    fn marked_element(&mut self, el: ExprId, value: NodeId, element: NodeId) -> NodeId {
+        let ty = self.fresh_cell();
+        let inner = self.state[el].ty.expect("an element is compiled");
+        // A call's own type application is what decides the element's type;
+        // an element that is not a call has nothing to apply.
+        let type_apply = self.type_applies.get(&el).copied();
+        self.shallow_types.push((type_apply, ty, inner));
+        self.element_expr(value, ty, element)
     }
 
     /// A set `set(a, b, …)` typed by the **set kind**, not by `array{T, n}`.
@@ -316,91 +417,42 @@ where
         expr
     }
 
-    /// A shallow array `[v1, @shallow v2, @shallow(2) v3]`: per-element type
-    /// slots, as a tuple's.
+    /// Resolve pending shallow element types before a dependent read or the
+    /// definition pass.
     ///
     /// # Invariant
-    /// The value array carries a per-position mask: a bare `@shallow` position's
-    /// **value** subtree stays lazy in the deep pass, and a `@shallow(n)` position
-    /// is wrapped so the value slot at each of the first `n` levels of its type
-    /// spine stays shallow. A mark is on the value, so a marked call registers its
-    /// type application and cell for [`Self::close_shallow_tail`].
-    pub(super) fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let depths = self.range_depths(e);
-        let mut vals = Vec::new();
-        let mut tys = Vec::new();
-        let mut mask = Vec::new();
-        for (i, &el) in elements.iter().enumerate() {
-            self.check_expr(el);
-            match depths[i] {
-                0 => {
-                    // An element is a complete slot: the term is the value expr.
-                    vals.push(self.state[el].term.expect("an element is compiled"));
-                    tys.push(self.state[el].ty.unwrap());
-                }
-                usize::MAX => {
-                    vals.push(self.state[el].term.expect("an element is compiled"));
-                    let ty = self.state[el].ty.unwrap();
-                    if let Some(&type_apply) = self.type_applies.get(&el) {
-                        self.shallow_types.push((type_apply, ty));
-                    }
-                    tys.push(ty);
-                }
-                n => {
-                    // The wrap is the element's value, and its reads get a fresh cell.
-                    let wrapped = self.wrap_shallow(el, n);
-                    // A marked call is applied as the bare arm's is, so the mark's
-                    // tail cell is decided before a read goes through it.
-                    if let Some(&type_apply) = self.type_applies.get(&el) {
-                        self.shallow_types
-                            .push((type_apply, self.state[el].ty.unwrap()));
-                    }
-                    let ty = self.fresh_cell();
-                    let element = self.state[el].term.expect("an element is compiled");
-                    vals.push(self.element_expr(wrapped, ty, element));
-                    tys.push(ty);
-                }
+    /// The type application is evaluated first, so the element's own type is
+    /// decided before the tail closes on it; an element that is not a call has
+    /// no application, and its own type is decided already.
+    ///
+    /// An entry that is still unresolved stays pending for the later pass: a
+    /// position whose type is open keeps its own undecided cell.
+    pub(super) fn resolve_shallow_types(&mut self) {
+        let shallow_types = std::mem::take(&mut self.shallow_types);
+        for (type_apply, tail, inner) in shallow_types {
+            if let Some(type_apply) = type_apply {
+                self.module.evaluate_node_deep(type_apply, None);
             }
-            mask.push(depths[i] == usize::MAX);
+            self.close_shallow_tail(tail, inner);
+            if self.module.node_value(AnyNodeId::Dynamic(tail)).is_none() {
+                self.shallow_types.push((type_apply, tail, inner));
+            }
         }
-        // `[values, [[slot…], [TupleType, Type]]]` — a tuple's shape, so a read
-        // selects the per-element slot.
-        let value = self.array_node_masked(self.current_block, &vals, &mask);
-        let mut slots = Vec::new();
-        for &ty in &tys {
-            slots.push(self.element_slot(None, Some(ty), None));
-        }
-        let shape = self.array_node(self.current_block, &slots);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.slot_expr(self.current_block, shape, kind);
-        let expr = self.expr_of(value, ty_node);
-        self.state[e].term = Some(expr);
-        self.state[e].val = Some(value);
-        self.state[e].ty = Some(ty_node);
-        expr
     }
 
     /// Close an open `@shallow` tail on the type its application decided.
     /// See `docs/notes/index-read-unify.md` §7.
     ///
     /// # Invariant
-    /// Only an **undecided** tail position is closed, and only when the type
-    /// application decided the head: a tail that already names a type states it,
-    /// and an undecided head has nothing to close. One level suffices — the closed
-    /// cell is the head's own tail, so every further read follows the same cell.
-    pub(super) fn close_shallow_tail(&mut self, tail: NodeId) {
-        let Some(inner) = shape::field_type(
-            &self.module,
-            shape::TypeRef::Term(AnyNodeId::Dynamic(tail)),
-            1,
-        ) else {
-            return;
-        };
-        let AnyNodeId::Dynamic(inner) = inner else {
-            return;
-        };
+    /// Only an **undecided** tail position is closed, and only when the
+    /// element's own type is decided: a tail that already names a type states
+    /// it, and an undecided type has nothing to close.
+    pub(super) fn close_shallow_tail(&mut self, tail: NodeId, inner: NodeId) {
+        self.module.evaluate_node_deep(inner, None);
         if self.module.node_value(AnyNodeId::Dynamic(inner)).is_none() {
+            return;
+        }
+        if self.module.node_value(AnyNodeId::Dynamic(tail)).is_none() {
             self.module.unify(tail, inner);
         }
     }
@@ -413,6 +465,9 @@ where
     /// a shared subexpression is never itself marked. The descent follows slot
     /// 1 only while the spine is a concrete expr at check time; an undecided
     /// slot ends it, and the wraps above the stop still apply.
+    ///
+    /// The descent stops at a spine node already walked: a spine that
+    /// repeats itself is a cycle, not a deeper level.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
         // Level 1 is the element's own expr; a call's is built from the
         // extracted value and type, the apply expr being virtual.
@@ -425,7 +480,8 @@ where
             // expr a read dereferences.
             levels.push((current, self.state[e].ty.unwrap()));
         } else {
-            while levels.len() < depth {
+            let mut walked: HashSet<NodeId> = HashSet::new();
+            while levels.len() < depth && walked.insert(current) {
                 // SAFETY: `current` is a live node of this module (a checked
                 // expression's term).
                 let Some(items) = (unsafe { self.module.array_items(current) }) else {
@@ -458,32 +514,6 @@ where
             ));
         }
         wrapped.unwrap_or(self.state[e].term.unwrap())
-    }
-
-    /// The array type `{ element_type, length }`, kinded as an array.
-    ///
-    /// # Invariant
-    /// The element type is checked in type position and the length in term
-    /// position; both compile identically, because a type expression is a
-    /// first-class value and the array type *is* its expr.
-    pub(super) fn check_array_type(
-        &mut self,
-        e: ExprId,
-        element_type: ExprId,
-        length: ExprId,
-    ) -> NodeId {
-        self.check_expr(element_type);
-        self.check_expr(length);
-        let length_value = self.value_of(length);
-        // The element is a **slot**, as a tuple's is.
-        let element = self.element_slot_of(element_type);
-        let shape = self.array_node(self.current_block, &[element, length_value]);
-        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let expr = self.slot_expr(self.current_block, shape, kind);
-        self.state[e].term = Some(expr);
-        self.state[e].val = Some(shape);
-        self.state[e].ty = Some(kind);
-        expr
     }
 
     /// The set type `set{E}`: the shape is the element **slot** alone.
@@ -521,5 +551,154 @@ where
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
         expr
+    }
+
+    /// The constructor result used for shape checks, or a direct template's value.
+    fn array_constructor_value(&mut self, template: ExprId) -> NodeId {
+        let applied = self
+            .type_applies
+            .get(&template)
+            .copied()
+            .and_then(|type_apply| self.module.applied_exprs.get(&type_apply).copied())
+            .and_then(|applied| self.module.expr_value_half(applied));
+        if let Some(value) = applied
+            && (shape::value_items(&self.module, AnyNodeId::Dynamic(value)).is_some()
+                || self.module.node_operation(value).is_some())
+        {
+            return value;
+        }
+        self.value_of(template)
+    }
+
+    /// The **element count** of an array value: its length less one.
+    ///
+    /// # Invariant
+    /// The array's first slot holds the element template, so the elements are
+    /// the rest.
+    fn array_length_of(&mut self, array_value: NodeId) -> NodeId {
+        let operands = self.array_node(self.current_block, &[array_value]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::ArrayLength),
+            Some(operands),
+        )
+    }
+
+    /// The template's **shape**: the element template and the element count.
+    ///
+    /// # Invariant
+    /// Both are read from the constructor result's **value**, never from the
+    /// syntax. An unevaluated result states no shape.
+    fn template_shape(&mut self, root: NodeId) -> Option<(NodeId, NodeId)> {
+        let requirement = self.element_template(root)?;
+        // The array's first slot holds the element template, so the elements
+        // are the rest.
+        let length = shape::value_len(&self.module, AnyNodeId::Dynamic(root))?;
+        // The count is fresh: the shared `0` and `1` are constants.
+        let count = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(length.saturating_sub(1)))),
+        );
+        Some((requirement, count))
+    }
+
+    /// The constructor result's **element template**: its value's first slot.
+    fn element_template(&self, root: NodeId) -> Option<NodeId> {
+        shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(root),
+            shape::ARRAY_VALUE_TEMPLATE_SLOT,
+        )
+        .and_then(|node| node.dynamic())
+    }
+
+    /// Check one array element without merging a wildcard's expression root.
+    fn check_array_element(&mut self, el: ExprId, element: NodeId, requirement: NodeId) {
+        let wildcard = shape::value_item(&self.module, AnyNodeId::Dynamic(requirement), 0)
+            .and_then(|node| self.module.node_value(node))
+            .and_then(|value| value.as_enum())
+            .is_some_and(|value| matches!(value, LowValue::Any));
+        if !wildcard {
+            self.check_unify(
+                element,
+                requirement,
+                self.loc(el, 1),
+                DiagKind::ArrayElement,
+            );
+            return;
+        }
+        let Some(actual) = shape::value_items(&self.module, AnyNodeId::Dynamic(element)) else {
+            return;
+        };
+        let Some(expected) = shape::value_items(&self.module, AnyNodeId::Dynamic(requirement))
+        else {
+            return;
+        };
+        for (actual, expected) in actual.iter().zip(expected.iter()).skip(1) {
+            if let (Some(actual), Some(expected)) = (actual.node.dynamic(), expected.node.dynamic())
+            {
+                // Two open slots state no constraint yet; a decided element still pins the shared type.
+                if self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(expected))
+                    .is_none()
+                    && self.module.node_operation(expected).is_none()
+                    && self.module.node_value(AnyNodeId::Dynamic(actual)).is_none()
+                    && self.module.node_operation(actual).is_none()
+                {
+                    continue;
+                }
+                self.check_unify(actual, expected, self.loc(el, 1), DiagKind::ArrayElement);
+            }
+        }
+    }
+
+    /// The template's **deferred shape**: its element template and length.
+    ///
+    /// # Invariant
+    /// The count is the named length — the node the parameter's cell is read
+    /// through, so a unify with it pins the cell. If the result names no
+    /// length, its own length read is used.
+    fn deferred_shape(&mut self, template: ExprId, root: NodeId) -> (NodeId, NodeId) {
+        if let Some((element, length)) = self.named_shape(template, root) {
+            return (element, length);
+        }
+        (self.index_of(root, self.zero()), self.array_length_of(root))
+    }
+
+    /// The element template and length the array template's operator names.
+    ///
+    /// # Invariant
+    /// The operand's two positions are the element template and length. Only
+    /// an array template has this operand.
+    fn named_shape(&self, template: ExprId, root: NodeId) -> Option<(NodeId, NodeId)> {
+        let operation = match self.type_applies.get(&template).copied() {
+            Some(type_apply) => {
+                let applied = self.module.applied_exprs.get(&type_apply).copied()?;
+                let value = self.module.expr_value_half(applied)?;
+                self.module.node_operation(value)?
+            }
+            None if matches!(self.ir[template].kind, ExprKind::Array { .. }) => {
+                self.module.node_operation(root)?
+            }
+            None => return None,
+        };
+        let operand = operation.operand?;
+        let items = shape::value_items(&self.module, AnyNodeId::Dynamic(operand))?;
+        if items.len() < 2 {
+            return None;
+        }
+        Some((items[0].node.dynamic()?, items[1].node.dynamic()?))
+    }
+
+    /// The value one more than `value`: the `+ 1` an array read's subscript is.
+    fn plus(&mut self, value: NodeId) -> NodeId {
+        let operands = self.array_node(self.current_block, &[value, self.one()]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::Add),
+            Some(operands),
+        )
     }
 }

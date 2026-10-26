@@ -9,8 +9,8 @@ use lichen_compute::language::LangProgram;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding, TileRefusal};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
-    LaneWidth, LaunchSet, ScalarClass, ScalarData, Slice, Space, TargetFacts,
+    IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth,
+    ScalarClass, ScalarData, Slice, Space, TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -132,16 +132,16 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
-Par = struct{{.n Int, .in In}}
-reduction = (k : Par) => {{
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
-  @loop fold = s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)) ~ "combine"))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (0, 0.0 ~ "identity"))))))
+In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
+Par := _x => {{.n @any : Int, .in In _}}
+reduction := (k <: Par) => {{
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
+  @loop fold := s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at 0}}) : Float)) ~ "combine"))
+  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (0, 0.0 ~ "identity")}}))}})
 }}
-k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
 k
 "#
     )
@@ -242,7 +242,7 @@ fn a_tiled_reduction_tiles_the_declared_sum() {
 fn a_second_combine_tiles_through_the_same_path() {
     let (_stub, _guard) = common::stub();
     // **The data is bounded**: a power of two at an even index, one at an odd one.
-    let data: Vec<i64> = (0..BOUND)
+    let _data: Vec<i64> = (0..BOUND)
         .map(|position| if position % 2 == 0 { 2 } else { 1 })
         .collect();
     for steps in [1u64, 3] {
@@ -279,7 +279,7 @@ fn a_second_combine_tiles_through_the_same_path() {
                 .body
                 .validate()
                 .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
-            let tiled_fragment = body_fragment(tiled.into_body(), true);
+            let _tiled_fragment = body_fragment(tiled.into_body(), true);
             // **The launch covers the elements the fold reads**, not the lanes it runs.
         }
     }

@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, BlockId, ExtensionDiagnostic, GlobalExt, LowOperator, LowShape, LowValue, Module,
-    ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt,
+    AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic, GlobalExt, LowOperator,
+    LowShape, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -194,6 +194,26 @@ pub trait Ctx<P: Program> {
     /// The canonical, shared `[string, Type]` type expression, shared like
     /// [`Self::int_type`].
     fn string_type(&self) -> NodeId;
+    /// The shared **`Tuple` template**: the `[TupleType, Type]` expression every
+    /// tuple value's type is.
+    ///
+    /// # Invariant
+    /// Referenced, never rebuilt: a tuple value's type is this one node, so a
+    /// read can require the layout by unifying with it.
+    fn tuple_template(&self) -> NodeId;
+    /// The shared **`Array` template**: the `[ArrayType, Type]` expression every
+    /// array value's type is.
+    ///
+    /// # Invariant
+    /// Referenced, never rebuilt, as [`Self::tuple_template`]'s is.
+    fn array_template(&self) -> NodeId;
+    /// The shared **`Struct` template**: the self-referential `[StructType, ↺]`
+    /// expression every struct value's type is.
+    ///
+    /// # Invariant
+    /// Its type slot is itself, so the layout closes on itself and a struct
+    /// value's type needs no second node.
+    fn struct_template(&self) -> NodeId;
     // The 9 marker-node accessors are registry-derived — one per kind marker.
     for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification, executed through the highlevel's own
@@ -429,6 +449,96 @@ where
     }
 }
 
+/// The built-in `Tuple` template constant — the shared `[TupleType, Type]`
+/// expression every tuple value's type is.
+///
+/// # Invariant
+/// It is **shared**, never rebuilt: a tuple value's type is this one node, so
+/// two tuple values are one type and a read can name the layout it requires.
+/// See `docs/notes/value-templates.md`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TupleTemplateLit;
+
+impl<P> LiteralExt<P> for TupleTemplateLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.tuple_type_marker_node();
+        let ty = ctx.universe();
+        let expr = ctx.tuple_template();
+        LiteralBuild {
+            expr,
+            value: value_node,
+            ty,
+        }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
+}
+
+/// The built-in `Array` template constant — the shared `[ArrayType, Type]`
+/// expression every array value's type is.
+///
+/// # Invariant
+/// It is shared, as [`TupleTemplateLit`]'s is; see
+/// `docs/notes/value-templates.md`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ArrayTemplateLit;
+
+impl<P> LiteralExt<P> for ArrayTemplateLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.array_type_marker_node();
+        let ty = ctx.universe();
+        let expr = ctx.array_template();
+        LiteralBuild {
+            expr,
+            value: value_node,
+            ty,
+        }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
+}
+
+/// The built-in `Struct` template constant — the shared `[StructType, ↺]`.
+///
+/// # Invariant
+/// It is **self-referential**: its type slot is itself, as the universe's is, so
+/// the struct layout closes on itself and a struct value's type needs no
+/// second node. See `docs/notes/value-templates.md`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct StructTemplateLit;
+
+impl<P> LiteralExt<P> for StructTemplateLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.type_struct_marker_node();
+        let expr = ctx.struct_template();
+        LiteralBuild {
+            expr,
+            value: value_node,
+            ty: expr,
+        }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
+}
+
 // The highlevel program's literal vocabulary: the built-in literals as sibling
 // carry variants.
 lichen_utils::enum_ext! {
@@ -443,6 +553,9 @@ lichen_utils::enum_ext! {
     + StringTypeLit as StringType;
     + TypeTypeLit as TypeType;
     + AnyLit as Any;
+    + TupleTemplateLit as TupleTemplate;
+    + ArrayTemplateLit as ArrayTemplate;
+    + StructTemplateLit as StructTemplate;
 }
 
 impl<P> LiteralExt<P> for HighProgramLiteral
@@ -459,6 +572,9 @@ where
             HighProgramLiteral::StringType(lit) => lit.build(ctx),
             HighProgramLiteral::TypeType(lit) => lit.build(ctx),
             HighProgramLiteral::Any(lit) => lit.build(ctx),
+            HighProgramLiteral::TupleTemplate(lit) => lit.build(ctx),
+            HighProgramLiteral::ArrayTemplate(lit) => lit.build(ctx),
+            HighProgramLiteral::StructTemplate(lit) => lit.build(ctx),
         }
     }
 
@@ -724,6 +840,22 @@ pub enum TypeOperator {
     /// The operand layout is [`TypeOperator::IsStructType`]'s; the decode is
     /// `shape::is_array_type_any`.
     IsArrayType,
+    /// The **array template's value**: `[template, length]` becomes
+    /// `[template, hole × length]`.
+    ///
+    /// # Invariant
+    /// The operand is `[template expr, length]`: the template is the array's own
+    /// element template and the length is a `USize`. An **undecided** length
+    /// keeps the operator lazy — the value is not allocated and the length is
+    /// never guessed.
+    ArrayTemplate,
+    /// The **length of an array value**: its element count.
+    ///
+    /// # Invariant
+    /// The operand is `[array value]`, and the answer is the value's length less
+    /// one: the array's first slot holds the element template, so the elements
+    /// are the rest. An undecided value keeps the operator lazy.
+    ArrayLength,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -877,6 +1009,8 @@ define_type_operator_codec! {
     Sin = 26;
     Cos = 27;
     Ln = 28;
+    ArrayTemplate = 29;
+    ArrayLength = 30;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -942,7 +1076,7 @@ where
     P: Program,
     P::Value: ValueType,
 {
-    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
         // An undecided answer is `None` (see `OperatorExt::run`); the closure
         // gives every early `return` one return type.
         (|| match self {
@@ -1017,6 +1151,61 @@ where
                     }
                     _ => None,
                 }
+            }
+            // The **array template's value**: the element template and one fresh
+            // hole per element.
+            TypeOperator::ArrayTemplate => {
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                    unreachable!("the array template expects a two-element operand array")
+                };
+                // SAFETY: `operands` is the array the VM just evaluated for this
+                // node; its home block is alive here.
+                let items = unsafe { operands.items() };
+                if items.len() < 2 {
+                    return None;
+                }
+                // An undecided length keeps the operator lazy: the value is not
+                // allocated and the length is never guessed.
+                let Some(LowValue::USize(length)) = module
+                    .node_value(items[1].node)
+                    .and_then(|value| value.as_enum())
+                else {
+                    return None;
+                };
+                // The holes are full placeholder expressions, so a read of an
+                // element reads a slot and not a bare cell.
+                let layout = module.full_width_layout().unwrap_or(0);
+                let width = module.attribute_layout(layout).len();
+                let mut values = Vec::with_capacity(length + 1);
+                values.push(ArrayItem::template(items[0].node));
+                for _ in 0..length {
+                    values.push(ArrayItem::new(AnyNodeId::Dynamic(placeholder_expr(
+                        module, block, width, layout,
+                    ))));
+                }
+                Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                    module.alloc_array(&values, block),
+                    0,
+                ))))
+            }
+            // The **array value's length**: its element count.
+            TypeOperator::ArrayLength => {
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                    unreachable!("the array length expects a one-element operand array")
+                };
+                // SAFETY: `operands` is the array the VM just evaluated for this
+                // node; its home block is alive here.
+                let items = unsafe { operands.items() };
+                let Some(value) = items.first().and_then(|item| module.node_value(item.node))
+                else {
+                    return None;
+                };
+                let Some(LowValue::Array(array)) = value.as_enum() else {
+                    return None;
+                };
+                // SAFETY: `array` is the payload of a live value of this module.
+                let length = unsafe { array.items() }.len();
+                Some(P::Value::from(LowValue::USize(length.saturating_sub(1))))
             }
             TypeOperator::Add
             | TypeOperator::Sub
@@ -1169,6 +1358,11 @@ where
                     | TypeOperator::Ln => {
                         unreachable!("the prefix scalar operators are unary, and handled above")
                     }
+                    // The array operators are unary or own their operand layout,
+                    // and are handled above.
+                    TypeOperator::ArrayTemplate | TypeOperator::ArrayLength => {
+                        unreachable!("the array operators are handled above")
+                    }
                     // The refinement's membership test; the outer arm already
                     // gated on an undecided side.
                     TypeOperator::InDomain => {
@@ -1262,8 +1456,67 @@ where
             TypeOperator::IsStructType => Some(LowShape::USize),
             TypeOperator::IsTupleType => Some(LowShape::USize),
             TypeOperator::IsArrayType => Some(LowShape::USize),
+            // The array template's value states **no** shape.
+            TypeOperator::ArrayTemplate => None,
+            // A count is a machine scalar.
+            TypeOperator::ArrayLength => Some(LowShape::USize),
         }
     }
+}
+
+/// A fresh **placeholder expression** — the hole an array template's element
+/// position is.
+///
+/// # Invariant
+/// It is a full expression, exactly as a written `_` is: a fresh value cell, a
+/// fresh type cell, and one fresh `[value, type]` expression per attribute
+/// position, at the full-width layout. A bare cell would be read as a slot's
+/// value, and a read of the element would miss the type and the attributes.
+pub(crate) fn placeholder_expr<P: Program>(
+    module: &mut Module<P>,
+    block: BlockId,
+    width: usize,
+    layout: u32,
+) -> NodeId
+where
+    P::Value: ValueType,
+{
+    let any = module.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+    let value = module.add_node(block, None, None);
+    let ty = module.add_node(block, None, None);
+    let mut items = vec![
+        ArrayItem::new(AnyNodeId::Dynamic(value)),
+        ArrayItem::new(AnyNodeId::Dynamic(ty)),
+    ];
+    for _ in 0..width {
+        let slot_value = module.add_node(block, None, None);
+        let slot_type = module.add_node(block, None, None);
+        let mut slot_items = vec![
+            ArrayItem::new(AnyNodeId::Dynamic(slot_value)),
+            ArrayItem::new(AnyNodeId::Dynamic(slot_type)),
+        ];
+        slot_items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(any)),
+            width,
+        ));
+        let slot = module.alloc_array(&slot_items, block);
+        let slot = module.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                slot, layout,
+            )))),
+        );
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(slot)));
+    }
+    let array = module.alloc_array(&items, block);
+    module.add_node(
+        block,
+        None,
+        Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+            array, layout,
+        )))),
+    )
 }
 
 /// A `Div`/`Rem` whose divisor evaluated to zero: record why and stay lazy.

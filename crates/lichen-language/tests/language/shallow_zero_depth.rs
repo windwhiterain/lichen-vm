@@ -30,26 +30,26 @@ fn assert_refused_once(source: &str, span: (u32, u32)) {
 #[test]
 fn a_shallow_depth_of_zero_is_refused_where_it_stands_alone() {
     // The unmarked program is what a depth of zero degrades to, and it checks.
-    let unmarked = compile("[1, 2]");
+    let unmarked = compile("A := _x => [@any, 2]\nA[1, 2]");
     assert!(
         unmarked.ok(),
         "the control checks: {:?}",
         unmarked.diagnostics
     );
-    assert_refused_once("[@shallow(0) 1, 2]", (1, 2));
+    assert_refused_once("A := _x => [@any, 2]\nA[@shallow(0) 1, 2]", (2, 3));
 }
 
 /// A depth of at least 1 is accepted — the bound's other side.
 #[test]
 fn a_shallow_depth_of_one_is_still_accepted() {
-    let report = compile("[@shallow(1) 1, 2]");
+    let report = compile("A := _x => [@any, 2]\nA[@shallow(1) 1, 2]");
     assert!(report.ok(), "a depth of 1 checks: {:?}", report.diagnostics);
 }
 
 /// The bare mark carries no depth, so the bound does not reach it.
 #[test]
 fn a_bare_shallow_mark_is_still_accepted() {
-    let report = compile("[@shallow 1, 2]");
+    let report = compile("A := _x => [@any, 2]\nA[@shallow 1, 2]");
     assert!(
         report.ok(),
         "the bare mark checks: {:?}",
@@ -60,8 +60,8 @@ fn a_bare_shallow_mark_is_still_accepted() {
 /// The resolver reports once per marker, and this stage never deduplicates.
 #[test]
 fn a_repeated_zero_depth_is_refused_once_at_each_marker() {
-    let d = refusals("[@shallow(0) 1, @shallow(0) 2]");
+    let d = refusals("A := _x => [@any, 2]\nA[@shallow(0) 1, @shallow(0) 2]");
     assert_eq!(d.len(), 2, "one refusal per marker: {d:?}");
-    assert_eq!(d[0].span, Some((1, 2)), "the first marker");
-    assert_eq!(d[1].span, Some((1, 17)), "the second marker");
+    assert_eq!(d[0].span, Some((2, 3)), "the first marker");
+    assert_eq!(d[1].span, Some((2, 18)), "the second marker");
 }

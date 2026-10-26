@@ -648,6 +648,7 @@ impl<P: Program> Module<P> {
                 LowValue::Function(fid) => Some(fid),
                 _ => None,
             })
+            .map(|function| self.resolve_constructor(function))
     }
 
     /// The parameter expr and return type cell a function itself states, or `None`
@@ -738,6 +739,7 @@ impl<P: Program> Module<P> {
                 LowValue::Function(function) => Some(function),
                 _ => None,
             })
+            .map(|function| self.resolve_constructor(function))
     }
 
     /// How many canonical attributes the array's layout lists.
@@ -900,6 +902,128 @@ impl<P: Program> Module<P> {
         ok
     }
 
+    /// The function whose application produced `value`, when that owner is recorded.
+    fn applied_constructor(&mut self, value: NodeId) -> Option<AnyFunctionId> {
+        if !self.nodes.contains_key(value) {
+            return None;
+        }
+        let root = self.class_root(value);
+        let direct = self.apply_result_owners.get(&value).copied();
+        let apply = direct
+            .or_else(|| self.apply_result_owners.get(&root).copied())
+            .or_else(|| {
+                self.apply_result_owners
+                    .iter()
+                    .find_map(|(candidate, apply)| {
+                        (self.nodes.contains_key(*candidate) && self.class_root(*candidate) == root)
+                            .then_some(*apply)
+                    })
+            })?;
+        let operation = self.node_operation(apply)?;
+        if !matches!(
+            AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+            Some(crate::LowOperator::Apply)
+        ) {
+            return None;
+        }
+        let items = self.operand_items(operation.operand?).ok()?;
+        match self
+            .node_value(items.first()?.node)
+            .and_then(|value| value.as_enum())
+        {
+            Some(LowValue::Function(function)) => Some(function),
+            _ => None,
+        }
+    }
+
+    /// A unique wildcard constructor applied in `function`'s own scope.
+    fn wildcard_constructor_in_function(&self, function: AnyFunctionId) -> Option<AnyFunctionId> {
+        let AnyFunctionId::Dynamic(function) = function else {
+            return None;
+        };
+        let nodes = self.functions.get(function)?.nodes.clone();
+        let mut found = None;
+        for node in nodes {
+            if !self.nodes.contains_key(node) {
+                continue;
+            }
+            let Some(operation) = self.node_operation(node) else {
+                continue;
+            };
+            if !matches!(
+                AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                Some(crate::LowOperator::Apply)
+            ) {
+                continue;
+            }
+            let Ok(items) = self.operand_items(operation.operand?) else {
+                continue;
+            };
+            let Some(LowValue::Function(candidate)) = self
+                .node_value(items.first()?.node)
+                .and_then(|value| value.as_enum())
+            else {
+                continue;
+            };
+            if !self.is_wildcard_constructor(candidate) {
+                continue;
+            }
+            if found.is_some_and(|found| !self.function_identity_equal(found, candidate)) {
+                return None;
+            }
+            found = Some(candidate);
+        }
+        found
+    }
+
+    /// Record one constructor choice, rejecting a conflicting later choice.
+    fn bind_constructor(&mut self, wildcard: AnyFunctionId, constructor: AnyFunctionId) -> bool {
+        if self.function_identity_equal(wildcard, constructor) {
+            return true;
+        }
+        if self.constructor_bindings.contains_key(&wildcard) {
+            return self.function_identity_equal(self.resolve_constructor(wildcard), constructor);
+        }
+        self.constructor_bindings.insert(wildcard, constructor);
+        true
+    }
+
+    /// Bind a wildcard constructor when two function parameters meet.
+    fn infer_constructor_binding(
+        &mut self,
+        a_function: AnyFunctionId,
+        a: NodeId,
+        b_function: AnyFunctionId,
+        b: NodeId,
+    ) -> bool {
+        let a_constructor = self.applied_constructor(a);
+        let b_constructor = self.applied_constructor(b);
+        if let (Some(a_constructor), Some(b_constructor)) = (a_constructor, b_constructor) {
+            let a_wildcard = self.is_wildcard_constructor(a_constructor);
+            let b_wildcard = self.is_wildcard_constructor(b_constructor);
+            match (a_wildcard, b_wildcard) {
+                (true, false) => return self.bind_constructor(a_constructor, b_constructor),
+                (false, true) => return self.bind_constructor(b_constructor, a_constructor),
+                _ => {}
+            }
+        }
+        let a_wildcard = self.wildcard_constructor_in_function(a_function);
+        let b_wildcard = self.wildcard_constructor_in_function(b_function);
+        match (a_wildcard, b_wildcard, a_constructor, b_constructor) {
+            (Some(wildcard), None, _, Some(constructor))
+                if !self.is_wildcard_constructor(constructor) =>
+            {
+                self.bind_constructor(wildcard, constructor)
+            }
+            (None, Some(wildcard), Some(constructor), _)
+                if !self.is_wildcard_constructor(constructor) =>
+            {
+                self.bind_constructor(wildcard, constructor)
+            }
+            _ => true,
+        }
+    }
+
     /// Recursive core of [`Self::unify`]; `path` guards class exprs, `depth` the node-less ones.
     #[stacksafe]
     fn unify_inner(
@@ -960,6 +1084,16 @@ impl<P: Program> Module<P> {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
                     self.unify_array_items(pa, pb, path, depth, steps, any_path, root)
                 }
+                (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
+                    match self.unify_function_signatures(a, b, path, depth, steps, any_path, root) {
+                        Some(ok) => ok,
+                        None if self.function_identity_equal(a, b) => true,
+                        None => {
+                            self.record_value_error(root, Some(x), Some(y));
+                            false
+                        }
+                    }
+                }
                 // Two functions are one when their identities resolve to one
                 // logical function — the frozen/static expr included.
                 _ if self.value_expr_equal(x, y) => true,
@@ -1010,53 +1144,30 @@ impl<P: Program> Module<P> {
                         }
                         ok
                     }
-                    // A function's own cells, as an array's elements are the array's:
-                    // `[parameter, return]` decides it.
+                    // A function's parameter and return decide its signature.
                     (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
-                        let (Some((parameter_a, return_a)), Some((parameter_b, return_b))) =
-                            (self.function_cells(a), self.function_cells(b))
-                        else {
-                            // A template that states no signature states nothing: only
-                            // the values themselves can decide.
-                            return if self.function_identity_equal(a, b) {
+                        path.insert(ra, rb);
+                        let matched = self
+                            .unify_function_signatures(a, b, path, depth, steps, any_path, root);
+                        path.remove(ra, rb);
+                        match matched {
+                            Some(true) => {
                                 self.add_equality(ra, rb);
                                 true
-                            } else {
-                                self.record_error(ra, rb, steps, root);
-                                false
-                            };
-                        };
-                        path.insert(ra, rb);
-                        let mut ok = true;
-                        for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]
-                            .into_iter()
-                            .enumerate()
-                        {
-                            steps.push(UnifyStep {
-                                index: i,
-                                a: node_or_default(na),
-                                b: node_or_default(nb),
-                            });
-                            let child_ok = self.unify_inner(
-                                Side::of(na, self.node_value(na)),
-                                Side::of(nb, self.node_value(nb)),
-                                path,
-                                depth + 1,
-                                steps,
-                                any_path,
-                                root,
-                            );
-                            steps.pop();
-                            if !child_ok {
-                                ok = false;
-                                break;
+                            }
+                            Some(false) => false,
+                            None => {
+                                // A template that states no signature states nothing: only
+                                // the values themselves can decide.
+                                if self.function_identity_equal(a, b) {
+                                    self.add_equality(ra, rb);
+                                    true
+                                } else {
+                                    self.record_error(ra, rb, steps, root);
+                                    false
+                                }
                             }
                         }
-                        path.remove(ra, rb);
-                        if ok {
-                            self.add_equality(ra, rb);
-                        }
-                        ok
                     }
                     // Fully equal by content ([`ValueExt::value_eq`]), not the cheap [`PartialEq`].
                     _ if x.value_eq(&y) => {
@@ -1070,6 +1181,60 @@ impl<P: Program> Module<P> {
                 }
             }
         }
+    }
+
+    /// Compare function parameter and return cells; `None` means no signature.
+    fn unify_function_signatures(
+        &mut self,
+        a: AnyFunctionId,
+        b: AnyFunctionId,
+        path: &mut AncestorPairs<NodeId>,
+        depth: usize,
+        steps: &mut Vec<UnifyStep>,
+        any_path: &mut AncestorPairs<AnyNodeId>,
+        root: (NodeId, NodeId),
+    ) -> Option<bool> {
+        let (Some((parameter_a, return_a)), Some((parameter_b, return_b))) =
+            (self.function_cells(a), self.function_cells(b))
+        else {
+            return None;
+        };
+        if let (Dyn(parameter_a), Dyn(parameter_b)) = (parameter_a, parameter_b)
+            && let (Some(value_a), Some(value_b)) = (
+                self.expr_value_half(parameter_a),
+                self.expr_value_half(parameter_b),
+            )
+            && !self.infer_constructor_binding(a, value_a, b, value_b)
+        {
+            self.record_value_error(root, None, None);
+            return Some(false);
+        }
+        let mut ok = true;
+        for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]
+            .into_iter()
+            .enumerate()
+        {
+            steps.push(UnifyStep {
+                index: i,
+                a: node_or_default(na),
+                b: node_or_default(nb),
+            });
+            let child_ok = self.unify_inner(
+                Side::of(na, self.node_value(na)),
+                Side::of(nb, self.node_value(nb)),
+                path,
+                depth + 1,
+                steps,
+                any_path,
+                root,
+            );
+            steps.pop();
+            if !child_ok {
+                ok = false;
+                break;
+            }
+        }
+        Some(ok)
     }
 
     /// Whether two decided leaf values are one: functions by identity, else full value equality.

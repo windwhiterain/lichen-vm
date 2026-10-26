@@ -34,23 +34,30 @@ below.
 | form | container | result | notes |
 |---|---|---|---|
 | `a(k)` | tuple value | the slot's value | index is a full expression |
-| `a[i]` | array value | the element | out of bounds is refused |
+| `a[i]` | array value | the element | the index is comma-free; out of bounds is refused |
 | `a.name` | struct instance | the field's value | missing name is refused with a suggestion |
 | `t <== k` | table value | the value stored under `k` | a miss is a diagnostic |
 | `x @in s` | value, set | `Int` (0/1) | set membership |
 
-The container kind is required by each form; a wrong kind is a check-time
-refusal, never a runtime dispatch (Chapter 7's table).
+The container's layout is required by each form; a wrong layout is a
+check-time refusal, never a runtime dispatch (Chapter 7's table).
 
-## Annotations and marks
+## Annotations, requirements and marks
 
 | form | slot | checked how |
 |---|---|---|
 | `e : T` | type | unification |
+| `a <: c` | constructor | `a` unified with the requirement `c _` returns; `c` is applied once |
 | `e # p` | perspective | divisibility of the requirement against the provider (Chapter 13) |
 | `e ! p` | refinement | the predicate must answer `1` (Chapter 11) |
 | `e ? d` | doc | never constrains; a later doc overrides |
 | `e ~ "text"` | mark | compile-time metadata; no slot, no value |
+
+A **requirement** states what one position of a compound must be: a tuple of
+requirements, `[requirement, length]`, or `{.name requirement, …}`. The
+requirement `@any : T` asks for any value of type `T`, and `v : T` pins
+the value as well (Chapter 10). A **constructor** is the function that
+returns a fresh requirement when it is applied, and `<:` applies it once.
 
 ## The `$` form
 
@@ -65,4 +72,7 @@ written only in a plugin's own source.
   arithmetic operators are class-tied to `{Int, Float}`.
 - There is no boolean type; comparisons answer `0`/`1`, and `& | ^` over
   them are the logical connectives.
-- There is no ternary; `if` is an expression over a lazy two-element array.
+- There is no ternary; `if` is the lazy read of one element of a
+  two-element tuple.
+- There is no thin arrow; a function's signature is written with `=>` and
+  unified with plain `=` against a function template.

@@ -11,7 +11,7 @@ with their own type forms.
 A table is a constant mapping written with `==>` exprs:
 
 ```lichen
-t = table(1 ==> 10, 2 ==> 20)
+t := table(1 ==> 10, 2 ==> 20)
 t
 ```
 
@@ -22,15 +22,15 @@ table(1 ==> 10, 2 ==> 20): table{Int, Int}
 The type is `table{K, V}`: the key and value **slots**, one type each.
 Every entry's key shares the key slot and every value the value slot, so
 a table is homogeneous in both directions. A table's keys and values may
-be any values, including tuples, arrays, and type values:
+be any values, including tuples and type values:
 
 ```lichen
-t = table([1, 2] ==> 10, [3, 4] ==> 20)
-(t <== [1, 2], t <== [3, 4])
+t := table((1, 2) ==> 10, (3, 4) ==> 20)
+(t <== (1, 2), t <== (3, 4))
 ```
 
 ```text
-(10, 20): tuple{Int, Int}
+(10, 20): Tuple
 ```
 
 ### Reading a table
@@ -39,12 +39,12 @@ t = table([1, 2] ==> 10, [3, 4] ==> 20)
 equal to `k`:
 
 ```lichen
-t = table((1, 2) ==> "expr", (3, 4) ==> "other")
+t := table((1, 2) ==> "expr", (3, 4) ==> "other")
 (t <== (1, 2), t <== (3, 4))
 ```
 
 ```text
-("expr", "other"): tuple{string, string}
+("expr", "other"): Tuple
 ```
 
 The read needs the table's type decided at the read: a literal table or an
@@ -58,7 +58,7 @@ and arrays compare by **content**, a nested table compares by
 tuples are the same key, while two separately built tables are not:
 
 ```lichen
-t = table(table() ==> 1)
+t := table(table() ==> 1)
 t <== table()
 ```
 
@@ -74,8 +74,8 @@ The fresh `table()` is a different object from the stored one, so it is a
 different key. A function, on the other hand, is found by its identity:
 
 ```lichen
-f = x => x
-t = table(f ==> 1)
+f := x => x
+t := table(f ==> 1)
 t <== f
 ```
 
@@ -89,7 +89,7 @@ Looking up a key that is not in the table is refused where the read is
 written:
 
 ```lichen
-t = table(1 ==> 10, 2 ==> 20)
+t := table(1 ==> 10, 2 ==> 20)
 t <== 9
 ```
 
@@ -113,7 +113,7 @@ binary level — looser than a comparison, so its key is a whole comparison
 expression:
 
 ```lichen
-t = table(1 ==> 10, 2 ==> 20)
+t := table(1 ==> 10, 2 ==> 20)
 t <== 1 + 1
 ```
 
@@ -151,12 +151,12 @@ be members, not how many there are:
 ```
 
 ```text
-(set(1), set(1, 2)): tuple{set{Int}, set{Int}}
+(set(1), set(1, 2)): Tuple
 ```
 
 The value of a set is its members; what makes it a set is its type. A set
-is not an array: it is not indexable, and it cannot flow into an
-`array{…}` parameter. `set()` is the empty set, with an open element slot.
+is not an array: it is not indexable, and it cannot flow into an `Array`
+parameter. `set()` is the empty set, with an open element slot.
 
 ### Membership
 
@@ -168,7 +168,7 @@ is not an array: it is not indexable, and it cannot flow into an
 ```
 
 ```text
-(1, 0): tuple{Int, Int}
+(1, 0): Tuple
 ```
 
 The right operand's type must be decided at the read: a set literal is
@@ -192,8 +192,8 @@ error: expected set{?a}, found Int
 ```
 
 Membership is the only read a set has. `set(1, 2)[0]` is refused with
-`expected TypeArray, found SetType`: the bracket read requires an array
-kind, and a set is a different kind.
+`expected Array, found set{Int}`: the bracket read requires the array
+layout, and a set is a different one.
 
 ### Sets of types are classes
 
@@ -201,12 +201,12 @@ The members of a set may be *types*, and that is how the language names a
 group of types:
 
 ```lichen
-Num = set(Int, Float)
+Num := set(Int, Float)
 (Int @in Num, Float @in Num, string @in Num)
 ```
 
 ```text
-(1, 1, 0): tuple{Int, Int, Int}
+(1, 1, 0): Tuple
 ```
 
 `Num` is a set value whose type is `set{Type}`; membership compares the
@@ -242,5 +242,5 @@ about writing such contracts yourself.
 4. Write a set of the first three primes and test membership of `2`, `4`,
    and `Int`.
 5. Explain why `set(1, 2)[0]` is refused, and what the diagnostic names.
-6. Write `Num = set(Int, Float)` and test `Int`, `Float` and `string`
+6. Write `Num := set(Int, Float)` and test `Int`, `Float` and `string`
    against it.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use lichen_compute::language::LangProgram;
 
-const GC_SOURCE: &str = "add = x => y => x + y\ndouble = n => @gc { a = n + 1\n b = add a a\n b }\n@gc [double 3, double 7]";
+const GC_SOURCE: &str = "add := x => y => x + y\ndouble := n => @gc { a := n + 1\n b := add a a\n b }\n@gc [double 3, double 7]";
 
 /// The panic's own first line, so a diagnostic `assert!` cannot be read as the SlotMap panic.
 fn message(payload: &(dyn std::any::Any + Send)) -> String {

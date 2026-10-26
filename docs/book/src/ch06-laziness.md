@@ -8,7 +8,7 @@ apply, which is checking.
 
 ## What is evaluated, and when
 
-A lichen program is a graph. A binding's name is a node; an array element
+A lichen program is a graph. A binding's name is a node; a tuple element
 is a node; a function body is an expression. A node's value may not be
 computed yet — it may be a **thunk**, an expression waiting to be
 evaluated. Reading the node computes it, writes the result into the node,
@@ -24,51 +24,58 @@ end.
 The places where a reading program does *not* need a value are the same
 places where lichen does not compute it:
 
-- An array element is computed when it is read: `[1 / 0, 2][1]` is `2`,
+- A tuple element is computed when it is read: `(1 / 0, 2)(1)` is `2`,
   and the unread element's refusal is not in the way.
-- A tuple element is computed when it is read: `t = (1 / 0, 2); t(1)` is
-  `2`.
-- An `if`'s untaken branch is an unread array element.
+- An array element is computed when it is read.
+- An `if`'s untaken branch is an unread tuple element.
 - A function body is computed when the function is applied, and a branch
   that selects by index computes only the selected element — Chapter 4's
   `fib` is the example: it terminates at `0` because the sum it does not
   select is never evaluated.
 
 ```lichen
-((1 / 0) + 1, [1 / 0, 2][1])
+((1 / 0) + 1, (1 / 0, 2)(1))
 ```
 
 ```text
-(none, 2): tuple{Int, Int}
+(none, 2): Tuple
 ```
 
 The first element is `none`: a refused computation's value (below). The
-second is `2`, because the array's first element was never read.
+second is `2`, because the tuple's first element was never read.
 
 ## Checks are not lazy
 
 The checker's job is to decide types, and it does that by evaluating the
-program. So while the *values* are lazy, the *checker* evaluates the
-program far enough to type every expression — including expressions whose
-values would never be used. An error that is found while checking is
-reported wherever it is written:
+program. So a read that is written where a value is needed is checked
+there, even when the value would never be used:
 
 ```lichen
-f = x => [1, 2][5]
+f := x => ([@any : Int, 3])[5]
 ```
 
 ```text
-error: index 5 out of bounds (array length 2)
-  --> 1:17
+error: index 5 out of bounds (array length 3)
+  --> 1:29
    |
- 1 | f = x => [1, 2][5]
-   |                 ^
+ 1 | f := x => ([@any : Int, 3])[5]
+   |                             ^
 ```
 
 The index is checked even though `f` is never applied and its body is
-never evaluated by the program. The same holds for an index inside an
-untaken branch: the branch is a value the program would not need, but it
-is still an expression the checker types.
+never evaluated by the program.
+
+There is one exception, and it is the `if`: its two branches are a
+tuple's elements, and only the taken one is read. A fault written in the
+**untaken** arm is therefore not found:
+
+```lichen
+if 1 == 1 then 1 else 1 + "a"
+```
+
+```text
+1: Int
+```
 
 So there are two different things that can go wrong, and they behave
 differently:
@@ -83,42 +90,69 @@ structures that need the first kind to be held back.
 
 ## Infinite structures and `@shallow`
 
-An array's elements share one type, and the checker evaluates them to
+An array's elements share one requirement, and the checker evaluates them to
 find it. A definition that puts a call to itself in an array would
 therefore be unfolded forever. The marker `@shallow` says the element's
 value stays lazy in the checker's evaluation:
 
+> **The array instance is not accepted yet.** The compiler refuses `T[1, 2]`
+> with `expected Array, found Array` — Chapter 7 says where — so the
+> programs in this section state the rule and the answers they are written
+> to give.
+
 ```lichen
-nats = (n : Int) => [n, @shallow nats (n + 1)]
-ns = (nats 0 : tuple{Int, tuple{Int, tuple{Int, tuple{Int, tuple{Int, _}}}}})
-(ns(1)(0), ns(1)(1)(0), ns(1)(1)(1)(0), ns(1)(1)(1)(1)(0))
+T := _x => [@any, 2]
+nats := (n : Int) => T[n, @shallow nats (n + 1)]
+ns := nats 0
+(ns[1][0], ns[1][1][0], ns[1][1][1][0], ns[1][1][1][1][0])
 ```
 
 ```text
-(1, 2, 3, 4): tuple{Int, Int, Int, Int}
+(1, 2, 3, 4): Tuple
 ```
 
-`nats 0` is the array `[0, @shallow nats 1]`. Reading `ns(1)` gets the
-element at position 1 — the marked call — and reading `(0)` of that gets
-its first element, `1`; one more `(1)(0)` expr walks one step further.
-The stream has no end, and every read walks only as far as it needs.
+`nats 0` is the array `[0, @shallow nats 1]`. Reading `ns[1]` gets the
+element at position 1 — the marked call — and reading `[0]` of that gets
+its first element, `1`; one more `[1][0]` walk one step further. The
+stream has no end, and every read walks only as far as it needs.
 
 Without the marker the same definition does not check: the checker
-unfolds the element, and the diagnostic repeats at every level it
-reaches. `@shallow` is what makes an infinite list expressible, and it
-appears only inside array literals.
+unfolds the element, and stops on its budget:
+
+```lichen
+T := _x => [@any, 2]
+nats := (n : Int) => T[n, nats (n + 1)]
+ns := nats 0
+ns[1][0]
+```
+
+```text
+error: the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The program may still terminate when run.
+  --> 1:10
+   |
+ 1 | T := _x => [@any, 2]
+   |          ^
+```
+
+`@shallow` is what makes an infinite list expressible, and it appears
+only inside an array instance's element.
 
 The marker has two spellings. The bare `@shallow` keeps the whole value
 subtree lazy, and `@shallow(n)` keeps the value slot shallow at each of
 the first `n` levels of the element's type spine. The depth is a bound of
 at least `1`; a depth of `0` marks no level, and is refused:
 
+```lichen
+T := _x => [@any : Int, 2]
+T[@shallow(0) 5, 6]
+```
+
 ```text
-error: a `@shallow` depth of 0 marks no level — …
-  --> 1:2
+error: a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely
+  --> 2:3
    |
- 1 | [@shallow(0) 5]
-   |  ^
+ 2 | T[@shallow(0) 5, 6]
+   |   ^
 ```
 
 The mark is a **value** mark, not a type mark: it says the element's
@@ -175,15 +209,15 @@ a failed *check* stops the build.
 
 ## Sharing
 
-A binding is sharing, not copying. `x = 2 + 3` binds the name `x` to one
+A binding is sharing, not copying. `x := 2 + 3` binds the name `x` to one
 node, and every use of `x` reads that node; the value is computed once
 and every use sees it. The same is true of a function's captured
 environment: a closure points at the enclosing block's nodes rather than
 duplicating them.
 
 This is the property that Chapter 3's self-reference rule follows from: a
-block-wide binding's name *is* its value's node, so a value that read the
-binding would be reading itself. It is also why a bound infinite
+block-wide binding's name *is* its value's own node, so a value that read
+the binding would be reading itself. It is also why a bound infinite
 structure stays cheap: `ns` is one node, and the walks through it share
 the prefix they have already built.
 
@@ -194,15 +228,16 @@ a scope of its own, so that the nodes it builds can be released once its
 value has been read:
 
 ```lichen
-add = x => y => x + y
-double = n => @gc { a = n + 1
-                   b = add a a
+add := x => y => x + y
+double := n => @gc { a := n + 1
+                   b := add a a
                    b }
-@gc [double 3, double 7]
+T := _x => [@any : Int, 2]
+@gc T[double 3, double 7]
 ```
 
 ```text
-[8, 16]: array{Int, 2}
+[8, 16]: Array
 ```
 
 `@gc e` is a prefix marker at the same level as `@assert`, so it takes a
@@ -229,11 +264,11 @@ scope leaves a dangling reference. The mechanism's note is
 
 - Values are computed on demand and at most once; a reading program
   computes only what its answer needs.
-- Arrays, tuples, `if` branches, and function bodies are the places a
+- Tuples, arrays, `if` branches, and function bodies are the places a
   value can wait.
-- Checking is *not* lazy: an out-of-bounds index or a type error is
-  reported wherever it is written, even where its value would never be
-  used.
+- Checking follows the values: a read written where a value is needed is
+  checked there, but an `if`'s untaken arm is never read and so is never
+  checked.
 - `@shallow` keeps an array element's value lazy so an infinite structure
   can be written; its depth form keeps the first `n` levels shallow, and a
   depth of zero is refused.
@@ -246,11 +281,11 @@ scope leaves a dangling reference. The mechanism's note is
 ## Exercises
 
 1. Write an infinite stream of squares and read its first four values.
-2. Explain why `[1 / 0, 2][1]` is `2` but `f = x => [1, 2][5]` fails the
-   build.
+2. Explain why `(1 / 0, 2)(1)` is `2` but `f := x => ([@any : Int, 3])[5]`
+   fails the build.
 3. What does `(1 / 0) + 1` print, and why is that not an error?
 4. Wrap a block in `@gc` and describe what the marker lets the program do
    that it could not do otherwise.
-5. Try `[@shallow(0) 5]` and explain the refusal.
+5. Try `[@any : Int, 2][@shallow(0) 5, 6]` and explain the refusal.
 6. Write a function whose body is a large block, call it twice, and wrap the
    block in `@gc`. What is released, and when?

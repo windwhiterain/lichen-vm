@@ -1,13 +1,12 @@
 ---
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
-whose base case is a comparison and whose step is a remainder.  The parameter is a
-expr, so the recursion carries both numbers.  A function's type is the function
-itself (`f : f`), and an annotation states one by binding that function's own two
-cells — so `: tuple{Int, Int} -> Int` *is* the constraint rather than a check beside it,
-and the self-recursive result's type follows from it (`6: Int`).  Nothing carries
-the `raw` mark, because the type is decided."
+whose base case is a comparison and whose step is a remainder. The parameter is a
+pair template, so each call unifies its argument with the template applied once.
+The body is annotated as `Int`, so the recursive result's type is decided (`6: Int`).
+Nothing carries the `raw` mark."
   output = "6: Int"
 ---
-gcd = ((p : tuple{Int, Int}) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
+Pair := _x => (@any : Int, @any : Int)
+gcd := (p <: Pair) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)

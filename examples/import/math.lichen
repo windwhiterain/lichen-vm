@@ -1,6 +1,6 @@
 ---
   order = "0"
-  output = "(Int => Int, raw[?a, ?b] => raw[?a, ?b] -> raw[?a, ?b]): struct{.succ Int -> Int, .add raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]}"
+  output = "(Int => Int, ?a => ?a => ?a): Struct"
 ---
-succ = x => x + 1
-add = x => y => x + y
+succ := x => x + 1
+add := x => y => x + y

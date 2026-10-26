@@ -7,8 +7,6 @@
 //! the process and loses the tail of its output. Nothing here asserts: the run's own limits
 //! are the reading.
 
-use lichen_compute::language::new_store;
-
 use super::common;
 
 /// Append one line to the probe's log; a fresh handle per line flushes it.
@@ -28,22 +26,22 @@ fn a_store_registration_and_a_module_drop_repeat_where_the_peel_breaks_them() {
     let source = r#"
 ---
   compute = import "compute.lichen" ---
-k = compute.jit (x : Int => int2float (x + 1))
+k := compute.jit (x : Int => int2float (x + 1))
 compute.launch k 5
 "#;
     let parallel = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.a Int}
-Out = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length 69)))}
-Par = struct{.n Int, .in In}
-f = (k : Par) => {
-  i = compute.range k.n
-  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
-  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value float2int (int2float i + 0.5))))))
+In  := _x => {.a @any : Int}
+Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 69}))}
+Par := _x => {.n @any : Int, .in In _}
+f := (k <: Par) => {
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value float2int (int2float i + 0.5)}))})
 }
-k = compute.parallel f "BACKEND" Out
-out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
-((compute.read ((compute.Read _)(.from out.z, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 68)) : Int), compute.collect out.z)
+k := compute.parallel f "BACKEND" (Out _)
+out := (compute.plrun k (compute.A{.n 69, .I In{.a 0}}) : Struct)
+((compute.read (compute.Read{.from out.z, .at 0}) : Int), (compute.read (compute.Read{.from out.z, .at 1}) : Int), (compute.read (compute.Read{.from out.z, .at 68}) : Int), compute.collect out.z)
 "#;
     mark("first program start");
     let (first_module, first_value, _first_ty) = common::run(source);
@@ -53,6 +51,6 @@ out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
     mark("first program dropped");
     let (_stub, _guard) = common::stub();
     mark("cpu start");
-    let (cpu_module, cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
+    let (_cpu_module, _cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
     mark("cpu done");
 }

@@ -39,7 +39,6 @@ where
             path: AncestorNodes::new(),
             render_ext,
             attrs: None,
-            show_struct_id: false,
         }
     }
 
@@ -50,12 +49,6 @@ where
     /// An attribute spells itself, so an unspelled position answers `None`.
     pub fn show_attributes(&mut self, attrs: Attrs<'a, P>) {
         self.attrs = Some(attrs);
-    }
-
-    /// Turn the nominal-id suffix on, so two structs of one field shape stay
-    /// distinguishable.
-    pub fn show_struct_ids(&mut self) {
-        self.show_struct_id = true;
     }
 
     /// The module this printer renders from, for a renderer that must walk it
@@ -141,6 +134,23 @@ where
             .unwrap_or_else(|| "?".to_string())
     }
 
+    /// Render a node-less mismatch value; arrays return `None` for node fallback.
+    pub fn diagnostic_value(&mut self, value: P::Value) -> Option<String> {
+        if let Some(structural) = value.as_enum() {
+            return match structural {
+                LowValue::USize(n) => Some(n.to_string()),
+                LowValue::Float(value) => Some(float_literal(value)),
+                LowValue::Str(s) => Some(format!("\"{s}\"")),
+                LowValue::Array(_) => None,
+                LowValue::Table(_) => Some("Table".to_string()),
+                LowValue::Function(fid) => Some(self.function_spelling(fid)),
+                LowValue::None | LowValue::Error => Some("none".to_string()),
+                LowValue::Any => Some("@any".to_string()),
+            };
+        }
+        self.type_constant(&value)
+    }
+
     /// The spelling of a type constant, or of an extension's own variant.
     pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
         if value == &P::Value::int_marker() {
@@ -156,11 +166,14 @@ where
         } else if value == &P::Value::function_type_marker() {
             Some("TypeFunction".to_string())
         } else if value == &P::Value::tuple_type_marker() {
-            Some("TypeTuple".to_string())
+            // The `Tuple` template: the layout a tuple value's type is.
+            Some("Tuple".to_string())
         } else if value == &P::Value::array_type_marker() {
-            Some("TypeArray".to_string())
+            // The `Array` template: the layout an array value's type is.
+            Some("Array".to_string())
         } else if value == &P::Value::type_struct_marker() {
-            Some("TypeStruct".to_string())
+            // The `Struct` template: the layout a struct value's type is.
+            Some("Struct".to_string())
         } else if value == &P::Value::set_type_marker() {
             Some("SetType".to_string())
         } else if let Some(n) = value.type_id() {
@@ -173,13 +186,13 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
-        // A bare struct kind `[[payload, TypeStruct], K]`: render its tag, since
-        // its marker is an expr.
-        if is_struct_kind(self.module, node) {
-            return "TypeStruct".to_string();
+        // The **struct template**: the self-referential `[StructType, ↺]` a
+        // struct value's type is.
+        if elements.len() >= 2 && self.is_struct_template(elements[0].node) {
+            return "Struct".to_string();
         }
-        // `[head, K]` — an atomic type: the kind slot is the self-looping
-        // universe, so render the head (`int`, `Type`, …).
+        // `[head, K]` — an atomic type: the kind slot is the universe, so
+        // render the head (`int`, `Type`, `Tuple`, …).
         if elements.len() >= 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
@@ -191,25 +204,7 @@ where
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)
         {
-            return format!("{dom} -> {cod}");
-        }
-        // A struct type: the kind is the standard marker expr, whose id renders
-        // `#n` to distinguish same-shaped structs.
-        if elements.len() >= 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            // SAFETY: `kind` is a value read from the live node `elements[1]`;
-            // this arm's other `items()` calls share the note.
-            && self.kind_is_struct_any(unsafe { kind.items() })
-        {
-            let fields = self.slot_fields_any(elements[0].node);
-            let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
-            let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, unsafe { kind.items() });
-            return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct{{{}}}#{n}", fields.join(", ")),
-                _ => format!("struct{{{}}}", fields.join(", ")),
-            };
+            return format!("{dom} => {cod}");
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
@@ -231,41 +226,8 @@ where
                         && s.len() >= 2
                     {
                         return format!(
-                            "{} -> {}",
+                            "{} => {}",
                             self.any_node(s[0].node),
-                            self.any_node(s[1].node)
-                        );
-                    }
-                }
-                Some(m) if m == P::Value::tuple_type_marker() => {
-                    // An open field list — an undecided shape — shows its
-                    // placeholder with an ellipsis, so `tuple{?a}` is not a tuple.
-                    let open = !matches!(
-                        self.module
-                            .node_value(elements[0].node)
-                            .and_then(|value| value.as_enum()),
-                        Some(LowValue::Array(_))
-                    );
-                    let fields = self.slot_fields_any(elements[0].node);
-                    return if open {
-                        format!("tuple{{{}, …}}", fields.join(", "))
-                    } else {
-                        format!("tuple{{{}}}", fields.join(", "))
-                    };
-                }
-                Some(m) if m == P::Value::array_type_marker() => {
-                    // shape = [element slot, length] — render `array{T, len}`,
-                    // the element as source so a pin is stated.
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        // SAFETY: `shape` is the payload of a value read from
-                        // the live node `elements[0]`.
-                        && let s = unsafe { shape.items() }
-                        && s.len() >= 2
-                    {
-                        return format!(
-                            "array{{{}, {}}}",
-                            self.slot_any(s[0].node),
                             self.any_node(s[1].node)
                         );
                     }
@@ -306,7 +268,7 @@ where
         // the shape; otherwise it reads raw.
         if elements.len() >= 2 && self.is_arrow(node) {
             return format!(
-                "{} -> {}",
+                "{} => {}",
                 self.any_node(elements[0].node),
                 self.any_node(elements[1].node)
             );
@@ -454,21 +416,15 @@ where
         }
     }
 
-    /// [`Self::fields_any`] over an element-**slot** list: each element read as
-    /// source, a pin stated and the wildcard not.
-    fn slot_fields_any(&mut self, shape: AnyNodeId) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            // SAFETY: `array` is the payload of the value read from the live
-            // node `shape`.
-            unsafe { array.items() }
-                .iter()
-                .map(|item| self.slot_any(item.node))
-                .collect()
-        } else {
-            vec![self.any_node(shape)]
-        }
+    /// Whether a node holds the **struct marker** — the shared `Struct`
+    /// template's own value.
+    ///
+    /// # Invariant
+    ///
+    /// The template is recognised by its **value**: the marker at the value slot
+    /// is the struct one, and only the template carries it.
+    fn is_struct_template(&self, node: AnyNodeId) -> bool {
+        self.module.node_value(node) == Some(P::Value::type_struct_marker())
     }
 
     /// An element slot read as source: a pin stated, the wildcard not.
@@ -605,7 +561,7 @@ where
                 if let Some(fid) = self.static_function_type_function(sref)
                     && let Some((dom, cod)) = self.function_signature(fid)
                 {
-                    format!("{dom} -> {cod}")
+                    format!("{dom} => {cod}")
                 } else {
                     self.static_elements(sref, items, visiting)
                 }
@@ -624,32 +580,15 @@ where
         elements: &[ArrayItem],
         visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
     ) -> String {
-        // A bare struct kind `[[payload, TypeStruct], K]`: render its tag.
-        if kind_is_struct(self.module, elements) {
-            return "TypeStruct".to_string();
+        // The **struct template**: the self-referential `[StructType, ↺]` a
+        // struct value's type is.
+        if elements.len() >= 2 && self.is_struct_template(elements[0].node) {
+            return "Struct".to_string();
         }
-        // `[head, K]` — an atomic type: the kind slot is the self-looping
-        // universe, so render the head (`int`, `Type`, …).
+        // `[head, K]` — an atomic type: the kind slot is the universe, so
+        // render the head (`int`, `Type`, `Tuple`, …).
         if elements.len() >= 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
-        }
-        // A struct type: the kind is the standard marker expr, and a name table
-        // rides in the payload's names slot.
-        if elements.len() >= 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            // SAFETY: `kind` is a value read from the live node `elements[1]`;
-            // this arm's other `items()` calls share the note.
-            && self.kind_is_struct_any(unsafe { kind.items() })
-        {
-            let fields = self.static_slot_fields(elements[0].node, visiting);
-            let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
-            let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, unsafe { kind.items() });
-            return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct{{{}}}#{n}", fields.join(", ")),
-                _ => format!("struct{{{}}}", fields.join(", ")),
-            };
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
@@ -670,30 +609,8 @@ where
                         && s.len() >= 2
                     {
                         return format!(
-                            "{} -> {}",
+                            "{} => {}",
                             self.static_any(s[0].node, visiting),
-                            self.static_any(s[1].node, visiting)
-                        );
-                    }
-                }
-                Some(m) if m == P::Value::tuple_type_marker() => {
-                    let fields = self.static_fields(elements[0].node, visiting);
-                    return format!("tuple{{{}}}", fields.join(", "));
-                }
-                Some(m) if m == P::Value::array_type_marker() => {
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        // SAFETY: `shape` is the payload of a value read from
-                        // the live node `elements[0]`.
-                        && let s = unsafe { shape.items() }
-                        && s.len() >= 2
-                    {
-                        return format!(
-                            "array{{{}, {}}}",
-                            match self.slot_type_any(s[0].node) {
-                                Some(ty) => self.static_any(ty, visiting),
-                                None => self.static_any(s[0].node, visiting),
-                            },
                             self.static_any(s[1].node, visiting)
                         );
                     }
@@ -761,52 +678,6 @@ where
         }
     }
 
-    fn static_fields(
-        &mut self,
-        shape: AnyNodeId,
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            // SAFETY: `array` is the payload of the value read from the live
-            // node `shape`.
-            unsafe { array.items() }
-                .iter()
-                .map(|item| self.static_any(item.node, visiting))
-                .collect()
-        } else {
-            vec![self.static_any(shape, visiting)]
-        }
-    }
-
-    /// [`Self::static_fields`] over an element-**slot** list, each read as source.
-    ///
-    /// # Invariant
-    /// Its own spelling, because a static read threads the visiting set a cycle
-    /// needs.
-    fn static_slot_fields(
-        &mut self,
-        shape: AnyNodeId,
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            // SAFETY: `array` is the payload of the value read from the live
-            // node `shape`.
-            unsafe { array.items() }
-                .iter()
-                .map(|item| match self.slot_type_any(item.node) {
-                    Some(ty) => self.static_any(ty, visiting),
-                    None => self.static_any(item.node, visiting),
-                })
-                .collect()
-        } else {
-            vec![self.static_any(shape, visiting)]
-        }
-    }
-
     /// Whether a **static** ref's value is the universe `[Type, ↺]`, whose head
     /// is the `Type` marker, not a containing kind.
     ///
@@ -849,12 +720,6 @@ where
             AnyNodeId::Dynamic(node) => is_universe(self.module, node),
             AnyNodeId::Static(_) => self.is_static_universe(id),
         }
-    }
-
-    fn kind_is_struct_any(&self, kind_items: &[ArrayItem]) -> bool {
-        kind_items.len() >= 2
-            && self.is_universe_any(kind_items[1].node)
-            && marker_is_struct(self.module, kind_items[0].node)
     }
 }
 

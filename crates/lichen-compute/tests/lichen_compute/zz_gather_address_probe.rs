@@ -14,24 +14,24 @@ use lichen_compute::language::new_store;
 /// The gather: one read's address is another read's value.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  = struct{.x (compute.Buf Int), .tbl (compute.Buf Int)}
-POut = struct{.y (compute.Buf Int)}
-PPar = struct{.n Int, .in PIn, .out POut}
-PArg = struct{.n Int, .I PIn}
-gather_raw = (k : PPar) => {
-  i = compute.range k.n
-  j = (compute.read ((compute.Read _)(.from k.in.tbl, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((compute.read ((compute.Read _)(.from k.in.x, .at j)) : Int))))
+PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _})), .tbl (compute.Buf (compute.BufParam{.type Int, .length _}))}
+POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
+PPar := _x => {.n @any : Int, .in PIn _, .out POut}
+PArg := _x => {.n @any : Int, .I PIn _}
+gather_raw := (k <: PPar) => {
+  i := compute.range k.n
+  j := (compute.read (compute.Read{.from k.in.tbl, .at i}) : Int)
+  compute.write (compute.Write{.to k.out.y, .at i, .value ((compute.read (compute.Read{.from k.in.x, .at j}) : Int))})
 }
-gather = compute.parallel gather_raw "gpu" POut
-x   = (compute.buffer ([10, 20, 30, 40, 50, 60] : array{Int, 6}) : (compute.Buf Int))
-tbl = (compute.buffer ([5, 0, 4, 1, 3, 2] : array{Int, 6}) : (compute.Buf Int))
+gather := compute.parallel gather_raw "gpu" (POut _)
+x   := (compute.buffer ([@any : Int, 6][10, 20, 30, 40, 50, 60] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
+tbl := (compute.buffer ([@any : Int, 6][5, 0, 4, 1, 3, 2] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
 "#;
 
 /// The plain gather: `y[i] = x[tbl[i]]`, so `[60, 10, 50, 20, 40, 30]`.
 const PLAIN: &str = r#"
-gathered = (compute.plrun gather ((PArg)(.n 6, .I PIn(.x x, .tbl tbl))) : POut)
-compute.collect gathered.y : array{Int, 6}
+gathered := (compute.plrun gather ((PArg){.n 6, .I PIn{.x x, .tbl tbl}}) : Struct)
+compute.collect gathered.y : Array
 "#;
 
 /// The gather past the buffer's end: one lane names an index no element answers.
@@ -40,9 +40,9 @@ compute.collect gathered.y : array{Int, 6}
 /// An out-of-buffer read answers `0`, which is the padding a masked batch relies on, so
 /// `tbl = [5, 9, 4, 1, 3, 2]` answers `[60, 0, 50, 20, 40, 30]` rather than refusing.
 const PAST_THE_END: &str = r#"
-far = (compute.buffer ([5, 9, 4, 1, 3, 2] : array{Int, 6}) : (compute.Buf Int))
-gathered = (compute.plrun gather ((PArg)(.n 6, .I PIn(.x x, .tbl far))) : POut)
-compute.collect gathered.y : array{Int, 6}
+far := (compute.buffer ([@any : Int, 6][5, 9, 4, 1, 3, 2] : Array) : (compute.Buf (compute.BufParam{{.type Int, .length _}})))
+gathered := (compute.plrun gather ((PArg){.n 6, .I PIn{.x x, .tbl far}}) : Struct)
+compute.collect gathered.y : Array
 "#;
 
 /// What the raw runner renders for `body`, or how it refused.

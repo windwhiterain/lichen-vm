@@ -5,7 +5,9 @@ use lichen_highlevel::NoAttr;
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{BinOp, ExprId, ExprKind};
-use lichen_highlevel::program::{HighProgramValue, ProgramImpl, TypeValue};
+use lichen_highlevel::program::{
+    AnyLit, HighProgramLiteral, HighProgramValue, ProgramImpl, StructTemplateLit, TypeValue,
+};
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, FunctionId, LowValue, NodeId};
 use lichen_testkit::{Writer, dyn_node};
 
@@ -16,6 +18,38 @@ use lichen_testkit::{Writer, dyn_node};
 /// assert, so the caller reads `ok` and the diagnostics itself.
 fn build(root: ExprId, w: Writer<NoAttr>) -> Build<ProgramImpl> {
     Checker::build(w.finish(root).ir)
+}
+
+/// The wildcard `@any` — a value that unifies with everything and constrains
+/// nothing.
+///
+/// # Invariant
+/// The literal is written under a name, so a template's element is as
+/// readable as the rest of the program.
+fn any(w: &Writer, name: &str) -> ExprId {
+    let literal = w.hole(name);
+    w.fill(literal, ExprKind::Literal(HighProgramLiteral::from(AnyLit)));
+    literal
+}
+
+/// The wildcard bound to `ty` — the `@any : T` a template element spells.
+///
+/// # Invariant
+/// The wildcard's own type cell is fresh per occurrence, so one template's
+/// requirement never binds another's.
+fn any_of(w: &Writer, name: &str, ty: ExprId) -> ExprId {
+    let literal = any(w, &format!("{name}_value"));
+    w.annotate(name, literal, ty)
+}
+
+/// The layout marker a type node carries — the `Tuple`, `Array` or `Struct`
+/// constant its value slot holds.
+fn layout_marker(b: &lichen_highlevel::checker::Build<ProgramImpl>, ty: NodeId) -> TypeValue {
+    let ids = array_ids(b, ty);
+    match b.module.node_value(AnyNodeId::Dynamic(ids[0])) {
+        Some(HighProgramValue::TypeValue(marker)) => marker,
+        other => panic!("expected a layout marker, got {other:?}"),
+    }
 }
 
 fn array_ids(
@@ -202,7 +236,9 @@ fn an_error_block_as_a_child_does_not_cascade() {
     let w = Writer::new();
     let five = w.int("five", 5);
     let e = w.error_block("e");
-    let b = build(w.array("array", &[e, five]), w);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let b = build(w.array_inst("array", template, &[e, five]), w);
     assert!(b.ok, "the error block binds without a conflict");
 
     // A heterogeneous tuple does not unify elements at all; the error block
@@ -273,117 +309,105 @@ fn lambda_checks_against_arrow_annotation() {
 }
 
 #[test]
-fn annotating_a_lambda_with_a_tuple_type_fails() {
-    // (\x. x) : [int, int] — a tuple type, not a function type: the kind
-    // markers now distinguish the two, so this must fail.
+fn annotating_a_lambda_with_a_tuple_template_fails() {
+    // (\x. x) : (@any : int, @any : int) — a tuple template is a value, not a
+    // function type: the two must not agree.
     let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
     let d = w.int_type("d");
     let c = w.int_type("c");
-    let t = w.type_tuple("t", &[d, c]);
+    let t = w.tuple("t", &[any_of(&w, "d_any", d), any_of(&w, "c_any", c)]);
     let a = w.annotate("a", l, t);
     let b = build(a, w);
     assert!(
         !b.ok,
-        "(\\x. x) : [int, int] must fail (a lambda is not a tuple)"
+        "(\\x. x) : (@any : int, @any : int) must fail (a lambda is not a tuple)"
     );
 }
 
 #[test]
-fn typed_tuple_is_a_kinded_tuple() {
-    // [1, 2] — the expr [[1, 2], [[int, int], [TupleType, Type]]].
+fn a_tuple_value_is_typed_by_the_shared_tuple_template() {
+    // (1, 2) — the value holds the elements' own terms and the type is the
+    // shared `Tuple` template.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
     let b = build(tup, w);
-    assert!(b.ok, "[1, 2] should check");
+    assert!(b.ok, "(1, 2) should check");
     let ty = b.state[tup].ty.unwrap();
-    let ids = array_ids(&b, ty);
+    let ty_ids = array_ids(&b, ty);
     assert_eq!(
-        ids.len(),
+        ty_ids.len(),
         width(),
-        "a type expression is an expr [shape, kind]"
+        "a type expression is an expr [value, type, attrs…]"
     );
-    let shape_ids = array_ids(&b, ids[0]);
-    assert_eq!(shape_ids.len(), 2);
-    // Each shape element is an element slot `[value, type, attrs…]`, so the
+    assert_eq!(
+        layout_marker(&b, ty),
+        TypeValue::TypeTuple,
+        "the tuple's type is the shared Tuple template"
+    );
+    assert_eq!(ty_ids[1], b.type_expr);
+    // The value holds the elements' own terms: each is a complete slot, so the
     // element's type is its slot's type position.
-    for slot in shape_ids {
-        let slot_ids = array_ids(&b, slot);
-        assert_eq!(slot_ids.len(), 3, "the value, the type, one attribute");
-        assert!(is_int_type(&b, slot_ids[1]));
-        assert!(matches!(
-            b.module.node_value(AnyNodeId::Dynamic(slot_ids[0])),
-            Some(HighProgramValue::LowValue(LowValue::Any))
-        ));
+    let value_ids = array_ids(&b, b.state[tup].val.unwrap());
+    assert_eq!(value_ids.len(), 2, "the tuple's value is its two elements");
+    for element in value_ids {
+        let slot = array_ids(&b, element);
+        assert_eq!(slot.len(), width());
+        assert!(is_int_type(&b, slot[1]), "the element's type is Int");
     }
-    let kind_ids = array_ids(&b, ids[1]);
-    assert_eq!(kind_ids.len(), width());
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
-    ));
-    assert_eq!(kind_ids[1], b.type_expr);
 }
 
 #[test]
-fn real_array_type_is_type_and_length() {
-    // Array(int, 3) is [[int, 3], [ArrayType, Type]]: the element type and the
-    // length.
+fn an_array_template_holds_its_element_template_and_its_holes() {
+    // [@any : int, 3] — the value is the element template and three holes; the
+    // type is the shared `Array` template.
     let w = Writer::new();
-    let t = w.int_type("t");
+    let element = any_of(&w, "element", w.int_type("int_ty"));
     let n = w.int("n", 3);
-    let arr = w.type_array("arr", t, n);
+    let arr = w.array_template("arr", element, n);
     let b = build(arr, w);
-    assert!(b.ok, "Array(int, 3) should check");
-    // The type of the array type is its kind [ArrayType, Type].
+    assert!(b.ok, "[@any : int, 3] should check");
+    // The type of the template is the shared `Array` template.
     let ty = b.state[arr].ty.unwrap();
     let kind_ids = array_ids(&b, ty);
     assert_eq!(kind_ids.len(), width());
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
-    ));
+    assert_eq!(layout_marker(&b, ty), TypeValue::TypeArray);
     assert_eq!(kind_ids[1], b.type_expr);
-    // The value is the instance [element slot, length].
-    let shape = b.state[arr].val.unwrap();
-    let shape_ids = array_ids(&b, shape);
-    assert_eq!(shape_ids.len(), 2);
-    // The element is a slot, so its type is the slot's type position.
-    let element_slot = array_ids(&b, shape_ids[0]);
+    // The value is the element template and the holes the length states.
+    let value_ids = array_ids(&b, b.state[arr].val.unwrap());
+    assert_eq!(value_ids.len(), 4, "the template and its three holes");
+    let template_slot = array_ids(&b, value_ids[0]);
     assert!(
-        is_int_type(&b, element_slot[1]),
-        "instance[0] is the element slot, whose type is Int"
+        is_int_type(&b, template_slot[1]),
+        "the element template states Int"
     );
-    assert!(
-        matches!(
-            b.module.node_value(AnyNodeId::Dynamic(shape_ids[1])),
-            Some(HighProgramValue::LowValue(LowValue::USize(3)))
-        ),
-        "instance[1] is the length"
-    );
-    // The expr is [shape, kind].
-    let ids = array_ids(&b, b.state[arr].term.unwrap());
-    assert_eq!(ids.len(), width());
-    assert_eq!(ids[0], shape);
-    assert_eq!(ids[1], ty);
+    for hole in &value_ids[1..] {
+        let hole_ids = array_ids(&b, *hole);
+        assert!(
+            b.module
+                .node_value(AnyNodeId::Dynamic(hole_ids[0]))
+                .is_none(),
+            "a hole's value slot is undecided"
+        );
+    }
 }
 
 #[test]
-fn the_array_type_has_a_kind_not_a_type() {
-    // Array(int, 3) : Type — the array type's own type is the kind
-    // [ArrayType, Type], not the universe.
+fn an_array_template_is_not_itself_a_type() {
+    // [@any : int, 3] : Type — the array template's own type is the `Array`
+    // layout, not the universe.
     let w = Writer::new();
-    let t = w.int_type("t");
+    let element = any_of(&w, "element", w.int_type("int_ty"));
     let n = w.int("n", 3);
-    let arr = w.type_array("arr", t, n);
+    let arr = w.array_template("arr", element, n);
     let type_val = w.universe("type_val");
     let a = w.annotate("a", arr, type_val);
     let b = build(a, w);
-    assert!(!b.ok, "an array type is not itself a Type");
+    assert!(!b.ok, "an array template is not itself a Type");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
@@ -398,14 +422,14 @@ fn the_array_type_has_a_kind_not_a_type() {
 }
 
 #[test]
-fn lambda_against_an_array_type_conflicts_on_the_length() {
-    // (\x. x) : Array(int, 3) — a function's type is not an array type.
+fn a_lambda_against_an_array_template_conflicts() {
+    // (\x. x) : [@any : int, 3] — a function's type is not an array's.
     let w = Writer::new();
     let x = w.param("x");
     let l = w.lam("l", x, x);
-    let t = w.int_type("t");
+    let element = any_of(&w, "element", w.int_type("int_ty"));
     let n = w.int("n", 3);
-    let arr_ty = w.type_array("arr_ty", t, n);
+    let arr_ty = w.array_template("arr_ty", element, n);
     let a = w.annotate("a", l, arr_ty);
     let b = build(a, w);
     assert!(!b.ok);
@@ -413,87 +437,73 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     assert_eq!(
         diags.len(),
         1,
-        "one conflict: a function-type vs an array type"
+        "one conflict: a function-type vs an array layout"
     );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
 }
 
 #[test]
-fn array_literal_is_homogeneous() {
-    // [1, 2] — one type slot shared by all elements, the length the element
-    // count.
+fn an_array_instance_is_typed_by_the_shared_array_template() {
+    // [@any : int, 2][1, 2] — the type is the shared `Array` template; the
+    // value is the element template and the elements.
     let w = Writer::new();
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
-    let arr = w.array("arr", &[e1, e2]);
+    let arr = w.array_inst("arr", template, &[e1, e2]);
     let b = build(arr, w);
-    assert!(b.ok, "[1, 2] as an array literal should check");
+    assert!(b.ok, "[1, 2] as an array instance should check");
     let ty = b.state[arr].ty.unwrap();
     let ids = array_ids(&b, ty);
     assert_eq!(
         ids.len(),
         width(),
-        "a type expression is an expr [shape, kind]"
+        "a type expression is an expr [value, type, attrs…]"
     );
-    let shape_ids = array_ids(&b, ids[0]);
-    assert_eq!(shape_ids.len(), 2);
-    // The element position is a slot: the shared element type unifies to int.
-    let element_slot = array_ids(&b, shape_ids[0]);
+    assert_eq!(layout_marker(&b, ty), TypeValue::TypeArray);
+    assert_eq!(ids[1], b.type_expr);
+    // The value holds the element template and then the elements.
+    let value_ids = array_ids(&b, b.state[arr].val.unwrap());
+    assert_eq!(value_ids.len(), 3);
+    let element_slot = array_ids(&b, value_ids[0]);
     assert!(
         is_int_type(&b, element_slot[1]),
-        "the shared element type unifies to int"
+        "the instance keeps the template's element template"
     );
-    assert!(
-        matches!(
-            b.module.node_value(AnyNodeId::Dynamic(shape_ids[1])),
-            Some(HighProgramValue::LowValue(LowValue::USize(2)))
-        ),
-        "instance[1] is the element count"
-    );
-    let kind_ids = array_ids(&b, ids[1]);
-    assert_eq!(kind_ids.len(), width());
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
-    ));
-    assert_eq!(kind_ids[1], b.type_expr);
-    // The value holds the element values.
-    let value_ids = array_ids(&b, b.state[arr].val.unwrap());
-    assert_eq!(value_ids.len(), 2);
+    let first = array_ids(&b, value_ids[1]);
+    assert!(is_int_type(&b, first[1]), "the first element's type is Int");
 }
 
 #[test]
-fn array_literal_typechecks_against_an_array_type() {
-    // [1, 2] : Array(int, 2)
+fn an_array_instance_checks_against_its_template() {
+    // [@any : int, 2][1, 2] — every element is matched against its own clone
+    // of the template.
     let w = Writer::new();
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
-    let arr = w.array("arr", &[e1, e2]);
-    let t = w.int_type("t");
-    let n = w.int("n", 2);
-    let arr_ty = w.type_array("arr_ty", t, n);
-    let a = w.annotate("a", arr, arr_ty);
-    let b = build(a, w);
-    assert!(b.ok, "[1, 2] : int[2] should check");
+    let arr = w.array_inst("arr", template, &[e1, e2]);
+    let b = build(arr, w);
+    assert!(b.ok, "[1, 2] against its template should check");
     assert!(b.module.unify_errors.is_empty());
 }
 
 #[test]
-fn array_literal_length_mismatch_fails() {
-    // [1, 2] : Array(int, 3)
+fn an_array_instance_whose_length_differs_from_its_template_fails() {
+    // [@any : int, 3][1, 2] — the template's length is the instance's.
     let w = Writer::new();
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
-    let arr = w.array("arr", &[e1, e2]);
-    let t = w.int_type("t");
-    let n = w.int("n", 3);
-    let arr_ty = w.type_array("arr_ty", t, n);
-    let a = w.annotate("a", arr, arr_ty);
-    let b = build(a, w);
-    assert!(!b.ok, "[1, 2] : int[3] must fail (length mismatch)");
+    let arr = w.array_inst("arr", template, &[e1, e2]);
+    let b = build(arr, w);
+    assert!(!b.ok, "[1, 2] against a three-element template must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Annotation);
+    assert_eq!(diags[0].kind, DiagKind::ArrayElement);
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::USize(2)))
@@ -505,17 +515,19 @@ fn array_literal_length_mismatch_fails() {
 }
 
 #[test]
-fn heterogeneous_array_literal_fails() {
-    // [1, int] — the second element's type is Type; the first fixed the
-    // shared element type to int.
+fn an_array_instance_with_a_heterogeneous_element_fails() {
+    // [@any : int, 2][1, int] — the second element's type is Type; the
+    // template's element states Int.
     let w = Writer::new();
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
     let e1 = w.int("e1", 1);
     let e2 = w.int_type("e2"); // `int` as a value — its type is Type
-    let arr = w.array("arr", &[e1, e2]);
+    let arr = w.array_inst("arr", template, &[e1, e2]);
     let b = build(arr, w);
     assert!(
         !b.ok,
-        "[1, int] must fail (the elements must share one type)"
+        "[1, int] must fail (the elements must share the template's type)"
     );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -582,31 +594,39 @@ fn applying_a_non_function_fails() {
 }
 
 #[test]
-fn tuple_typechecks_elementwise() {
-    // [1, 2] : [int, int]
+fn a_tuple_matches_a_tuple_template_elementwise() {
+    // (1, 2) = (@any : int, @any : int) — both sides are evaluated values.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
     let d = w.int_type("d");
     let c = w.int_type("c");
-    let t = w.type_tuple("t", &[d, c]);
-    let a = w.annotate("a", tup, t);
+    let template = w.tuple(
+        "template",
+        &[any_of(&w, "d_any", d), any_of(&w, "c_any", c)],
+    );
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
-    assert!(b.ok, "[1, 2] : [int, int] should check");
+    assert!(b.ok, "(1, 2) against (@any : int, @any : int) should check");
+    assert!(b.module.unify_errors.is_empty());
 }
 
 #[test]
-fn tuple_length_mismatch_fails() {
+fn a_tuple_whose_length_differs_from_its_template_fails() {
+    // (1, 2) <: (@any : int) — the template states one element.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
     let d = w.int_type("d");
-    let t = w.type_tuple("t", &[d]);
-    let a = w.annotate("a", tup, t);
+    let template = w.tuple("template", &[any_of(&w, "d_any", d)]);
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
-    assert!(!b.ok, "[1, 2] : [int] must fail (length mismatch)");
+    assert!(
+        !b.ok,
+        "(1, 2) against (@any : int) must fail (length mismatch)"
+    );
 }
 
 #[test]
@@ -656,21 +676,6 @@ fn inline_lambda_applies() {
     let five = w.int("five", 5);
     let call = w.app("call", l, five);
     let b = build(call, w);
-    // PROBE: what the build reports when the unify no longer forces.
-    if !b.ok && std::env::var_os("LICHEN_BUILD_TRACE").is_some() {
-        for d in b.diagnostics() {
-            eprintln!(
-                "PROBE diag: kind={:?} a={:?} b={:?} loc={:?} va={:?} vb={:?}",
-                d.kind, d.a, d.b, d.loc, d.value_a, d.value_b
-            );
-        }
-        for e in &b.module.unify_errors {
-            eprintln!(
-                "PROBE unify_error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
-                e.a, e.b, e.value_a, e.value_b, e.steps
-            );
-        }
-    }
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
@@ -823,18 +828,21 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 }
 
 #[test]
-fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
-    // (\x. x) : tuple{Type, Int} — a function's type is not a tuple type.
+fn annotating_a_lambda_with_a_mixed_tuple_template_reports_expected_found() {
+    // (\x. x) : (@any : Type, @any : Int) — a function's type is not a tuple's.
     let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
     let t1 = w.universe("t1");
     let t2 = w.int_type("t2");
-    let t = w.type_tuple("t", &[t1, t2]);
-    let a = w.annotate("a", l, t);
+    let template = w.tuple(
+        "template",
+        &[any_of(&w, "t1_any", t1), any_of(&w, "t2_any", t2)],
+    );
+    let a = w.annotate("a", l, template);
     let b = build(a, w);
-    assert!(!b.ok, "a function is not a tuple type");
+    assert!(!b.ok, "a function is not a tuple template");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
@@ -902,16 +910,13 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     let b = build(whole, w);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
-    // The resolved root type is the tuple type `tuple{Int, Type}`; each element's
-    // type is its slot's type position.
-    let expr = array_ids(&b, b.root_ty);
-    assert_eq!(expr.len(), width());
-    let shape = array_ids(&b, expr[0]);
-    let e0 = array_ids(&b, shape[0]);
-    assert!(is_int_type(&b, e0[1]), "element 0's cell syncs to int");
-    let e1 = array_ids(&b, shape[1]);
+    // The element types are the calls' lazy result cells, synced with their
+    // return exprs; the value holds the elements.
+    let e0 = b.state[c0].ty.unwrap();
+    assert!(is_int_type(&b, e0), "element 0's cell syncs to int");
+    let e1 = b.state[c1].ty.unwrap();
     assert_eq!(
-        b.module.node_value(AnyNodeId::Dynamic(e1[1])),
+        b.module.node_value(AnyNodeId::Dynamic(e1)),
         b.module.node_value(AnyNodeId::Dynamic(b.type_expr)),
         "element 1's cell syncs to Type's"
     );
@@ -919,22 +924,24 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
 
 #[test]
 fn tuple_length_mismatch_reports_both_sides() {
-    // [1, 2] : [int]
+    // (1, 2) <: (@any : int)
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
     let d = w.int_type("d");
-    let t = w.type_tuple("t", &[d]);
-    let a = w.annotate("a", tup, t);
+    let template = w.tuple("template", &[any_of(&w, "d_any", d)]);
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // The length mismatch shows in the shapes: two element types against one.
-    assert_eq!(array_ids(&b, array_ids(&b, diags[0].a)[0]).len(), 2);
-    assert_eq!(array_ids(&b, array_ids(&b, diags[0].b)[0]).len(), 1);
+    // The length mismatch shows in the values: two elements against one.
+    let a_value = array_ids(&b, array_ids(&b, diags[0].a)[0]);
+    let b_value = array_ids(&b, array_ids(&b, diags[0].b)[0]);
+    assert_eq!(a_value.len(), 2);
+    assert_eq!(b_value.len(), 1);
 }
 
 // --- call result annotations are checked, not just bound --------------------
@@ -1000,7 +1007,9 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let b = w.int("b", 2);
     let x = w.param("x");
     let y = w.param("y");
-    let f2_body = w.array("f2_body", &[a, b, x, y]);
+    let element = any(&w, "element");
+    let template = w.array_template("template", element, w.int("len", 4));
+    let f2_body = w.array_inst("f2_body", template, &[a, b, x, y]);
     let (f1, _f2) = w.lam_nested(("inner_lam", y, f2_body), ("outer_lam", x));
     let three = w.int("three", 3);
     let four = w.int("four", 4);
@@ -1011,8 +1020,12 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let value = b.module.evaluate_node_deep(b.root_val, None).unwrap();
     let ids = array_ids_from(value);
     let expected = [1usize, 2, 3, 4];
-    assert_eq!(ids.len(), expected.len());
-    for (&id, &n) in ids.iter().zip(expected.iter()) {
+    assert_eq!(
+        ids.len(),
+        expected.len() + 1,
+        "the instance's value is the element template and the elements"
+    );
+    for (&id, &n) in ids[1..].iter().zip(expected.iter()) {
         // An element is a complete slot: the bound value is its first position.
         let element = b
             .module
@@ -1115,13 +1128,15 @@ fn tuple_index_selects_value_and_type() {
 
 #[test]
 fn array_index_selects_value_and_type() {
-    // [1, 2, 3][1] — the shape holds the length as data, so the type
-    // evaluation dispatches on the kind.
+    // [@any : int, 3][1, 2, 3][1] — the element sits one slot past the
+    // element template the value carries.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let e3 = w.int("e3", 3);
-    let arr = w.array("arr", &[e1, e2, e3]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[e1, e2, e3]);
     let one = w.int("one", 1);
     let idx = w.index("idx", arr, one);
     let mut b = build(idx, w);
@@ -1175,13 +1190,14 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
 
 #[test]
 fn array_index_out_of_bounds_renders_a_diagnostic() {
-    // [1, 2, 3][5] — the type side checks the index against the ArrayType's
-    // length (3), not the shape's structural size (2).
+    // [1, 2, 3][5] — the value's own length is the bound.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let e3 = w.int("e3", 3);
-    let arr = w.array("arr", &[e1, e2, e3]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[e1, e2, e3]);
     let five = w.int("five", 5);
     let idx = w.index("idx", arr, five);
     let b = build(idx, w);
@@ -1189,6 +1205,8 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
+    // The diagnostic is source-level: the subscript the program wrote and the
+    // element count, not the value's own slots.
     assert_eq!(diags[0].index, Some(5));
     assert_eq!(diags[0].length, Some(3));
     assert_eq!(
@@ -1199,99 +1217,99 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     );
+    // The diagnostic is located at the subscript the program wrote.
     assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
 }
 
 #[test]
 fn array_index_out_of_bounds_against_a_bound_length() {
-    // (\x. x[3])([1, 2]) — the type is known only once the apply binds it.
+    // (\x. x[3])([1, 2]) — the length is the value's own, so it is known only
+    // once the apply binds the parameter.
     let w = Writer::new();
     let x = w.param("x");
     let three = w.int("three", 3);
-    let body = w.index("body", x, three);
-    let int_ty = w.int_type("int_ty");
-    let two = w.int("two", 2);
-    let arr_ty = w.type_array("arr_ty", int_ty, two);
-    let l = w.lam_typed("l", x, Some(arr_ty), body, false);
+    let read = w.index("read", x, three);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let matched = w.unify("matched", x, template);
+    let body = w.tuple("body", &[matched, read]);
+    let l = w.lam("l", x, body);
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
-    let arr = w.array("arr", &[e1, e2]);
+    let arr = w.array_inst("arr", template, &[e1, e2]);
     let whole = w.app("whole", l, arr);
     let b = build(whole, w);
     assert!(!b.ok, "(\\x. x[3])([1, 2]) must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
+    // The diagnostic is source-level: the subscript the program wrote and the
+    // element count, not the value's own slots.
     assert_eq!(diags[0].index, Some(3));
     assert_eq!(diags[0].length, Some(2));
 }
 
-// --- struct types ----------------------------------------------------------
+// --- struct values ----------------------------------------------------------
 
-// A struct type is [[field types], [marker, Type]] with a nominal id.
-
-// The payload is [TypeId(n), names, names_in_order]; see `lichen_highlevel::shape`.
+// A struct value is [name table, nominal id, the fields' terms…]; see
+// `lichen_highlevel::shape`.
 
 #[test]
-fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct{.f Int, .t Type} — the expr [[int, Type], [[TypeId(0), names,
-    // names_in_order], TypeStruct]].
+fn a_struct_value_carries_a_name_table_and_a_fresh_nominal_id() {
+    // {.f @any : int, .t @any : Type} — the value holds the name table, the
+    // nominal id and the fields' own terms.
     let w = Writer::new();
-    let t1 = w.int_type("t1");
-    let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, Some("f")), (t2, Some("t"))]);
+    let t1 = any_of(&w, "t1", w.int_type("int_ty"));
+    let t2 = any_of(&w, "t2", w.universe("type_ty"));
+    let s = w.struct_value("s", &[(t1, Some("f")), (t2, Some("t"))]);
     let mut b = build(s, w);
-    assert!(b.ok, "struct{{.f Int, .t Type}} should kind");
+    assert!(b.ok, "{{.f @any : int, .t @any : Type}} should check");
     assert!(b.module.unify_errors.is_empty());
-    // the shape is the positional field-**slot** list [slot(Int), slot(Type)] —
-    // the nominal id does not ride in the shape
-    let struct_shape = b.state[s].val.unwrap();
-    let shape_ids = array_ids(&b, struct_shape);
-    assert_eq!(shape_ids.len(), 2);
-    // A field's type is its slot's type position.
-    let f_slot = array_ids(&b, shape_ids[0]);
-    assert!(is_int_type(&b, f_slot[1]), "the `.f` field's type is Int");
-    let t_slot = array_ids(&b, shape_ids[1]);
-    assert_eq!(
-        t_slot[1], b.type_expr,
-        "the `.t` field's type is the universe"
-    );
-    // the kind slot is a standard [marker, K] expr; see `lichen_highlevel::shape`.
-    let kind = b.state[s].ty.unwrap();
-    let kind_ids = array_ids(&b, kind);
-    assert_eq!(kind_ids.len(), width());
-    assert_eq!(kind_ids[1], b.type_expr);
-    let marker = kind_ids[0];
-    let marker_ids = array_ids(&b, marker);
-    assert_eq!(
-        marker_ids.len(),
-        width(),
-        "the marker is a [value, type] expr"
-    );
+    // The value is [name table, nominal id, the fields…].
+    let struct_value = b.state[s].val.unwrap();
+    let value_ids = array_ids(&b, struct_value);
+    assert_eq!(value_ids.len(), 4);
+    // The name table is a constant table.
     assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
+        b.module.node_value(AnyNodeId::Dynamic(value_ids[0])),
+        Some(HighProgramValue::LowValue(LowValue::Table(_)))
     ));
-    let payload_ids = array_ids(&b, marker_ids[0]);
-    assert_eq!(payload_ids.len(), 3);
+    // The nominal id is the written occurrence itself.
     assert!(
         matches!(
-            b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
+            b.module.node_value(AnyNodeId::Dynamic(value_ids[1])),
             Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
         ),
         "the id is the written occurrence itself"
     );
-    // a named struct's payload carries a name table in its names slot.
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),
-        Some(HighProgramValue::LowValue(LowValue::Table(_)))
-    ));
-    // The tag is what makes it a struct marker: a same-payload expr whose
-    // type slot is the universe is not one.
-    let block = b.module.node_block(marker);
+    // A field's type is its own slot's type position.
+    let f_slot = array_ids(&b, value_ids[2]);
+    assert!(is_int_type(&b, f_slot[1]), "the `.f` field's type is Int");
+    let t_slot = array_ids(&b, value_ids[3]);
+    assert_eq!(
+        t_slot[1], b.type_expr,
+        "the `.t` field's type is the universe"
+    );
+    // The type is the shared `Struct` template, which closes on itself.
+    let kind = b.state[s].ty.unwrap();
+    let kind_ids = array_ids(&b, kind);
+    assert_eq!(kind_ids.len(), width());
+    assert_eq!(layout_marker(&b, kind), TypeValue::TypeStruct);
+    assert_eq!(kind_ids[1], kind, "the Struct template is self-referential");
+    assert!(
+        lichen_highlevel::shape::is_struct_type_any(
+            &mut b.module,
+            b.type_expr,
+            AnyNodeId::Dynamic(kind)
+        ),
+        "the shared Struct template is the struct layout"
+    );
+    // A type whose kind's marker is not the struct marker is not a struct
+    // layout: the tag is what names it.
+    let block = b.module.node_block(kind);
     let tagless_items = b.module.alloc_array(
         &[
-            ArrayItem::new(AnyNodeId::Dynamic(marker_ids[0])),
+            ArrayItem::new(AnyNodeId::Dynamic(b.markers.tuple_type_marker)),
             ArrayItem::new(AnyNodeId::Dynamic(b.type_expr)),
         ],
         block,
@@ -1304,71 +1322,28 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         ))),
     );
     assert!(
-        !lichen_highlevel::shape::is_struct_marker_any(&b.module, AnyNodeId::Dynamic(tagless)),
-        "a marker-shaped expr without the TypeStruct tag is not a struct marker"
-    );
-    let tagless_kind_items = b.module.alloc_array(
-        &[
-            ArrayItem::new(AnyNodeId::Dynamic(tagless)),
-            ArrayItem::new(AnyNodeId::Dynamic(b.type_expr)),
-        ],
-        block,
-    );
-    let tagless_kind = b.module.add_node(
-        block,
-        None,
-        Some(HighProgramValue::from(LowValue::Array(
-            tagless_kind_items.into(),
-        ))),
-    );
-    let tagless_term_items = b.module.alloc_array(
-        &[
-            ArrayItem::new(AnyNodeId::Dynamic(struct_shape)),
-            ArrayItem::new(AnyNodeId::Dynamic(tagless_kind)),
-        ],
-        block,
-    );
-    let tagless_term = b.module.add_node(
-        block,
-        None,
-        Some(HighProgramValue::from(LowValue::Array(
-            tagless_term_items.into(),
-        ))),
-    );
-    assert!(
         !lichen_highlevel::shape::is_struct_type_any(
             &mut b.module,
             b.type_expr,
-            AnyNodeId::Dynamic(tagless_term)
+            AnyNodeId::Dynamic(tagless)
         ),
-        "a type whose kind's marker lacks the TypeStruct tag is not a struct type"
+        "a type whose kind's marker is not the struct marker is not a struct type"
     );
-    // The identity is unaffected by the missing tag: it is the occurrence.
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
-    ));
 }
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct{.a Int, .b Type} — the names slot maps each name to its index.
+    // {.a @any : int, .b @any : Type} — the value's first slot maps each name
+    // to its field index.
     let w = Writer::new();
-    let t1 = w.int_type("t1");
-    let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, Some("a")), (t2, Some("b"))]);
+    let t1 = any_of(&w, "t1", w.int_type("int_ty"));
+    let t2 = any_of(&w, "t2", w.universe("type_ty"));
+    let s = w.struct_value("s", &[(t1, Some("a")), (t2, Some("b"))]);
     let b = build(s, w);
     assert!(b.ok);
-    let kind = b.state[s].ty.unwrap();
-    let kind_ids = array_ids(&b, kind);
-    assert_eq!(kind_ids.len(), width());
-    let marker_ids = array_ids(&b, kind_ids[0]);
-    assert_eq!(marker_ids.len(), width());
-    let payload_ids = array_ids(&b, marker_ids[0]);
-    assert_eq!(payload_ids.len(), 3);
-    // the names field (the payload's slot 1) is a constant table: "a" -> 0,
+    // the names slot (the value's slot 0) is a constant table: "a" -> 0,
     // "b" -> 1.
-    let names_node = payload_ids[1];
+    let names_node = array_ids(&b, b.state[s].val.unwrap())[0];
     let Some(HighProgramValue::LowValue(LowValue::Table(table))) =
         b.module.node_value(AnyNodeId::Dynamic(names_node))
     else {
@@ -1394,39 +1369,30 @@ fn a_named_struct_carries_a_name_to_index_table() {
         .collect();
     found.sort_by_key(|&(_, i)| i);
     assert_eq!(found, vec![("a", 0), ("b", 1)]);
-    // the payload's slot 2 repeats the names in definition order (the table's
-    // inverse).
-    let in_order = array_ids(&b, payload_ids[2]);
-    let names: Vec<&str> = in_order
-        .iter()
-        .map(
-            |&node| match b.module.node_value(AnyNodeId::Dynamic(node)) {
-                Some(HighProgramValue::LowValue(LowValue::Str(s))) => s,
-                other => panic!("a definition-order name must be a string: {other:?}"),
-            },
-        )
-        .collect();
-    assert_eq!(names, vec!["a", "b"]);
+    // The fields follow in the definition's order, so the table's index is the
+    // field's own position.
+    let value_ids = array_ids(&b, b.state[s].val.unwrap());
+    assert_eq!(
+        value_ids.len(),
+        4,
+        "the name table, the id and the two fields"
+    );
+    assert_eq!(value_ids[2], b.state[t1].term.unwrap(), "the first field");
+    assert_eq!(value_ids[3], b.state[t2].term.unwrap(), "the second field");
 }
 
 #[test]
-fn each_struct_type_occurrence_allocates_a_distinct_id() {
+fn each_struct_value_occurrence_allocates_a_distinct_id() {
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s1 = w.struct_type("s1", &[(f, Some("f"))]);
-    let s2 = w.struct_type("s2", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s1 = w.struct_value("s1", &[(f, Some("f"))]);
+    let s2 = w.struct_value("s2", &[(f, Some("f"))]);
     let expr = w.tuple("expr", &[s1, s2]);
     let b = build(expr, w);
     assert!(b.ok);
-    // the nominal id is the marker payload's slot 0; see `lichen_highlevel::shape`.
-    let id1 = array_ids(
-        &b,
-        array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0],
-    )[0];
-    let id2 = array_ids(
-        &b,
-        array_ids(&b, array_ids(&b, b.state[s2].ty.unwrap())[0])[0],
-    )[0];
+    // the nominal id is the value's slot 1; see `lichen_highlevel::shape`.
+    let id1 = array_ids(&b, b.state[s1].val.unwrap())[1];
+    let id2 = array_ids(&b, b.state[s2].val.unwrap())[1];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id1)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s1.0 as usize
@@ -1438,54 +1404,56 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
 }
 
 #[test]
-fn two_struct_type_occurrences_do_not_unify() {
-    // same fields, different occurrences → different ids → nominal conflict
+fn two_struct_value_occurrences_do_not_unify() {
+    // same fields, different occurrences → different name tables and ids → a
+    // nominal conflict
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s1 = w.struct_type("s1", &[(f, Some("f"))]);
-    let s2 = w.struct_type("s2", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s1 = w.struct_value("s1", &[(f, Some("f"))]);
+    let s2 = w.struct_value("s2", &[(f, Some("f"))]);
     let expr = w.tuple("expr", &[s1, s2]);
     let b = build(expr, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s1].term.unwrap(), b.state[s2].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
+    // The conflict is inside the value layout: the two occurrences do not name
+    // one struct.
     let err = module.unify_errors[0].clone();
-    assert!(matches!(
-        err.value_a,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s1.0 as usize
-    ));
-    assert!(matches!(
-        err.value_b,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s2.0 as usize
-    ));
+    assert!(
+        err.value_a.is_some() && err.value_b.is_some(),
+        "the conflict names both sides: {err:?}"
+    );
+    assert_ne!(
+        err.value_a, err.value_b,
+        "the two occurrences are distinct: {err:?}"
+    );
 }
 
 #[test]
-fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
+fn a_struct_value_does_not_unify_with_a_same_shape_tuple_value() {
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
-    let t = w.type_tuple("t", &[f]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
+    let t = w.tuple("t", &[f]);
     let expr = w.tuple("expr", &[s, t]);
     let b = build(expr, w);
     assert!(b.ok);
     let mut module = b.module;
-    module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
+    module.unify(b.state[s].ty.unwrap(), b.state[t].ty.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    // Both shapes are the same field-**slot** list, so the nominal distinction
-    // lives at the kind's marker slot.
+    // The layouts are named by different markers, so a struct is not a tuple.
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
     assert!(
         matches!(
             (&a, &b),
             (
-                Some(HighProgramValue::LowValue(LowValue::Array(_))),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeStruct)),
                 Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
             ) | (
                 Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
-                Some(HighProgramValue::LowValue(LowValue::Array(_)))
+                Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
             )
         ),
         "marker-level nominal clash: got {a:?} vs {b:?}"
@@ -1493,30 +1461,31 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
 }
 
 #[test]
-fn a_struct_type_unifies_with_itself() {
+fn a_struct_value_unifies_with_itself() {
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
     let b = build(s, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[s].term.unwrap());
     assert!(
         module.unify_errors.is_empty(),
-        "the same struct type unifies with itself"
+        "the same struct value unifies with itself"
     );
 }
 
 #[test]
-fn an_annotation_against_a_struct_type_reports_the_conflict() {
-    // 5 : struct{.f Int} — the literal's int type conflicts with the struct type.
+fn an_annotation_against_a_struct_value_reports_the_conflict() {
+    // 5 : {.f @any : int} — the literal's int type conflicts with the struct
+    // layout.
     let w = Writer::new();
     let five = w.int("five", 5);
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
     let a = w.annotate("a", five, s);
     let b = build(a, w);
-    assert!(!b.ok, "5 : struct{{.f Int}} must fail");
+    assert!(!b.ok, "5 : {{.f @any : int}} must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
@@ -1524,7 +1493,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    // The struct's shape is the structured expected side; the language layer
+    // The struct's layout is the structured expected side; the language layer
     // spells it.
     assert!(
         diags[0].loc().is_some(),
@@ -1533,32 +1502,50 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
 }
 
 #[test]
-fn two_struct_types_conflict_reports_the_nominal_ids() {
-    // The argument's struct type has a different fresh id than the annotation's.
+fn two_struct_values_conflict_on_their_name_tables() {
+    // An instance of one struct occurrence against a template of another: the
+    // two do not unify.
     let w = Writer::new();
-    let f1 = w.int_type("f1");
-    let s1 = w.struct_type("s1", &[(f1, Some("f"))]);
-    let f2 = w.int_type("f2");
-    let s2 = w.struct_type("s2", &[(f2, Some("f"))]);
-    let x = w.param("x");
-    let body = w.annotate("body", x, s1);
-    let l = w.lam("l", x, body);
-    let whole = w.app("whole", l, s2);
-    let b = build(whole, w);
-    assert!(!b.ok, "two distinct struct types must not unify");
+    let f1 = any_of(&w, "f1", w.int_type("int_ty"));
+    let s1 = w.struct_value("s1", &[(f1, Some("f"))]);
+    let one = w.int("one", 1);
+    let args = w.tuple("args", &[one]);
+    let i1 = w.instantiate("i1", s1, args, &[Some("f")]);
+    let f2 = any_of(&w, "f2", w.int_type("int_ty"));
+    let s2 = w.struct_value("s2", &[(f2, Some("f"))]);
+    let matched = w.unify("matched", i1, s2);
+    let b = build(matched, w);
+    assert!(!b.ok, "two distinct struct occurrences must not unify");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Runtime);
-    // The conflict is on the nominal id; the wording is the language layer's job.
-    assert!(diags[0].loc().is_some(), "the runtime conflict is located");
+    assert_eq!(diags[0].kind, DiagKind::Annotation);
+    // The conflict is inside the value layout, and the name table comes
+    // first: two tables are never one handle.
+    assert!(
+        matches!(
+            (&diags[0].value_a, &diags[0].value_b),
+            (
+                Some(HighProgramValue::LowValue(LowValue::Table(_))),
+                Some(HighProgramValue::LowValue(LowValue::Table(_)))
+            )
+        ),
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a,
+        diags[0].value_b
+    );
+    assert_ne!(
+        diags[0].value_a, diags[0].value_b,
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a, diags[0].value_b
+    );
 }
 
 #[test]
-fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
-    // (\x. (x : struct{.f Int})) 5 — the apply-time unify checks the argument.
+fn an_annotation_with_a_struct_value_rejects_a_literal_at_apply_time() {
+    // (\x. (x : {.f @any : int})) 5 — the apply-time unify checks the argument.
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
     let x = w.param("x");
     let body = w.annotate("body", x, s);
     let l = w.lam("l", x, body);
@@ -1567,10 +1554,12 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     let b = build(whole, w);
     assert!(!b.ok, "a literal is not a struct value");
     let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
+    // One diagnostic: the apply-time check reports the struct's layout against
+    // the literal's int type.
+    assert_eq!(diags.len(), 1, "one diagnostic: {diags:?}");
     assert_eq!(diags[0].kind, DiagKind::Runtime);
     // reversed direction: a = the parameter's expected type (the struct's
-    // field list), b = the argument's found type (int)
+    // layout), b = the argument's found type (int)
     assert!(matches!(
         diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::Array(_)))
@@ -1586,17 +1575,15 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     // The IR is a graph: the same expression may have several parents, so it
     // compiles once, keeping one nominal id.
     let w = Writer::new();
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
-    let a = w.array("a", &[s, s]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
+    let a = w.tuple("a", &[s, s]);
     let b = build(a, w);
     assert!(b.ok, "one shared occurrence is one nominal type");
     assert!(b.module.unify_errors.is_empty());
-    // The id is the written occurrence, so sharing the expression shares the type.
-    let id = array_ids(
-        &b,
-        array_ids(&b, array_ids(&b, b.state[s].ty.unwrap())[0])[0],
-    )[0];
+    // The id is the written occurrence, so sharing the expression shares the
+    // nominal id.
+    let id = array_ids(&b, b.state[s].val.unwrap())[1];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
@@ -1605,84 +1592,102 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
 
 // --- struct instantiation ----------------------------------------------------
 
-// `s(1, 2)` wraps the positional tuple in the struct type: the element-type
-// list is checked against the field list.
+// `S{.f 1, .g 2}` fills the clone of the struct value's own fields.
 
 #[test]
-fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
+fn a_tuple_instantiated_with_a_struct_value_is_an_instance() {
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let f1 = w.int_type("f1");
-    let f2 = w.int_type("f2");
-    let s = w.struct_type("s", &[(f1, Some("f")), (f2, Some("g"))]);
-    let inst = w.instantiate("inst", s, v, &[]);
+    let f1 = any_of(&w, "f1", w.int_type("int_ty"));
+    let f2 = any_of(&w, "f2", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f1, Some("f")), (f2, Some("g"))]);
+    let inst = w.instantiate("inst", s, v, &[Some("f"), Some("g")]);
     let b = build(inst, w);
-    assert!(b.ok, "s(1, 2) must check");
+    assert!(b.ok, "S{{.f 1, .g 2}} must check");
     assert!(b.module.unify_errors.is_empty());
-    // the instance's type is the struct type, not the tuple type
+    // the instance's type is the shared struct layout, not the tuple's
     assert_eq!(
-        b.state[inst].ty, b.state[s].term,
-        "the instance's type is the struct type"
+        b.state[inst].ty, b.state[s].ty,
+        "the instance's type is the struct layout"
+    );
+    assert_eq!(
+        layout_marker(&b, b.state[inst].ty.unwrap()),
+        TypeValue::TypeStruct
     );
 }
 
 #[test]
 fn a_struct_instantiation_checks_its_fields() {
-    // arity: two fields, one value
+    // arity: one field, two values
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
     let inst = w.instantiate("inst", s, v, &[]);
     let b = build(inst, w);
-    assert!(
-        !b.ok,
-        "s(1, 2) against a one-field struct must fail (arity)"
-    );
-    // field type: the tuple's Ints are not Type
+    assert!(!b.ok, "S{{.f 1}} against two values must fail (arity)");
+    // field type: the template's fields are Type, the values' are Int
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let t1 = w.universe("t1");
-    let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, Some("f")), (t2, Some("t"))]);
-    let inst = w.instantiate("inst", s, v, &[]);
+    let t1 = any_of(&w, "t1", w.universe("type_ty"));
+    let t2 = any_of(&w, "t2", w.universe("type_ty"));
+    let s = w.struct_value("s", &[(t1, Some("f")), (t2, Some("t"))]);
+    let inst = w.instantiate("inst", s, v, &[Some("f"), Some("t")]);
     let b = build(inst, w);
     assert!(
         !b.ok,
-        "s(1, 2) against struct{{.f Type, .t Type}} must fail (fields)"
+        "S{{.f 1, .t 2}} against struct{{.f Type, .t Type}} must fail (fields)"
     );
     // a literal is not a positional value
     let w = Writer::new();
     let five = w.int("five", 5);
-    let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, Some("f"))]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
     let inst = w.instantiate("inst", s, five, &[]);
     let b = build(inst, w);
-    assert!(!b.ok, "s(5) must fail — a literal is not a struct value");
+    assert!(!b.ok, "S(5) must fail — a literal is not a struct value");
+    // an unknown field name is refused
+    let w = Writer::new();
+    let one = w.int("one", 1);
+    let v = w.tuple("v", &[one]);
+    let f = any_of(&w, "f", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f, Some("f"))]);
+    let inst = w.instantiate("inst", s, v, &[Some("g")]);
+    let b = build(inst, w);
+    assert!(!b.ok, "S{{.g 1}} against a template with no `.g` must fail");
+    let diags = b.diagnostics();
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.kind == DiagKind::StructUnknownField),
+        "the unknown field is named: {diags:?}"
+    );
 }
 
 #[test]
 fn instances_of_different_struct_occurrences_conflict() {
-    // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id.
+    // [i1, i2] against a template of the first occurrence — each instance
+    // carries its own nominal id.
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let f1 = w.int_type("f1");
-    let f2 = w.int_type("f2");
-    let s1 = w.struct_type("s1", &[(f1, Some("f")), (f2, Some("g"))]);
-    let i1 = w.instantiate("i1", s1, v, &[]);
-    let f3 = w.int_type("f3");
-    let f4 = w.int_type("f4");
-    let s2 = w.struct_type("s2", &[(f3, Some("f")), (f4, Some("g"))]);
-    let i2 = w.instantiate("i2", s2, v, &[]);
-    let a = w.array("a", &[i1, i2]);
+    let f1 = any_of(&w, "f1", w.int_type("int_ty"));
+    let f2 = any_of(&w, "f2", w.int_type("int_ty"));
+    let s1 = w.struct_value("s1", &[(f1, Some("f")), (f2, Some("g"))]);
+    let i1 = w.instantiate("i1", s1, v, &[Some("f"), Some("g")]);
+    let f3 = any_of(&w, "f3", w.int_type("int_ty"));
+    let f4 = any_of(&w, "f4", w.int_type("int_ty"));
+    let s2 = w.struct_value("s2", &[(f3, Some("f")), (f4, Some("g"))]);
+    let i2 = w.instantiate("i2", s2, v, &[Some("f"), Some("g")]);
+    let template = w.array_template("template", s1, w.int("len", 2));
+    let a = w.array_inst("a", template, &[i1, i2]);
     let b = build(a, w);
     assert!(
         !b.ok,
@@ -1691,50 +1696,61 @@ fn instances_of_different_struct_occurrences_conflict() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::ArrayElement);
-    // The conflict is the two distinct struct instances' nominal ids.
+    // The conflict is inside the value layout, and the name table comes
+    // first: two tables are never one handle.
     assert!(
         matches!(
             (&diags[0].value_a, &diags[0].value_b),
             (
-                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_))),
-                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_)))
+                Some(HighProgramValue::LowValue(LowValue::Table(_))),
+                Some(HighProgramValue::LowValue(LowValue::Table(_)))
             )
         ),
-        "the two distinct struct instances conflict on their nominal id"
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a,
+        diags[0].value_b
+    );
+    assert_ne!(
+        diags[0].value_a, diags[0].value_b,
+        "the two occurrences do not share a name table: {:?} vs {:?}",
+        diags[0].value_a, diags[0].value_b
     );
 }
 
 #[test]
 fn an_instantiation_through_a_call_result_callee_checks() {
-    // `(mk (Int))(1, 2)` with `mk = u => struct{...}` — the callee is an
+    // `(mk (Int)){.f 1, .g 2}` with `mk = u => {...}` — the callee is an
     // unevaluated apply the checker forces first.
     let w = Writer::new();
     let p = w.param("p");
-    let f1 = w.int_type("f1");
-    let f2 = w.int_type("f2");
-    let s = w.struct_type("s", &[(f1, Some("f")), (f2, Some("g"))]);
+    let f1 = any_of(&w, "f1", w.int_type("int_ty"));
+    let f2 = any_of(&w, "f2", w.int_type("int_ty"));
+    let s = w.struct_value("s", &[(f1, Some("f")), (f2, Some("g"))]);
     let mk = w.lam("mk", p, s);
     let arg = w.int_type("arg");
     let call = w.app("call", mk, arg);
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let inst = w.instantiate("inst", call, v, &[]);
+    let inst = w.instantiate("inst", call, v, &[Some("f"), Some("g")]);
     let b = build(inst, w);
     assert!(
         b.ok,
-        "a call-result callee resolves to its struct type: {:?}",
+        "a call-result callee resolves to its struct layout: {:?}",
         b.diagnostics()
     );
+    // The instance's type is the struct layout the callee returns: the
+    // shared `Struct` template.
     assert_eq!(
-        b.state[inst].ty, b.state[call].term,
-        "the instance's type is the callee's struct type"
+        b.state[inst].ty, b.state[s].ty,
+        "the instance's type is the callee's struct layout"
     );
 }
 
 #[test]
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
-    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is not a struct.
+    // `(mk (Int)){.f 1, .g 2}` with `mk = u => Int`: the forced callee is not a
+    // struct.
     let w = Writer::new();
     let p = w.param("p");
     let intt = w.int_type("intt");
@@ -1758,18 +1774,21 @@ fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
 }
 
 #[test]
-fn an_instantiation_requires_a_struct_type_callee() {
-    // Nominality: a tuple type is not a struct — it cannot instantiate.
+fn an_instantiation_requires_a_struct_value_callee() {
+    // Nominality: a tuple is not a struct — it cannot instantiate.
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
-    let f1 = w.int_type("f1");
-    let f2 = w.int_type("f2");
-    let t = w.type_tuple("t", &[f1, f2]);
+    let f1 = any_of(&w, "f1", w.int_type("int_ty"));
+    let f2 = any_of(&w, "f2", w.int_type("int_ty"));
+    let t = w.tuple("t", &[f1, f2]);
     let inst = w.instantiate("inst", t, v, &[]);
     let b = build(inst, w);
-    assert!(!b.ok, "tuple{{Int, Int}}(1, 2) must be rejected");
+    assert!(
+        !b.ok,
+        "(@any : int, @any : int){{.f 1, .g 2}} must be rejected"
+    );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
@@ -1877,36 +1896,29 @@ fn partial_inference_in_an_arrow_type() {
         b.module.equality_representative(b.int_type),
         "and it is the annotated domain itself"
     );
+    let return_type = b.module.functions[fid].return_type;
+    assert_eq!(
+        b.module.class_root(return_type),
+        b.module.class_root(b.int_type),
+        "the bare codomain hole captures the actual return type"
+    );
 }
 
 #[test]
-fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : array{Int, _} — the placeholder length binds to the
-    // element count.
+fn an_undecidable_array_template_length_is_guarded() {
+    // [@any : int, _][1] — the length is a value now, so a placeholder
+    // leaves the template undecidable.
     let w = Writer::new();
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.hole("len"));
     let e1 = w.int("e1", 1);
-    let e2 = w.int("e2", 2);
-    let e3 = w.int("e3", 3);
-    let arr = w.array("arr", &[e1, e2, e3]);
-    let it = w.int_type("it");
-    let h = w.hole("h");
-    let t = w.type_array("t", it, h);
-    let a = w.annotate("a", arr, t);
-    let mut b = build(a, w);
-    assert!(b.ok, "[1, 2, 3] : array{{Int, _}} should check");
-    // The annotated type's length slot unifies with the literal's length 3.
-    let ann_shape = array_ids(&b, b.state[a].ty.unwrap())[0];
-    let length_slot = array_ids(&b, ann_shape)[1];
-    let arr_shape = array_ids(&b, b.state[arr].ty.unwrap())[0];
-    let len3 = array_ids(&b, arr_shape)[1];
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(len3)),
-        Some(HighProgramValue::LowValue(LowValue::USize(3)))
-    ));
-    assert_eq!(
-        b.module.equality_representative(length_slot),
-        b.module.equality_representative(len3),
-        "the placeholder length binds to the element count"
+    let arr = w.array_inst("arr", template, &[e1]);
+    let b = build(arr, w);
+    assert!(!b.ok, "an undecidable template length must be refused");
+    let diags = b.diagnostics();
+    assert!(
+        diags.iter().any(|diag| diag.kind == DiagKind::Guard),
+        "the undecidable template is guarded: {diags:?}"
     );
 }
 
@@ -1928,58 +1940,40 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 }
 
 #[test]
-fn shallow_array_is_masked_and_typed_like_a_tuple() {
-    // [1, @shallow(2)] — the marker marks position 1; the type is a tuple, not an
-    // array type.
+fn a_shallow_array_element_is_masked() {
+    // [@any : int, 2][1, @shallow(1) 2] — the marker masks the element's
+    // value slot; the type is the `Array` template.
     let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
-    let arr = w.shallow_array("arr", &[(one, 0), (two, usize::MAX)]);
-    let mut b = build(arr, w);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let arr = w.array_inst_depths("arr", template, &[(one, 0), (two, 1)]);
+    let b = build(arr, w);
     assert!(b.ok, "the shallow array should check");
-    let value = b
+    // The instance's value is the element template and the two elements.
+    let value_ids = array_ids(&b, b.state[arr].val.unwrap());
+    assert_eq!(value_ids.len(), 3);
+    // The marked element's value slot carries the mask.
+    let marked = array_ids(&b, value_ids[2]);
+    let masked = b
         .module
-        .evaluate_node_deep(b.state[arr].val.unwrap(), None)
-        .unwrap();
+        .node_value(AnyNodeId::Dynamic(marked[0]))
+        .expect("the marked element's value slot is written");
+    let mask = array_mask_from(masked);
+    assert!(mask[0], "the marked element's value slot is masked");
+    assert!(!mask[1], "its type slot is not masked");
+    // The type is the shared `Array` template.
     assert_eq!(
-        array_mask_from(value),
-        [false, true],
-        "position 1 is marked"
-    );
-    let ty_val = b
-        .module
-        .evaluate_node_deep(b.state[arr].ty.unwrap(), None)
-        .unwrap();
-    let HighProgramValue::LowValue(LowValue::Array(ty_expr)) = ty_val else {
-        panic!("expected a type expr");
-    };
-    let kind_val = b
-        .module
-        .evaluate_node_deep(
-            // SAFETY: `ty_expr` is the value just evaluated by the build under
-            // test, whose block has not been dropped.
-            dyn_node(unsafe { ty_expr.items() }[1].node),
-            None,
-        )
-        .unwrap();
-    let HighProgramValue::LowValue(LowValue::Array(kind)) = kind_val else {
-        panic!("expected a kind expression");
-    };
-    assert_eq!(
-        b.module.node_value(AnyNodeId::Dynamic(
-            // SAFETY: `kind` is the value just evaluated by the build under
-            // test, whose block has not been dropped.
-            dyn_node(unsafe { kind.items() }[0].node)
-        )),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
-        "typed like a tuple"
+        layout_marker(&b, b.state[arr].ty.unwrap()),
+        TypeValue::TypeArray
     );
 }
 
 #[test]
 fn shallow_marked_position_stays_lazy_until_a_read() {
-    // [1, @shallow(x => x + 1) 5] — the apply sits at the bare-`@shallow` position, so the
-    // deep pass skips it.
+    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5] — the apply sits at the
+    // marked position, so the deep pass skips it.
     let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
@@ -1988,21 +1982,45 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
     let add = w.binop("add", BinOp::Add, x, one2);
     let lam = w.lam("lam", x, add);
     let call = w.app("call", lam, five);
-    let arr = w.shallow_array("arr", &[(one, 0), (call, usize::MAX)]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let arr = w.array_inst_depths("arr", template, &[(one, 0), (call, 1)]);
     let b = build(arr, w);
     assert!(b.ok, "the shallow array should check");
     let ids = array_ids(&b, b.state[arr].val.unwrap());
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), 3, "the element template and the two elements");
+    // The unmarked element's value slot is its own value.
+    let plain = array_ids(&b, ids[1]);
+    assert_eq!(
+        b.module.node_value(AnyNodeId::Dynamic(plain[0])),
+        Some(HighProgramValue::LowValue(LowValue::USize(1))),
+        "the unmarked element's value is its own"
+    );
+    // The marked element's value slot is the masked slot, and the element's
+    // own value is under the mask.
+    let marked = array_ids(&b, ids[2]);
+    let masked = array_ids(&b, marked[0]);
+    assert_eq!(
+        masked[0],
+        b.state[call].term.unwrap(),
+        "the element's own value is under the mask"
+    );
+    // The marked position is **lazy**: the apply under the mask has not run,
+    // so its answer is undecided.
+    let answer = b
+        .module
+        .element_value_node(AnyNodeId::Dynamic(masked[0]))
+        .unwrap_or(AnyNodeId::Dynamic(masked[0]));
     assert!(
-        b.module.node_value(AnyNodeId::Dynamic(ids[1])).is_none(),
+        b.module.node_value(answer).is_none(),
         "the masked apply never ran in the deep pass"
     );
 }
 
 #[test]
 fn a_read_of_a_shallow_position_forces_the_element() {
-    // [1, @shallow(x => x + 1) 5][1] — the read runs the apply that the deep pass
-    // deliberately skipped.
+    // [@any : int, 2][1, @shallow(1) (x => x + 1) 5][1] — the read runs the
+    // apply that the deep pass deliberately skipped.
     let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
@@ -2011,16 +2029,26 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     let add = w.binop("add", BinOp::Add, x, one2);
     let lam = w.lam("lam", x, add);
     let call = w.app("call", lam, five);
-    let arr = w.shallow_array("arr", &[(one, 0), (call, usize::MAX)]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let arr = w.array_inst_depths("arr", template, &[(one, 0), (call, 1)]);
     let one_idx = w.int("one_idx", 1);
-    let read = w.field("read", arr, one_idx);
+    let read = w.index("read", arr, one_idx);
     let mut b = build(read, w);
     assert!(b.ok, "the read should check");
+    let value = b
+        .module
+        .evaluate_node_deep(b.state[read].val.unwrap(), None)
+        .unwrap();
+    let items = array_ids_from(value);
+    assert_eq!(items.len(), width(), "the read's value is the masked slot");
+    let answer = b
+        .module
+        .element_value_node(AnyNodeId::Dynamic(items[0]))
+        .unwrap_or(AnyNodeId::Dynamic(items[0]));
     assert_eq!(
-        b.module
-            .evaluate_node_deep(b.state[read].val.unwrap(), None)
-            .unwrap(),
-        HighProgramValue::LowValue(LowValue::USize(6)),
+        b.module.node_value(answer),
+        Some(HighProgramValue::LowValue(LowValue::USize(6))),
         "the read forces the apply at the masked position"
     );
 }
@@ -2147,7 +2175,9 @@ fn an_out_of_bounds_array_index_fails_a_generated_assert() {
     let a = w.int("a", 1);
     let b2 = w.int("b2", 2);
     let c = w.int("c", 3);
-    let arr = w.array("arr", &[a, b2, c]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[a, b2, c]);
     let idx = w.int("idx", 3);
     let e = w.index("e", arr, idx);
     let b = build(e, w);
@@ -2171,7 +2201,9 @@ fn an_in_bounds_generated_constraint_is_drained() {
     let w = Writer::new();
     let a = w.int("a", 1);
     let b2 = w.int("b2", 2);
-    let arr = w.array("arr", &[a, b2]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 2));
+    let arr = w.array_inst("arr", template, &[a, b2]);
     let idx = w.int("idx", 1);
     let e = w.index("e", arr, idx);
     let b = build(e, w);
@@ -2192,7 +2224,9 @@ fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
     let c = w.int("c", 9);
-    let arr = w.array("arr", &[a, b2, c]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[a, b2, c]);
     let read = w.index("read", arr, i);
     let f = w.lam("f", i, read);
     let two = w.int("two", 2);
@@ -2216,7 +2250,9 @@ fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
     let c = w.int("c", 9);
-    let arr = w.array("arr", &[a, b2, c]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[a, b2, c]);
     let read = w.index("read", arr, i);
     let f = w.lam("f", i, read);
     let three = w.int("three", 3);
@@ -2244,7 +2280,9 @@ fn a_body_index_fails_at_the_violating_argument() {
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
     let c = w.int("c", 9);
-    let arr = w.array("arr", &[a, b2, c]);
+    let element = any_of(&w, "element", w.int_type("int_ty"));
+    let template = w.array_template("template", element, w.int("len", 3));
+    let arr = w.array_inst("arr", template, &[a, b2, c]);
     let read = w.index("read", arr, i);
     let f = w.lam("f", i, read);
     let five = w.int("five", 5);
@@ -2264,49 +2302,49 @@ fn a_body_index_fails_at_the_violating_argument() {
 // is undecided.
 
 #[test]
-fn an_annotated_struct_parameter_function_reads_a_named_field() {
-    // `f = (p : struct{.x Int, .y Int} => p.x)`; `f (struct{.x 1, .y 2})`.
+fn a_struct_template_parameter_function_reads_a_named_field() {
+    // `f = (p <: A => p.x)`; `f (A{.x 1, .y 2})`.
     let w = Writer::new();
     let p = w.param("p");
-    let int_x = w.int_type("int_x");
-    let int_y = w.int_type("int_y");
-    let struct_ty = w.struct_type("struct_ty", &[(int_x, Some("x")), (int_y, Some("y"))]);
+    let int_x = any_of(&w, "int_x", w.int_type("int_ty"));
+    let int_y = any_of(&w, "int_y", w.int_type("int_ty"));
+    let template = w.struct_value("template", &[(int_x, Some("x")), (int_y, Some("y"))]);
+    let constructor_parameter = w.param("constructor_parameter");
+    let constructor = w.lam("constructor", constructor_parameter, template);
+    let requirement = w.app("requirement", constructor, w.hole("requirement_hole"));
+    let matched = w.unify("matched", p, requirement);
     let read = w.named_field("read", p, "x");
-    let f = w.lam_typed("f", p, Some(struct_ty), read, false);
+    let body = w.tuple("body", &[matched, read]);
+    let f = w.lam("f", p, body);
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let fields = w.tuple("fields", &[one, two]);
-    let arg = w.instantiate("inst", struct_ty, fields, &[]);
+    let instance = w.app("instance", constructor, w.hole("instance_hole"));
+    let arg = w.instantiate("arg", instance, fields, &[Some("x"), Some("y")]);
     let call = w.app("call", f, arg);
     let b = build(call, w);
-    assert!(b.ok, "f (struct{{.x 1, .y 2}}) must check");
+    assert!(b.ok, "f (A{{.x 1, .y 2}}) must check");
 }
 
-/// Two **separately written** occurrences of `struct{.x Int}` are two distinct
+/// Two **separately written** occurrences of `{.x @any : int}` are two distinct
 /// nominal types.
 ///
 /// # Invariant
-/// A struct type expression mints a fresh nominal id per source occurrence
-/// (`check_type_struct`), and unification compares that id; sharing one *named*
-/// type expression is what makes an annotation and an instance agree.
+/// A struct value mints a fresh nominal id per source occurrence
+/// (`check_struct_value`), and unification compares that id; sharing one *named*
+/// struct value is what makes a template and an instance agree.
 #[test]
-fn two_written_struct_types_are_distinct_nominal_types() {
+fn two_written_struct_values_are_distinct_nominal_types() {
     let w = Writer::new();
-    let p = w.param("p");
-    let int_a = w.int_type("int_a");
-    let written_in_annotation = w.struct_type("written_in_annotation", &[(int_a, Some("x"))]);
-    let read = w.named_field("read", p, "x");
-    let f = w.lam_typed("f", p, Some(written_in_annotation), read, false);
-    let int_b = w.int_type("int_b");
-    let written_in_argument = w.struct_type("written_in_argument", &[(int_b, Some("x"))]);
+    let int_a = any_of(&w, "int_a", w.int_type("int_ty"));
+    let written_in_annotation = w.struct_value("written_in_annotation", &[(int_a, Some("x"))]);
+    let int_b = any_of(&w, "int_b", w.int_type("int_ty"));
+    let written_in_argument = w.struct_value("written_in_argument", &[(int_b, Some("x"))]);
     let one = w.int("one", 1);
     let fields = w.tuple("fields", &[one]);
-    let arg = w.instantiate("inst", written_in_argument, fields, &[]);
-    let call = w.app("call", f, arg);
-    let b = build(call, w);
-    for d in b.diagnostics() {
-        eprintln!("PROBE two occurrences diag: {d:?}");
-    }
+    let arg = w.instantiate("arg", written_in_argument, fields, &[Some("x")]);
+    let matched = w.unify("matched", arg, written_in_annotation);
+    let b = build(matched, w);
     assert!(
         !b.ok,
         "two written occurrences of the same struct text are distinct nominal types"
@@ -2314,94 +2352,75 @@ fn two_written_struct_types_are_distinct_nominal_types() {
 }
 
 #[test]
-fn an_open_struct_annotation_lets_its_field_be_read() {
-    // `F = T: KT T => T.I` with `KT = _x => struct{.I _, .O _}` — the
-    // annotation names the fields, leaving their types open.
+fn an_open_struct_template_lets_its_field_be_read() {
+    // `F = t => { t <: A; t.I }` with `A = {.I _, .O _}` — the template names
+    // the fields, leaving their types open.
 
-    // The annotated parameter's type is compiled and unified into its slot
-    // before the body compiles (`checker/lambda.rs`).
-
-    // So the body's `T.I` reads a field the annotation already named, and
-    // applying `F` to a struct type closes it.
+    // The parameter and argument use the same constructor's returned requirement.
     let w = Writer::new();
     let t = w.param("t");
     let open_i = w.hole("open_i");
     let open_o = w.hole("open_o");
-    // **One** named struct type for both sides: two written `struct{…}` are
+    // **One** named struct value for both sides: two written `{.…}` are
     // distinct.
-    let open_struct = w.struct_type("open_struct", &[(open_i, Some("I")), (open_o, Some("O"))]);
+    let open_struct = w.struct_value("open_struct", &[(open_i, Some("I")), (open_o, Some("O"))]);
+    let constructor_parameter = w.param("constructor_parameter");
+    let constructor = w.lam("constructor", constructor_parameter, open_struct);
+    let requirement = w.app("requirement", constructor, w.hole("requirement_hole"));
+    let matched = w.unify("matched", t, requirement);
     let read = w.named_field("read", t, "I");
-    let f = w.lam_typed("f", t, Some(open_struct), read, false);
+    let body = w.tuple("body", &[matched, read]);
+    let f = w.lam("f", t, body);
     // The argument is an **instance** of that struct whose field values are the
     // *types* `Int` — the struct contains a type.
     let int_i = w.int_type("int_i");
     let int_o = w.int_type("int_o");
     let fields = w.tuple("fields", &[int_i, int_o]);
-    let arg = w.instantiate("inst", open_struct, fields, &[]);
+    let instance = w.app("instance", constructor, w.hole("instance_hole"));
+    let arg = w.instantiate("arg", instance, fields, &[Some("I"), Some("O")]);
     let call = w.app("call", f, arg);
     let b = build(call, w);
-    // The checker's own per-expression view, not mutated by the unify.
-    for (at, st) in b.state.iter().enumerate() {
-        let e = ExprId(at as u32);
-        eprintln!(
-            "PROBE expr[{at}] kind={:?}\n    term={:?}\n    val ={:?}\n    ty  ={:?}",
-            b.ir[e].kind, st.term, st.val, st.ty,
-        );
-    }
-    for d in b.diagnostics() {
-        eprintln!("PROBE open struct diag: {d:?}");
-    }
-    // What each function's parameter type slot holds after the build.
-    for (fid, function) in b.module.functions.iter() {
-        let cell = array_ids(&b, function.parameter)[1];
-        eprintln!(
-            "PROBE function {fid:?} param_type_cell={cell:?} value={:?} low={:?}",
-            b.module.node_value(AnyNodeId::Dynamic(cell)),
-            b.module.low_type_of_node(cell),
-        );
-    }
     assert!(
         b.ok,
-        "an open struct annotation must still let the body read its field"
+        "an open struct template must still let the body read its field"
     );
 }
 
 // --- a tuple-domain function that reads an element --------------------------
 
 #[test]
-fn an_annotated_tuple_parameter_function_reads_an_element() {
-    // The regression `f = p : tuple{Int, Int} => p(0)`; `f (1, 2)` failed with
-    // `expected raw[?a, Int], found raw[?a, Int]`.
+fn a_tuple_template_parameter_function_reads_an_element() {
+    // The regression `f = p => { p <: (@any : int, @any : int); p(0) }`;
+    // `f (1, 2)` failed with `expected raw[?a, Int]`.
     let w = Writer::new();
     let p = w.param("p");
-    let int1 = w.int_type("int1");
-    let int2 = w.int_type("int2");
-    let tuple_ty = w.type_tuple("tuple_ty", &[int1, int2]);
+    let int1 = any_of(&w, "int1", w.int_type("int_ty"));
+    let int2 = any_of(&w, "int2", w.int_type("int_ty"));
+    let tuple_ty = w.tuple("tuple_ty", &[int1, int2]);
+    let matched = w.unify("matched", p, tuple_ty);
     let zero = w.int("zero", 0);
     let read = w.field("read", p, zero);
-    let f = w.lam_typed("f", p, Some(tuple_ty), read, false);
+    let body = w.tuple("body", &[matched, read]);
+    let f = w.lam("f", p, body);
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let fields = w.tuple("fields", &[one, two]);
     let call = w.app("call", f, fields);
     let b = build(call, w);
-    for d in b.diagnostics() {
-        eprintln!(
-            "PROBE tuple read diag: kind={:?} loc={:?} a={:?} b={:?}",
-            d.kind, d.loc, d.a, d.b
-        );
-    }
-    assert!(b.ok, "f (1, 2) against the tuple domain must check");
+    assert!(b.ok, "f (1, 2) against the tuple template must check");
     // And actually evaluate it: the apply's parameter check runs there.
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
-    for e in &module.unify_errors {
-        eprintln!(
-            "PROBE tuple read eval error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
-            e.a, e.b, e.value_a, e.value_b, e.steps
-        );
-    }
-    assert_eq!(common_value(&value), 1, "f (1, 2) yields 1");
+    // The body's value is the match and the read; the read is the second.
+    let ids = array_ids_from(value);
+    assert_eq!(ids.len(), 2, "the body's value is the match and the read");
+    let read_node = module
+        .element_value_node(AnyNodeId::Dynamic(ids[1]))
+        .unwrap_or(AnyNodeId::Dynamic(ids[1]))
+        .dynamic()
+        .expect("the read's value slot");
+    let read_value = module.evaluate_node_deep(read_node, None).unwrap();
+    assert_eq!(common_value(&read_value), 1, "f (1, 2) yields 1");
 }
 
 /// The integer a value carries, for the assertions above.
@@ -2422,12 +2441,15 @@ fn common_value(value: &HighProgramValue) -> u64 {
 
 #[test]
 fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
-    // `f = (p : struct{.x Int, .y Int} => p)`; `g = (a => f a)`.
+    // `f = (p : Struct => p)`; `g = (a => f a)`.
     let w = Writer::new();
     let p = w.param("p");
-    let int_x = w.int_type("int_x");
-    let int_y = w.int_type("int_y");
-    let struct_ty = w.struct_type("struct_ty", &[(int_x, Some("x")), (int_y, Some("y"))]);
+    // The parameter's domain is the shared `Struct` layout.
+    let struct_ty = w.hole("struct_ty");
+    w.fill(
+        struct_ty,
+        ExprKind::Literal(HighProgramLiteral::from(StructTemplateLit)),
+    );
     let f = w.lam_typed("f", p, Some(struct_ty), p, false);
 
     let a = w.param("a");

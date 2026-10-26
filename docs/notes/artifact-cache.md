@@ -316,6 +316,11 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `23` added the apply-result owner table, mapping a returned value node to the apply
+  that produced it. A computed struct result can lose its operator while its value is
+  materialized; the table preserves the ownership needed to recover that computation
+  for field reads and kernel lowering. A v22 artifact has no such table and cannot
+  preserve that ownership, so it is rebuilt rather than accepted with a different result.
 
 ### Reader obligations
 

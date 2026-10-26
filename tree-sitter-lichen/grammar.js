@@ -6,10 +6,17 @@
 // accepts anything the frontend accepts.  Grammar: `docs/language-spec.md` §2,
 // the precedence ladder `docs/notes/operators.md` §3.
 //
-// Postfix forms (`(k)`, `[i]`) exist only when *glued* to the
+// Postfix forms (`(k)`, `[i]`, `{…}`) exist only when *glued* to the
 // preceding token (`docs/language-spec.md` §2.1), so the grammar spells the
 // glued delimiter `token.immediate`; a spaced delimiter is a fresh atom and so
 // an argument of `application`.
+//
+// The value templates (`docs/notes/value-templates.md`): `Tuple`, `Array` and
+// `Struct` are the builtin templates, `[template, length]` is an array
+// template, `template[…]` is an array instance, `{.a e}` a struct value and
+// `S{.a e}` a struct instance.  The retired lowercase type forms
+// (`tuple{…}`, `struct{…}`, `array{T, n}`) and the `C(…)` instantiation no
+// longer parse.
 //
 // Run `tree-sitter generate` in this directory after editing.
 
@@ -29,16 +36,16 @@ const binaryLevel = (precedence, operators) => $ => prec.left(precedence, seq(
 const PREC = {
   lambda: 1,
   annotation: 2,
-  arrow: 3,
-  table_find: 4,
-  comparison: 5,
-  bitwise_or: 6,
-  bitwise_xor: 7,
-  bitwise_and: 8,
-  addition: 9,
-  product: 10,
-  prefix: 11,
-  application: 12,
+  unify: 3,
+  table_find: 5,
+  comparison: 6,
+  bitwise_or: 7,
+  bitwise_xor: 8,
+  bitwise_and: 9,
+  addition: 10,
+  product: 11,
+  prefix: 12,
+  application: 13,
 };
 
 module.exports = grammar({
@@ -77,18 +84,20 @@ module.exports = grammar({
     // -- statements --------------------------------------------------------
     statements: $ => seq(
       $.statement,
-      repeat(seq($.separator, $.statement)),
-      optional($.separator),
+      repeat(seq(repeat1($.separator), $.statement)),
+      repeat($.separator),
     ),
 
     statement: $ => choice($.binding, $.expression),
 
+    // `name := expr` — the binding.  The `=` of a unify is an expression, not
+    // a binding (`docs/notes/value-templates.md`).
     binding: $ => seq(
       optional(token(prec(1, '@loop'))),
       optional(token(prec(1, '@cache'))),
       optional('let'),
       field('name', $.identifier),
-      '=',
+      ':=',
       field('value', $.expression),
     ),
 
@@ -99,7 +108,7 @@ module.exports = grammar({
     expression: $ => choice(
       $.lambda,
       $.annotation,
-      $.arrow,
+      $.unify,
       $.table_read,
       $.binary_comparison,
       $.binary_or,
@@ -125,11 +134,12 @@ module.exports = grammar({
     // compound slot leaves its value position open
     // (`docs/notes/compound-element-slots.md`).  A mark's payload is text,
     // never an expression (`docs/language-spec.md` §2, marks).
-    annotation: $ => prec.right(PREC.annotation, choice(
-      seq(
-        field('value', $.expression),
-        repeat1($._annotation_piece),
-      ),
+    //
+    // The value and the pieces' right sides sit at the unify level, so the
+    // pieces chain flat (`a : b : c` is two pieces of one annotation) and an
+    // annotation is never the value of another.
+    annotation: $ => prec.right(PREC.annotation, seq(
+      field('value', $.expression),
       repeat1($._annotation_piece),
     )),
 
@@ -138,11 +148,13 @@ module.exports = grammar({
       seq(field('operator', '~'), field('payload', $.string_literal)),
     ),
 
-    // `A -> B` — a function type, right-associative.
-    arrow: $ => prec.right(PREC.arrow, seq(
-      field('parameter', $.expression),
-      '->',
-      field('return_type', $.expression),
+    // `actual = expected` — a plain unify; `actual <: template` — a template
+    // match.  One level, left-associative, and it binds looser than the
+    // annotation (`docs/notes/value-templates.md`).
+    unify: $ => prec.left(PREC.unify, seq(
+      field('left', $.expression),
+      field('operator', choice('=', '<:')),
+      field('right', $.expression),
     )),
 
     // `t <== k` — the table read: the loosest binary level, left-associative,
@@ -164,12 +176,12 @@ module.exports = grammar({
     binary_addition: binaryLevel(PREC.addition, ['+', '-']),
     binary_product: binaryLevel(PREC.product, ['*', '/', '%']),
 
-    // The prefix level: `@assert e`, the four one-operand keywords and the two
-    // two-operand ones.  A one-operand keyword takes an application
+    // The prefix level: `@assert e`, `@gc e`, the one-operand keywords
+    // and the two two-operand ones.  A one-operand keyword takes an application
     // (`int2float f x` converts `f x`); a two-operand one takes one atom each
     // (`docs/notes/operators.md` §3, §11).
     prefix: $ => prec(PREC.prefix, choice(
-      seq('@assert', field('value', $.application)),
+      seq(choice('@assert', '@gc'), field('value', $.application)),
       seq(
         field('operator', choice('int2float', 'float2int', 'exp', 'sqrt', 'floor')),
         field('value', $.application),
@@ -199,13 +211,11 @@ module.exports = grammar({
       $.wildcard,
       $.type_constant,
       $.parenthesized,
-      $.array,
+      $.array_template,
+      $.struct_value,
       $.block,
       $.if_expression,
       $.native_call,
-      $.tuple_type,
-      $.struct_type,
-      $.array_type,
       $.set_type,
       $.table_type,
       $.table_value,
@@ -215,30 +225,41 @@ module.exports = grammar({
     _postfix: $ => choice(
       $.field_read,
       $.index,
+      $.instance,
       $.call,
+      $.struct_instance,
     ),
 
     // `a.name` — a named field read.
     field_read: $ => seq('.', field('name', $.identifier)),
 
-    // `a[i]` — an index; the `[` must be glued, else it opens an array atom.
+    // `a[i]` — an element read; the `[` must be glued, else it opens an array
+    // template.
     index: $ => seq(token.immediate('['), field('index', $.expression), ']'),
 
-    // `a(k)` — a positional slot read, or `C(.x 1, …)` / `C(1,)` — an
-    // instantiation; a single bare expression in a glued paren is the read.
-    call: $ => seq(
-      token.immediate('('),
+    // `T[e1, e2]` — an instance of the array template `T`: the elements are
+    // written out, so a separator follows the first one.  The separator-free
+    // one-element form is the read above.
+    instance: $ => seq(
+      token.immediate('['),
       optional(seq(
-        $._argument,
-        repeat(seq($.separator, $._argument)),
-        optional($.separator),
+        $.shallow_element,
+        $.separator,
+        optional(seq(
+          $.shallow_element,
+          repeat(seq($.separator, $.shallow_element)),
+          optional($.separator),
+        )),
       )),
-      ')',
+      ']',
     ),
 
-    _argument: $ => choice(
-      seq('.', field('name', $.identifier), field('value', $.expression)),
-      field('value', $.expression),
+    // `a(k)` — a positional slot read: one expression in a glued paren.  The
+    // retired `C(…)` instantiation is gone (`docs/notes/value-templates.md`).
+    call: $ => seq(
+      token.immediate('('),
+      field('key', $.expression),
+      ')',
     ),
 
     // -- atoms & literals --------------------------------------------------
@@ -252,37 +273,32 @@ module.exports = grammar({
     // each sigil keyword outranks it by token precedence.
     wildcard: $ => token(prec(1, '@any')),
 
-    type_constant: $ => choice('Int', 'Float', 'string', 'Type'),
+    // The type constants, the builtin templates among them: `Tuple`, `Array`
+    // and `Struct` are values, not spellings of a type
+    // (`docs/notes/value-templates.md`).
+    type_constant: $ => choice('Int', 'Float', 'string', 'Type', 'Tuple', 'Array', 'Struct'),
 
-    // `( e )` grouping / `(e1, e2, ...)` tuple value.  An element may be a
-    // named struct-field argument `.field value` (struct instantiation / field
-    // read) or a bare expression; the grammar is lenient and accepts either
-    // everywhere.
+    // `( e )` grouping / `(e1, e2, ...)` tuple value.
     parenthesized: $ => seq(
       '(',
       optional(seq(
-        $._paren_element,
-        repeat(seq($.separator, $._paren_element)),
+        $.expression,
+        repeat(seq($.separator, $.expression)),
         optional($.separator),
       )),
       ')'
     ),
 
-    _paren_element: $ => choice(
-      seq('.', field('name', $.identifier), field('value', $.expression)),
-      field('value', $.expression),
-    ),
-
-    // `[e1, e2, ...]` array literal.  A position may carry the `@shallow`
-    // marker; a bare `expression` is the unmarked case of `shallow_element`.
-    array: $ => seq(
+    // `[template, length]` — the array template: the element template and the
+    // array's length.  An array *value* is an instance of a template, written
+    // `template[…]`.
+    array_template: $ => seq(
       '[',
-      optional(seq(
-        $.shallow_element,
-        repeat(seq($.separator, $.shallow_element)),
-        optional($.separator),
-      )),
-      ']'
+      $.shallow_element,
+      $.separator,
+      $.shallow_element,
+      optional($.separator),
+      ']',
     ),
 
     // `@shallow e` marks the whole element shallow, `@shallow(2) e` the first
@@ -293,33 +309,19 @@ module.exports = grammar({
       field('element', $.expression),
     ),
 
-    // `tuple{slot, ...}` — the tuple type: one slot per element, keyword-led
-    // because the braced form is a *type* and `(e, …)` is the tuple value.
-    tuple_type: $ => seq(
-      'tuple',
+    // `{.a e, …}` — a struct value: the fields carry their own names.
+    struct_value: $ => seq(
       '{',
-      $.tuple_slot,
-      repeat(seq($.separator, $.tuple_slot)),
+      $.struct_field,
+      repeat(seq($.separator, $.struct_field)),
       optional($.separator),
       '}',
     ),
 
-    // `value : type` — a tuple type's slot: the value position pinned by a
-    // top-level `:`, or a bare type whose value is the wildcard.
-    tuple_slot: $ => prec(1, choice(
-      seq(
-        field('value', $._atom),
-        ':',
-        field('type', $.expression),
-      ),
-      field('type', $.expression),
-    )),
-
-    // `struct{.name T, ...}` — a nominal struct type (the field list is
-    // optional, `struct{}`).
-    struct_type: $ => seq(
-      'struct',
-      '{',
+    // `S{.a e, …}` — a struct instance: the callee is the struct's template,
+    // and the brace is glued to it.
+    struct_instance: $ => seq(
+      token.immediate('{'),
       optional(seq(
         $.struct_field,
         repeat(seq($.separator, $.struct_field)),
@@ -328,20 +330,11 @@ module.exports = grammar({
       '}',
     ),
 
+    // `.name e` — one field of a struct value or a struct instance.
     struct_field: $ => seq(
-      optional(seq('.', field('name', $.identifier))),
-      field('type', $.expression),
-    ),
-
-    // `array{T, n}` — the array type: the element type, then the length.
-    array_type: $ => seq(
-      'array',
-      '{',
-      field('element', $.expression),
-      $.separator,
-      field('length', $.expression),
-      optional($.separator),
-      '}',
+      '.',
+      field('name', $.identifier),
+      field('value', $.expression),
     ),
 
     // `set{E}` — the set type, whose one element is the element **slot**.
@@ -399,11 +392,11 @@ module.exports = grammar({
     // struct field); an explicit `return expr` anywhere is the block's tail.
     block: $ => seq(
       '{',
-      optional($.separator),
+      repeat($.separator),
       optional(seq(
         $.block_stmt,
-        repeat(seq($.separator, $.block_stmt)),
-        optional($.separator),
+        repeat(seq(repeat1($.separator), $.block_stmt)),
+        repeat($.separator),
       )),
       '}',
     ),
