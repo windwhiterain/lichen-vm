@@ -414,10 +414,6 @@ where
     /// (a parameter) stays refused (`docs/notes/function-normalization.md`
     /// §3.7).  An undecided template decides nothing, so the instantiation
     /// refuses itself.
-    ///
-    /// The pin is the **pair** the parameter states: the template in the
-    /// placeholder's value slot, the type in its type slot, so the instance
-    /// inherits the template's name table and nominal id.
     pub(super) fn pin_placeholder_callee(&mut self, function: ExprId, argument: ExprId) {
         let ExprKind::Instantiate { template, .. } = self.ir[argument].kind else {
             return;
@@ -467,9 +463,9 @@ where
     /// The requirement a call's parameter states: the template and the type.
     ///
     /// # Invariant
-    /// A parameter that states a template (`x <: T`) holds it in its **value
-    /// slot**, so the requirement is the parameter's own term.  A parameter that
-    /// states only a type keeps the requirement in its **type slot**, as the
+    /// The requirement is the **pair** the parameter states: the template in
+    /// its **value slot**, the type in its **type slot**.  A parameter that
+    /// states only a type keeps the requirement in its type slot, as the
     /// annotation's own term.
     fn expected_argument_requirement(&mut self, function: ExprId) -> Option<NodeId> {
         let function_ty = self.state[function].ty?;
@@ -486,8 +482,8 @@ where
         let items = unsafe { self.module.array_items(parameter) }?;
         let value = items.get(shape::EXPR_VALUE_SLOT)?.node.dynamic()?;
         let ty = items.get(shape::EXPR_TYPE_SLOT)?.node.dynamic()?;
-        // The template slot decides: a parameter that states a template holds
-        // it there, and the requirement is then the parameter's own term.
+        // A template in the value slot makes the parameter's own term the
+        // requirement.
         if self.module.class_value(value).is_some() {
             return Some(parameter);
         }
