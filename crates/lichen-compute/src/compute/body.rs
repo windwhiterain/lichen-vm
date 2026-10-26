@@ -405,11 +405,11 @@ where
                                 self.origins.remove(&node);
                                 value
                             }
-                            // A value node has no operation: the definition's peels answer it.
-                            None => match self.module.node_operation(node) {
-                                Some(_) => self.opaque(node)?,
-                                None => self.definition(node)?,
-                            },
+                            // **A node with an operation is its own definition**:
+                            // the operation is the definition, so the definition's
+                            // walk answers it. The refusal below is for a node
+                            // with neither a value nor an operation.
+                            None => self.definition(node)?,
                         }
                     }
                 },
@@ -1992,6 +1992,18 @@ where
         let Some(target) = arguments.first() else {
             return Err("an index read is missing its target".into());
         };
+        // **A read of a call's result names the call**: the result is an expr and
+        // the read is its value half, so the computation the read names is the
+        // call (`docs/notes/value-templates.md`).
+        if let Some(call) = target.dynamic()
+            && let Some(operation) = self.module.node_operation(call)
+            && matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Apply)
+            )
+        {
+            return self.value(call);
+        }
         let index = arguments.get(1);
         // **What it saw, in the graph's terms**: the refusal names the target, the index
         // and the chain.
