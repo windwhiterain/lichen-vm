@@ -176,9 +176,9 @@ const FAMILIES: &str = "scalars := set(Float, Int)\n\
     four := (a : Int) => (b : Int) => (c : Int) => (d : Int) => { r := $probe_family(a, b, c, d); r : Int; r }\n";
 
 /// Three struct types, as the linked workbench's wrapper carries them.
-const STRUCTS: &str = "GridName := {.path @any : string, .name @any : string}\n\
-    WriteSphere := {.radius @any : Float, .voxel @any : Float, .path @any : string, .name @any : string}\n\
-    Voxels := {.kind @any : Type, .path @any : string, .name @any : string}\n";
+const STRUCTS: &str = "GridName := _x => {.path @any : string, .name @any : string}\n\
+    WriteSphere := _x => {.radius @any : Float, .voxel @any : Float, .path @any : string, .name @any : string}\n\
+    Voxels := _x => {.kind @any : Type, .path @any : string, .name @any : string}\n";
 
 /// Three more families, as the linked workbench's wrapper carries them.
 const MORE_FAMILIES: &str = "grid_count := path: string => { r := $probe_family(path); r : Int; r }\n\

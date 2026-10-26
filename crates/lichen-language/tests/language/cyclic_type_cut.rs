@@ -24,7 +24,7 @@ fn a_repeated_class_cell_is_one_unification_class() {
 fn a_coinductive_spine_is_cut_at_the_first_revisited_node() {
     // "the walk cuts the spine at the first node it meets again" — spec §5.
     assert_eq!(
-        root_type("f := x => [@any, 2][x, @shallow f (x + 1.0)]; inf := f 0.0; inf"),
+        root_type("A := _x => [@any, 2]\nf := x => A[x, @shallow f (x + 1.0)]; inf := f 0.0; inf"),
         "Array"
     );
 }
@@ -35,7 +35,7 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
     // The call result is the per-call instance; the shared cut is not here.
     assert_eq!(
         root_type(
-            "f := x => [@any, 2][x, @shallow g x]; g := y => [@any, 2][y, @shallow f y]; inf := f 0.0; inf"
+            "A := _x => [@any, 2]\nf := x => A[x, @shallow g x]; g := y => A[y, @shallow f y]; inf := f 0.0; inf"
         ),
         "Array"
     );
@@ -45,7 +45,9 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
 #[test]
 fn a_three_name_cycle_terminates_at_its_first_revisit() {
     // "it fires at the first revisit and a cycle of any length terminates" — §5.
-    let printed = root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x <: A => 0; f");
+    // The three struct values keep their cycle; the constructor names the
+    // struct the parameter takes.
+    let printed = root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x <: (_x => A) => 0; f");
     assert_eq!(printed, "Struct => Int");
     assert_eq!(printed.matches("Struct").count(), 1);
     assert_eq!(printed.matches('…').count(), 0);

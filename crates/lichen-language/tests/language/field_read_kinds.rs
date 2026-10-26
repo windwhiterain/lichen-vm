@@ -49,7 +49,10 @@ fn undecided_read(source: &str, form: &str) -> Option<(u32, u32)> {
 #[test]
 fn a_paren_read_of_a_deferred_array_is_refused_at_the_read() {
     assert_eq!(
-        undecided_read("f := x => x(0)\nf [@any, 2][10, 20]", "tuple read"),
+        undecided_read(
+            "f := x => x(0)\nA := _x => [@any, 2]\nf A[10, 20]",
+            "tuple read"
+        ),
         Some((1, 6)),
         "the caret is the container, not the read"
     );
@@ -58,7 +61,7 @@ fn a_paren_read_of_a_deferred_array_is_refused_at_the_read() {
 /// A decided container is refused where it stands, naming both **kinds**.
 #[test]
 fn a_paren_read_of_a_decided_array_is_refused() {
-    let (message, kind) = refused("l := [@any, 2][10, 20]\nl(0)");
+    let (message, kind) = refused("A := _x => [@any, 2]\nl := A[10, 20]\nl(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
         message.contains("Tuple") && message.contains("Array"),
@@ -70,7 +73,7 @@ fn a_paren_read_of_a_decided_array_is_refused() {
 #[test]
 fn a_paren_read_of_a_struct_instance_is_refused() {
     let (message, kind) =
-        refused("S := {.x @any : Int, .y @any : Type}\ns := S{.x 1, .y Int}\ns(0)");
+        refused("S := _x => {.x @any : Int, .y @any : Type}\ns := S{.x 1, .y Int}\ns(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
         message.contains("Tuple") && message.contains("Struct"),
@@ -89,7 +92,8 @@ fn a_paren_read_of_a_tuple_resolves() {
 /// type is what decides the container.
 #[test]
 fn a_bracket_read_of_a_tuple_is_refused() {
-    let (message, kind) = refused("f := (x <: (@any : Int, @any : Int)) => x[0]\nf (10, 20)");
+    let (message, kind) =
+        refused("T := _x => (@any : Int, @any : Int)\nf := (x <: T) => x[0]\nf (10, 20)");
     assert_eq!(
         kind,
         DiagKind::Guard,
@@ -125,7 +129,7 @@ fn a_bare_expression_in_a_block_is_not_a_field() {
 #[test]
 fn a_named_struct_and_a_named_block_read_by_name() {
     assert_eq!(
-        output("A := {.f @any : Int, .g @any : Type}\na := A{.f 1, .g Type}\n(a.f, a.g)"),
+        output("A := _x => {.f @any : Int, .g @any : Type}\na := A{.f 1, .g Type}\n(a.f, a.g)"),
         "(1, Type): Tuple"
     );
     assert_eq!(
@@ -137,7 +141,7 @@ fn a_named_struct_and_a_named_block_read_by_name() {
 /// `.a` states the container's kind; an array is not a struct.
 #[test]
 fn a_named_read_of_an_array_is_refused() {
-    let (message, kind) = refused("l := [@any, 2][10, 20]\nl.a");
+    let (message, kind) = refused("A := _x => [@any, 2]\nl := A[10, 20]\nl.a");
     assert_eq!(kind, DiagKind::Guard);
     assert_eq!(message, "expected Struct, found Array");
 }
@@ -149,7 +153,10 @@ fn a_named_read_of_an_array_is_refused() {
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
     assert_eq!(
-        undecided_read("f := x => x.a\nf [@any, 2][10, 20]", "field read"),
+        undecided_read(
+            "f := x => x.a\nA := _x => [@any, 2]\nf A[10, 20]",
+            "field read",
+        ),
         Some((1, 6)),
         "the caret is the container, not the read"
     );
@@ -161,7 +168,7 @@ fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
         output(
-            "S := {.a @any : Int, .b @any : string}\nf := (x <: S) => x.a\nf (S{.a 1, .b \"h\"})"
+            "S := _x => {.a @any : Int, .b @any : string}\nf := (x <: S) => x.a\nf (S{.a 1, .b \"h\"})"
         ),
         "1: Int"
     );

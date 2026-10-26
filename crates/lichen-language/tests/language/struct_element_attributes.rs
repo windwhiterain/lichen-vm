@@ -24,7 +24,7 @@ fn output(source: &str) -> String {
 
 #[test]
 fn a_field_requirement_refuses_an_argument_that_misses_it() {
-    let (message, kind) = refused("S := {.a @any : Int # 4}\nS{.a 1 # 2}");
+    let (message, kind) = refused("S := _x => {.a @any : Int # 4}\nS{.a 1 # 2}");
     assert_eq!(kind, DiagKind::Annotation);
     assert_eq!(message, "expected 4, found 2");
 }
@@ -42,14 +42,14 @@ fn a_perspective_parameter_takes_a_value_that_refines_it() {
 #[test]
 fn a_field_requirement_holds_for_an_argument_that_meets_it() {
     assert_eq!(
-        output("S := {.a @any : Int # 4}\nS{.a 1 # 4}"),
+        output("S := _x => {.a @any : Int # 4}\nS{.a 1 # 4}"),
         "(1,): Struct"
     );
 }
 
 #[test]
 fn a_field_pin_refuses_the_value_it_names() {
-    let (message, kind) = refused("S := {.a 5 : Int}\nS{.a 6}");
+    let (message, kind) = refused("S := _x => {.a 5 : Int}\nS{.a 6}");
     assert_eq!(kind, DiagKind::Annotation);
     assert_eq!(message, "expected 5, found 6");
 }
@@ -58,10 +58,10 @@ fn a_field_pin_refuses_the_value_it_names() {
 /// written second supplies field `.a`.
 #[test]
 fn a_named_argument_reconciles_against_its_own_field() {
-    let (message, _) = refused("S := {.a 5 : Int, .b 7 : Int}\nS{.b 8, .a 6}");
+    let (message, _) = refused("S := _x => {.a 5 : Int, .b 7 : Int}\nS{.b 8, .a 6}");
     assert_eq!(message, "expected 5, found 6");
     assert_eq!(
-        output("S := {.a 5 : Int, .b 7 : Int}\nS{.b 7, .a 5}"),
+        output("S := _x => {.a 5 : Int, .b 7 : Int}\nS{.b 7, .a 5}"),
         "(5, 7): Struct"
     );
 }
@@ -74,8 +74,10 @@ fn a_recursive_struct_type_reconciles_and_terminates() {
         output(
             "A := {.f @any : Int, .g B}
              B := {.f @any : Type, .g A}
-             a := A{.f 1, .g b}
-             b := B{.f Int, .g a}
+             AT := _x => A
+             BT := _x => B
+             a := AT{.f 1, .g b}
+             b := BT{.f Int, .g a}
              (a, b)"
         )
         .starts_with("(("),

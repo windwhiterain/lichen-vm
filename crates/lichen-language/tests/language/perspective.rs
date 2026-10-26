@@ -159,7 +159,7 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
 #[test]
 fn a_failed_read_in_an_attribute_renders_as_none() {
     // A failed read is a concrete empty value, spelled `none` and never `?a`.
-    let source = "f := x # 4 => x\nf (5 # [1,2][3])";
+    let source = "A := _x => [1, 2]\nf := x # 4 => x\nf (5 # A[3])";
     assert!(!ok(source));
     assert_eq!(message(source), "expected 4, found none");
 }
