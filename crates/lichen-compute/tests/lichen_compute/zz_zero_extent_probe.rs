@@ -77,9 +77,14 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let par0 = w.statement(w.app("Par0", bundled(w, imports.expr, "P"), kt));
 
     let k = w.param("k");
-    // A compound constraint is a template match: the actual is unified with a
-    // clone of the template, so the template keeps its own holes.
-    let constraint = w.unify("k_matches_par0", k, w.clone("par0_clone", par0));
+    // A compound constraint is a template match: the actual is unified with the
+    // template constructor applied once, so the template keeps its own holes.
+    let par0_ctor = w.lam("par0_ctor", w.param("par0_x"), par0);
+    let constraint = w.unify(
+        "k_matches_par0",
+        k,
+        w.app("par0_applied", par0_ctor, w.hole("par0_arg")),
+    );
     let i = w.app(
         "i",
         bundled(w, imports.expr, "range"),
@@ -116,12 +121,12 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
         &[Some("to"), Some("at"), Some("value")],
     );
     let written = w.app("write_call", bundled(w, imports.expr, "write"), write);
-    let out_value = w.statement(w.instantiate(
+    let out_value = w.instantiate(
         "out0_value",
         out0,
         fields(w, "out0_fields", &[written]),
         &[Some("z")],
-    ));
+    );
     // A block is a tuple of its statements read positionally, and its last statement is the one
     // the block answers with.
     let body = w.field(
@@ -199,8 +204,13 @@ fn write_recorded(
 
     let s = w.param("s");
     // The step's parameter is constrained the same way the kernel's is: the
-    // actual is unified with a clone of the template.
-    let constraint = w.unify("s_matches_garg", s, w.clone("garg_clone", garg));
+    // actual is unified with the template constructor applied once.
+    let garg_ctor = w.lam("garg_ctor", w.param("garg_x"), garg);
+    let constraint = w.unify(
+        "s_matches_garg",
+        s,
+        w.app("garg_applied", garg_ctor, w.hole("garg_arg")),
+    );
     let out = dispatch(w, imports, kernel, w.named_field("s_n", s, "n"));
     let body = w.field(
         "step_last",
