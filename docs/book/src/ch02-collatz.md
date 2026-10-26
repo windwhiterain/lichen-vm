@@ -11,7 +11,7 @@ nobody knows whether that is true, but it has been checked for an
 enormous range of numbers. The program will count the steps.
 
 ```lichen
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 27
 ```
 
@@ -23,7 +23,7 @@ The program takes 111 steps to get from 27 to 1. Let's take it apart.
 
 ## A binding of a function
 
-`collatz = n => …` binds the name `collatz` to a function of one
+`collatz := n => …` binds the name `collatz` to a function of one
 parameter, `n`. There is no `fn` keyword, no return type, and no separate
 function declaration: a function is an expression (`n => e`), and binding
 it to a name is all it takes.
@@ -39,33 +39,33 @@ Every operator in the language yields an `Int` except the floating-point
 forms, which yield `Float` (Chapter 3). Programs branch by indexing on
 that number.
 
-## `if` is an expression over an index
+## `if` is an expression over a tuple
 
 `if cond then a else b` is an expression like any other; it is written in
 the language as a shorthand for
 
 ```text
-[b, a][cond]
+(b, a)(cond)
 ```
 
-That is: build the two branches as a two-element array and index it with
-the condition. The order in the desugaring is `[else, then]`, because the
-condition is `0` for false and `1` for true. Two consequences matter:
+That is: build the two branches as a two-element **tuple** and read
+position `cond` of it. The order in the desugaring is `(else, then)`,
+because the condition is `0` for false and `1` for true. Two consequences
+matter:
 
-- The untaken branch is **never evaluated**, because an array's elements
+- The untaken branch is **never evaluated**, because a tuple's elements
   are lazy. `if 1 == 1 then 1 else 1 / 0` prints `1: Int`: position 0 of
-  the desugared array — the division by zero — is never read.
-- Both branches must have the **same type**, because they are elements of
-  one array. A branch that disagrees is an array-element mismatch, not a
-  special `if` error.
+  the desugared tuple — the division by zero — is never read.
+- The branches are a tuple's elements, so they need not share a type.
+  The `if` answers the branch that was taken, with that branch's type.
 
-## The next step is an array lookup
+## The next step is a tuple lookup
 
-`[n / 2, 3 * n + 1]` builds both possible successors of `n`: the even
+`(n / 2, 3 * n + 1)` builds both possible successors of `n`: the even
 successor in position 0 and the odd successor in position 1. Then
-`[n % 2]` indexes it: `n % 2` is `0` for an even `n` and `1` for an odd
-one. The glued brackets are the array read; a space before `[` would
-apply the array as a function instead (Chapter 3).
+`(n % 2)` reads position `n % 2` of it: `n % 2` is `0` for an even `n`
+and `1` for an odd one. The glued parentheses are the tuple read; a space
+before `(` would apply the tuple as a function instead (Chapter 3).
 
 `n / 2` is integer division, and `Int` is a machine-sized **unsigned**
 integer, so `7 / 2` is `3` and `n % 2` is exactly the parity.
@@ -91,12 +91,12 @@ contributes `0` steps.
 Try a few values:
 
 ```lichen
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 (collatz 1, collatz 6, collatz 7)
 ```
 
 ```text
-(0, 8, 16): tuple{Int, Int, Int}
+(0, 8, 16): Tuple
 ```
 
 `1` needs no steps; `6` takes 8; `7` takes 16.
@@ -107,7 +107,7 @@ Counting is one thing; the sequence's **peak** is another. `peak n` is
 the largest value the sequence reaches on its way to 1:
 
 ```lichen
-peak = n => if n == 1 then 1 else max n (peak [n / 2, 3 * n + 1][n % 2])
+peak := n => if n == 1 then 1 else max n (peak (n / 2, 3 * n + 1)(n % 2))
 peak 27
 ```
 
@@ -133,7 +133,7 @@ reports each differently.
 **A type error.** Call `collatz` with a string:
 
 ```lichen
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz "twenty-seven"
 ```
 
@@ -154,7 +154,7 @@ printed, so the program never produces output.
 fails the program if it does not:
 
 ```lichen
-n = 0
+n := 0
 @assert (n > 0)
 n
 ```
@@ -175,7 +175,7 @@ Chapter 14 covers assertions and the rest of the diagnostic vocabulary.
 **Non-termination.** `collatz 0` never reaches `1`, so it never finishes:
 
 ```lichen
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 0
 ```
 
@@ -200,31 +200,35 @@ The program printed `111: Int`: the count is an `Int`. The function's own
 answer is a function value, and its two halves say so:
 
 ```lichen
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz
 ```
 
 ```text
-Int => Int: Int -> Int
+Int => ?a: Int => ?a
 ```
 
-The type half is `Int -> Int`: a function from `Int` to `Int`. The value
-half is printed as `Int => Int` — the same function, shown as the
-signature it implements. A function with no decided parameter type prints
-as `?a => ?a: ?a -> ?a`; the `?a` names an open cell, and Chapter 5
-explains those. An annotated function states its signature up front:
+A function's value is printed as its **signature**: the parameter's type,
+then `=>`, then the result's type. Here the parameter is an `Int` — the
+body divides `n` — and the result is an open cell `?a`, because the
+recursive call's result is not yet decided (Chapter 5 explains the cell
+model). A function whose parameter is not decided either prints as
+`?a => ?a: ?a => ?a`.
+
+An annotated function states its signature up front — the parameter's
+type on the parameter, and the result's type on the body:
 
 ```lichen
-collatz = (n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]) : Int -> Int
+collatz := (n : Int) => ((if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)) : Int)
 collatz
 ```
 
 ```text
-Int => Int: Int -> Int
+Int => Int: Int => Int
 ```
 
-Same answer here — the recursion had already decided the parameter's type
-— but an annotation is how a function with no such use states its
+Same answer here — the recursion had already decided the parameter's
+type — but an annotation is how a function with no such use states its
 signature. Chapter 12 explains why a recursive function in particular may
 need one.
 
@@ -241,7 +245,7 @@ with a header:
   output = "111: Int"
   doc = "Count the Collatz steps from 27 to 1."
 ---
-collatz = n => if n == 1 then 0 else 1 + collatz [n / 2, 3 * n + 1][n % 2]
+collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 27
 ```
 
@@ -251,10 +255,10 @@ comments. Chapter 16 shows the suite and how to add to it.
 
 ## Summary
 
-- A function is a value: `n => e`, bound with `=`.
-- A comparison yields `0` or `1`; `if` is the lazy index of a two-element
-  array, so only the taken branch runs.
-- `[a, b]` builds an array, `[i]` reads position `i`, and `n / 2` is
+- A function is a value: `n => e`, bound with `:=`.
+- A comparison yields `0` or `1`; `if` is the lazy read of one element of
+  a two-element tuple, so only the taken branch runs.
+- `(a, b)` builds a tuple, `(k)` reads position `k` of it, and `n / 2` is
   unsigned integer division.
 - A binding may name itself as the head of a call, which is recursion.
 - `@assert e` fails the program unless `e` evaluates to `1`.
@@ -267,8 +271,8 @@ comments. Chapter 16 shows the suite and how to add to it.
 2. Write `odd_steps n`: the number of *odd* values the sequence passes
    through on its way to 1. (Hint: count `n % 2` at each step.)
 3. Explain why `if 1 == 0 then 1 else 2` prints `2: Int`, and why
-   `[2, 1][1 == 0]` prints the same thing.
+   `(2, 1)(1 == 0)` prints the same thing.
 4. Write a program that prints `collatz` itself, and read both halves of
    its output.
-5. Give `peak` an annotation of type `Int -> Int` and confirm the output
-   does not change.
+5. Give `peak` an annotated parameter and result — `(n : Int) => (… : Int)` —
+   and confirm the output does not change.
