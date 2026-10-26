@@ -12,21 +12,21 @@ use lichen_kernel_ir::{
     install_parallel_backend,
 };
 use lichen_language::package::PackageStore;
-use lichen_lowlevel::{Module, NodeId};
+use lichen_lowlevel::{AnyNodeId, Module, NodeId};
 
 pub use lichen_language::testing::{
     array_values, float_array, float_of, run_at, type_head, type_is_float, type_is_int,
     type_is_undecided, usize_array, usize_of, values_eq,
 };
 
-/// The store this thread's programs share.
-///
-/// # Invariant
-/// The store is per thread, so a test that registers a package of its own does not reach
-/// another test's, and the embedded compute package registers once for the thread rather
-/// than once for every program: `register_embedded` reuses an already-registered path,
-/// which a fresh store per program never gets to.
 thread_local! {
+    /// The store this thread's programs share.
+    ///
+    /// # Invariant
+    /// The store is per thread, so a test that registers a package of its own does not reach
+    /// another test's, and the embedded compute package registers once for the thread rather
+    /// than once for every program: `register_embedded` reuses an already-registered path,
+    /// which a fresh store per program never gets to.
     static STORE: RefCell<PackageStore<LangProgram>> = RefCell::new(
         new_store(None).expect("the embedded compute package registers")
     );
@@ -70,46 +70,64 @@ pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFr
     found.pop().expect("one fragment was just counted")
 }
 
-/// The `compute.Buf` element slots a module holds, and what each one reads.
+/// The `compute.Buf` struct values a module holds, and the node each one's
+/// element field holds.
 ///
 /// # Invariant
 ///
-/// This is `walk_role`'s read restated: a `Buf`-shaped type term's element field
-/// through `low_type_of_slot`, which is the call the element class is taken by.
-///
-/// The wrapper's fields are `native`, `type` and `length`
-/// (`docs/notes/kernel-buffer-declarations.md`); the older `native`/`element` expr is
-/// still recognised, so a module that holds both shapes is read for both.
-pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> {
-    use lichen_highlevel::shape::{TypeRef, field_names, field_type, low_type_of_slot};
-    use lichen_lowlevel::AnyNodeId;
+/// The layout is the **value's** own: a struct value carries its name table
+/// and its fields, so a reader asks the value for its names and never a type
+/// (`docs/notes/value-templates.md`). The wrapper's fields are `native`, `type`
+/// and `length` (`docs/notes/kernel-buffer-declarations.md`); the older
+/// `native`/`element` expr is still read, so a module holding both is read.
+pub fn buf_element_fields(module: &Module<LangProgram>) -> Vec<(NodeId, AnyNodeId)> {
+    use lichen_highlevel::shape::{STRUCT_VALUE_FIELD_BASE, value_items};
+    use lichen_language::render::struct_value_named_fields;
 
-    let mut reads: Vec<(NodeId, String)> = Vec::new();
+    let mut found: Vec<(NodeId, AnyNodeId)> = Vec::new();
     for (id, _node) in module.nodes.iter() {
-        let slot = AnyNodeId::Dynamic(id);
-        let Some(ty) = [TypeRef::Term(slot), TypeRef::Slot(slot)]
-            .into_iter()
-            .find(|ty| field_names(module, *ty).is_some())
-        else {
+        let Some(value) = module.element_value_node(AnyNodeId::Dynamic(id)) else {
             continue;
         };
-        let names: Vec<&str> = field_names(module, ty)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|name| *name)
-            .collect();
+        let Some(items) = value_items(module, value) else {
+            continue;
+        };
+        let Some(names) = struct_value_named_fields(module, value) else {
+            continue;
+        };
+        let names: Vec<&str> = names.iter().filter_map(|name| *name).collect();
         if names.as_slice() != ["native", "type", "length"]
             && names.as_slice() != ["native", "element"]
         {
             continue;
         }
-        let read = match field_type(module, ty, 1) {
-            Some(element) => format!("{:?}", low_type_of_slot(module, element)),
-            None => "<no element field>".to_string(),
+        let Some(element) = items.get(STRUCT_VALUE_FIELD_BASE + 1) else {
+            continue;
         };
-        reads.push((id, read));
+        found.push((id, element.node));
     }
-    reads
+    found
+}
+
+/// The `compute.Buf` element slots a module holds, and what each one reads.
+///
+/// # Invariant
+///
+/// This is `walk_role`'s read restated: a `Buf`-shaped value's element field
+/// through `low_type_of_slot`, which is the call the element class is taken by.
+pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> {
+    use lichen_highlevel::shape::low_type_of_slot;
+
+    buf_element_fields(module)
+        .into_iter()
+        .map(|(id, element)| {
+            let read = match low_type_of_slot(module, element) {
+                Some(shape) => format!("{shape:?}"),
+                None => "<no element field>".to_string(),
+            };
+            (id, read)
+        })
+        .collect()
 }
 
 /// Compile and run `source` (no imports, no store).
