@@ -35,10 +35,10 @@ this note records the migration decisions and the reasons for them.
   homogeneity across elements.
 - Binary operators take a tuple `(left, right)`. The old `[left, right]` spelling
   now denotes an array template and cannot keep its former meaning.
-- A compound domain in a function arrow uses template matching. Scalar domains
-  and the ordinary `:` stay unchanged. Generic hole I/O inference is required:
-  a whole bare hole in a domain or a codomain captures the actual parameter's
-  value and type, or the actual return's type and value.
+- The thin arrow `->` is removed. Function constraints use the same `<:` rule as
+  every other template: clone a function template and unify. For example,
+  `x <: (x : Int => _: Int) => x 1` constrains and applies `x` without a second
+  signature language or a dynamic scalar/compound match.
 - A single comma-free `a[i]` is an array read. `T[x,]` is a one-element
   instance; `T[]` and `T[x, y]` are the zero- and multi-element forms.
 
@@ -91,84 +91,19 @@ The `show_struct_ids` switch and the `struct_type_named_fields` reader are gone
 with the type that carried the names; `struct_value_named_fields` reads the
 value's table instead.
 
-## The arrow's two sides
+## Function templates
 
-A written arrow `A -> B` is a **signature**: a real function whose parameter
-states the domain and whose return states the codomain. The two sides do not
-take the same kind of statement, and the difference is the difference between
-`:` and `<:`.
+A function constraint is an ordinary function template. `<:` clones that template
+and unifies the actual function with it, so a parameter's value and type travel in
+the parameter expression itself; no separate arrow classifier is needed. A scalar
+constraint can use ordinary `:` inside the template, while a compound constraint
+uses `<:` inside it.
 
-### The domain
-
-The domain is classified after a deep evaluation, and the class decides what
-the signature's parameter holds.
-
-- A **scalar or type-valued** domain — `Int`, `Type`, the bare `Struct`, a
-  nested scalar function type — states a *type*. It fills the parameter's
-  **type slot**, as it always did.
-- A **bare open hole** — `_`, or a name bound to one (`I := _`) — states
-  *nothing*. It fills the **whole** parameter, so the actual parameter's value
-  and type are captured in the hole's own cells. No clone is taken: the hole is
-  the capture.
-- A **compound template** — a tuple, an array or a struct value, whose type is
-  the shared `Tuple`/`Array`/`Struct` layout — states a *value*. It is
-  **cloned** with the ordinary template instantiation, and the whole parameter
-  unifies with the clone, exactly `<:`. The clone's holes are fresh, so a
-  match writes into the clone and never into the written template; a *named*
-  template's holes are not shared either, because the clone boundary shares
-  only the enclosing lambda's parameters.
-- An **operation that has not decided** is cloned and whole-unified as well, so
-  the parameter decides with it. This is the one place where a scalar domain
-  behaves like a value: an operation domain that later decides to a scalar
-  leaves the parameter's *value* bound to the operation's answer instead of the
-  type slot. It is a limitation, not a rule.
-
-The apply's function-ness guard has no written sides at all: its two cells are
-fresh, so the pattern states nothing and stays harmless.
-
-### The codomain
-
-The codomain's **type half** is the signature's return type when the codomain
-is a hole or a compound template — a hole's type half captures the actual
-function's return type, and a compound template's is the layout. A scalar
-codomain is a type value and keeps its whole denotation, as before.
-
-### The directed value capture
-
-The generic function equality compares **type cells**, so it never carries a
-return *value*. Where the check knows both the arrow's syntax and the actual
-function — an annotation `f : A -> B` — the codomain is therefore directed at
-the function's return:
-
-- a **bare hole** takes the return's value, while its type half stays the
-  layout;
-- a **compound codomain** is cloned and the whole return is matched against
-  the clone.
-
-The return is never forced: an undecided answer states nothing, so there is
-nothing to take and nothing to match, and a scalar return keeps the ordinary
-type behaviour.
-
-Two limits are deliberate. A **frozen** callee is not captured: its return
-lives in another module, and reading it would need lowlevel metadata this
-slice does not add. A parameter whose type is an arrow (`x : A -> B`) cannot
-be captured locally either: the parameter's value is bound at the apply, in
-the lowlevel's generic function equality, which compares type cells only. The
-codomain hole's **type** half is captured there; its **value** half is not,
-and no local capture reaches it.
-
-### The poison channel
-
-A captured compound input or output is a **value**, not a type. It must be
-consumed with `<:` — which clones it — and never with `:` — which would pin the
-captured value into the place that uses it. A captured scalar input or output is
-also a full expression: its value stays open and its type half states the scalar
-type, so the compute prelude can consume both scalar and compound I/O with `<:`.
-A concrete scalar type constant still uses ordinary `:`.
-
-Only a **whole** bare hole captures. A hole *inside* a concrete template is a
-match position: the template is cloned and the hole is cloned with it, so the
-match fills it and never shares it with the written template.
+The earlier `A -> B` experiment was rejected: consuming a captured scalar type and
+a compound template uniformly would have required either a dynamic match or a
+second signature implementation. Removing the thin arrow keeps one constraint
+model. Compute uses a template function to constrain its input and can apply the
+function to that input template to obtain a symbolic output template.
 
 ## Open details
 
@@ -184,10 +119,9 @@ match fills it and never shares it with the written template.
 - The highlevel clone boundary currently shares only enclosing lambda
   parameters. It deliberately does not infer lexical ownership for local
   bindings in nested lambdas.
-- Compound arrow domains and bare-hole capture are implemented. Remaining limits
-  are a frozen callee's return value, a parameter-typed arrow's codomain value,
-  and a deferred operation domain that later decides to a scalar; **The arrow's
-  two sides** above records the exact boundary.
+- Function-template constraints still need end-to-end verification for frozen
+  wrappers and dependent output templates; the compute examples are the
+  acceptance cases.
 
 ## Verification boundary
 

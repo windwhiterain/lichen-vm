@@ -172,12 +172,10 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 `{f := p => body; f a}` => `{let (p_clone => body_clone) = @clone (p => body); a = p_clone; body_clone}`
 ```
 
-A function signature `D -> C` is also a function expression. A scalar domain or
-codomain states an ordinary type. A compound domain is a template matched against
-the whole parameter; a compound codomain is a template matched against the whole
-return. A whole open hole in either side captures the actual expression's value
-and type, which is how generic input/output templates are inferred. Captured
-inputs and outputs are expressions, so a later template match uses `<:`.
+A function constraint uses a function template and `<:`, never a separate `->`
+form. For example, `x <: (x : Int => _: Int) => x 1` clones the function template
+and unifies it with `x`, then applies `x`. The parameter's value and type travel
+in its expression, so scalar and compound constraints use the same model.
 
 ## Struct
 
