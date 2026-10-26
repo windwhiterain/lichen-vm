@@ -125,6 +125,10 @@ Array unify every element expression to a template expression.
 `a[n]` := `{(type_of a) = Array; @raw a.value[n+1]}`
 ```
 
+An array instance length may depend on an enclosing lambda parameter. Its check
+is then deferred to the application, where the instance's element count pins
+that parameter. A top-level `_` length remains undecided; it is not inferred.
+
 ## Subtype
 
 Unify is directed, extend to subtype.
@@ -174,8 +178,9 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 
 A function constraint uses a function template and `<:`, never a separate `->`
 form. For example, `x <: (x : Int => _: Int) => x 1` clones the function template
-and unifies it with `x`, then applies `x`. The parameter's value and type travel
-in its expression, so scalar and compound constraints use the same model.
+and unifies `x`'s signature with the clone, preserving `x`'s callable body, then
+applies `x`. The parameter's value and type travel in its expression, so scalar
+and compound constraints use the same model.
 
 ## Struct
 
