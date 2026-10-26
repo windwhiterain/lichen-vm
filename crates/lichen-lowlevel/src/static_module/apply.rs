@@ -141,7 +141,7 @@ impl<P: Program> Module<P> {
                 minted: HashMap::new(),
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
-            self.applied_exprs.insert(node, applied);
+            self.record_applied_expr(node, applied);
             remap = ctx.remap;
             minted = ctx.minted;
         }

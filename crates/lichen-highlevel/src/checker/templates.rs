@@ -21,32 +21,6 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
-    /// The expression to read for a template, and whether it is a constructor
-    /// that must be applied. Call-result values are used directly.
-    pub(super) fn template_subject(
-        &mut self,
-        template: ExprId,
-        placeholder: Option<ExprId>,
-    ) -> (ExprId, bool) {
-        if let Some(placeholder) = placeholder {
-            if self.placeholder_constructors.contains(&placeholder) {
-                return (template, true);
-            }
-            return (placeholder, false);
-        }
-        let ExprKind::Apply { function, .. } = self.ir[template].kind else {
-            return (template, false);
-        };
-        self.check_expr(function);
-        let function_ty = self.state[function].ty.unwrap();
-        self.module.evaluate_node_deep(function_ty, None);
-        if self.module.is_function_type(function_ty) {
-            (template, true)
-        } else {
-            (function, false)
-        }
-    }
-
     /// `@clone e` — a fresh instantiation of `e`'s value graph.
     ///
     /// # Invariant

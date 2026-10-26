@@ -206,13 +206,8 @@ where
         elements: crate::ir::ChildRange,
         depths: crate::ir::ChildRange,
     ) -> NodeId {
-        let (subject, apply_template) = self.template_subject(template, None);
-        self.check_expr(subject);
-        let (template_value, template_ty) = if apply_template {
-            (self.value_of(template), self.state[template].ty.unwrap())
-        } else {
-            (self.value_of(subject), self.state[subject].ty.unwrap())
-        };
+        self.check_expr(template);
+        let template_ty = self.state[template].ty.unwrap();
         self.module.evaluate_node_deep(template_ty, None);
         if self.type_is_concrete(template_ty) {
             self.check_unify(
@@ -229,6 +224,7 @@ where
         let element_depths: Vec<usize> =
             self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
         // The constructor application supplies the array value and its shape.
+        let template_value = self.value_of(template);
         let (requirement, template_count) = match self.template_shape(template_value) {
             Some(shape) => shape,
             None => {
