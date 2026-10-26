@@ -97,6 +97,17 @@ impl<P: Program> Module<P> {
     /// what a routed apply needs when its argument is a read the kernel emits.
     /// `None` for a body that computes no compute operator or more than one.
     /// Routing is the prelude's: docs/notes/operator-polymorphism.md.
+    ///
+    /// # Invariant
+    /// **A read's position is a subscript, not a computation.** The position an
+    /// `Index` or a `TableGet` reads at is computed by an operator whenever it
+    /// is not a literal — a struct field read whose name table is undecided
+    /// computes `TableGet(names, name) + <field base>`. That arithmetic is
+    /// *addressing*, so it is not the operator the body computes: the compute
+    /// module's own wrappers (`read`, `write`, `buf`, `collect`) each carry
+    /// such an addition beside the one operator they compute, and counting it
+    /// left them with no answer at all
+    /// (`docs/notes/loop-conversion.md` §8.5).
     pub fn static_function_compute_operator(
         &self,
         function: StaticFunctionRef,
@@ -105,17 +116,32 @@ impl<P: Program> Module<P> {
         let module = self.static_module(key);
         let function = module.functions.get(function.index.0)?;
         let mut found: Option<(P::Operator, LocalNodeId)> = None;
-        let mut pending = vec![function.r#return];
-        let mut seen = std::collections::HashSet::new();
-        while let Some(local) = pending.pop() {
-            if !seen.insert(local) {
+        // Each entry says whether the node was reached as a read's position.
+        let mut pending = vec![(function.r#return, false)];
+        // Each node's own flag: a node first met as a position and later met
+        // as a computation is a computation, so the walk visits it twice.
+        let mut seen: HashMap<LocalNodeId, bool> = HashMap::new();
+        // The nodes already counted, so a revisit does not count twice.
+        let mut counted: HashSet<LocalNodeId> = HashSet::new();
+        while let Some((local, position)) = pending.pop() {
+            if let Some(was_position) = seen.get(&local)
+                && (!*was_position || position)
+            {
                 continue;
             }
+            seen.insert(local, position);
             let node = module.nodes.get(local.index)?;
             if let Some(operation) = &node.operation {
-                if crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator).is_none() {
+                let low = crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator);
+                let read = matches!(
+                    low,
+                    Some(crate::LowOperator::Index | crate::LowOperator::TableGet)
+                );
+                if !position && low.is_none() {
                     // **An operand-less call is no compute operator**: a nominal id reads none.
-                    if let Some(operand) = operation.operand {
+                    if let Some(operand) = operation.operand
+                        && counted.insert(local)
+                    {
                         // Two compute operators in one body have no single answer.
                         if found.is_some() {
                             return None;
@@ -124,7 +150,22 @@ impl<P: Program> Module<P> {
                     }
                 }
                 if let Some(operand) = operation.operand {
-                    pending.push(operand);
+                    // The operand array's items: for a read, the second one is the
+                    // position it reads at.
+                    if let Some(crate::LowValue::Array(array)) = module
+                        .read(operand)
+                        .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(&value))
+                    {
+                        // SAFETY: `array` is a payload of a value read out of a
+                        // live frozen module; nothing here releases an arena.
+                        for (index, item) in unsafe { array.items() }.iter().enumerate() {
+                            if let crate::AnyNodeId::Static(inner) = item.node
+                                && inner.module == key
+                            {
+                                pending.push((inner.index, position || (read && index == 1)));
+                            }
+                        }
+                    }
                 }
             } else if let Some(crate::LowValue::Array(array)) = node
                 .value
@@ -136,7 +177,7 @@ impl<P: Program> Module<P> {
                     if let crate::AnyNodeId::Static(inner) = item.node
                         && inner.module == key
                     {
-                        pending.push(inner.index);
+                        pending.push((inner.index, position));
                     }
                 }
             }

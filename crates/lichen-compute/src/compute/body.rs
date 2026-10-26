@@ -1328,18 +1328,35 @@ where
     }
 
     /// The compute operator a dynamic function clone's body computes, or `None`.
+    ///
+    /// # Invariant
+    /// The rule is [`Module::static_function_compute_operator`]'s: a read's
+    /// position is a subscript and not a computation, so only the body's own
+    /// operator is a candidate.
     fn dynamic_compute_operator(&self, function: FunctionId) -> Option<P::Operator> {
         let function = self.module.functions.get(function)?;
         let mut found = None;
-        let mut pending = vec![function.r#return];
-        let mut seen = HashSet::new();
-        while let Some(node) = pending.pop() {
-            if !seen.insert(node) {
+        // Each entry says whether the node was reached as a read's position.
+        let mut pending = vec![(function.r#return, false)];
+        // Each node's own flag: a node first met as a position and later met
+        // as a computation is a computation, so the walk visits it twice.
+        let mut seen: HashMap<NodeId, bool> = HashMap::new();
+        // The nodes already counted, so a revisit does not count twice.
+        let mut counted: HashSet<NodeId> = HashSet::new();
+        while let Some((node, position)) = pending.pop() {
+            if let Some(was_position) = seen.get(&node)
+                && (!*was_position || position)
+            {
                 continue;
             }
+            seen.insert(node, position);
             if let Some(operation) = self.module.node_operation(node) {
-                if AsEnum::<LowOperator>::as_enum(&operation.operator).is_none()
+                let low = AsEnum::<LowOperator>::as_enum(&operation.operator);
+                let read = matches!(low, Some(LowOperator::Index | LowOperator::TableGet));
+                if !position
+                    && low.is_none()
                     && operation.operand.is_some()
+                    && counted.insert(node)
                 {
                     if found.is_some() {
                         return None;
@@ -1347,7 +1364,15 @@ where
                     found = Some(operation.operator);
                 }
                 if let Some(operand) = operation.operand {
-                    pending.push(operand);
+                    // The operand array's items: for a read, the second one is the
+                    // position it reads at.
+                    if let Ok(items) = self.module.operand_items(operand) {
+                        for (index, item) in items.iter().enumerate() {
+                            if let AnyNodeId::Dynamic(inner) = item.node {
+                                pending.push((inner, position || (read && index == 1)));
+                            }
+                        }
+                    }
                 }
             } else if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node))
                 && let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
@@ -1355,7 +1380,7 @@ where
                 // SAFETY: the array is a live value of this module during the walk.
                 for item in unsafe { array.items() } {
                     if let AnyNodeId::Dynamic(inner) = item.node {
-                        pending.push(inner);
+                        pending.push((inner, position));
                     }
                 }
             }
