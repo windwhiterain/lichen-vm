@@ -153,6 +153,19 @@ impl<P: Program> Module<P> {
         cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
         // The nesting guard, first: `node`'s depth bounds the expansion, so a loop never nests.
+        if std::env::var("DSH_TRACE").is_ok() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static CALLS: AtomicUsize = AtomicUsize::new(0);
+            let calls = CALLS.fetch_add(1, Ordering::Relaxed);
+            if calls < 40 || calls % 10_000 == 0 {
+                eprintln!(
+                    "[apply] calls={calls} function={function:?} template={:?} node={node:?} depth={} nodes={}",
+                    self.functions[function].template,
+                    self.node_depth(node),
+                    self.nodes.len()
+                );
+            }
+        }
         if self.depth_exhausted(node) {
             return None;
         }
@@ -163,26 +176,44 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
-        let Some(instantiation) =
-            self.instantiate(function, argument, block, node, ParameterCheck::Value)
-        else {
-            // A failed parameter check leaves the apply's result unknown:
-            // the body must not run under a mismatched argument.
-            return None;
+        let template = self.functions[function].template.unwrap_or(function);
+        let argument_key = match argument {
+            Dyn(node) => Dyn(self.class_root(node)),
+            AnyNodeId::Static(sref) => AnyNodeId::Static(self.static_equality_representative(sref)),
         };
-        let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
-        // A closure's type cell is the call's own; the expr sync below owns the verdict.
-        if let Some(cell) = cell
-            && let Some(codomain) = self.expr_type_item(instantiation.applied)
-        {
-            self.evaluate_node(codomain, Some(block));
-            if !self.is_function_type_ref(codomain) {
-                let before = self.unify_errors.len();
-                self.unify_ref(cell, codomain);
-                self.unify_errors.truncate(before);
-            }
+        let key = (template, argument_key);
+        if self.report_type_side_failures && self.value_templates.contains(&template) {
+            return None;
         }
-        self.wire_apply_result(node, result, instantiation.applied, block)
+        if !self.value_applying.insert(key) {
+            return None;
+        }
+        self.value_templates.insert(template);
+        let result = (|| {
+            let Some(instantiation) =
+                self.instantiate(function, argument, block, node, ParameterCheck::Value)
+            else {
+                // A failed parameter check leaves the apply's result unknown:
+                // the body must not run under a mismatched argument.
+                return None;
+            };
+            let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
+            // A closure's type cell is the call's own; the expr sync below owns the verdict.
+            if let Some(cell) = cell
+                && let Some(codomain) = self.expr_type_item(instantiation.applied)
+            {
+                self.evaluate_node(codomain, Some(block));
+                if !self.is_function_type_ref(codomain) {
+                    let before = self.unify_errors.len();
+                    self.unify_ref(cell, codomain);
+                    self.unify_errors.truncate(before);
+                }
+            }
+            self.wire_apply_result(node, result, instantiation.applied, block)
+        })();
+        self.value_templates.remove(&template);
+        self.value_applying.remove(&key);
+        result
     }
 
     /// Apply a function's **type** where its value is not concrete yet.
@@ -228,7 +259,7 @@ impl<P: Program> Module<P> {
         // template is what says the chain is inside the same function again.
         // The parameter check still runs, so the call's diagnostics do not
         // depend on the guard.
-        let template = self.template_root_of(function);
+        let template = self.functions[function].template.unwrap_or(function);
         let reentrant = self.type_applying.contains(&template);
         self.type_applying.push(template);
         let applied = self.apply_type_body(function, argument, block, node, cell, check, reentrant);

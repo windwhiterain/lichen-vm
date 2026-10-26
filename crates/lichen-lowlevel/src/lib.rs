@@ -1156,6 +1156,14 @@ pub struct Module<P: Program> {
     /// itself therefore expands the body at every turn. The chain is what
     /// stops that turn — a function already inside itself is not forced again.
     pub(crate) type_applying: Vec<FunctionId>,
+    /// Open `(function template, argument class)` value applications.
+    ///
+    /// # Invariant
+    /// An open pair is coinductive re-entry, not a new computation; a different
+    /// argument class is a new application and still runs.
+    pub(crate) value_applying: HashSet<(FunctionId, AnyNodeId)>,
+    /// Function templates whose value body is open in this application chain.
+    pub(crate) value_templates: HashSet<FunctionId>,
     /// The module's **attribute-layout registry**: one entry per schema tail.
     ///
     /// # Invariant

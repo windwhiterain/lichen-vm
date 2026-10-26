@@ -94,6 +94,8 @@ impl<P: Program> Module<P> {
             stamp_depth: 0,
             deep_depth: 0,
             type_applying: Vec::new(),
+            value_applying: HashSet::new(),
+            value_templates: HashSet::new(),
             budget_exhausted: None,
             report_type_side_failures: false,
             // The empty layout is entry 0 from the first moment, so a plain value array's
