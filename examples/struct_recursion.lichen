@@ -2,8 +2,8 @@
   order = "3"
   output = "((@any, (@any, …)), (@any, (@any, …)), (1, (Int, …)), (Int, (1, …))): Tuple"
 ---
-A := {.f @any : Int, .g B}
-B := {.f @any : Type, .g A}
+A := _x => {.f @any : Int, .g (B _)}
+B := _x => {.f @any : Type, .g (A _)}
 a := A{.f 1, .g b}
 b := B{.f Int, .g a}
 (A , B, a, b)
