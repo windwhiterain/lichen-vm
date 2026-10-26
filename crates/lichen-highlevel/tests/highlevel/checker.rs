@@ -1917,6 +1917,12 @@ fn partial_inference_in_an_arrow_type() {
         b.module.equality_representative(b.int_type),
         "and it is the annotated domain itself"
     );
+    let return_type = b.module.functions[fid].return_type;
+    assert_eq!(
+        b.module.class_root(return_type),
+        b.module.class_root(b.int_type),
+        "the bare codomain hole captures the actual return type"
+    );
 }
 
 #[test]

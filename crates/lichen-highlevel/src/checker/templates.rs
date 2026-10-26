@@ -63,6 +63,7 @@ where
         self.check_expr(expected);
         let actual_term = self.state[actual].term.expect("the actual is compiled");
         let expected_term = self.state[expected].term.expect("the expected is compiled");
+        self.compute_operands(actual_term, expected_term);
         self.check_unify(
             actual_term,
             expected_term,

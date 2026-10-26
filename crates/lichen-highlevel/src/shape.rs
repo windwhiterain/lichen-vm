@@ -463,11 +463,8 @@ where
     if !self_referential {
         return true;
     }
-    // The self-referential template's type slot is the template itself.
-    match (items[EXPR_TYPE_SLOT].node, ty) {
-        (AnyNodeId::Dynamic(slot), AnyNodeId::Dynamic(template)) => slot == template,
-        _ => false,
-    }
+    // The self-referential template's type slot is in the template's own class.
+    module.same_class(items[EXPR_TYPE_SLOT].node, ty)
 }
 
 /// Whether `ty`'s type slot is the universe.

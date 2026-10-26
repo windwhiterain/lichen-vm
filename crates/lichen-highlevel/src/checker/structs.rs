@@ -270,7 +270,7 @@ where
     /// field-read and function-ness guards.
     pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
         self.module
-            .node_value(AnyNodeId::Dynamic(ty))
+            .node_value(AnyNodeId::Dynamic(self.module.class_root(ty)))
             .is_some_and(|value| {
                 matches!(
                     value.as_enum(),

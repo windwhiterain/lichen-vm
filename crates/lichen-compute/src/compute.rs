@@ -1703,10 +1703,13 @@ where
                         .element_value_node(operands[0].node)
                         .unwrap_or(operands[0].node);
                     let buffer = buf_payload::<P>(module, element).unwrap_or(element);
-                    let element = match module
-                        .node_value(buffer)
-                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                    {
+                    let Some(held) = decided_buffer_value(module, buffer) else {
+                        return None;
+                    };
+                    if matches!(held.as_enum(), Some(LowValue::Error)) {
+                        return Some(held);
+                    }
+                    let element = match AsEnum::<ComputeValue>::as_enum(&held) {
                         Some(ComputeValue::Buffer(payload, class)) => {
                             // SAFETY: the buffer value was just read out of `module`, so its
                             // payload's home block is alive for this read.
@@ -1804,11 +1807,14 @@ where
                         .element_value_node(operands[0].node)
                         .unwrap_or(operands[0].node);
                     let buffer = buf_payload::<P>(module, element).unwrap_or(element);
+                    let Some(held) = decided_buffer_value(module, buffer) else {
+                        return None;
+                    };
+                    if matches!(held.as_enum(), Some(LowValue::Error)) {
+                        return Some(held);
+                    }
 
-                    let results: ScalarData = match module
-                        .node_value(buffer)
-                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                    {
+                    let results: ScalarData = match AsEnum::<ComputeValue>::as_enum(&held) {
                         Some(ComputeValue::Buffer(payload, class)) => {
                             // SAFETY: the buffer value was just read out of `module`,
                             // so its payload's block is alive below.
@@ -3809,12 +3815,15 @@ fn run_input<P>(
 ) -> Option<RunInput>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
 {
-    match module
-        .node_value(node)
-        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-    {
+    let Some(held) = decided_buffer_value(module, node) else {
+        return None;
+    };
+    if matches!(held.as_enum(), Some(LowValue::Error)) {
+        return None;
+    }
+    match AsEnum::<ComputeValue>::as_enum(&held) {
         Some(ComputeValue::Buffer(payload, class)) => {
             // SAFETY: the buffer value is read on this borrow, so its payload's
             // block is alive below.
@@ -3834,6 +3843,16 @@ where
             None
         }
     }
+}
+
+/// A decided buffer payload, or `None` while its value is absent or `@any`.
+fn decided_buffer_value<P>(module: &Module<P>, node: AnyNodeId) -> Option<P::Value>
+where
+    P: Program,
+    P::Value: AsEnum<LowValue>,
+{
+    let value = module.node_value(node)?;
+    (!matches!(value.as_enum(), Some(LowValue::Any))).then_some(value)
 }
 
 /// The payload a `Buf` value carries — its `.native` slot.

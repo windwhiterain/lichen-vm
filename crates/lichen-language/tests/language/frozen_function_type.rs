@@ -35,4 +35,13 @@ fn a_written_arrow_in_a_frozen_module_is_a_function_type() {
          function type the annotation names, so the signature reads as an \
          arrow rather than as `[Function, <signature>]` — got {out:?}"
     );
+
+    let out = render_imported_wrapper(
+        "wrap := f => {O := _; f : _ -> O; O}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y)",
+    );
+    assert_eq!(
+        out, "Int: Type",
+        "a frozen wrapper captures the codomain type"
+    );
 }
