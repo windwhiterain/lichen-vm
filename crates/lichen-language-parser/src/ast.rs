@@ -216,12 +216,6 @@ pub enum Expr {
         marks: Vec<String>,
         span: Span,
     },
-    /// `T1 -> T2` — a function type.
-    Arrow {
-        parameter_type: Box<Expr>,
-        return_type: Box<Expr>,
-        span: Span,
-    },
     /// `(e1, ..., en)` — a tuple value (always; no type/value mode).
     Tuple(Vec<Expr>, Span),
     /// `set{E}` — a set type, whose one element is the element **slot**.
@@ -401,7 +395,6 @@ impl Expr {
             Expr::NamedFieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
-            Expr::Arrow { span, .. } => *span,
             Expr::Tuple(_, s) => *s,
             Expr::TypeSet(_, s) => *s,
             Expr::TypeTable { span, .. } => *span,

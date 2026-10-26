@@ -134,9 +134,6 @@ where
                 self.loc(parameter_type, 1),
                 DiagKind::Annotation,
             );
-            // An arrow's codomain takes the parameter's own return value, when
-            // the parameter's value is already a function.
-            self.capture_codomain_value(parameter_type, parameter);
         }
         // Invariant: the attribute cell stays undecided — a bound declared
         // value would be baked by the deep pass.
@@ -437,9 +434,7 @@ where
         // A **decided** non-function callee is refused here; an
         // undecided one waits for the runtime apply.
         if self.type_is_concrete(function_ty) && !self.module.is_function_type(function_ty) {
-            let d = self.fresh_cell();
-            let c = self.fresh_cell();
-            let fn_ty = self.signature_pattern(d, c);
+            let fn_ty = self.function_pattern();
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // **The body's own requirements are replayed here**, where the caller's slot
@@ -607,5 +602,54 @@ where
             }
         }
         node
+    }
+
+    /// A fresh **function pattern**: a real function whose own cells are open.
+    ///
+    /// # Invariant
+    /// The pattern's parameter and return are fresh cells, so it states
+    /// nothing: it says "a function", not "this function". It is a real
+    /// function object — the shape a lambda has — and not a second shape for
+    /// a function type.
+    fn function_pattern(&mut self) -> NodeId {
+        let return_block = self.module.add_block(None);
+        let saved = self.current_block;
+        self.current_block = return_block;
+        let parent = self.current_function();
+        let function = self.module.begin_function(return_block, parent);
+        self.function_stack.push((function, None));
+        // Both value positions are unconstrained: the pattern states no
+        // requirement at all.
+        let parameter_value = self.fresh_cell();
+        let parameter_type = self.fresh_cell();
+        let parameter = self.slot_expr(return_block, parameter_value, parameter_type);
+        let return_value = self.fresh_cell();
+        let return_type = self.fresh_cell();
+        let body = self.slot_expr(return_block, return_value, return_type);
+        self.module.finish_function(function, body, parameter);
+        self.module.functions[function].return_type = return_type;
+        let func_node = self.alloc_node(return_block, None, None);
+        self.module.write_node_value(
+            func_node,
+            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
+                function,
+            )))),
+        );
+        // The paired term `[Function(fid), ↺]`: the self-reference is what
+        // makes it a function type.
+        let expr = self.alloc_node(return_block, None, None);
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
+            ArrayItem::new(AnyNodeId::Dynamic(expr)),
+        ];
+        self.module.write_node_value(
+            expr,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, return_block).into(),
+            ))),
+        );
+        self.function_stack.pop();
+        self.current_block = saved;
+        expr
     }
 }

@@ -234,14 +234,6 @@ fn walk(expr: &Expr, deps: &mut Deps) {
                 walk(attribute, deps);
             }
         }
-        Expr::Arrow {
-            parameter_type,
-            return_type,
-            ..
-        } => {
-            walk(parameter_type, deps);
-            walk(return_type, deps);
-        }
         Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
             for element in elements {
                 walk(element, deps);

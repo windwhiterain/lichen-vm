@@ -490,12 +490,6 @@ pub enum ExprKind<L> {
         r#type: Option<ExprId>,
         attributes: ChildRange,
     },
-    /// `{ parameter, return_type }` — a function type, compiled to the kinded
-    /// arrow `[[in, out], [FunctionType, Type]]`.
-    TypeFunction {
-        parameter: ExprId,
-        return_type: ExprId,
-    },
     /// A tuple instance `(e1, ..., en)`.
     ///
     /// # Invariant
@@ -683,13 +677,6 @@ impl<L> ExprKind<L> {
                 push(*value);
                 push_opt(r#type, &mut push);
             }
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                push(*parameter);
-                push(*return_type);
-            }
             ExprKind::Array { template, length } => {
                 push(*template);
                 push(*length);
@@ -802,13 +789,6 @@ impl<L> ExprKind<L> {
                 if let Some(r#type) = r#type {
                     fix(r#type);
                 }
-            }
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                fix(parameter);
-                fix(return_type);
             }
             ExprKind::Array { template, length } => {
                 fix(template);

@@ -46,7 +46,6 @@ mod indexing;
 mod lambda;
 mod native_call;
 mod operators;
-mod signatures;
 mod structs;
 mod templates;
 mod tuples;
@@ -680,7 +679,7 @@ where
             let expression = ExprId(index as u32);
             let is_type = matches!(
                 checker.ir[expression].kind,
-                ExprKind::TypeFunction { .. } | ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
+                ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
             );
             if is_type && let Some(term) = checker.state[expression].term {
                 checker.module.evaluate_node_deep(term, None);
@@ -1482,7 +1481,6 @@ where
             | ExprKind::NamedField { .. }
             | ExprKind::Find { .. }
             | ExprKind::Annotation { .. }
-            | ExprKind::TypeFunction { .. }
             | ExprKind::Array { .. }
             | ExprKind::Placeholder
             | ExprKind::ErrorBlock
@@ -1643,14 +1641,6 @@ where
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
-            ExprKind::TypeFunction {
-                parameter,
-                return_type,
-            } => {
-                // The signature compiles both sides in the enclosing scope,
-                // ahead of its own shell.
-                self.check_signature(e, parameter, return_type)
-            }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
             ExprKind::Struct { fields, names } => self.check_struct_value(e, fields, names),
             ExprKind::Array { template, length } => self.check_array_template(e, template, length),

@@ -464,14 +464,6 @@ impl Resolver {
                     self.resolve_expr(d);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.resolve_expr(parameter_type);
-                self.resolve_expr(return_type);
-            }
             Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     self.resolve_expr(el);
@@ -622,7 +614,6 @@ fn is_tree_expr(e: &Expr) -> bool {
             | Expr::TypeSet(..)
             | Expr::TypeTable { .. }
             | Expr::TypeConst(..)
-            | Expr::Arrow { .. }
     )
 }
 

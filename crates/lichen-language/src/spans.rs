@@ -154,15 +154,6 @@ pub(crate) fn shift_expr(
                 shift_expr(attribute, old_starts, new_starts, delta);
             }
         }
-        Expr::Arrow {
-            parameter_type,
-            return_type,
-            span,
-        } => {
-            shift(span, old_starts, new_starts, delta);
-            shift_expr(parameter_type, old_starts, new_starts, delta);
-            shift_expr(return_type, old_starts, new_starts, delta);
-        }
         Expr::Tuple(elements, span) | Expr::Set(elements, span) => {
             shift(span, old_starts, new_starts, delta);
             for element in elements {

@@ -192,14 +192,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 push_index(&mut out, 4, refinement);
             }
         }
-        Expr::Arrow {
-            parameter_type,
-            return_type,
-            ..
-        } => {
-            push_index(&mut out, 0, parameter_type);
-            push_index(&mut out, 1, return_type);
-        }
         Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
             for (i, element) in elements.iter().enumerate() {
                 push_index(&mut out, i as u32, element);

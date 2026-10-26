@@ -76,7 +76,7 @@ fn a_table_arrow_separates_a_table_entry() {
 #[test]
 fn arrows_and_punctuation() {
     assert_eq!(
-        kinds("(a, b) : A -> B <3>"),
+        kinds("(a, b) : A ==> B <3>"),
         vec![
             TokenKind::LParen,
             TokenKind::Name("a".to_string()),
@@ -84,7 +84,7 @@ fn arrows_and_punctuation() {
             TokenKind::RParen,
             TokenKind::Colon,
             TokenKind::Name("A".to_string()),
-            TokenKind::Arrow,
+            TokenKind::TableArrow,
             TokenKind::Name("B".to_string()),
             TokenKind::LAngle,
             TokenKind::Int(3),

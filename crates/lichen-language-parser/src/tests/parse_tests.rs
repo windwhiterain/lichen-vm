@@ -297,29 +297,7 @@ fn application_is_left_associative() {
 }
 
 #[test]
-fn arrows_are_right_associative() {
-    let Expr::Arrow {
-        parameter_type,
-        return_type,
-        ..
-    } = parse_ok("Int -> Int -> Int")
-    else {
-        panic!("expected an arrow")
-    };
-    assert!(matches!(
-        *parameter_type,
-        Expr::TypeConst(TypeConst::Int, _)
-    ));
-    assert!(matches!(*return_type, Expr::Arrow { .. }));
-}
-
-#[test]
-fn annotation_binds_looser_than_arrow_and_apply() {
-    let Expr::Annotation { value, r#type, .. } = parse_ok("5 : Int -> Int") else {
-        panic!("expected an annotation")
-    };
-    assert!(matches!(*value, Expr::Int(5, _)));
-    assert!(matches!(*r#type.as_deref().unwrap(), Expr::Arrow { .. }));
+fn annotation_binds_looser_than_apply() {
     let Expr::Annotation { value, .. } = parse_ok("x y : Int") else {
         panic!("expected an annotation")
     };
@@ -363,11 +341,6 @@ fn an_annotated_parameter_is_a_lambda() {
             ..
         }
     ));
-    // The annotation can be a compound type: x : Int -> Int => e.
-    let Expr::Lambda { parameter_type, .. } = parse_ok("x : Int -> Int => x") else {
-        panic!("expected a lambda")
-    };
-    assert!(matches!(parameter_type, Some(t) if matches!(*t, Expr::Arrow { .. })));
     // x : Int alone (no `=>`) stays an annotation.
     assert!(matches!(parse_ok("x : Int"), Expr::Annotation { .. }));
     // An annotated lambda parenthesized is the same form.
@@ -693,14 +666,6 @@ fn an_underscore_is_a_placeholder_in_type_and_term_position() {
         panic!("expected an annotation")
     };
     assert!(matches!(*r#type.as_deref().unwrap(), Expr::Placeholder(_)));
-    // Nested: `x : Int -> _` — the arrow's return is a placeholder.
-    let Expr::Annotation { r#type, .. } = parse_ok("x : Int -> _") else {
-        panic!("expected an annotation")
-    };
-    let Expr::Arrow { return_type, .. } = *r#type.expect("an arrow type") else {
-        panic!("expected an arrow type")
-    };
-    assert!(matches!(*return_type, Expr::Placeholder(_)));
     // In term position `_` is the same placeholder, not an ordinary name.
     assert!(matches!(parse_ok("_"), Expr::Placeholder(_)));
     // As an annotated *value*, `_` is the placeholder in the value slot.
@@ -960,10 +925,6 @@ fn dangling_operators_are_recovered() {
             &binding.value,
             Expr::BinOp { right, .. }
                 if matches!(**right, Expr::Err { .. } | Expr::Placeholder(_))
-        ) || matches!(
-            &binding.value,
-            Expr::Arrow { return_type, .. }
-                if matches!(**return_type, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
             Expr::Annotation { r#type, .. }

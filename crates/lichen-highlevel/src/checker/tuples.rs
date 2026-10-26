@@ -117,17 +117,4 @@ where
         }
         slots
     }
-
-    /// The type an expression contributes in a type position — a struct field, a
-    /// tuple-type element, a function-type side.
-    ///
-    /// # Invariant
-    /// A term put in a type position unifies as its own value expr, which never
-    /// unifies with its type: `struct{.f Int, .g b}` fails, `struct{.f Int, .g B}`
-    /// works. An expression that carries attributes denotes the annotated value's
-    /// term instead; see `docs/notes/operator-polymorphism.md` §3.
-    pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {
-        self.check_expr(el);
-        self.type_denotation(el, None)
-    }
 }

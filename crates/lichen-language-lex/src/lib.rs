@@ -112,8 +112,6 @@ pub enum TokenKind {
     /// The `ln` keyword — the natural logarithm of one `Float`, at the prefix level
     /// (`crates/lichen-kernel-ir/src/unary.rs`).
     KwLn,
-    /// '->' -- a function type.
-    Arrow,
     /// '=>' -- a lambda.
     FatArrow,
     /// ':' -- an annotation.
@@ -237,7 +235,6 @@ impl TokenKind {
             TokenKind::KwSin => "'sin'",
             TokenKind::KwCos => "'cos'",
             TokenKind::KwLn => "'ln'",
-            TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
             TokenKind::ColonEquals => "':='",
@@ -372,8 +369,6 @@ enum RawToken {
     KwLn,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
-    #[token("->")]
-    Arrow,
     #[token("=>")]
     FatArrow,
     #[token("==>")]
@@ -831,7 +826,6 @@ fn raw_to_kind(
         RawToken::KwSin => Some(TokenKind::KwSin),
         RawToken::KwCos => Some(TokenKind::KwCos),
         RawToken::KwLn => Some(TokenKind::KwLn),
-        RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::TableArrow => Some(TokenKind::TableArrow),
         RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),

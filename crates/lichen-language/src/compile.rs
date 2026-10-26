@@ -839,21 +839,6 @@ impl Compiler {
                 let name = self.intern_str(name);
                 self.alloc(ExprKind::NamedField { container, name }, span)
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                span,
-            } => {
-                let parameter = self.compile_expr(parameter_type);
-                let return_type = self.compile_expr(return_type);
-                self.alloc(
-                    ExprKind::TypeFunction {
-                        parameter,
-                        return_type,
-                    },
-                    span,
-                )
-            }
             Expr::Tuple(elements, span) => {
                 let ids = self.compile_all(elements);
                 self.alloc_tuple(&ids, span)

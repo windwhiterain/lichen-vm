@@ -388,15 +388,6 @@ impl KeyWriter<'_> {
                     self.str(mark);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                self.u(17);
-                self.expr(parameter_type);
-                self.expr(return_type);
-            }
             Expr::Tuple(elems, _) => {
                 self.u(29);
                 self.u(elems.len() as u64);

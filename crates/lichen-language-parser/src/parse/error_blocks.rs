@@ -114,14 +114,6 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(r, out);
                 }
             }
-            Expr::Arrow {
-                parameter_type,
-                return_type,
-                ..
-            } => {
-                walk_expr(parameter_type, out);
-                walk_expr(return_type, out);
-            }
             Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
                 for el in elems {
                     walk_expr(el, out);

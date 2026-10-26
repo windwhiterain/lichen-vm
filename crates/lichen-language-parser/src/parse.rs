@@ -740,35 +740,15 @@ fn expression<'a, Er: GrammarError<'a>>(
             )
             .boxed();
 
-        // `->`, right-associative.
-        let term3 = table_find
-            .clone()
-            .then(
-                token(TokenKind::Arrow)
-                    .ignore_then(operand(tokens, table_find.clone()))
-                    .repeated()
-                    .collect::<Vec<_>>(),
-            )
-            .map(|(first, rest)| {
-                fold_right(first, rest, |lhs, rhs| {
-                    let span = lhs.span();
-                    Expr::Arrow {
-                        parameter_type: Box::new(lhs),
-                        return_type: Box::new(rhs),
-                        span,
-                    }
-                })
-            });
-
         // `=` and `<:` are left-associative, between comparisons and annotations.
-        let unify = term3
+        let unify = table_find
             .clone()
             .foldl(
                 choice((
                     token(TokenKind::Equals).to(UnifyOp::Plain),
                     token(TokenKind::TemplateUnify).to(UnifyOp::Template),
                 ))
-                .then(operand(tokens, term3.clone()))
+                .then(operand(tokens, table_find.clone()))
                 .repeated(),
                 |lhs, (op, rhs)| unify_op(lhs, op, rhs),
             )
@@ -961,22 +941,6 @@ fn unify_op(left: Expr, operator: UnifyOp, right: Expr) -> Expr {
             span,
         },
     }
-}
-
-/// Right-fold `first (op rhs)*` into `op(first, op(rhs₁, … op(rhsₙ₋₁, rhsₙ)))`.
-fn fold_right<F>(first: Expr, rest: Vec<Expr>, combine: F) -> Expr
-where
-    F: Fn(Expr, Expr) -> Expr,
-{
-    let mut it = rest.into_iter().rev();
-    let mut acc = match it.next() {
-        Some(rhs) => rhs,
-        None => return first,
-    };
-    for rhs in it {
-        acc = combine(rhs, acc);
-    }
-    combine(first, acc)
 }
 
 /// Keep the first body of a `=>` chain and drop the rest.
