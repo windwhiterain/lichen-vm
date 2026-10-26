@@ -407,14 +407,17 @@ where
         (value, self.struct_template())
     }
 
-    /// A placeholder callee takes the struct type the **context requires**.
+    /// A placeholder callee takes the template the **context requires**.
     ///
     /// # Invariant
     /// Only a **placeholder** callee is resolved here: an undetermined callee
-    /// (a parameter) stays refused
-    /// (`docs/notes/function-normalization.md` §3.7).  The expected type must
-    /// be decided; an undecided one decides nothing, so the instantiation
-    /// refuses itself by name.
+    /// (a parameter) stays refused (`docs/notes/function-normalization.md`
+    /// §3.7).  An undecided template decides nothing, so the instantiation
+    /// refuses itself.
+    ///
+    /// The pin is the **pair** the parameter states: the template in the
+    /// placeholder's value slot, the type in its type slot, so the instance
+    /// inherits the template's name table and nominal id.
     pub(super) fn pin_placeholder_callee(&mut self, function: ExprId, argument: ExprId) {
         let ExprKind::Instantiate { template, .. } = self.ir[argument].kind else {
             return;
@@ -422,41 +425,53 @@ where
         if !matches!(self.ir[template].kind, ExprKind::Placeholder) {
             return;
         }
-        let Some(expected) = self.expected_argument_type(function) else {
+        let Some(requirement) = self.expected_argument_requirement(function) else {
             return;
         };
-        // The expected type must be decided: an undecided one decides nothing.
-        self.module.evaluate_node_deep(expected, None);
-        let Some(value) = self.node_value(expected) else {
+        // The requirement must be decided: an undecided one decides nothing.
+        self.module.evaluate_node_deep(requirement, None);
+        let Some(value) = self.module.class_value(requirement) else {
             return;
         };
-        // A type is an expr; anything else states no type to pin.
+        // A requirement is a term; anything else states no template to pin.
         if !matches!(
             lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value),
             Some(LowValue::Array(_))
         ) {
             return;
         }
-        // The placeholder's own expr is the callee: pinning it to the expected
-        // type makes the instantiation that type.
+        // The requirement's two halves: the template and the type.
+        let Some((expected_template, expected_type)) = self.requirement_halves(requirement) else {
+            return;
+        };
+        // The placeholder's own pair is the callee: pinning it to the
+        // requirement makes the instantiation that template.
         self.check_expr(template);
-        let expr = self.state[template]
-            .term
+        let placeholder_value = self.state[template]
+            .val
             .expect("the placeholder is compiled");
-        // The expected side leads, so the expected type's own value is the one
-        // the expr keeps.
-        let (_, errors) = self.module.try_unify(expected, expr);
+        let placeholder_type = self.state[template]
+            .ty
+            .expect("the placeholder is compiled");
         // The callee is a hole: it takes the requirement and disagrees with
         // nothing, so the unify has no failure to report.
-        self.module.unify_errors.truncate(errors.start);
+        for (expected, hole) in [
+            (expected_template, placeholder_value),
+            (expected_type, placeholder_type),
+        ] {
+            let (_, errors) = self.module.try_unify(expected, hole);
+            self.module.unify_errors.truncate(errors.start);
+        }
     }
 
-    /// The type a call's parameter requires: the call's **expected type**.
+    /// The requirement a call's parameter states: the template and the type.
     ///
     /// # Invariant
-    /// The parameter expr's **type slot** is the requirement; its value slot is
-    /// the argument the call supplies, which states no type.
-    fn expected_argument_type(&mut self, function: ExprId) -> Option<NodeId> {
+    /// A parameter that states a template (`x <: T`) holds it in its **value
+    /// slot**, so the requirement is the parameter's own term.  A parameter that
+    /// states only a type keeps the requirement in its **type slot**, as the
+    /// annotation's own term.
+    fn expected_argument_requirement(&mut self, function: ExprId) -> Option<NodeId> {
         let function_ty = self.state[function].ty?;
         let callee = self.module.function_type_function(function_ty)?;
         let parameter = match callee {
@@ -469,7 +484,31 @@ where
         // SAFETY: `parameter` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
         let items = unsafe { self.module.array_items(parameter) }?;
-        items.get(shape::EXPR_TYPE_SLOT)?.node.dynamic()
+        let value = items.get(shape::EXPR_VALUE_SLOT)?.node.dynamic()?;
+        let ty = items.get(shape::EXPR_TYPE_SLOT)?.node.dynamic()?;
+        // The template slot decides: a parameter that states a template holds
+        // it there, and the requirement is then the parameter's own term.
+        if self.module.class_value(value).is_some() {
+            return Some(parameter);
+        }
+        // Otherwise the requirement is the term the type slot holds.
+        Some(ty)
+    }
+
+    /// A requirement term's two halves: the template and the type.
+    ///
+    /// # Invariant
+    /// The halves are the term's **value** and **type** slots, read through the
+    /// class that holds them, so a cell answers with the value its class knows.
+    fn requirement_halves(&mut self, requirement: NodeId) -> Option<(NodeId, NodeId)> {
+        let root = self.module.equality_representative(requirement);
+        let items = shape::value_items(&self.module, AnyNodeId::Dynamic(root))?;
+        let template = items.get(shape::EXPR_VALUE_SLOT)?.node.dynamic()?;
+        let ty = items.get(shape::EXPR_TYPE_SLOT)?.node.dynamic()?;
+        Some((
+            self.module.equality_representative(template),
+            self.module.equality_representative(ty),
+        ))
     }
 
     /// A struct instance `S{…}`: the template is cloned and the arguments
