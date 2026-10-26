@@ -652,9 +652,8 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                         }
                     };
                 }
-                // A merged fragment reads back the buffer its producer wrote: the
-                // ordinal names an output, and this reference keeps one output
-                // array, so it reads that one.
+                // A merged fragment reads back the buffer its producer wrote:
+                // the ordinal names an output, and this reference keeps one.
                 KernelInstr::OutputReadCall(read_class) => {
                     let element_index = operand(1).as_index();
                     let position = operand(0).as_index();

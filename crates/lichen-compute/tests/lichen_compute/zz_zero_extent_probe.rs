@@ -77,8 +77,8 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let par0 = w.statement(w.app("Par0", bundled(w, imports.expr, "P"), kt));
 
     let k = w.param("k");
-    // A compound constraint is a template match: the actual is unified with the
-    // template constructor applied once, so the template keeps its own holes.
+    // A compound constraint is a template match: the actual is unified with
+    // the template constructor applied once.
     let par0_ctor = w.lam("par0_ctor", w.param("par0_x"), par0);
     let constraint = w.unify(
         "k_matches_par0",
@@ -90,8 +90,8 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
         bundled(w, imports.expr, "range"),
         w.named_field("k_n", k, "n"),
     );
-    // The kernel's own buffer: the parameter template carries no output group,
-    // so the body allocates the buffer it writes to and answers with it.
+    // The kernel's own buffer: the parameter template carries no output
+    // group, so the body allocates it.
     let bufparam_type = w.app(
         "BufParam_of_element",
         bundled(w, imports.expr, "BufParam"),
@@ -203,8 +203,7 @@ fn write_recorded(
     ));
 
     let s = w.param("s");
-    // The step's parameter is constrained the same way the kernel's is: the
-    // actual is unified with the template constructor applied once.
+    // The step's parameter is constrained the same way the kernel's is.
     let garg_ctor = w.lam("garg_ctor", w.param("garg_x"), garg);
     let constraint = w.unify(
         "s_matches_garg",

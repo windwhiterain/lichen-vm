@@ -19,14 +19,14 @@ pub use lichen_language::testing::{
     type_is_undecided, usize_array, usize_of, values_eq,
 };
 
-// The store this thread's programs share.
-//
-// # Invariant
-// The store is per thread, so a test that registers a package of its own does not reach
-// another test's, and the embedded compute package registers once for the thread rather
-// than once for every program: `register_embedded` reuses an already-registered path,
-// which a fresh store per program never gets to.
 thread_local! {
+    /// The store this thread's programs share.
+    ///
+    /// # Invariant
+    /// The store is per thread, so a test that registers a package of its own does not reach
+    /// another test's, and the embedded compute package registers once for the thread rather
+    /// than once for every program: `register_embedded` reuses an already-registered path,
+    /// which a fresh store per program never gets to.
     static STORE: RefCell<PackageStore<LangProgram>> = RefCell::new(
         new_store(None).expect("the embedded compute package registers")
     );
@@ -75,12 +75,11 @@ pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFr
 ///
 /// # Invariant
 ///
-/// The layout is the **value's** own: a struct value carries its name table and
-/// its fields, so a reader asks the value for its names and never a type
+/// The layout is the **value's** own: a struct value carries its name table
+/// and its fields, so a reader asks the value for its names and never a type
 /// (`docs/notes/value-templates.md`). The wrapper's fields are `native`, `type`
 /// and `length` (`docs/notes/kernel-buffer-declarations.md`); the older
-/// `native`/`element` expr is still recognised, so a module that holds both
-/// shapes is read for both.
+/// `native`/`element` expr is still read, so a module holding both is read.
 pub fn buf_element_fields(module: &Module<LangProgram>) -> Vec<(NodeId, AnyNodeId)> {
     use lichen_highlevel::shape::{STRUCT_VALUE_FIELD_BASE, value_items};
     use lichen_language::render::struct_value_named_fields;
