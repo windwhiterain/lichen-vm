@@ -81,7 +81,7 @@ fn edge_cases_parse_without_error_nodes() {
         "a := [T, 3]\na",
         "k := set{E}\nk",
         "b := table{K, V}\nb",
-        "c := A -> B\nc",
+        "c := (x : A => _ : B)\nc",
         "p := (a, b)\np",
         "q := T[a, b]\nq",
         "r := S{.a 1, .b 2}\nr",

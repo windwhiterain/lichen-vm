@@ -37,7 +37,6 @@ const PREC = {
   lambda: 1,
   annotation: 2,
   unify: 3,
-  arrow: 4,
   table_find: 5,
   comparison: 6,
   bitwise_or: 7,
@@ -110,7 +109,6 @@ module.exports = grammar({
       $.lambda,
       $.annotation,
       $.unify,
-      $.arrow,
       $.table_read,
       $.binary_comparison,
       $.binary_or,
@@ -157,13 +155,6 @@ module.exports = grammar({
       field('left', $.expression),
       field('operator', choice('=', '<:')),
       field('right', $.expression),
-    )),
-
-    // `A -> B` — a function type, right-associative.
-    arrow: $ => prec.right(PREC.arrow, seq(
-      field('parameter', $.expression),
-      '->',
-      field('return_type', $.expression),
     )),
 
     // `t <== k` — the table read: the loosest binary level, left-associative,

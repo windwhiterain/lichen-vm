@@ -63,7 +63,6 @@
 
 ; operators (anonymous).  The full set is the language's, docs/notes/operators.md
 ; §1: `+ - * / %`, the six comparisons, the bitwise trio and `@in`.
-"->" @operator
 "=>" @operator
 "==>" @operator
 "<==" @operator
