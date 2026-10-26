@@ -858,6 +858,38 @@ fn expression<'a, Er: GrammarError<'a>>(
                             value
                         }
                     },
+                    Expr::Unify {
+                        actual,
+                        expected,
+                        span,
+                    } => match *actual {
+                        Expr::Name(parameter, parameter_span, _) => {
+                            let parameter_value =
+                                Expr::Name(parameter.clone(), parameter_span, None);
+                            let r#return = Box::new(Expr::Block {
+                                statements: vec![Stmt::Expr(Expr::Unify {
+                                    actual: Box::new(parameter_value),
+                                    expected,
+                                    span,
+                                })],
+                                expr: Box::new(body),
+                                span,
+                            });
+                            Expr::Lambda {
+                                parameter,
+                                parameter_span,
+                                parameter_binder: None,
+                                parameter_type: None,
+                                parameter_perspective: None,
+                                r#return,
+                                span,
+                            }
+                        }
+                        value => {
+                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
+                            value
+                        }
+                    },
                     Expr::TemplateUnify {
                         actual,
                         template,
