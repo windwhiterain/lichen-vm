@@ -199,7 +199,7 @@ const SOURCE: &str = r#"
 L := 8
 In   := {.d (compute.Buf ((compute.BufParam _){.type Float, .length L}))}
 OutR := {.r (compute.Buf ((compute.BufParam _){.type Float, .length L}))}
-Par  := {.n Int, .in In}
+Par  := {.n @any : Int, .in In}
 producer_raw := (lane <: Par) => {
   at := compute.range lane.n
   r := compute.buf ((compute.BufParam _){.type Float, .length lane.n})
@@ -209,7 +209,7 @@ producer_raw := (lane <: Par) => {
 producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
 In2  := {.d (compute.Buf ((compute.BufParam _){.type Float, .length L})), .p (compute.Buf ((compute.BufParam _){.type Float, .length L}))}
 OutZ := {.z (compute.Buf ((compute.BufParam _){.type Float, .length L}))}
-Par2 := {.n Int, .in In2}
+Par2 := {.n @any : Int, .in In2}
 consumer_raw := (lane <: Par2) => {
   running := (compute.read ((compute.Read _){.from lane.in.p, .at 0}) : Float)
   at := compute.range lane.n
@@ -218,7 +218,7 @@ consumer_raw := (lane <: Par2) => {
   ((OutZ){.z (compute.write ((compute.Write _){.to z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity")}))})
 }
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutZ
-GArg := {.n Int, .in In}
+GArg := {.n @any : Int, .in In}
 step := (s <: GArg) => {
   first := (compute.plrun producer ((compute.A In){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun consumer ((compute.A In2){.n s.n, .I In2{.d s.in.d, .p first.r}})

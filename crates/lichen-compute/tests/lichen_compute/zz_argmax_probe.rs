@@ -15,8 +15,8 @@ const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
 MIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 MOut := {.m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-MPar := {.n Int, .w Int, .least Float, .in MIn, .out MOut}
-MArg := {.n Int, .w Int, .least Float, .I MIn}
+MPar := {.n @any : Int, .w @any : Int, .least @any : Float, .in MIn, .out MOut}
+MArg := {.n @any : Int, .w @any : Int, .least @any : Float, .I MIn}
 peak_raw := (c <: MPar) => {
   lane := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from c.in.x, .at (lane * c.w + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
@@ -25,8 +25,8 @@ peak_raw := (c <: MPar) => {
 peak := compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" MOut
 HIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 HOut := {.h (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-HPar := {.n Int, .big Int, .in HIn, .out HOut}
-HArg := {.n Int, .big Int, .I HIn}
+HPar := {.n @any : Int, .big @any : Int, .in HIn, .out HOut}
+HArg := {.n @any : Int, .big @any : Int, .I HIn}
 mark_raw := (c <: HPar) => {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -37,8 +37,8 @@ mark_raw := (c <: HPar) => {
 mark := compute.parallel mark_raw "gpu" HOut
 FIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .m (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 FOut := {.h (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-FPar := {.n Int, .big Float, .in FIn, .out FOut}
-FArg := {.n Int, .big Float, .I FIn}
+FPar := {.n @any : Int, .big @any : Float, .in FIn, .out FOut}
+FArg := {.n @any : Int, .big @any : Float, .I FIn}
 markf_raw := (c <: FPar) => {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -49,8 +49,8 @@ markf_raw := (c <: FPar) => {
 markf := compute.parallel markf_raw "gpu" FOut
 TIn  := {.h (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 TOut := {.t (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-TPar := {.n Int, .w Int, .big Int, .in TIn, .out TOut}
-TArg := {.n Int, .w Int, .big Int, .I TIn}
+TPar := {.n @any : Int, .w @any : Int, .big @any : Int, .in TIn, .out TOut}
+TArg := {.n @any : Int, .w @any : Int, .big @any : Int, .I TIn}
 pick_raw := (c <: TPar) => {
   lane := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
@@ -59,18 +59,18 @@ pick_raw := (c <: TPar) => {
 pick := compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
 UIn  := {.h (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 UOut := {.t (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-UPar := {.n Int, .w Int, .big Float, .in UIn, .out UOut}
-UArg := {.n Int, .w Int, .big Float, .I UIn}
+UPar := {.n @any : Int, .w @any : Int, .big @any : Float, .in UIn, .out UOut}
+UArg := {.n @any : Int, .w @any : Int, .big @any : Float, .I UIn}
 pickf_raw := (c <: UPar) => {
   lane := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
 pickf := compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" UOut
-ZIn  := {.a Int}
+ZIn  := {.a @any : Int}
 ZOut := {.z (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-ZPar := {.n Int, .in ZIn, .out ZOut}
-ZArg := {.n Int, .I ZIn}
+ZPar := {.n @any : Int, .in ZIn, .out ZOut}
+ZArg := {.n @any : Int, .I ZIn}
 idx_raw := (c <: ZPar) => {
   i := compute.range c.n
   compute.write ((compute.Write _){.to c.out.z, .at i, .value (i + 10)})

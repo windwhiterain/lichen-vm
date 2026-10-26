@@ -3,9 +3,9 @@
 ---
 In := {.k (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
 OutE := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
-Fill := {.n Int}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 1})

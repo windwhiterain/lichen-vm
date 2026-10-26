@@ -32,7 +32,7 @@ fn fold_over(combine: &str, identity: &str) -> String {
 ---
 In  := {.b (compute.Buf ((compute.BufParam _){.type Float, .length COUNT}))}
 Out := {.z (compute.Buf ((compute.BufParam _){.type Float, .length COUNT}))}
-Par := {.n Int, .in In}
+Par := {.n @any : Int, .in In}
 reduction := (k <: Par) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Float, .length k.n})
@@ -41,10 +41,10 @@ reduction := (k <: Par) => {
 }
 kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step := (s <: Par) => {
-  compute.plrun kernel ((compute.A In){.n s.n, .I In{.b s.in.b}}) : Out
+  compute.plrun kernel ((compute.A In){.n s.n, .I In{.b s.in.b}}) : Struct
 }
 built := compute.graph step
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length COUNT})
@@ -164,12 +164,7 @@ fn a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body() {
     let (passed_module, _passed_value, _root) = common::run(&source);
     let report = pass_report(&passed_module);
     clear_graph_pass();
-    println!(
-        "the tiling pass reported:\n  {}",
-        report.join(
-            "\n  "
-        )
-    );
+    println!("the tiling pass reported:\n  {}", report.join("\n  "));
 
     assert!(
         report
@@ -201,12 +196,7 @@ fn a_datum_no_body_computes_is_refused_by_name_and_the_body_answers() {
     let (passed_module, _passed_value, _root) = common::run(&source);
     let report = pass_report(&passed_module);
     clear_graph_pass();
-    println!(
-        "the tiling pass reported:\n  {}",
-        report.join(
-            "\n  "
-        )
-    );
+    println!("the tiling pass reported:\n  {}", report.join("\n  "));
 
     assert!(
         report

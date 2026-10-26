@@ -23,8 +23,8 @@ const GEMV: &str = r#"
 --- compute = import "compute.lichen" ---
 InG  := {.w (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 OutG := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-Par  := {.n Int, .kdim Int, .in InG, .out OutG}
-ArgK := {.n Int, .kdim Int, .I InG}
+Par  := {.n @any : Int, .kdim @any : Int, .in InG, .out OutG}
+ArgK := {.n @any : Int, .kdim @any : Int, .I InG}
 gemv_raw := (k <: Par) => {
   i := compute.range k.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
@@ -48,8 +48,8 @@ const STENCIL_RING: &str = r#"
 --- compute = import "compute.lichen" ---
 XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
-XArg := {.n Int, .alpha Float, .I XIn}
+XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
+XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
 ring_raw := (c <: XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -73,8 +73,8 @@ const STENCIL_DIRICHLET: &str = r#"
 --- compute = import "compute.lichen" ---
 XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
-XArg := {.n Int, .alpha Float, .I XIn}
+XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
+XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
 step_raw := (c <: XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -94,8 +94,8 @@ const STENCIL_GRID: &str = r#"
 --- compute = import "compute.lichen" ---
 GIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 GOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-GPar := {.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
-GArg := {.n Int, .cols Int, .alpha Float, .I GIn}
+GPar := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .in GIn, .out GOut}
+GArg := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .I GIn}
 grid_raw := (c <: GPar) => {
   i := compute.range c.n
   row := compute.row c
@@ -147,10 +147,10 @@ y := (compute.plrun gemv ((GArg){{.n {capacity}, .kdim {dim}, .I GIn{{.w fresh.k
         )
     } else {
         format!(
-            r#"SArg := {{.n Int, .cap Int, .dim Int, .t Int, .m Int, .in DIn}}
+            r#"SArg := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .m @any : Int, .in DIn}}
 step := (s <: SArg) => {{{{
   fresh := (compute.plrun append ((KArg){{.n s.n, .cap s.cap, .dim s.dim, .t s.t, .I DIn{{.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .q s.in.q}}}}) : Struct)
-  compute.plrun gemv ((GArg){{.n s.m, .kdim s.dim, .I GIn{{.w fresh.k, .x s.in.q}}}}) : GOut
+  compute.plrun gemv ((GArg){{.n s.m, .kdim s.dim, .I GIn{{.w fresh.k, .x s.in.q}}}}) : Struct
 }}}}
 built := compute.graph step
 compute.collect (compute.graphrun built ({count}, {capacity}, {dim}, 1, {capacity}, k0, v0, nk, nv, q))"#
@@ -161,8 +161,8 @@ compute.collect (compute.graphrun built ({count}, {capacity}, {dim}, 1, {capacit
 --- compute = import "compute.lichen" ---
 DIn   := {{.k (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .v (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .nk (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .nv (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 KVOut := {{.k (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .v (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
-KPar  := {{.n Int, .cap Int, .dim Int, .t Int, .in DIn, .out KVOut}}
-KArg  := {{.n Int, .cap Int, .dim Int, .t Int, .I DIn}}
+KPar  := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .in DIn, .out KVOut}}
+KArg  := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .I DIn}}
 append_raw := (k <: KPar) => {{
   column := compute.row k
   position := compute.col k
@@ -177,8 +177,8 @@ append_raw := (k <: KPar) => {{
 append := compute.parallel (append_raw ~ "claim:Reduction(element)") "gpu" KVOut
 GIn  := {{.w (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 GOut := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
-GPar := {{.n Int, .kdim Int, .in GIn, .out GOut}}
-GArg := {{.n Int, .kdim Int, .I GIn}}
+GPar := {{.n @any : Int, .kdim @any : Int, .in GIn, .out GOut}}
+GArg := {{.n @any : Int, .kdim @any : Int, .I GIn}}
 gemv_raw := (k <: GPar) => {{
   i := compute.range k.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at (s(0) - 1)}}) : Float))) ~ "combine" ~ "element"))
@@ -208,8 +208,8 @@ const FIR_SMOOTH: &str = r#"
 --- compute = import "compute.lichen" ---
 FIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 FOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-FPar := {.n Int, .taps Int, .in FIn, .out FOut}
-FArg := {.n Int, .taps Int, .I FIn}
+FPar := {.n @any : Int, .taps @any : Int, .in FIn, .out FOut}
+FArg := {.n @any : Int, .taps @any : Int, .I FIn}
 filter_raw := (c <: FPar) => {
   i := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from c.in.x, .at (i - (s(0) - 1))}) : Float))) ~ "combine" ~ "element"))
@@ -228,8 +228,8 @@ const ROWSUM_LIBRARY: &str = r#"
 --- compute = import "compute.lichen" ---
 RIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 ROut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-RPar := {.n Int, .kdim Int, .in RIn, .out ROut}
-RArg := {.n Int, .kdim Int, .I RIn}
+RPar := {.n @any : Int, .kdim @any : Int, .in RIn, .out ROut}
+RArg := {.n @any : Int, .kdim @any : Int, .I RIn}
 rowsum_raw := (c <: RPar) => {
   r := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){.from c.in.x, .at (r * c.kdim + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
@@ -247,8 +247,8 @@ const SCALE_ELEMENTWISE: &str = r#"
 --- compute = import "compute.lichen" ---
 SIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 SOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-SPar := {.n Int, .k Float, .in SIn, .out SOut}
-SArg := {.n Int, .k Float, .I SIn}
+SPar := {.n @any : Int, .k @any : Float, .in SIn, .out SOut}
+SArg := {.n @any : Int, .k @any : Float, .I SIn}
 scale_raw := (c <: SPar) => {
   i := compute.range c.n
   x := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)

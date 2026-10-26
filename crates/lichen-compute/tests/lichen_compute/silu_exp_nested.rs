@@ -31,7 +31,7 @@ fn producer() -> String {
 ---
 Gate  := {{.g (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 SiluA := {{.a (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParA  := {{.n Int, .in Gate}}
+ParA  := {{.n @any : Int, .in Gate}}
 silu_raw := (k <: ParA) => {{
   i := compute.range k.n
   g := (compute.read ((compute.Read _){{.from k.in.g, .at i}}) : Float)

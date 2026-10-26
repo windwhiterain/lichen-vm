@@ -21,7 +21,7 @@ fn head() -> String {
   compute = import "compute.lichen"
 ---
 Out := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Int, .length c.n})

@@ -16,8 +16,8 @@ const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
 PIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .lim (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 POut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-PPar := {.n Int, .least Float, .in PIn, .out POut}
-PArg := {.n Int, .least Float, .I PIn}
+PPar := {.n @any : Int, .least @any : Float, .in PIn, .out POut}
+PArg := {.n @any : Int, .least @any : Float, .I PIn}
 sum_raw := (c <: PPar) => {
   i := compute.range c.n
   lim := (compute.read ((compute.Read _){.from c.in.lim, .at 0}) : Int)

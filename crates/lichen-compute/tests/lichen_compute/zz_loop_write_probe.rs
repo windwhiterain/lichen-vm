@@ -23,8 +23,8 @@ const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
 In  := {.unused (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 Out := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-Par := {.n Int, .taps Int, .in In, .out Out}
-Arg := {.n Int, .taps Int, .I In}
+Par := {.n @any : Int, .taps @any : Int, .in In, .out Out}
+Arg := {.n @any : Int, .taps @any : Int, .I In}
 raw := (c <: Par) => {
   i := compute.range c.n
 @BODY@

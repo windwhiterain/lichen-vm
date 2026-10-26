@@ -50,7 +50,7 @@ fn nested(kind: &str, ga: &str, cols: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-Meta  := {{.rows Int, .cols {kind}}}
+Meta  := {{.rows @any : Int, .cols {kind}}}
 In2   := {{.a (compute.Buf ((compute.BufParam _){{.type {kind}, .length {ELEMENTS}}})), .b (compute.Buf ((compute.BufParam _){{.type {kind}, .length {ELEMENTS}}}))}}
 Out   := {{.z (compute.Buf ((compute.BufParam _){{.type {kind}, .length {ROWS}}}))}}
 Par   := {{.meta Meta, .in In2}}
@@ -65,7 +65,7 @@ nested_raw := (k <: Par) => {{
 }}
 nested := compute.parallel (nested_raw ~ "claim:Elementwise(element)") "gpu" Out
 step := (s <: GA) => {{
-  compute.plrun nested ((Arg){{.meta Meta{{.rows s.rows, .cols {cols}}}, .I In2{{.a s.in.a, .b s.in.b}}}}) : Out
+  compute.plrun nested ((Arg){{.meta Meta{{.rows s.rows, .cols {cols}}}, .I In2{{.a s.in.a, .b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
 built
@@ -86,9 +86,9 @@ fn flat() -> String {
 ---
 In1   := {{.a (compute.Buf ((compute.BufParam _){{.type Int, .length {ELEMENTS}}}))}}
 Out1  := {{.z (compute.Buf ((compute.BufParam _){{.type Int, .length {ROWS}}}))}}
-Par3  := {{.n Int, .K Int, .cols Int, .in In1}}
-Arg3  := {{.n Int, .K Int, .cols Int, .I In1}}
-GA3   := {{.n Int, .K Int, .cols Int, .in In1}}
+Par3  := {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1}}
+Arg3  := {{.n @any : Int, .K @any : Int, .cols @any : Int, .I In1}}
+GA3   := {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1}}
 shape_raw := (k <: Par3) => {{
   i := compute.range k.n
   r := i / k.cols
@@ -99,7 +99,7 @@ shape_raw := (k <: Par3) => {{
 }}
 shape := compute.parallel (shape_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step3 := (s <: GA3) => {{
-  compute.plrun shape ((Arg3){{.n s.n, .K s.K, .cols s.cols, .I In1{{.a s.in.a}}}}) : Out1
+  compute.plrun shape ((Arg3){{.n s.n, .K s.K, .cols s.cols, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built3 := compute.graph step3
 built3
@@ -134,7 +134,7 @@ fn filled(shape: &str, kind: &str, offsets: &[usize]) -> String {
     }
     format!(
         r#"
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
 {declarations}  (({shape})({writes}))
@@ -425,8 +425,8 @@ fn a_leaf_the_graph_cannot_carry_is_refused_at_its_own_path() {
 ---
 In2  := {.a (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 Out  := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-Par  := {.n Int, .in In2, .spare (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-Arg  := {.n Int, .in In2, .spare (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+Par  := {.n @any : Int, .in In2, .spare (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
+Arg  := {.n @any : Int, .in In2, .spare (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 stray_raw := (k <: Par) => {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.a, .at i}) : Int)
@@ -435,7 +435,7 @@ stray_raw := (k <: Par) => {
 }
 stray := compute.parallel (stray_raw ~ "claim:Elementwise(element)") "gpu" Out
 built := compute.graph ((s <: Arg) => {
-  compute.plrun stray ((Arg){.n s.n, .in In2{.a s.in.a}, .spare s.spare}) : Out
+  compute.plrun stray ((Arg){.n s.n, .in In2{.a s.in.a}, .spare s.spare}) : Struct
 })
 built
 "#,

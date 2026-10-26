@@ -15,8 +15,8 @@ const PROGRAM: &str = r#"
 --- compute = import "compute.lichen" ---
 In  := {.unused (compute.Buf ((compute.BufParam _){.type Float, .length 2}))}
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 2}))}
-Fill := {.n Int}
-FillArg := {.n Int}
+Fill := {.n @any : Int}
+FillArg := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length c.n})
@@ -24,8 +24,8 @@ fill := (c <: Fill) => {
 }
 fk := compute.parallel fill "cpu" Out
 filled := (compute.plrun fk ((FillArg){.n 2}) : Struct)
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
 raw := (c <: Par) => {
   i := compute.range c.n
   x := (compute.read ((compute.Read _){.from c.in.unused, .at i}) : Float)
@@ -62,7 +62,7 @@ fn probe_a_kernel_that_declares_its_output() {
 const LENGTH: &str = r#"
 --- compute = import "compute.lichen" ---
 OutThree := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -98,7 +98,7 @@ fn probe_a_declared_length_is_the_allocation() {
 const LOOPED: &str = r#"
 --- compute = import "compute.lichen" ---
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-LPar := {.n Int, .taps Int}
+LPar := {.n @any : Int, .taps @any : Int}
 fill := (c <: LPar) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length c.n})
@@ -135,7 +135,7 @@ fn probe_the_codomain_may_hold_a_loops_result() {
 const SELECTED: &str = r#"
 --- compute = import "compute.lichen" ---
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -170,7 +170,7 @@ fn probe_a_literal_selected_by_the_index() {
 const NESTED: &str = r#"
 --- compute = import "compute.lichen" ---
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -205,7 +205,7 @@ fn probe_a_nested_chain_in_the_body() {
 const TWO: &str = r#"
 --- compute = import "compute.lichen" ---
 Out := {.c (compute.Buf ((compute.BufParam _){.type Int, .length 2})), .s (compute.Buf ((compute.BufParam _){.type Int, .length 2}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   a := compute.buf ((compute.BufParam _){.type Int, .length c.n})
@@ -245,7 +245,7 @@ const SPELLING: &str = r#"
 --- compute = import "compute.lichen" ---
 Param := _x => {.type _, .length _}
 BufT := x : (Param _) => {.native Int, .type x.type, .length x.length}
-buf := (x : (Param _)) => (BufT x){.native 0, .type @any, .length @any}
+buf := (x <: (Param _)) => (BufT x){.native 0, .type @any, .length @any}
 e := buf ((Param _){.type Float, .length 192})
 e
 "#;
@@ -275,7 +275,7 @@ const ALIAS: &str = r#"
 --- compute = import "compute.lichen" ---
 In  := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -283,8 +283,8 @@ fill := (c <: Fill) => {
 }
 filler := compute.parallel fill "cpu" In
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
 alias_raw := (k <: Par) => {
   i := compute.range k.n
   low := (compute.read ((compute.Read _){.from k.in.d, .at i}) : Float)
@@ -320,7 +320,7 @@ const COND_READ: &str = r#"
 --- compute = import "compute.lichen" ---
 In  := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -328,8 +328,8 @@ fill := (c <: Fill) => {
 }
 filler := compute.parallel fill "cpu" In
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
 then_raw := (k <: Par) => {
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){.type Float, .length k.n})

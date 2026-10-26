@@ -31,8 +31,8 @@ fn recorded(body: &str) -> String {
 const KERNEL: &str = r#"
 XIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 XOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
-XArg := {.n Int, .alpha Float, .I XIn}
+XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
+XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
 ring_raw := (c <: XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -54,7 +54,7 @@ compute.collect settled.y : Array
 
 /// The same fold with the recursive function's type stated: the state is a struct.
 const ANNOTATED: &str = r#"
-@loop march := ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct))) : tuple{Int, XOut} -> XOut)
+@loop march := ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct))) : (Int, XOut) -> XOut)
 settled := march (2, seed)
 compute.collect settled.y : Array
 "#;
@@ -65,7 +65,7 @@ compute.collect settled.y : Array
 /// The read's chains root at the container expr, so evaluating it forces the apply; before `096b75bb`
 /// this printed `raw none` even annotated, and it is the case that fix was measured against.
 const ANNOTATED_INLINE: &str = r#"
-@loop march := ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct))) : tuple{Int, XOut} -> XOut)
+@loop march := ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x s(1).y}}) : Struct))) : (Int, XOut) -> XOut)
 compute.collect (march (2, seed)).y : Array
 "#;
 

@@ -40,9 +40,9 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-Src := {{.a Int}}
+Src := {{.a @any : Int}}
 SrcOut := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length 3}}))}}
-SrcPar := {{.n Int, .in Src}}
+SrcPar := {{.n @any : Int, .in Src}}
 fill := (k <: SrcPar) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})

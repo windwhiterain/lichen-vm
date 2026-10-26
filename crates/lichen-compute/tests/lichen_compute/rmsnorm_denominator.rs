@@ -33,7 +33,7 @@ fn program(denominator: &str) -> String {
 ---
 Row  := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 Sums := {{.s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParS := {{.n Int, .in Row}}
+ParS := {{.n @any : Int, .in Row}}
 sumsq_raw := (k <: ParS) => {{
   i := compute.range k.n
   sums := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -43,7 +43,7 @@ sumsq_raw := (k <: ParS) => {{
 sumsq := compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sums
 Scale := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutY  := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParY  := {{.n Int, .in Scale}}
+ParY  := {{.n @any : Int, .in Scale}}
 rescale_raw := (k <: ParY) => {{
   i := compute.range k.n
   x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
@@ -53,7 +53,7 @@ rescale_raw := (k <: ParY) => {{
   ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value (((x / d) * w) ~ "element")}}))}})
 }}
 rescale := compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" OutY
-GArg := {{.n Int, .in All}}
+GArg := {{.n @any : Int, .in All}}
 All  := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 step := (s <: GArg) => {{
   first := (compute.plrun sumsq ((compute.A Row){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)

@@ -31,7 +31,7 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
     format!(
         r#"
 --- compute = import "compute.lichen" ---
-Src := {{.a Int}}
+Src := {{.a @any : Int}}
 SrcOut := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 SrcPar := compute.P (compute.KT _){{.I Src, .O SrcOut}}
 fill := (k <: SrcPar) => {{

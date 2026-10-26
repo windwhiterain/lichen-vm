@@ -12,7 +12,7 @@ const MISPLACED_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
 Data := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
 Out := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 3})
@@ -21,8 +21,8 @@ fill := (c <: Fill) => {
 filler := compute.parallel fill "cpu" Data
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
 In  := {.k (compute.Buf ((compute.BufParam _){.type Float, .length 3}))}
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
 f := (k <: Par) => {
   i := compute.range k.n
   ((Out){.e (compute.write ((compute.Write _){.to k.in.k, .at i, .value (99.0 : Float)}))})

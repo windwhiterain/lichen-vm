@@ -16,8 +16,8 @@ const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
 PIn  := {.x (compute.Buf ((compute.BufParam _){.type Int, .length _})), .tbl (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 POut := {.y (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-PPar := {.n Int, .in PIn, .out POut}
-PArg := {.n Int, .I PIn}
+PPar := {.n @any : Int, .in PIn, .out POut}
+PArg := {.n @any : Int, .I PIn}
 gather_raw := (k <: PPar) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.tbl, .at i}) : Int)

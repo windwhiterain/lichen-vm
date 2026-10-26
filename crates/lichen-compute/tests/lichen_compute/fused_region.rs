@@ -71,7 +71,7 @@ fn program(step: &str) -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutR := {{.r (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par  := {{.n Int, .in In}}
+Par  := {{.n @any : Int, .in In}}
 producer_raw := (k <: Par) => {{
   i := compute.range k.n
   d := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -81,7 +81,7 @@ producer_raw := (k <: Par) => {{
 producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 consumer_raw := (k <: Par2) => {{
   i := compute.range k.n
   d := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -90,7 +90,7 @@ consumer_raw := (k <: Par2) => {{
   ((OutZ){{.z (compute.write ((compute.Write _){{.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")}}))}})
 }}
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 {step}
 built := compute.graph step
 "#
@@ -113,7 +113,7 @@ fn recording() -> String {
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{}\n{fill}count = ({count})\ndata := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)\n\
+        "{}\n{fill}count :=  ({count})\ndata := (compute.plrun filler ((Fill){{.n {count}}}) : Struct)\n\
          out := compute.collect (compute.graphrun built (count, data.r))\nout\n",
         program(two_stage()),
         fill = filled(),
@@ -130,7 +130,7 @@ fn running() -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){{.type Float, .length {COUNT}}})

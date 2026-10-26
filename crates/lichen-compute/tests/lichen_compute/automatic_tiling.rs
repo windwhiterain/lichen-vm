@@ -72,9 +72,9 @@ fn declared() -> String {
 ---
 In  := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
 Out := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-Par := {{.n Int, .in In}}
-Arg := {{.n Int, .I In}}
-GA  := {{.n Int, .in In}}
+Par := {{.n @any : Int, .in In}}
+Arg := {{.n @any : Int, .I In}}
+GA  := {{.n @any : Int, .in In}}
 reduction := (k <: Par) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -83,7 +83,7 @@ reduction := (k <: Par) => {{
 }}
 kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step := (s <: GA) => {{
-  compute.plrun kernel ((Arg){{.n s.n, .I In{{.b s.in.b}}}}) : Out
+  compute.plrun kernel ((Arg){{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
 {fill}
@@ -107,7 +107,7 @@ fn filled() -> String {
     format!(
         r#"
 Data := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
   b := compute.buf ((compute.BufParam _){{.type Float, .length {count}}})

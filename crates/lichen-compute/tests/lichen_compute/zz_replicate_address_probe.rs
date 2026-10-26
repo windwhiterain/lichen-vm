@@ -21,7 +21,7 @@ fn program() -> String {
 --- compute = import "compute.lichen" ---
 AIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 AOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-APar := {.n Int, .cols Int, .taps Int, .in AIn, .out AOut}
+APar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in AIn, .out AOut}
 sum_raw := (c <: APar) => {
   i := compute.range c.n
   row := compute.row c
@@ -46,7 +46,7 @@ fn terms(expression: &str) -> String {
 --- compute = import "compute.lichen" ---
 TIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 TOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-TPar := {.n Int, .cols Int, .in TIn, .out TOut}
+TPar := {.n @any : Int, .cols @any : Int, .in TIn, .out TOut}
 term_raw := (c <: TPar) => {
   i := compute.range c.n
   row := compute.row c

@@ -55,7 +55,7 @@ fn fold_over(combine: &str, seed: &str, data_at_i: &str) -> String {
 ---
 In  := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
 Out := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-Par := {{.n Int, .in In}}
+Par := {{.n @any : Int, .in In}}
 reduction := (k <: Par) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -64,10 +64,10 @@ reduction := (k <: Par) => {{
 }}
 kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step := (s <: Par) => {{
-  compute.plrun kernel ((compute.A In){{.n s.n, .I In{{.b s.in.b}}}}) : Out
+  compute.plrun kernel ((compute.A In){{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill_raw := (c <: Fill) => {{
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length {count}}})

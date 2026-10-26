@@ -17,9 +17,9 @@ use lichen_lowlevel::AnyNodeId;
 const SOURCE: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  := {.a Int}
+InA  := {.a @any : Int}
 OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParA := {.n Int, .in InA}
+ParA := {.n @any : Int, .in InA}
 adder := compute.parallel ((k <: ParA) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
@@ -27,7 +27,7 @@ adder := compute.parallel ((k <: ParA) => {
 }) "cpu" OutA
 InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParB := {.n Int, .in InB}
+ParB := {.n @any : Int, .in InB}
 doubler := compute.parallel ((k <: ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)

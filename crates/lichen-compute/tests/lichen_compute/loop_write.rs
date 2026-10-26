@@ -20,8 +20,8 @@ use super::common;
 const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
 Out := {.y (compute.Buf ((compute.BufParam _){.type Float, .length 2}))}
-Par := {.n Int, .taps Int}
-Arg := {.n Int, .taps Int}
+Par := {.n @any : Int, .taps @any : Int}
+Arg := {.n @any : Int, .taps @any : Int}
 raw := (c <: Par) => {
   i := compute.range c.n
 @BODY@

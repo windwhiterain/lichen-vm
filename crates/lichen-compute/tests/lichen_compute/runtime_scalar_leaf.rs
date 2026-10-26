@@ -62,7 +62,7 @@ fn program(step: &str, bias: Option<f32>) -> String {
 ---
 Row   := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
 Sums  := {{.s (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-ParS  := {{.n Int, .in Row}}
+ParS  := {{.n @any : Int, .in Row}}
 row_sum_raw := (k <: ParS) => {{
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -71,7 +71,7 @@ row_sum_raw := (k <: ParS) => {{
 }}
 row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Sums
 Sumsq := {{.q (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-ParQ  := {{.n Int, .in Row}}
+ParQ  := {{.n @any : Int, .in Row}}
 row_sumsq_raw := (k <: ParQ) => {{
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -81,7 +81,7 @@ row_sumsq_raw := (k <: ParQ) => {{
 row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sumsq
 Moments := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}})), .s (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
 OutY    := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-ParY    := {{.n Int, .eps Float, .in Moments}}
+ParY    := {{.n @any : Int, .eps @any : Float, .in Moments}}
 normalise_raw := (k <: ParY) => {{
   i := compute.range k.n
   count := int2float k.n
@@ -95,8 +95,8 @@ normalise_raw := (k <: ParY) => {{
 }}
 normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "gpu" OutY
 All   := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
-GArg  := {{.n Int, .eps Float, .in All}}
-ArgY  := {{.n Int, .eps Float, .I Moments}}
+GArg  := {{.n @any : Int, .eps @any : Float, .in All}}
+ArgY  := {{.n @any : Int, .eps @any : Float, .I Moments}}
 {step}
 built := compute.graph step
 "#,
@@ -114,7 +114,7 @@ fn step() -> &'static str {
     r#"step := (s <: GArg) => {
   a := (compute.plrun row_sum ((compute.A Row){.n s.n, .I Row{.x s.in.x}}) : Struct)
   b := (compute.plrun row_sumsq ((compute.A Row){.n s.n, .I Row{.x s.in.x}}) : Struct)
-  compute.plrun normalise ((ArgY){.n s.n, .eps s.eps, .I Moments{.x s.in.x, .w s.in.w, .s a.s, .q b.q}}) : OutY
+  compute.plrun normalise ((ArgY){.n s.n, .eps s.eps, .I Moments{.x s.in.x, .w s.in.w, .s a.s, .q b.q}}) : Struct
 }"#
 }
 
@@ -139,7 +139,7 @@ fn recording(bias: Option<f32>) -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 Weights := {{.w (compute.Buf ((compute.BufParam _){{.type Float, .length {count}}}))}}
 row_raw := (c <: Fill) => {{
   i := compute.range c.n
@@ -177,7 +177,7 @@ fn table(row: &[f32]) -> String {
 /// `recording`, run over the row through `graphrun`.
 fn running(bias: Option<f32>) -> String {
     format!(
-        "{recording}\n{fill}row = (compute.plrun row_filler ((Fill){{.n {elements}}}) : Struct)\nweight := \
+        "{recording}\n{fill}row :=  (compute.plrun row_filler ((Fill){{.n {elements}}}) : Struct)\nweight := \
          (compute.plrun weight_filler ((Fill){{.n {elements}}}) : Struct)\nout := compute.collect \
          (compute.graphrun built (4, {eps:.1}, row.x, weight.w))\nout\n",
         recording = recording(bias),

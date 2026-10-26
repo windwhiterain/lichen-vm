@@ -31,8 +31,8 @@ use lichen_utils::extend::AsEnum;
 const KERNELS: &str = r#"
 QK := {.q (compute.Buf ((compute.BufParam _){.type Float, .length 192}))}
 Scored := {.s (compute.Buf ((compute.BufParam _){.type Float, .length 192}))}
-ParS := {.n Int, .keys Int, .dim Int, .in QK}
-ArgS := {.n Int, .keys Int, .dim Int, .I QK}
+ParS := {.n @any : Int, .keys @any : Int, .dim @any : Int, .in QK}
+ArgS := {.n @any : Int, .keys @any : Int, .dim @any : Int, .I QK}
 scores_raw := (k <: ParS) => {
   i := compute.range k.n
   query := compute.row k
@@ -44,8 +44,8 @@ scores_raw := (k <: ParS) => {
 scores := compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
 QSV := {.s (compute.Buf ((compute.BufParam _){.type Float, .length 192})), .v (compute.Buf ((compute.BufParam _){.type Float, .length 192}))}
 OutA := {.o (compute.Buf ((compute.BufParam _){.type Float, .length 192}))}
-ParA := {.n Int, .dim Int, .keys Int, .in QSV}
-ArgA := {.n Int, .dim Int, .keys Int, .I QSV}
+ParA := {.n @any : Int, .dim @any : Int, .keys @any : Int, .in QSV}
+ArgA := {.n @any : Int, .dim @any : Int, .keys @any : Int, .I QSV}
 attend_raw := (k <: ParA) => {
   i := compute.range k.n
   query := compute.row k
@@ -78,7 +78,7 @@ const CONTROL: &str = "(scores, attend)\n";
 /// the recording is open, so this module compiles them in the opposite order to
 /// [`CONTROL`] over byte-identical kernel declarations.
 const STEP: &str = r#"QKV := {.q (compute.Buf ((compute.BufParam _){.type Float, .length 192})), .k (compute.Buf ((compute.BufParam _){.type Float, .length 192})), .v (compute.Buf ((compute.BufParam _){.type Float, .length 192}))}
-GArg := {.lanes Int, .on Int, .keys Int, .dim Int, .in QKV}
+GArg := {.lanes @any : Int, .on @any : Int, .keys @any : Int, .dim @any : Int, .in QKV}
 step := (a <: GArg) => {
   scale := (compute.plrun scores ((ArgS){.n a.lanes, .keys a.keys, .dim a.dim, .I QK{.q a.in.q}}) : Struct)
   (compute.plrun attend ((ArgA){.n a.on, .dim a.dim, .keys a.keys, .I QSV{.s scale.s, .v a.in.v}}) : Struct)

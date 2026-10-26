@@ -95,11 +95,7 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let bufparam = w.instantiate(
         "bufparam",
         bufparam_type,
-        fields(
-            w,
-            "bufparam_fields",
-            &[int, w.named_field("k_n", k, "n")],
-        ),
+        fields(w, "bufparam_fields", &[int, w.named_field("k_n", k, "n")]),
         &[Some("type"), Some("length")],
     );
     let buffer = w.app("out_buffer", bundled(w, imports.expr, "buf"), bufparam);

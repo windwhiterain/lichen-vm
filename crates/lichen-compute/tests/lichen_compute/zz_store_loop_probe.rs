@@ -33,9 +33,9 @@ compute.launch k 5
 "#;
     let parallel = r#"
 --- compute = import "compute.lichen" ---
-In  := {.a Int}
+In  := {.a @any : Int}
 Out := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 69}))}
-Par := {.n Int, .in In}
+Par := {.n @any : Int, .in In}
 f := (k <: Par) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Int, .length k.n})

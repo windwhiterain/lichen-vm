@@ -57,7 +57,7 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
 A := {{.a (compute.Buf ((compute.BufParam _){{.type Int, .length {rows}}}))}}
 B := {{.b (compute.Buf ((compute.BufParam _){{.type Int, .length {steps}}}))}}
 C := {{.c (compute.Buf ((compute.BufParam _){{.type Int, .length {columns}}}))}}
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill_a := (c <: Fill) => {{
   i := compute.range c.n
   a := compute.buf ((compute.BufParam _){{.type Int, .length c.n}})

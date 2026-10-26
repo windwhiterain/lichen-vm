@@ -39,8 +39,8 @@ In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})
 OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 In2  := {{.p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutF := {{.f (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParE := {{.n Int, .in In}}
-Par2 := {{.n Int, .in In2}}
+ParE := {{.n @any : Int, .in In}}
+Par2 := {{.n @any : Int, .in In2}}
 scale_raw := (k <: ParE) => {{
   i := compute.range k.n
   e := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -53,7 +53,7 @@ rescale_raw := (k <: Par2) => {{
   ((OutF){{.f (compute.write ((compute.Write _){{.to f, .at i, .value ((exp ((compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float))) ~ "element")}}))}})
 }}
 rescale := compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu" OutF
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun scale ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun rescale ((compute.A In2){{.n s.n, .I In2{{.p first.e}}}})
@@ -82,7 +82,7 @@ fn reduction_in_loop() -> String {
 {scale}
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 consumer_raw := (k <: Par2) => {{
   i := compute.range k.n
   r := (compute.read ((compute.Read _){{.from k.in.p, .at 0}}) : Float)
@@ -91,7 +91,7 @@ consumer_raw := (k <: Par2) => {{
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun scale ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun consumer ((compute.A In2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}})
@@ -108,7 +108,7 @@ fn scale() -> String {
         r#"
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParE := {{.n Int, .in In}}
+ParE := {{.n @any : Int, .in In}}
 scale_raw := (k <: ParE) => {{
   i := compute.range k.n
   e := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})

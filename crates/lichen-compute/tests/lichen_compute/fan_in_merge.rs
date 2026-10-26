@@ -41,7 +41,7 @@ fn program() -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutM := {{.m (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParM := {{.n Int, .in In}}
+ParM := {{.n @any : Int, .in In}}
 rowmax_raw := (k <: ParM) => {{
   i := compute.range k.n
   m := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -51,7 +51,7 @@ rowmax_raw := (k <: ParM) => {{
 rowmax := compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu" OutM
 Soft := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .m (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutS := {{.s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParS := {{.n Int, .in Soft}}
+ParS := {{.n @any : Int, .in Soft}}
 shifted_raw := (k <: ParS) => {{
   i := compute.range k.n
   m := (compute.read ((compute.Read _){{.from k.in.m, .at 0}}) : Float)
@@ -62,7 +62,7 @@ shifted_raw := (k <: ParS) => {{
 shifted := compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutS
 Norm := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .m (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .s (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutY := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParY := {{.n Int, .in Norm}}
+ParY := {{.n @any : Int, .in Norm}}
 norm_raw := (k <: ParY) => {{
   i := compute.range k.n
   m := (compute.read ((compute.Read _){{.from k.in.m, .at 0}}) : Float)
@@ -71,11 +71,11 @@ norm_raw := (k <: ParY) => {{
   ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value (((exp ((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) - m)) / s) ~ "element")}}))}})
 }}
 norm := compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu" OutY
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   mx := (compute.plrun rowmax ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   tot := (compute.plrun shifted ((compute.A Soft){{.n s.n, .I Soft{{.d s.in.d, .m mx.m}}}}) : Struct)
-  compute.plrun norm ((compute.A Norm){{.n s.n, .I Norm{{.d s.in.d, .m mx.m, .s tot.s}}}}) : OutY
+  compute.plrun norm ((compute.A Norm){{.n s.n, .I Norm{{.d s.in.d, .m mx.m, .s tot.s}}}}) : Struct
 }}
 built := compute.graph step
 (rowmax, shifted, norm, built)

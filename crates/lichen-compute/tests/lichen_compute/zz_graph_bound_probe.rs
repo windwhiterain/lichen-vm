@@ -16,7 +16,7 @@ const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
 LIn  := {.d (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 LOut := {.lim (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-LPar := {.n Int, .in LIn, .out LOut}
+LPar := {.n @any : Int, .in LIn, .out LOut}
 lim_raw := (k <: LPar) => {
   i := compute.range k.n
   compute.write ((compute.Write _){.to k.out.lim, .at i, .value (((compute.read ((compute.Read _){.from k.in.d, .at i}) : Int)) + 1)})
@@ -29,7 +29,7 @@ lim10_raw := (k <: LPar) => {
 lim10k := compute.parallel lim10_raw "gpu" LOut
 SIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _})), .lim (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 SOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-SPar := {.n Int, .in SIn, .out SOut}
+SPar := {.n @any : Int, .in SIn, .out SOut}
 sum_raw := (c <: SPar) => {
   i := compute.range c.n
   bound := (compute.read ((compute.Read _){.from c.in.lim, .at 0}) : Int)
@@ -37,7 +37,7 @@ sum_raw := (c <: SPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (bound, 0.0 ~ "identity"))})
 }
 sumk := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" SOut
-GArg := {.n Int, .in SIn}
+GArg := {.n @any : Int, .in SIn}
 x := (compute.buffer ([@any : Float, 6][1.0, 2.0, 4.0, 8.0, 16.0, 32.0] : Array) : (compute.Buf ((compute.BufParam _){.type Float, .length _})))
 d := (compute.buffer ([@any : Int, 1][2] : Array) : (compute.Buf ((compute.BufParam _){.type Int, .length _})))
 "#;

@@ -53,7 +53,7 @@ data := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Bu
 
 /// One buffer under `.in`, and the body **reads its own extent argument**.
 const SAME_ONE: &str = r#"
-GArg := {.n Int, .in Inc, .out Out}
+GArg := {.n @any : Int, .in Inc, .out Out}
 step := (s <: GArg) => {
   compute.plrun dblD ((compute.A Inc){.n s.n, .I Inc{.d s.in.d}})
 }
@@ -63,7 +63,7 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// Two buffers under `.in`, and the dispatch's argument is that same struct.
 const SAME_TWO: &str = r#"
-GArg := {.n Int, .in Two}
+GArg := {.n @any : Int, .in Two}
 step := (s <: GArg) => {
   compute.plrun dblT ((compute.A Two){.n s.n, .I Two{.d s.in.d, .z s.in.z}})
 }
@@ -73,7 +73,7 @@ compute.collect (compute.graphrun built (3, data, data)) : Array
 
 /// Two buffers under `.in`, and the dispatch's argument is a **different** struct.
 const OTHER_TWO: &str = r#"
-GArg := {.n Int, .in Two}
+GArg := {.n @any : Int, .in Two}
 step := (s <: GArg) => {
   compute.plrun dblQ ((compute.A Single){.n 3, .I Single{.q s.in.d}})
 }
@@ -83,7 +83,7 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// One buffer under `.in`, and the dispatch's argument is a **different** struct.
 const OTHER_ONE: &str = r#"
-GArg := {.n Int, .in Inc}
+GArg := {.n @any : Int, .in Inc}
 step := (s <: GArg) => {
   compute.plrun dblQ ((compute.A Single){.n 3, .I Single{.q s.in.d}})
 }
@@ -93,7 +93,7 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// Two dispatches, the second reading the first's answer — the one axis still uncrossed.
 const TWO_NODES: &str = r#"
-GArg := {.n Int, .in Inc}
+GArg := {.n @any : Int, .in Inc}
 step := (s <: GArg) => {
   a := (compute.plrun dblD ((compute.A Inc){.n s.n, .I Inc{.d s.in.d}}) : Struct)
   compute.plrun dblD ((compute.A Inc){.n 3, .I Inc{.d a.e}})

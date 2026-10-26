@@ -16,8 +16,8 @@ const CONVOLVE_MASKED: &str = r#"
 --- compute = import "compute.lichen" ---
 CIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 COut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-CPar := {.n Int, .cols Int, .taps Int, .in CIn, .out COut}
-CArg := {.n Int, .cols Int, .taps Int, .I CIn}
+CPar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn, .out COut}
+CArg := {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn}
 convolve_raw := (c <: CPar) => {
   i := compute.range c.n
   row := compute.row c
@@ -38,8 +38,8 @@ const CONVOLVE_UNMASKED: &str = r#"
 --- compute = import "compute.lichen" ---
 CIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}})), .w (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 COut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-CPar := {.n Int, .cols Int, .taps Int, .in CIn, .out COut}
-CArg := {.n Int, .cols Int, .taps Int, .I CIn}
+CPar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn, .out COut}
+CArg := {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn}
 convolve_raw := (c <: CPar) => {
   i := compute.range c.n
   row := compute.row c
@@ -60,8 +60,8 @@ const IF_IN_FOLD: &str = r#"
 --- compute = import "compute.lichen" ---
 TIn  := {.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
 TOut := {.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}
-TPar := {.n Int, .taps Int, .in TIn, .out TOut}
-TArg := {.n Int, .taps Int, .I TIn}
+TPar := {.n @any : Int, .taps @any : Int, .in TIn, .out TOut}
+TArg := {.n @any : Int, .taps @any : Int, .I TIn}
 tiny_raw := (c <: TPar) => {
   i := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if s(0) > 1 then 1.0 else 0.0)) ~ "combine" ~ "element"))

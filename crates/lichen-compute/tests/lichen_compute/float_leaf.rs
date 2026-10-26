@@ -55,9 +55,9 @@ fn scaled(kind: &str) -> String {
 ---
 In1  := {{.a (compute.Buf ((compute.BufParam _){{.type {kind}, .length {elements}}}))}}
 Out1 := {{.z (compute.Buf ((compute.BufParam _){{.type {kind}, .length {rows}}}))}}
-Par  := {{.n Int, .cols Int, .scale {kind}, .in In1}}
-Arg  := {{.n Int, .cols Int, .scale {kind}, .I In1}}
-GA   := {{.n Int, .cols Int, .scale {kind}, .in In1}}
+Par  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
+Arg  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1}}
+GA   := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
 scale_raw := (k <: Par) => {{
   i := compute.range k.n
   r := i / k.cols
@@ -68,7 +68,7 @@ scale_raw := (k <: Par) => {{
 }}
 scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step := (s <: GA) => {{
-  compute.plrun scale ((Arg){{.n s.n, .cols s.cols, .scale s.scale, .I In1{{.a s.in.a}}}}) : Out1
+  compute.plrun scale ((Arg){{.n s.n, .cols s.cols, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
 built
@@ -93,9 +93,9 @@ fn mismatched(leaf: &str, kind: &str) -> String {
 ---
 In1  := {{.a (compute.Buf ((compute.BufParam _){{.type {kind}, .length {elements}}}))}}
 Out1 := {{.z (compute.Buf ((compute.BufParam _){{.type {kind}, .length {rows}}}))}}
-Par  := {{.n Int, .scale {leaf}, .in In1}}
-Arg  := {{.n Int, .scale {leaf}, .I In1}}
-GA   := {{.n Int, .scale {leaf}, .in In1}}
+Par  := {{.n @any : Int, .scale {leaf}, .in In1}}
+Arg  := {{.n @any : Int, .scale {leaf}, .I In1}}
+GA   := {{.n @any : Int, .scale {leaf}, .in In1}}
 mismatch_raw := (k <: Par) => {{
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){{.type {kind}, .length {rows}}})
@@ -103,7 +103,7 @@ mismatch_raw := (k <: Par) => {{
 }}
 mismatch := compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step := (s <: GA) => {{
-  compute.plrun mismatch ((Arg){{.n s.n, .scale s.scale, .I In1{{.a s.in.a}}}}) : Out1
+  compute.plrun mismatch ((Arg){{.n s.n, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
 built
@@ -145,7 +145,7 @@ fn filled(element: &str, data_at_i: &str) -> String {
     format!(
         r#"
 FillOut := {{.z (compute.Buf ((compute.BufParam _){{.type {element}, .length {elements}}}))}}
-Fill  := {{.n Int}}
+Fill  := {{.n @any : Int}}
 fill_raw := (c <: Fill) => {{
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){{.type {element}, .length {elements}}})
@@ -161,7 +161,7 @@ a := (compute.plrun filler ((Fill){{.n {elements}}}) : Struct)
 /// The same kernel launched directly, over the buffer and the three scalars.
 fn direct() -> String {
     format!(
-        "{head}\n{data}out = (compute.plrun scale ((Arg){{.n {rows}, .cols {cols}, \
+        "{head}\n{data}out :=  (compute.plrun scale ((Arg){{.n {rows}, .cols {cols}, \
          .scale {scale}, .I In1{{.a a.z}}}}) : Struct)\ncompute.collect out.z\n",
         head = scaled("Float"),
         data = filled("Float", datum("Float")),

@@ -161,9 +161,9 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  := {.a Int}
+InA  := {.a @any : Int}
 OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParA := {.n Int, .in InA}
+ParA := {.n @any : Int, .in InA}
 adder := compute.parallel ((k <: ParA) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
@@ -171,7 +171,7 @@ adder := compute.parallel ((k <: ParA) => {
 }) "cpu" OutA
 InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParB := {.n Int, .in InB}
+ParB := {.n @any : Int, .in InB}
 doubler := compute.parallel ((k <: ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -180,7 +180,7 @@ doubler := compute.parallel ((k <: ParB) => {
 }) "cpu" OutB
 data := (compute.plrun adder ((compute.A InA){.n 4, .I InA{.a 0}}) : Struct)
 InS  := {.b (compute.Buf _)}
-ParS := {.n Int, .in InS}
+ParS := {.n @any : Int, .in InS}
 step := (s <: ParS) => {
   out := (compute.plrun doubler ((compute.A InB){.n 4, .I InB{.b data.z}}) : Struct)
   out
@@ -252,9 +252,9 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  := {.a Int}
+InA  := {.a @any : Int}
 OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParA := {.n Int, .in InA}
+ParA := {.n @any : Int, .in InA}
 adder := compute.parallel ((k <: ParA) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
@@ -262,7 +262,7 @@ adder := compute.parallel ((k <: ParA) => {
 }) "cpu" OutA
 InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParB := {.n Int, .in InB}
+ParB := {.n @any : Int, .in InB}
 step := (s <: ParB) => {
   out := (compute.plrun adder ((compute.A InA){.n s.n, .I InA{.a 0}}) : Struct)
   compute.plrun adder ((compute.A InA){.n s.n, .I InA{.a out.z}})
@@ -381,9 +381,9 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  := {.a Int}
+InA  := {.a @any : Int}
 OutA := {.z (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParA := {.n Int, .in InA}
+ParA := {.n @any : Int, .in InA}
 adder := compute.parallel ((k <: ParA) => {
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){.type Int, .length k.n})
@@ -391,7 +391,7 @@ adder := compute.parallel ((k <: ParA) => {
 }) "cpu" OutA
 InB  := {.b (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
 OutB := {.w (compute.Buf ((compute.BufParam _){.type Int, .length 4}))}
-ParB := {.n Int, .in InB}
+ParB := {.n @any : Int, .in InB}
 doubler := compute.parallel ((k <: ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)

@@ -24,8 +24,8 @@ fn program(condition: &str, then: &str, otherwise: &str) -> String {
 --- compute = import "compute.lichen" ---
 TIn  := {{.x (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
 TOut := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length _}}))}}
-TPar := {{.n Int, .taps Int, .in TIn, .out TOut}}
-TArg := {{.n Int, .taps Int, .I TIn}}
+TPar := {{.n @any : Int, .taps @any : Int, .in TIn, .out TOut}}
+TArg := {{.n @any : Int, .taps @any : Int, .I TIn}}
 tiny_raw := (c <: TPar) => {{
   i := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))

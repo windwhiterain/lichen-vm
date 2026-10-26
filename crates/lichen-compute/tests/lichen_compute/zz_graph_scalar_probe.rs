@@ -15,8 +15,8 @@ const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
 PIn  := {.x (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
 POut := {.y (compute.Buf ((compute.BufParam _){.type Int, .length _}))}
-PPar := {.n Int, .off Int, .in PIn, .out POut}
-PArg := {.n Int, .off Int, .I PIn}
+PPar := {.n @any : Int, .off @any : Int, .in PIn, .out POut}
+PArg := {.n @any : Int, .off @any : Int, .I PIn}
 append_raw := (c <: PPar) => {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Int)
@@ -28,9 +28,9 @@ x := (compute.buffer ([@any : Int, 4][1, 2, 3, 4] : Array) : (compute.Buf ((comp
 
 /// The step, recorded: the extent, the offset and the buffer are the graph's three arguments.
 const RECORDED: &str = r#"
-GArg := {.n Int, .off Int, .in PIn}
+GArg := {.n @any : Int, .off @any : Int, .in PIn}
 step := (s <: GArg) => {
-  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : POut
+  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : Struct
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (4, 4, x))
@@ -38,9 +38,9 @@ compute.collect (compute.graphrun built (4, 4, x))
 
 /// The same recording, collected at the eight the offset reaches for.
 const RECORDED_WIDE: &str = r#"
-GArg := {.n Int, .off Int, .in PIn}
+GArg := {.n @any : Int, .off @any : Int, .in PIn}
 step := (s <: GArg) => {
-  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : POut
+  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : Struct
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (4, 4, x)) : Array
@@ -48,9 +48,9 @@ compute.collect (compute.graphrun built (4, 4, x)) : Array
 
 /// The control for `RECORDED`: offset 0 through the same graph, hand answer `[1, 2, 3, 4]`.
 const RECORDED_OFFSET_ZERO: &str = r#"
-GArg := {.n Int, .off Int, .in PIn}
+GArg := {.n @any : Int, .off @any : Int, .in PIn}
 step := (s <: GArg) => {
-  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : POut
+  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : Struct
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (4, 0, x)) : Array
@@ -58,9 +58,9 @@ compute.collect (compute.graphrun built (4, 0, x)) : Array
 
 /// The control that names the offset: 2 lands half inside the extent, answer `[0, 0, 1, 2]`.
 const RECORDED_OFFSET_TWO: &str = r#"
-GArg := {.n Int, .off Int, .in PIn}
+GArg := {.n @any : Int, .off @any : Int, .in PIn}
 step := (s <: GArg) => {
-  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : POut
+  compute.plrun append ((PArg){.n s.n, .off s.off, .I PIn{.x s.in.x}}) : Struct
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (4, 2, x)) : Array

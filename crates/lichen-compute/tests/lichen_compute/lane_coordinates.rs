@@ -21,10 +21,10 @@ const TWO_EXTENTS: &str = r#"
 --- compute = import "compute.lichen" ---
 In := {.a (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
 Out := {.z (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
-Par := {.n Int, .cols Int, .stride Int, .in In}
-Host := {.n Int, .cols Int, .stride Int, .I In}
+Par := {.n @any : Int, .cols @any : Int, .stride @any : Int, .in In}
+Host := {.n @any : Int, .cols @any : Int, .stride @any : Int, .I In}
 Data := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 6})
@@ -55,10 +55,10 @@ const ONE_EXTENT: &str = r#"
 --- compute = import "compute.lichen" ---
 In := {.a (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
 Out := {.z (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
-Par := {.n Int, .in In}
-Host := {.n Int, .I In}
+Par := {.n @any : Int, .in In}
+Host := {.n @any : Int, .I In}
 Data := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 6}))}
-Fill := {.n Int}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 6})

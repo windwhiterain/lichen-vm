@@ -36,7 +36,7 @@ fn source() -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par  := {{.n Int, .in In}}
+Par  := {{.n @any : Int, .in In}}
 producer_raw := (lane <: Par) => {{
   at := compute.range lane.n
   e := compute.buf ((compute.BufParam _){{.type Float, .length lane.n}})
@@ -45,7 +45,7 @@ producer_raw := (lane <: Par) => {{
 producer := compute.parallel producer_raw "cpu" OutE
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 consumer_raw := (lane <: Par2) => {{
   at := compute.range lane.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _){{.from lane.in.e, .at s(0) - 1}}) : Float)))
@@ -53,7 +53,7 @@ consumer_raw := (lane <: Par2) => {{
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at at, .value fold (lane.n, 0.0)}}))}})
 }}
 consumer := compute.parallel consumer_raw "cpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun producer ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun consumer ((compute.A In2){{.n s.n, .I In2{{.d s.in.d, .e first.e}}}})

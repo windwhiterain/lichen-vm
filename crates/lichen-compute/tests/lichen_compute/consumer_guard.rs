@@ -41,7 +41,7 @@ fn chain() -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutR := {{.r (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par  := {{.n Int, .in In}}
+Par  := {{.n @any : Int, .in In}}
 producer_raw := (k <: Par) => {{
   i := compute.range k.n
   r := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -51,7 +51,7 @@ producer_raw := (k <: Par) => {{
 producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 consumer_raw := (k <: Par2) => {{
   i := compute.range k.n
   r := (compute.read ((compute.Read _){{.from k.in.p, .at 0}}) : Float)
@@ -60,7 +60,7 @@ consumer_raw := (k <: Par2) => {{
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")}}))}})
 }}
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun producer ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun consumer ((compute.A In2){{.n s.n, .I In2{{.d s.in.d, .p first.r}}}})
@@ -107,7 +107,7 @@ fn filled() -> String {
     format!(
         r#"
 Data := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length {COUNT}}})
@@ -150,7 +150,7 @@ fn bare_consumer() -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutR := {{.r (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par  := {{.n Int, .in In}}
+Par  := {{.n @any : Int, .in In}}
 producer_raw := (k <: Par) => {{
   i := compute.range k.n
   r := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -160,7 +160,7 @@ producer_raw := (k <: Par) => {{
 producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 consumer_raw := (k <: Par2) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -168,7 +168,7 @@ consumer_raw := (k <: Par2) => {{
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
 }}
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun producer ((compute.A In){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun consumer ((compute.A In2){{.n s.n, .I In2{{.d s.in.d, .p first.r}}}})

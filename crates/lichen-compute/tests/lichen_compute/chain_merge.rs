@@ -61,8 +61,8 @@ fn program(step: &str) -> String {
 ---
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutR := {{.r (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par  := {{.n Int, .in In}}
-Arg  := {{.n Int, .I In}}
+Par  := {{.n @any : Int, .in In}}
+Arg  := {{.n @any : Int, .I In}}
 total_raw := (k <: Par) => {{
   i := compute.range k.n
   r := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -72,8 +72,8 @@ total_raw := (k <: Par) => {{
 total := compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
-Arg2 := {{.n Int, .I In2}}
+Par2 := {{.n @any : Int, .in In2}}
+Arg2 := {{.n @any : Int, .I In2}}
 shift_raw := (k <: Par2) => {{
   i := compute.range k.n
   p := (compute.read ((compute.Read _){{.from k.in.p, .at 0}}) : Float)
@@ -84,8 +84,8 @@ shift_raw := (k <: Par2) => {{
 shift := compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 In3  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .q (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutY := {{.y (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par3 := {{.n Int, .in In3}}
-Arg3 := {{.n Int, .I In3}}
+Par3 := {{.n @any : Int, .in In3}}
+Arg3 := {{.n @any : Int, .I In3}}
 lift_raw := (k <: Par3) => {{
   i := compute.range k.n
   q := (compute.read ((compute.Read _){{.from k.in.q, .at 0}}) : Float)
@@ -94,7 +94,7 @@ lift_raw := (k <: Par3) => {{
   ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")}}))}})
 }}
 lift := compute.parallel (lift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutY
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 {step}
 built := compute.graph step
 "#
@@ -109,7 +109,7 @@ fn recording() -> String {
             r#"step := (s <: GArg) => {
   first := (compute.plrun total ((Arg){.n s.n, .I In{.d s.in.d}}) : Struct)
   second := (compute.plrun shift ((Arg2){.n s.n, .I In2{.d s.in.d, .p first.r}}) : Struct)
-  compute.plrun lift ((Arg3){.n s.n, .I In3{.d s.in.d, .q second.z}}) : OutY
+  compute.plrun lift ((Arg3){.n s.n, .I In3{.d s.in.d, .q second.z}}) : Struct
 }"#
         )
     )
@@ -125,7 +125,7 @@ fn filled() -> String {
     format!(
         r#"
 Data := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){{.type Float, .length {COUNT}}})
@@ -139,7 +139,7 @@ filler := compute.parallel fill "cpu" Data
 /// The chain as a program that runs its recording and answers it.
 fn running() -> String {
     format!(
-        "{head}\n{fill}count = ({COUNT})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
+        "{head}\n{fill}count :=  ({COUNT})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
          out := compute.collect (compute.graphrun built (count, data.d))\nout\n",
         head = recording(),
         fill = filled(),

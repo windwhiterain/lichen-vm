@@ -15,9 +15,9 @@ const IN_PLACE_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
 In  := {.k (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
 Out := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
-Par := {.n Int, .in In}
-Arg := {.n Int, .I In}
-Fill := {.n Int}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+Fill := {.n @any : Int}
 fill := (c <: Fill) => {
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){.type Float, .length 1})

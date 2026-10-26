@@ -100,7 +100,7 @@ fn source() -> String {
 ---
 In  := {{.b (compute.Buf ((compute.BufParam _){{.type Float, .length {BOUND}}}))}}
 Out := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {BOUND}}}))}}
-Par := {{.n Int, .in In}}
+Par := {{.n @any : Int, .in In}}
 reduction := (k <: Par) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})

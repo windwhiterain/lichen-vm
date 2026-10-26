@@ -31,7 +31,7 @@ Expr := {{.a (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})
 Side := {{.p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 In   := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParE := {{.n Int, .in In}}
+ParE := {{.n @any : Int, .in In}}
 scale_raw := (k <: ParE) => {{
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -40,7 +40,7 @@ scale_raw := (k <: ParE) => {{
 scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
+Par2 := {{.n @any : Int, .in In2}}
 offset_raw := (k <: Par2) => {{
   i := compute.range k.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -53,7 +53,7 @@ offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" Out
 
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
 const ONE_BUFFER: &str = r#"
-GArg := {.n Int, .in In}
+GArg := {.n @any : Int, .in In}
 step := (s <: GArg) => {
   first := (compute.plrun scale ((compute.A In){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun offset ((compute.A In2){.n s.n, .I In2{.d s.in.d, .p first.e}})
@@ -64,7 +64,7 @@ built
 
 /// The same step over an argument naming **two** buffers, both read.
 const TWO_BUFFERS: &str = r#"
-GArg := {.n Int, .in Expr}
+GArg := {.n @any : Int, .in Expr}
 step := (s <: GArg) => {
   first := (compute.plrun scale ((compute.A In){.n s.n, .I In{.d s.in.a}}) : Struct)
   compute.plrun offset ((compute.A In2){.n s.n, .I In2{.d s.in.b, .p first.e}})
@@ -75,7 +75,7 @@ built
 
 /// The same step over an argument whose second buffer sits **outside** `.in`, unread.
 const MISPLACED_BUFFER: &str = r#"
-GArg := {.n Int, .in In, .q Side}
+GArg := {.n @any : Int, .in In, .q Side}
 step := (s <: GArg) => {
   first := (compute.plrun scale ((compute.A In){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun offset ((compute.A In2){.n s.n, .I In2{.d s.in.d, .p first.e}})
@@ -102,7 +102,7 @@ built
 /// The recording, run over two buffers whose elements are `1 … COUNT` and `10 … COUNT + 9`.
 fn running() -> String {
     format!(
-        "{}\n{fill}count = ({count})\nfirst := (compute.plrun ones_filler ((Fill){{.n {count}}}) : \
+        "{}\n{fill}count :=  ({count})\nfirst := (compute.plrun ones_filler ((Fill){{.n {count}}}) : \
          OutE)\nsecond := (compute.plrun tens_filler ((Fill){{.n {count}}}) : Struct)\nout := \
          compute.collect (compute.graphrun built (count, first.e, second.e))\nout\n",
         chain(TWO_BUFFERS),
@@ -120,7 +120,7 @@ fn running() -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 ones_raw := (c <: Fill) => {{
   i := compute.range c.n
   y := compute.buf ((compute.BufParam _){{.type Float, .length {COUNT}}})

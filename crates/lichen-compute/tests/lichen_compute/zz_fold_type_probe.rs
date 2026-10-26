@@ -15,8 +15,8 @@ use super::common;
 const KERNEL: &str = r#"
 XIn  := {.x (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
 XOut := {.y (compute.Buf ((compute.BufParam _){.type Float, .length _}))}
-XPar := {.n Int, .alpha Float, .in XIn, .out XOut}
-XArg := {.n Int, .alpha Float, .I XIn}
+XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
+XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
 ring_raw := (c <: XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
@@ -55,7 +55,7 @@ out := run (2, seed)
 /// The same fold with the **recursive function** annotated, which is the rule the type system states.
 const LOOP_RECURSION_ANNOTATED: &str = r#"
 seed := (compute.collect (compute.plrun ring ((XArg){{.n 6, .alpha 0.25, .I XIn{{.x x}}}}) : Struct).y : Array)
-@loop run := ((s => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){{.n 6, .alpha 0.25, .I XIn{{.x (compute.buffer (s(1)) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))}}}}) : Struct).y : Array))) : tuple{Int, Array} -> Array)
+@loop run := ((s => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){{.n 6, .alpha 0.25, .I XIn{{.x (compute.buffer (s(1)) : (compute.Buf ((compute.BufParam _){{.type Float, .length _}})))}}}}) : Struct).y : Array))) : (Int, Array) -> Array)
 out := run (2, seed)
 out
 "#;

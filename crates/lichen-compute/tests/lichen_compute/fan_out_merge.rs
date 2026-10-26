@@ -51,8 +51,8 @@ fn program() -> String {
 ---
 In  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-ParE := {{.n Int, .in In}}
-ArgE := {{.n Int, .I In}}
+ParE := {{.n @any : Int, .in In}}
+ArgE := {{.n @any : Int, .I In}}
 scale_raw := (k <: ParE) => {{
   i := compute.range k.n
   e := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
@@ -61,15 +61,15 @@ scale_raw := (k <: ParE) => {{
 scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}})), .p (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Par2 := {{.n Int, .in In2}}
-Arg2 := {{.n Int, .I In2}}
+Par2 := {{.n @any : Int, .in In2}}
+Arg2 := {{.n @any : Int, .I In2}}
 offset_raw := (k <: Par2) => {{
   i := compute.range k.n
   z := compute.buf ((compute.BufParam _){{.type Float, .length k.n}})
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value (((compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float) + 1.0) ~ "element")}}))}})
 }}
 offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg := {{.n Int, .in In}}
+GArg := {{.n @any : Int, .in In}}
 step := (s <: GArg) => {{
   first := (compute.plrun scale ((ArgE){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   left := (compute.plrun offset ((Arg2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}}) : Struct)
@@ -97,7 +97,7 @@ fn filled() -> String {
     format!(
         r#"
 Data := {{.d (compute.Buf ((compute.BufParam _){{.type Float, .length {COUNT}}}))}}
-Fill := {{.n Int}}
+Fill := {{.n @any : Int}}
 fill := (c <: Fill) => {{
   i := compute.range c.n
   d := compute.buf ((compute.BufParam _){{.type Float, .length {COUNT}}})
@@ -116,7 +116,7 @@ filler := compute.parallel fill "cpu" Data
 /// an observation rather than an inference.
 fn running() -> String {
     format!(
-        "{head}\n{fill}count = ({count})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
+        "{head}\n{fill}count :=  ({count})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
          r := (compute.graphrun built (count, data.d) : Array)\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
         head = recording(),

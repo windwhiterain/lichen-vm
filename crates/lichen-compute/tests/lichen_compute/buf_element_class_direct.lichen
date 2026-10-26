@@ -3,7 +3,7 @@
 ---
 In := {.d (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
 OutE := {.e (compute.Buf ((compute.BufParam _){.type Float, .length 1}))}
-Par := {.n Int, .in In}
+Par := {.n @any : Int, .in In}
 raw := (lane <: Par) => {
   e := compute.buf ((compute.BufParam _){.type Float, .length lane.n})
   ((OutE){.e (compute.write ((compute.Write _){.to e, .at 0, .value (compute.read ((compute.Read _){.from lane.in.d, .at 0}) : Float)}))})
