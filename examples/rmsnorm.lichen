@@ -52,5 +52,5 @@ fill_w_raw := (c <: Fill) => {
 fill_w := compute.parallel fill_w_raw "cpu" wBuf
 w := (compute.plrun fill_w Fill{.n 4} <: wBuf).w
 sums := (compute.plrun sumsq ParS{.n 4, .in Row{.x x}} <: Sums)
-out := (compute.plrun rescale ParY{.n 4, .in Scale{.x x, .w w, .s sums.s}}) <: OutY)
+out := (compute.plrun rescale ParY{.n 4, .in Scale{.x x, .w w, .s sums.s}} <: OutY)
 compute.collect out.y : Array
