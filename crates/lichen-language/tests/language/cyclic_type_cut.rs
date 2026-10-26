@@ -16,7 +16,7 @@ fn root_type(source: &str) -> String {
 #[test]
 fn a_repeated_class_cell_is_one_unification_class() {
     // "a repeated `?a` says two slots are one unification class" — spec §5.
-    assert_eq!(root_type("f := x => x; f"), "?a -> ?a");
+    assert_eq!(root_type("f := x => x; f"), "?a => ?a");
 }
 
 /// The §7.6 lazy spine: the cut; one level short prints `tuple{Float, tuple{Float, …}}`.
@@ -46,7 +46,7 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
 fn a_three_name_cycle_terminates_at_its_first_revisit() {
     // "it fires at the first revisit and a cycle of any length terminates" — §5.
     let printed = root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x <: A => 0; f");
-    assert_eq!(printed, "Struct -> Int");
+    assert_eq!(printed, "Struct => Int");
     assert_eq!(printed.matches("Struct").count(), 1);
     assert_eq!(printed.matches('…').count(), 0);
 }

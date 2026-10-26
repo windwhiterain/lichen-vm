@@ -306,7 +306,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
     // The printer recognizes a cell unified into the universe class.
     assert_eq!(
         lichen_language::run::evaluate("x : Int => x").unwrap(),
-        "Int => Int: Int -> Int"
+        "Int => Int: Int => Int"
     );
     assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
 }
@@ -692,7 +692,7 @@ fn operator_precedence_and_associativity() {
 
     assert_eq!(
         lichen_language::run::evaluate("x => x + 1").unwrap(),
-        "Int => Int: Int -> Int"
+        "Int => Int: Int => Int"
     );
     // Each new level is checked against the reading that would come out
     // wrong in the wrong place.
@@ -843,7 +843,7 @@ fn a_recursive_function_checks_and_evaluates() {
 
 #[test]
 fn a_recursive_binding_parameter_can_be_annotated() {
-    // `n : Int => e` desugars to `(n => e) : (Int -> _)`, and the `_`
+    // `n : Int => e` desugars to `(n => e) : (Int => _)`, and the `_`
     // codomain binds lazily.
     assert_eq!(
         usize_of(&evaluate(
@@ -1612,7 +1612,7 @@ fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
         "{}",
         d[0].message
     );
-    let d = diags("(Int -> Int)(1, 2)");
+    let d = diags("(Int => Int)(1, 2)");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::InstantiateCallee
@@ -1781,9 +1781,9 @@ fn mutually_recursive_structs_check_and_evaluate() {
 }
 
 #[test]
-fn a_function_type_is_a_first_class_value() {
-    // `Int -> Int` checks in term position; the identity is such a function.
-    run("(x => x) : (Int -> Int)");
+fn a_function_template_is_a_first_class_value() {
+    // A function template is a value; the identity satisfies its constraint.
+    run("(x => x) <: (x : Int => _: Int)");
 }
 
 #[test]
@@ -1853,7 +1853,7 @@ fn calling_an_unregistered_native_operator_is_a_diagnostic() {
 
 #[test]
 fn an_annotation_mismatch_reports_expected_and_found() {
-    let d = diags("5 : Int -> Int");
+    let d = diags("5 <: (x : Int => _: Int)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     assert_eq!(d[0].span, Some((1, 1)));
@@ -1863,9 +1863,9 @@ fn an_annotation_mismatch_reports_expected_and_found() {
         check.value_a,
         Some(LangValue::TypeValue(TypeValue::TypeInt))
     );
-    // An arrow is a function now, so the expected side is that function.
+    // The expected side is the function template.
     assert!(matches!(
-        check.value_b.expect("the expected arrow"),
+        check.value_b.expect("the expected function template"),
         LangValue::LowValue(LowValue::Function(_))
     ));
 }
@@ -2054,9 +2054,12 @@ fn an_underscore_annotation_on_an_apply() {
 }
 
 #[test]
-fn partial_inference_in_an_arrow_type() {
-    // The input is fixed to `Int` by the annotation, the return inferred.
-    assert_eq!(usize_of(&evaluate("(((x => x) : (Int -> _)) 5) : Int")), 5);
+fn partial_inference_in_a_function_template() {
+    // The input is fixed to `Int` by the template, the return inferred.
+    assert_eq!(
+        usize_of(&evaluate("(((x => x) <: (x : Int => _)) 5) : Int")),
+        5
+    );
 }
 
 #[test]
@@ -2068,7 +2071,7 @@ fn an_underscore_in_the_array_length_position() {
 
 #[test]
 fn a_mismatch_against_a_partial_type_is_reported() {
-    let d = diags("5 : (Int -> _)");
+    let d = diags("5 <: (x : Int => _)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     let check = d[0].check.as_ref().expect("a checker diagnostic");

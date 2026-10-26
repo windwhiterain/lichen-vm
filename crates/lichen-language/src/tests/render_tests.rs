@@ -56,10 +56,10 @@ fn a_node_the_module_no_longer_holds_renders_without_panicking() {
 #[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
     // The message uses the CLI's type spellings, not the raw `TypeInt → TypeInt`.
-    let report = crate::compile("5 : Int -> Int");
+    let report = crate::compile("5 <: (x : Int => _: Int)");
     assert_eq!(
         report.diagnostics[0].message,
-        "expected Int -> Int, found Int"
+        "expected Int => Int, found Int"
     );
 }
 
@@ -69,7 +69,7 @@ fn an_array_element_conflict_renders_undecided_arrow_cells() {
     let report = crate::compile("[Int, 2][Int, x => x]");
     assert_eq!(
         report.diagnostics[0].message,
-        "expected Int, found ?a -> ?a"
+        "expected Int, found ?a => ?a"
     );
 }
 
@@ -154,10 +154,9 @@ fn a_set_and_a_table_value_render_their_own_syntax() {
 }
 
 #[test]
-fn a_written_arrow_is_a_function() {
-    // A type-position arrow lowers to a real function; the value half and the
-    // type half both state its signature.
-    assert_eq!(output("Int -> Int"), "Int => Int: Int -> Int");
+fn a_function_template_is_a_function() {
+    // A function template is a real function; both halves state its signature.
+    assert_eq!(output("x : Int => _: Int"), "Int => Int: Int => Int");
 }
 
 #[test]
@@ -168,8 +167,8 @@ fn a_type_second_slot_does_not_collapse_an_array() {
 
 #[test]
 fn a_function_value_prints_its_signature() {
-    assert_eq!(output("x => x"), "?a => ?a: ?a -> ?a");
-    assert_eq!(output("f := x => x\nf"), "?a => ?a: ?a -> ?a");
+    assert_eq!(output("x => x"), "?a => ?a: ?a => ?a");
+    assert_eq!(output("f := x => x\nf"), "?a => ?a: ?a => ?a");
 }
 
 // --- `type_of` as an ordinary lichen function ----------------------------
@@ -198,7 +197,7 @@ fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
     assert_eq!(with_type_of("f := type_of\nf 1"), "Int: Type");
     assert_eq!(with_type_of("g := x => type_of x\ng 2"), "Int: Type");
-    assert_eq!(with_type_of("type_of (x => x)"), "?a => ?a: ?a -> ?a");
+    assert_eq!(with_type_of("type_of (x => x)"), "?a => ?a: ?a => ?a");
 }
 
 #[test]
