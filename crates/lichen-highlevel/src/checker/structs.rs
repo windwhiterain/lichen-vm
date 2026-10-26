@@ -671,8 +671,7 @@ where
         let nominal_node = items[shape::STRUCT_VALUE_ID_SLOT].node;
         let fields: Vec<NodeId> = items[shape::STRUCT_VALUE_FIELD_BASE..]
             .iter()
-            .map(|item| item.node)
-            .filter_map(|node| node.dynamic())
+            .map(|item| self.module.as_dynamic(item.node, self.current_block))
             .collect();
         let table = self.struct_name_table(template_value);
         let (ordered, valid) = self.reorder_arguments(
