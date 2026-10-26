@@ -214,6 +214,40 @@ impl<P: Program> Module<P> {
         cell: Option<AnyNodeId>,
         check: ParameterCheck,
     ) -> bool {
+        // A type application whose function is **already being type-applied** in
+        // this chain does not force the callee's body.
+        //
+        // # Invariant
+        // The type application forces the body only to read the codomain and
+        // the returned attribute; the body in turn applies the types of the
+        // calls it names, so a signature that closes on itself expands the
+        // body at every turn. The chain is the guard: the function is already
+        // inside itself, and a second force is the expansion the chain never
+        // leaves. The chain names the **template** each application is an
+        // instance of, because a call's callee is a per-call closure: the
+        // template is what says the chain is inside the same function again.
+        // The parameter check still runs, so the call's diagnostics do not
+        // depend on the guard.
+        let template = self.template_root_of(function);
+        let reentrant = self.type_applying.contains(&template);
+        self.type_applying.push(template);
+        let applied = self.apply_type_body(function, argument, block, node, cell, check, reentrant);
+        self.type_applying.pop();
+        applied
+    }
+
+    /// The body of a type application; `reentrant` says the chain is already
+    /// inside `function`, so the body is not forced again.
+    fn apply_type_body(
+        &mut self,
+        function: FunctionId,
+        argument: AnyNodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<AnyNodeId>,
+        check: ParameterCheck,
+        reentrant: bool,
+    ) -> bool {
         let Some(instantiation) = self.instantiate(function, argument, block, node, check) else {
             return false;
         };
@@ -226,8 +260,9 @@ impl<P: Program> Module<P> {
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
         // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
-        // apply the deep budget counts.
-        if self.expr_type_item(applied).is_none() {
+        // apply the deep budget counts. A reentrant application leaves the clone
+        // unforced: the chain is already inside this function.
+        if !reentrant && self.expr_type_item(applied).is_none() {
             self.evaluate_node(Dyn(applied), Some(block));
         }
         let Some(codomain) = self.expr_type_item(applied) else {

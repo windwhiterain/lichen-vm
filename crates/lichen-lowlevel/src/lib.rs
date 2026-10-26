@@ -1146,6 +1146,16 @@ pub struct Module<P: Program> {
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
+    /// The functions whose **type application** is in progress, innermost first.
+    ///
+    /// # Invariant
+    /// One entry per type application in progress, and the entry is popped on
+    /// every exit, so the chain names the applications that are open and
+    /// nothing else. A type application forces the callee's body, and the body
+    /// applies the types of the calls it names: a signature that closes on
+    /// itself therefore expands the body at every turn. The chain is what
+    /// stops that turn — a function already inside itself is not forced again.
+    pub(crate) type_applying: Vec<FunctionId>,
     /// The module's **attribute-layout registry**: one entry per schema tail.
     ///
     /// # Invariant
