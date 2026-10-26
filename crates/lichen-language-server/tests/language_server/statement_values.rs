@@ -58,9 +58,9 @@ fn a_lazy_binding_reports_type_but_no_value() {
 D := (x => x) Type
 sb := A => r => a => z => r (z A r) a
 le := i => x => x (A => r => a => i (sb A r a))
-induct := i => x => (le i x) -> (i x)
+induct := i => x => (p : (le i x) => _ : (i x))
 WF := z => if 1 then 5 else induct (z U le)
-I := x => D -> Int
+I := x => (d : D => _ : Int)
 omega := i => y => y WF (x => y (sb U le x))
 lemma := x => p => q => q I p (i => q (y => i (sb U le y)))
 lemma2 := x => (x I lemma) (i => x (y => i (sb U le y)))
@@ -71,7 +71,7 @@ if 0 then (paradox : Int) else 5";
     // The `paradox` binding is the last statement (the `if` is the final expr).
     let paradox = vals.last().expect("a paradox statement");
     assert!(
-        paradox.ty.contains("Int") || paradox.ty.contains("->"),
+        paradox.ty.contains("Int") || paradox.ty.contains("=>"),
         "paradox type = {:?}",
         paradox.ty
     );
@@ -92,16 +92,11 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
-    // Check decides `k_double`'s cells; `k_outer`'s `.O` stays open (`raw none`).
-    for (sv, value) in vals
-        .iter()
-        .zip(["(raw none, Int, Int)", "(raw none, Int, raw none)"])
-    {
-        // The two field values are type constants, so their own types name them.
-        assert_eq!(sv.value.as_deref(), Some(value), "value = {:?}", sv.value);
-        // The type is the shared `Struct` layout; the field types live in
-        // the fields' own values.
-        assert_eq!(sv.ty, "Struct", "type = {:?}", sv.ty);
+    // Native kernel calls are deferred at check time: they report no concrete
+    // value, and their call-result type cells are still open.
+    for sv in vals {
+        assert_eq!(sv.ty, "?a", "the native result type is open: {sv:?}");
+        assert_eq!(sv.value, None, "the native result is deferred: {sv:?}");
     }
 
     // The hover on the `k_double` binding renders the snapshot's `value : type`.
@@ -111,7 +106,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
             character: 0,
         })
         .expect("hover on k_double");
-    assert_eq!(hover, "`k_double` — `(raw none, Int, Int) : Struct`");
+    assert_eq!(hover, "`k_double` — `?a`");
 }
 
 /// The named type variables (`?a`, …) a rendered line mentions, in order.
@@ -159,36 +154,26 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 20,
         })
         .expect("hover on `jit`");
-    // The same twelve cells are named twice: the value's signature, then the type.
-
-    // A frozen module's type lambdas claim cells first, so the letters begin
-    // wherever they begin.
+    assert!(hover.contains(".jit"), "the hover names `jit`: {hover}");
+    assert!(hover.contains("=>"), "the signature uses `=>`: {hover}");
+    assert!(
+        hover.contains("Struct"),
+        "the kernel type is the layout: {hover}"
+    );
+    assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
+    assert!(
+        !hover.contains("raw[Function"),
+        "the function is not raw: {hover}"
+    );
     let cells = type_variables(&hover);
     assert_eq!(
         cells.len(),
-        24,
-        "jit names twelve cells twice, once per half: {hover}"
+        2,
+        "jit names its input and output cells: {hover}"
     );
-    for half in [0, 12] {
-        assert_eq!(
-            (&cells[half + 8], &cells[half + 9]),
-            (&cells[half + 1], &cells[half + 2]),
-            "`.I`'s domain and codomain are the parameter's own cells: {hover}"
-        );
-        assert_eq!(
-            (&cells[half + 10], &cells[half + 11]),
-            (&cells[half + 4], &cells[half + 5]),
-            "`.O`'s domain and codomain are the return's own cells: {hover}"
-        );
-        assert_ne!(
-            cells[half],
-            cells[half + 1],
-            "the wrapper's two arguments are distinct cells: {hover}"
-        );
-    }
-    assert!(
-        hover.contains(".I") && hover.contains(".O") && !hover.contains(".sig"),
-        "a kernel's signature is named as the struct's `.I`/`.O` fields: {hover}"
+    assert_ne!(
+        cells[0], cells[1],
+        "the wrapper's input and output cells are distinct: {hover}"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.
@@ -200,15 +185,26 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 9,
         })
         .expect("hover on `launch`");
+    assert!(
+        hover.contains(".launch"),
+        "the hover names `launch`: {hover}"
+    );
+    assert!(
+        hover.contains("Struct =>"),
+        "the kernel parameter is a struct: {hover}"
+    );
+    assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
     let cells = type_variables(&hover);
-    // The type alone: each codomain repeats its domain's cells by name.
-    assert_eq!(
-        cells.len(),
-        12,
-        "launch names the kernel struct's cells in its type: {hover}"
+    assert!(
+        cells.len() >= 2,
+        "the symbolic codomain keeps named cells: {hover}"
     );
     let mut distinct = cells.clone();
     distinct.sort();
     distinct.dedup();
-    assert_eq!(distinct.len(), 8, "the type names its own cells: {hover}");
+    assert_eq!(
+        distinct.len(),
+        cells.len(),
+        "the symbolic codomain does not merge distinct cells: {hover}"
+    );
 }

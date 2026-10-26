@@ -1302,7 +1302,7 @@ impl DocIndex {
             let ty_kind = classify_token_kind(&t.kind);
             let (token_type, modifiers) = match &t.kind {
                 TokenKind::Name(_) if prev_was_dot => {
-                    // `a.name`, `struct{.name T}`, `C(.name v)` — a named field.
+                    // `a.name`, `{.name requirement}`, `S{.name value}` — a named field.
                     (SemanticTokenType::PROPERTY, Vec::new())
                 }
                 TokenKind::Name(_) => name_class
@@ -2885,12 +2885,12 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "---output = \"(Int -> Int, Int -> Int -> Int): Struct\"---\nsucc := x => x + 1\nadd := x => y => x + y\n",
+            "---output = \"(Int => Int, Int => Int -> Int): Struct\"---\nsucc := x => x + 1\nadd := x => y => x + y\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "---math = import \"math.lichen\"\noutput = \"(Int -> Int, Int -> Int): Struct\"---\ndouble := x => math.add x x\ninc_twice := x => math.succ (math.succ x)\n",
+            "---math = import \"math.lichen\"\noutput = \"(Int => Int, Int => Int): Struct\"---\ndouble := x => math.add x x\ninc_twice := x => math.succ (math.succ x)\n",
         );
         let main_path = write(
             &dir,
@@ -2990,7 +2990,7 @@ mod tests {
                 character: 5,
             })
             .expect("hover on `succ`");
-        assert!(msg.contains("Int -> Int"), "field hover msg = {msg}");
+        assert!(msg.contains("Int => Int"), "field hover msg = {msg}");
         assert!(!msg.contains("unresolved"), "field hover msg = {msg}");
 
         // Go-to-definition on the module use jumps to the import directive.
@@ -3035,7 +3035,7 @@ mod tests {
                     line: 6,
                     character: 6,
                 },
-                "Int -> Int",
+                "Int => Int",
             ),
             // `.inc_twice` field access on `geo`
             (
@@ -3043,7 +3043,7 @@ mod tests {
                     line: 6,
                     character: 33,
                 },
-                "Int -> Int",
+                "Int => Int",
             ),
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
@@ -3076,7 +3076,7 @@ mod tests {
             .map(|(_, ty)| ty.trim_end_matches('`'))
             .unwrap_or_else(|| panic!("the field renders its type; got {msg}"));
         let sides: Vec<&str> = rendered
-            .split("->")
+            .split("=>")
             .map(|side| side.trim().trim_end_matches('`').trim())
             .collect();
         assert_eq!(sides.len(), 2, "one arrow, domain to codomain: {msg}");
@@ -3135,7 +3135,7 @@ mod tests {
                 "`{name}` should resolve; got {msg}"
             );
             assert!(
-                msg.contains("->"),
+                msg.contains("=>"),
                 "`{name}` should show its type; got {msg}"
             );
         }

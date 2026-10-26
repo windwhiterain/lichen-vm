@@ -77,6 +77,15 @@ renderer names them rather than writing its own `+1` or `+2`.
 The **header** of a struct value — its name table and its nominal id — and the
 **template** of an array value are internal: they name the layout and are never
 user data, so a struct reads as its field tuple and an array as its elements.
+The array's template slot is explicitly marked in the lowlevel item metadata:
+table keys and the deep verdict ignore its contents but retain its presence, so
+an array instance and a tuple over the same user elements stay distinct.
+
+Recursive bindings may leave a two-cell `[value, type]` skeleton instead of a
+complete expression. The renderer reads those cells rather than falling back to
+a raw graph dump. Its value-cycle guard holds the equality class, not just the
+node id; the shared layout template does not cut a nested value merely because
+it appears again in the type position.
 
 The **type** of a compound is the template itself, so a type prints as `Tuple`,
 `Array` or `Struct`; the element types live in the elements' own expressions
@@ -94,34 +103,34 @@ value's table instead.
 ## Function templates
 
 A function constraint is an ordinary function template. `<:` clones that template
-and unifies the actual function with it, so a parameter's value and type travel in
-the parameter expression itself; no separate arrow classifier is needed. A scalar
-constraint can use ordinary `:` inside the template, while a compound constraint
-uses `<:` inside it.
+and unifies the actual function's **signature** with it; the actual function body
+is not replaced by the template. A scalar constraint can use ordinary `:` inside
+the template, while a compound constraint uses `<:` inside it. Static and dynamic
+functions use the same parameter/return-cell comparison, including a frozen
+signature with open cells.
 
 The earlier `A -> B` experiment was rejected: consuming a captured scalar type and
 a compound template uniformly would have required either a dynamic match or a
 second signature implementation. Removing the thin arrow keeps one constraint
-model. Compute uses a template function to constrain its input and can apply the
-function to that input template to obtain a symbolic output template.
+model. Compute uses `f <: (i <: I => _)` to constrain its input and `O := f I` to
+obtain a symbolic output template. A native wrapper states `r : type_of (k.O)`
+for the result's type and `r <: k.O` for the complete output template.
 
 ## Open details
 
-- An array template's length may be unevaluated. Its representation must not force
-  an arbitrary expression merely to allocate the value's repeated holes. The
-  current checker builds a decidable length directly and refuses an instance
-  whose cloned value or length is not decidable; that is a limitation, not the
-  dynamic-array semantics. A layout-only constraint can use ordinary `Array`
-  annotation: `std.sort` does so, and the native operator retains its non-`Int`
-  rejection rather than pretending `[T, _]` already infers the length.
-- The interaction of `@shallow` with template arrays and instances needs to be
-  stated rather than inherited accidentally from the retired array literal.
+- A decidable array length is built directly. A length that depends on an
+  enclosing lambda parameter is deferred through the clone's own length read:
+  the instance's count pins that cell, and a later argument mismatch is a
+  runtime error. A top-level `_` still receives a guard; `[T, _]` does not infer
+  a length. A layout-only constraint can use ordinary `Array` annotation, and
+  `std.sort` retains its non-`Int` rejection. The lazy fallback for an arbitrary
+  computed template is not yet a proven element/length check.
 - The highlevel clone boundary currently shares only enclosing lambda
   parameters. It deliberately does not infer lexical ownership for local
   bindings in nested lambdas.
-- Function-template constraints still need end-to-end verification for frozen
-  wrappers and dependent output templates; the compute examples are the
-  acceptance cases.
+- Frozen function-template constraints and dependent output templates have
+  end-to-end coverage, and nested `compute.jit` returns `6: Int`. Parallel
+  compute lowering for buffer/struct-valued kernels remains under repair.
 
 ## Verification boundary
 
