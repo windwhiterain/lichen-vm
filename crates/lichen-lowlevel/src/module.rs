@@ -67,6 +67,7 @@ impl<P: Program> Module<P> {
             full_width_layout: None,
             element_types: HashMap::new(),
             applied_exprs: HashMap::new(),
+            apply_result_owners: HashMap::new(),
             apply_exprs: HashMap::new(),
             applied_parameters: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,

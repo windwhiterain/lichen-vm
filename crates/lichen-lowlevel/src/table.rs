@@ -424,6 +424,11 @@ impl<P: Program> Module<P> {
     /// agree that the slot is there, and its value is never read. So an array instance
     /// and a tuple over the same user elements are two keys, while two array instances
     /// over the same user elements and different element templates are one.
+    /// Structural equality of two live values, including compound fields.
+    pub fn structural_eq(&self, a: AnyNodeId, b: AnyNodeId) -> bool {
+        self.key_eq(a, b, &mut AncestorPairs::new())
+    }
+
     pub(crate) fn key_eq(
         &self,
         a: AnyNodeId,

@@ -49,7 +49,7 @@ where
     /// # Invariant
     /// A non-function template unifies whole terms, so a value is matched
     /// against its layout. A function template unifies the actual function's
-    /// type with the cloned signature, preserving the actual body for calls.
+    /// type with the signature, preserving the actual body for calls.
     /// The direction is fixed: `actual` is found and `expected` the requirement.
     /// The `:` annotation does **not** come through here: it states a type, and a type is unified as a type.
     pub(super) fn check_unify_expr(
@@ -95,21 +95,6 @@ where
     /// are the template's.
     pub(super) fn clone_instance(&mut self, value: ExprId) -> Option<TemplateInstance> {
         let root = self.state[value].term?;
-        let boundary = self.clone_boundary(value);
-        self.module
-            .clone_template(root, self.current_block, self.current_function(), &boundary)
-    }
-
-    /// The instance of a template's **value** graph, or `None` when a budget
-    /// stopped the walk.
-    ///
-    /// # Invariant
-    /// The instance is **fresh**: the walk clones the graph it reaches and
-    /// shares only the cells the boundary names, so the template's own cells
-    /// are the template's. The root is the value itself, so a callee whose
-    /// value is a call's answer is read where it is decided.
-    pub(super) fn clone_instance_value(&mut self, value: ExprId) -> Option<TemplateInstance> {
-        let root = self.value_of(value);
         let boundary = self.clone_boundary(value);
         self.module
             .clone_template(root, self.current_block, self.current_function(), &boundary)

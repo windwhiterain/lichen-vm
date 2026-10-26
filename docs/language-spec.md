@@ -7,7 +7,7 @@ Illustration only, not precise.
 core:
 ```sytax
 program := block_inner
-expr := name | atom | unify | lambda | apply | clone | block | annotated | compound | access | instanciate
+expr := name | atom | unify | lambda | apply | block | annotated | compound | access | instanciate
 block := `{` block_inner `}`
 block_inner := ( (stmt | expr) sep)* expr
 sep := `,` | `;` | `\n`
@@ -17,7 +17,6 @@ assert := `@assert` expr
 unify := expr `=` expr
 lambda := name => expr
 apply := expr expr
-clone := @clone expr
 annotated := expr annotation+
 annotation := annotator expr
 annotator := `:` | `!` | `?` | `#`
@@ -39,11 +38,13 @@ atom := number | string | `_` | @any | builtin
 
 sugar:
 ```sytax
-`<expr'1> <: <expr'2>` => `<expr'1> = @clone <expr'2>`
+`<expr'1> <: <expr'2>` => `<expr'1> = <expr'2> _`
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
-bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
+bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> [<expr'1>, <expr'2>]`
+`<expr'1> <: <expr'2>` => `<expr'1> = <expr'2> _`
 `<name> <annoation*> => <expr>` => `<name> => {<name> <annoation*>; <expr>}`
-`<name> <: <expr'1> => <expr'2>` => `<name> => {<name> <: <expr'1>; <expr'2>}`
+`<name> = <expr'1> => <expr'2>` => `<name> => {<name> = <expr'1>; <expr'2>}`
+`<name> <: <expr'1> => <expr'2>` => `<name> => {<name> = <expr'1> _; <expr'2>}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -102,7 +103,7 @@ Tuple has no special layout.
 ```sytax
 `Tuple` := `@raw[@raw TupleType, Type, ...]`
 
-`(e1, e2)` := `@raw[@raw[e1, e2], Tuple, ...]`
+`(e1, e2)` := `@raw[@raw[e1, e2], TupleType, ...]`
 
 `t(n)` := `{(type_of t) = Tuple; @raw t.value[n]}` 
 ```
@@ -115,19 +116,15 @@ Array unify every element expression to a template expression.
 `[template, n]` := `@raw[@raw[template, <`_`*n>], Array, ...]`
 
 `e0[e1, e2]` := `{
-  let [template, length] := @clone e0
-  (e1, 2) = (template, length)
-  let [template, length] := @clone e0
-  (e2, 2) = (template, length)
-  @raw[@raw[template, e1, e2], Array, ...]
+  let [template, length] := e0 _
+  length = 2
+  e1 = template
+  e2 = template
+  raw[raw[template, e1, e2], Array, ...]
 }`
 
-`a[n]` := `{(type_of a) = Array; @raw a.value[n+1]}`
+`a[n]` := `{(type_of t) = Array; @raw t.value[n+1]}`
 ```
-
-An array instance length may depend on an enclosing lambda parameter. Its check
-is then deferred to the application, where the instance's element count pins
-that parameter. A top-level `_` length remains undecided; it is not inferred.
 
 ## Subtype
 
@@ -173,14 +170,11 @@ Function is an expression with a specified undecide expression as parameter.
 Polymorphism at every application: @clone its expression, unify the argument with cloned parameter.
 
 ```sytax
+`Function` := `@raw[@raw FunctionType, Type, ...]`
 `{f := p => body; f a}` => `{let (p_clone => body_clone) = @clone (p => body); a = p_clone; body_clone}`
 ```
 
-A function constraint uses a function template and `<:`, never a separate `->`
-form. For example, `x <: (x : Int => _: Int) => x 1` clones the function template
-and unifies `x`'s signature with the clone, preserving `x`'s callable body, then
-applies `x`. The parameter's value and type travel in its expression, so scalar
-and compound constraints use the same model.
+> `@clone f`: a cloned undecided node  will detached from its original class, only clone if its class is in function `f`' scope, otherwise create a reference.
 
 ## Struct
 
@@ -189,7 +183,7 @@ Struct is a special tuple that:
 - Nominal over the sytax position.
 
 ```sytax
-`Struct` := `@raw[@raw StructType, Struct, ...]`
+`Struct` = `@raw[@raw StructType, Struct, ...]`
 
 `s := {.n1 e1 .n2 e2}` 
 
@@ -198,19 +192,19 @@ Struct is a special tuple that:
 `s{.n2 e3, .n1 e4}` 
 := 
 `{
-  let {.n1 e1, .n2 e2} = @clone s
-  v := @raw[name_table, nominal_id, @raw None, @raw None]
+  let {.n1 e1, .n2 e2} = s _;
+  v := raw[name_table, nominal_id, @raw None, @raw None]
   raw v[name_table["n1"]+2] = e1;
-  raw v[name_table["n2"]+2] = e2
+  raw v[name_table["n2"]+2] = e2;
   e3 = raw v[name_table["n2"]+2]
   e4 = raw v[name_table["n1"]+2]
-  @raw[@raw v, Struct, ...]
+  raw[raw v, Struct, ...]
 }`
 
 `s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
 ```
 
-> ```lichen @raw t[name_table["n1"]+2]` is lowlevel computation.
+> ```lichen raw t[name_table["n1"]+2]` is lowlevel computation.
 
 ## Preprocessor block
 

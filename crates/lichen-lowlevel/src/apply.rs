@@ -155,6 +155,16 @@ impl<P: Program> Module<P> {
         false
     }
 
+    /// Record a type-side apply's returned expression and its value's owner.
+    pub(super) fn record_applied_expr(&mut self, node: NodeId, applied: NodeId) {
+        self.applied_exprs.insert(node, applied);
+        let value = self
+            .expr_value_half(applied)
+            .map(|value| self.equality_representative(value))
+            .unwrap_or(applied);
+        self.apply_result_owners.insert(value, node);
+    }
+
     /// Wire the apply result: cache the return expr, unify it with the cloned return
     /// node.
     ///

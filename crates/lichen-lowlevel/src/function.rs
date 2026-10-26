@@ -83,6 +83,8 @@ struct ApplyCtx<'a> {
     parameter: NodeId,
     /// The parameter expr's value slot: re-minted per call, and never carried into.
     parameter_slot: Option<NodeId>,
+    /// Whether this walk is instantiating the parameter; wildcard cells become holes only here.
+    in_parameter: bool,
     /// Template keys a minted walk inserted; the enclosing pass drops them with the
     /// mint, so it groups only its own clones.
     minted_keys: Option<&'a mut Vec<NodeId>>,
@@ -231,7 +233,7 @@ impl<P: Program> Module<P> {
         let applied = instantiation.applied;
         // The clone's return expr: the applied call's own expr, which states the
         // attribute as the source return does.
-        self.applied_exprs.insert(node, applied);
+        self.record_applied_expr(node, applied);
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
         // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
@@ -360,6 +362,7 @@ impl<P: Program> Module<P> {
             applied: function,
             parameter,
             parameter_slot,
+            in_parameter: false,
             minted_keys: None,
             tag: self.nodes[node].function,
             closure: HashMap::new(),
@@ -368,8 +371,10 @@ impl<P: Program> Module<P> {
         };
         // The parameter is a walk entry point: its unify fires even when the body
         // never references it.  Idempotent.
-        let applied = self.node_apply(r#return, &mut ctx);
+        ctx.in_parameter = true;
         self.node_apply(parameter, &mut ctx);
+        ctx.in_parameter = false;
+        let applied = self.node_apply(r#return, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
@@ -554,10 +559,13 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        // The wildcard is decided: the clone's cell carries it, never a hole.
+        // A wildcard is carried into ordinary values; a parameter template
+        // receives a fresh undecided cell instead.
         if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
             let fresh = self.add_node(ctx.target, None, None);
-            self.write_node_value(fresh, value);
+            if !ctx.in_parameter {
+                self.write_node_value(fresh, value);
+            }
             return fresh;
         }
         // A closure is instantiated from its template, whose body a clone never names.
@@ -595,7 +603,8 @@ impl<P: Program> Module<P> {
                 .parent
                 .is_some();
         // Judged against the call's anchor, so one call gives a node one answer.
-        let depends_on_parameter = node == ctx.parameter
+        let depends_on_parameter = ctx.in_parameter
+            || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
             || (!proven_concrete && !closed)
             || scoped
@@ -787,6 +796,7 @@ impl<P: Program> Module<P> {
                     applied: function,
                     parameter,
                     parameter_slot,
+                    in_parameter: false,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
                     closure: HashMap::new(),

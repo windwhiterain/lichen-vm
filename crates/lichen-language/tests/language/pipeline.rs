@@ -1538,7 +1538,7 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
     // A field read through a parameter: the written type names the struct,
     // so its name table resolves the field.
     let report = compile(
-        "S := {.x @any : Int, .y @any : Type}; a := S{.y Int, .x 1}; apply := (s <: S) => s.y; apply (a) : Type",
+        "S := _x => {.x @any : Int, .y @any : Type}; a := S{.y Int, .x 1}; apply := (s <: S) => s.y; apply (a) : Type",
     );
     assert!(
         report.ok(),

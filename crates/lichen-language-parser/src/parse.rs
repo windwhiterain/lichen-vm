@@ -568,8 +568,6 @@ fn expression<'a, Er: GrammarError<'a>>(
                 span: span_at(tokens, me.span().start),
             })
             .or(gc_marked(tokens, application.clone()))
-            // `@clone` has the assert marker's precedence.
-            .or(clone_marked(tokens, application.clone()))
             // The prefix keyword operators, at the assert's level: operands by
             // juxtaposition, no infix token, so no new rung.
             .or(choice((
@@ -920,8 +918,7 @@ fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
 enum UnifyOp {
     /// `=` — the plain unify of an actual and an expected value.
     Plain,
-    /// `<:` — the template match: the actual is unified with a clone of the
-    /// template.
+    /// `<:` — apply the template constructor to `_` before the unify.
     Template,
 }
 
@@ -1495,19 +1492,6 @@ fn gc_marked<'a, Er: GrammarError<'a>>(
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(expr)
         .map_with(|inner, me| Expr::Gc(Box::new(inner), span_at(tokens, me.span().start)))
-}
-
-/// `@clone e` — instantiate `e` with fresh holes.
-fn clone_marked<'a, Er: GrammarError<'a>>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
-    token(TokenKind::KwClone)
-        .ignore_then(expr)
-        .map_with(|inner, me| Expr::Clone {
-            value: Box::new(inner),
-            span: span_at(tokens, me.span().start),
-        })
 }
 
 /// `{ stmt; …; expr }` — a block: a program's statement list plus its value.

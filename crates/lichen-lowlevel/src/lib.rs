@@ -1003,6 +1003,8 @@ pub struct Module<P: Program> {
     pub element_types: HashMap<NodeId, AnyNodeId>,
     /// The clone's return expr of each type-side apply, keyed by the apply node.
     pub applied_exprs: HashMap<NodeId, NodeId>,
+    /// The apply that produced each returned value, for constructor recovery.
+    pub apply_result_owners: HashMap<NodeId, NodeId>,
     /// The clone's parameter of each type-side apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
     /// The value-side apply of a call, keyed by its type-side apply.

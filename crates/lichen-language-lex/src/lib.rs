@@ -70,7 +70,7 @@ pub enum TokenKind {
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
-    /// `@clone e` — clone an expression before unification.
+    /// An internal clone node, not accepted as source syntax.
     KwClone,
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).
@@ -756,7 +756,6 @@ fn raw_to_kind(
             "assert" => Some(TokenKind::KwAssert),
             "in" => Some(TokenKind::KwIn),
             "shallow" => Some(TokenKind::KwShallow),
-            "clone" => Some(TokenKind::KwClone),
             "any" => Some(TokenKind::Any),
             "gc" => Some(TokenKind::KwGc),
             "cache" => Some(TokenKind::KwCache),
@@ -765,7 +764,7 @@ fn raw_to_kind(
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert`, `@in`, `@shallow`, `@clone`, `@any`, `@gc` and `@cache` are the \
+                         `@assert`, `@in`, `@shallow`, `@any`, `@gc` and `@cache` are the \
                          ones that exist"
                     ),
                 });

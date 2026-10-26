@@ -407,6 +407,66 @@ where
         (value, self.struct_template())
     }
 
+    /// The placeholder in a callee position, including the apply inserted by
+    /// the instantiation desugaring.
+    fn placeholder_callee_expr(&self, template: ExprId) -> Option<ExprId> {
+        match self.ir[template].kind {
+            ExprKind::Placeholder => Some(template),
+            ExprKind::Apply { function, .. }
+                if matches!(self.ir[function].kind, ExprKind::Placeholder) =>
+            {
+                Some(function)
+            }
+            _ => None,
+        }
+    }
+
+    /// The constructor function and its type, when `value` is an apply result.
+    fn constructor_of(&mut self, value: NodeId) -> Option<(NodeId, NodeId)> {
+        let apply = self
+            .module
+            .apply_result_owners
+            .get(&value)
+            .copied()
+            .or_else(|| {
+                let root = self.module.class_root(value);
+                self.module
+                    .apply_result_owners
+                    .iter()
+                    .find_map(|(candidate, apply)| {
+                        (self.module.class_root(*candidate) == root).then_some(*apply)
+                    })
+            });
+        let apply = match apply {
+            Some(apply) => apply,
+            None => self
+                .module
+                .apply_result_owners
+                .iter()
+                .find_map(|(candidate, apply)| {
+                    self.module
+                        .structural_eq(AnyNodeId::Dynamic(*candidate), AnyNodeId::Dynamic(value))
+                        .then_some(*apply)
+                })?,
+        };
+        let operation = self.module.node_operation(apply)?;
+        if !matches!(
+            lichen_utils::extend::AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Apply)
+        ) {
+            return None;
+        }
+        let items = self.module.operand_items(operation.operand?).ok()?;
+        let callee = self
+            .module
+            .as_dynamic(items.first()?.node, self.current_block);
+        let ty = items.get(3)?.node.dynamic()?;
+        if !self.module.is_function_type(ty) {
+            return None;
+        }
+        Some((callee, ty))
+    }
+
     /// A placeholder callee takes the template the **context requires**.
     ///
     /// # Invariant
@@ -418,9 +478,9 @@ where
         let ExprKind::Instantiate { template, .. } = self.ir[argument].kind else {
             return;
         };
-        if !matches!(self.ir[template].kind, ExprKind::Placeholder) {
+        let Some(placeholder) = self.placeholder_callee_expr(template) else {
             return;
-        }
+        };
         let Some(requirement) = self.expected_argument_requirement(function) else {
             return;
         };
@@ -442,22 +502,17 @@ where
         };
         // The placeholder's own pair is the callee: pinning it to the
         // requirement makes the instantiation that template.
-        self.check_expr(template);
-        let placeholder_value = self.state[template]
-            .val
-            .expect("the placeholder is compiled");
-        let placeholder_type = self.state[template]
-            .ty
-            .expect("the placeholder is compiled");
-        // The callee is a hole: it takes the requirement and disagrees with
-        // nothing, so the unify has no failure to report.
-        for (expected, hole) in [
-            (expected_template, placeholder_value),
-            (expected_type, placeholder_type),
-        ] {
-            let (_, errors) = self.module.try_unify(expected, hole);
-            self.module.unify_errors.truncate(errors.start);
+        self.check_expr(placeholder);
+        if let Some((constructor, constructor_ty)) = self.constructor_of(expected_template) {
+            self.state[placeholder].val = Some(constructor);
+            self.state[placeholder].ty = Some(constructor_ty);
+            self.placeholder_constructors.insert(placeholder);
+            return;
         }
+        // A placeholder has no prior content, so the requirement is assigned
+        // directly rather than merging its class into the template.
+        self.state[placeholder].val = Some(expected_template);
+        self.state[placeholder].ty = Some(expected_type);
     }
 
     /// The requirement a call's parameter states: the template and the type.
@@ -507,13 +562,13 @@ where
         ))
     }
 
-    /// A struct instance `S{…}`: the template is cloned and the arguments
-    /// fill the clone's fields.
+    /// A struct instance `S{…}`: the constructor is applied to `_`, and the
+    /// arguments fill the fresh struct value it returns.
     ///
     /// # Invariant
-    /// The template is a **struct value**, not a type: the instance clones it,
-    /// so the clone's own fields are the requirements and the template keeps
-    /// its holes. The result inherits the clone's name table and nominal id.
+    /// The template is a **struct value** returned by the constructor, not a
+    /// type. Its fields are the requirements, and the instance inherits its
+    /// name table and nominal id. No second clone is made.
     pub(super) fn check_instantiate(
         &mut self,
         e: ExprId,
@@ -521,11 +576,31 @@ where
         value: ExprId,
         arg_names: &[Option<&'static str>],
     ) -> NodeId {
-        self.check_expr(template);
+        let placeholder = self.placeholder_callee_expr(template);
+        let constructor = placeholder
+            .map(|placeholder| self.placeholder_constructors.contains(&placeholder))
+            .unwrap_or(false);
+        if constructor || placeholder.is_none() {
+            self.check_expr(template);
+        } else if let Some(placeholder) = placeholder {
+            self.check_expr(placeholder);
+        }
         self.check_expr(value);
-        let template_value = self.value_of(template);
+        let (template_value, template_ty) = if constructor {
+            (self.value_of(template), self.state[template].ty.unwrap())
+        } else {
+            match placeholder {
+                Some(placeholder) => (
+                    self.value_of(placeholder),
+                    self.state[placeholder].ty.unwrap(),
+                ),
+                None => {
+                    let template_value = self.value_of(template);
+                    (template_value, self.state[template].ty.unwrap())
+                }
+            }
+        };
         self.module.evaluate_node_deep(template_value, None);
-        let template_ty = self.state[template].ty.unwrap();
         self.module.evaluate_node_deep(template_ty, None);
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
@@ -569,19 +644,10 @@ where
         let Some((elements, vals)) = self.instantiation_arguments(value, template_ty) else {
             return self.refused_expr(e);
         };
-        // The template's clone: the requirements are the clone's own fields.
-        let Some(instance) = self.clone_instance_value(template) else {
-            self.record_guard(
-                template_ty,
-                template_ty,
-                self.loc(template, 0),
-                DiagKind::Guard,
-                None,
-            );
-            return self.refused_expr(e);
-        };
-        let clone_value = instance.root;
-        let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(clone_value)) else {
+        // The constructor application supplies the fresh struct value; its
+        // fields are the requirements the arguments fill.
+        let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(template_value))
+        else {
             self.record_guard(
                 template_ty,
                 template_ty,
@@ -608,11 +674,11 @@ where
             .map(|item| item.node)
             .filter_map(|node| node.dynamic())
             .collect();
-        let table = self.struct_name_table(clone_value);
+        let table = self.struct_name_table(template_value);
         let (ordered, valid) = self.reorder_arguments(
             e,
             &template_ty,
-            clone_value,
+            template_value,
             &elements,
             arg_names,
             &fields,
@@ -694,7 +760,7 @@ where
         &mut self,
         e: ExprId,
         template_ty: &NodeId,
-        clone_value: NodeId,
+        template_value: NodeId,
         elements: &[ExprId],
         arg_names: &[Option<&'static str>],
         fields: &[NodeId],
@@ -717,7 +783,7 @@ where
                     }
                     if assign[position].is_some() {
                         self.record_guard(
-                            clone_value,
+                            template_value,
                             *template_ty,
                             self.loc(elements[i], 0),
                             DiagKind::StructDuplicateField,
@@ -730,7 +796,7 @@ where
                 }
                 None => {
                     self.record_guard(
-                        clone_value,
+                        template_value,
                         *template_ty,
                         self.loc(elements[i], 0),
                         DiagKind::StructUnknownField,
@@ -777,7 +843,7 @@ where
                 if slot.is_none() {
                     let name = table.and_then(|table| self.struct_field_name(table, position));
                     self.record_guard(
-                        clone_value,
+                        template_value,
                         *template_ty,
                         self.loc(e, 0),
                         DiagKind::StructMissingField,

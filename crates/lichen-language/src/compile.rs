@@ -580,8 +580,8 @@ impl Compiler {
                 let value = self.compile_expr(value);
                 self.alloc_clone(value, span)
             }
-            // `actual <: template`: the actual is unified with a clone of the
-            // template, so the template keeps its own holes.
+            // `actual <: template`: apply the template constructor to `_`,
+            // then unify the actual with that fresh result.
             Expr::TemplateUnify {
                 actual,
                 template,
@@ -589,7 +589,14 @@ impl Compiler {
             } => {
                 let actual = self.compile_expr(actual);
                 let template = self.compile_expr(template);
-                let expected = self.alloc_clone(template, span);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let expected = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
                 self.alloc_unify(actual, expected, span)
             }
             // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
@@ -598,8 +605,17 @@ impl Compiler {
                 fields,
                 span,
             } => {
-                // The callee is the struct's template; the fields are its values.
+                // The constructor is applied once; its fresh struct value is
+                // the requirement the fields fill.
                 let template = self.compile_expr(callee);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let template = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
                 let field_ids: Vec<ExprId> =
                     fields.iter().map(|f| self.compile_expr(&f.value)).collect();
                 let names: Vec<Option<&'static str>> = fields
@@ -631,14 +647,22 @@ impl Compiler {
                 let length = self.compile_expr(length);
                 self.alloc_array(template, length, span)
             }
-            // `template[e1, …, en]`: the array instance, its template and its
-            // elements.
+            // `template[e1, …, en]`: apply the array constructor once, then
+            // unify every element with the requirement it returns.
             Expr::ArrayInst {
                 template,
                 elements,
                 span,
             } => {
                 let template = self.compile_expr(template);
+                let hole = self.alloc(ExprKind::Placeholder, span);
+                let template = self.alloc(
+                    ExprKind::Apply {
+                        function: template,
+                        argument: hole,
+                    },
+                    span,
+                );
                 let (ids, depths) = self.compile_elements(elements);
                 self.alloc_array_inst(template, &ids, &depths, span)
             }

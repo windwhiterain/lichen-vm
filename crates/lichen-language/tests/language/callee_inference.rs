@@ -28,7 +28,7 @@ fn refused(source: &str) -> (String, DiagKind) {
 fn a_named_type_function_parameter_and_its_field_reads() {
     assert_eq!(
         output(
-            "Param := {.type @any, .length @any}\n\
+            "Param := _x => {.type @any, .length @any}\n\
              buf := (x <: Param) => (x.type, x.length)\n\
              buf (Param{.type Float, .length 192})"
         ),
@@ -43,7 +43,7 @@ fn a_named_type_function_parameter_and_its_field_reads() {
 fn an_instantiation_whose_callee_is_inferred() {
     assert_eq!(
         output(
-            "Param := {.type @any, .length @any}\n\
+            "Param := _x => {.type @any, .length @any}\n\
              BufT  := (x <: Param) => {.type x.type, .length x.length}\n\
              buf   := (x <: Param) => x\n\
              e     := buf _{.type Float, .length 192}\n\
@@ -59,7 +59,7 @@ fn an_instantiation_whose_callee_is_inferred() {
 #[test]
 fn an_instantiation_whose_callee_is_not_decided_is_refused() {
     let (message, kind) =
-        refused("Param := {.type @any, .length @any}\ne := _{.type Float, .length 192}");
+        refused("Param := _x => {.type @any, .length @any}\ne := _{.type Float, .length 192}");
     assert_eq!(kind, DiagKind::InstantiateCalleeUndetermined);
     assert_eq!(
         message,
