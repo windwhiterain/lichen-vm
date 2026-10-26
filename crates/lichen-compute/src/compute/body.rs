@@ -78,6 +78,8 @@ pub struct Lower<'a, P: Program> {
     /// A definition edge can cycle, so a lowering that meets a node it is already
     /// lowering refuses it by name instead of following the cycle.
     lowered_path: HashSet<NodeId>,
+    /// DEBUG stack
+    trace_stack: Vec<NodeId>,
     /// The nodes whose origin fallback is already in progress.
     ///
     /// # Invariant
@@ -237,6 +239,7 @@ where
             depth: 0,
             value_classes: HashMap::new(),
             lowered_path: HashSet::new(),
+            trace_stack: Vec::new(),
             origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
@@ -293,6 +296,7 @@ where
             depth: 0,
             value_classes: HashMap::new(),
             lowered_path: HashSet::new(),
+            trace_stack: Vec::new(),
             origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
@@ -326,7 +330,9 @@ where
                 "a definition cycle: {node:?} is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)"
             ));
         }
+        self.trace_stack.push(node);
         let result = self.value_inner(node);
+        self.trace_stack.pop();
         self.lowered_path.remove(&node);
         result
     }
@@ -869,6 +875,76 @@ where
 
     /// A node nothing can resolve, **described rather than numbered**.
     fn opaque(&self, node: NodeId) -> Result<ValueId, String> {
+        if std::env::var("DSH_TRACE").is_ok() {
+            eprintln!("[opaque] {node:?}");
+            for candidate in self.module.nodes.iter().map(|(id, _)| id) {
+                let Some(operation) = self.module.node_operation(candidate) else {
+                    continue;
+                };
+                if let Some(operand) = operation.operand
+                    && let Ok(items) = self.module.operand_items(operand)
+                    && items
+                        .iter()
+                        .any(|item| item.node == AnyNodeId::Dynamic(node))
+                {
+                    eprintln!(
+                        "[opaque]   operand of {candidate:?} ({:?})",
+                        operation.operator
+                    );
+                }
+                if let Some(items) = unsafe { self.module.array_items(candidate) }
+                    && items
+                        .iter()
+                        .any(|item| item.node == AnyNodeId::Dynamic(node))
+                {
+                    eprintln!(
+                        "[opaque]   value of {candidate:?} ({:?})",
+                        operation.operator
+                    );
+                    if let Some(operand) = operation.operand
+                        && let Ok(operands) = self.module.operand_items(operand)
+                    {
+                        for (index, item) in operands.iter().enumerate() {
+                            eprintln!(
+                                "[opaque]     op[{index}] {:?} value={:?}",
+                                item.node,
+                                item.node.dynamic().and_then(|inner| {
+                                    self.module.node_value(AnyNodeId::Dynamic(inner)).and_then(
+                                        |v| {
+                                            AsEnum::<LowValue>::as_enum(&v)
+                                                .map(|e| format!("{e:?}"))
+                                        },
+                                    )
+                                })
+                            );
+                        }
+                    }
+                }
+            }
+            for entry in self.trace_stack.iter().rev().take(16) {
+                eprintln!(
+                    "[opaque]   <- {entry:?} op={:?} owner={:?} origin={:?}",
+                    self.module
+                        .node_operation(*entry)
+                        .map(|o| format!("{:?}", o.operator)),
+                    self.module.node_function(*entry),
+                    self.module.node_origin(*entry),
+                );
+                if let Some(operation) = self.module.node_operation(*entry)
+                    && let Some(operand) = operation.operand
+                    && let Ok(items) = self.module.operand_items(operand)
+                {
+                    for (index, item) in items.iter().enumerate() {
+                        eprintln!("[opaque]       op[{index}] {:?}", item.node);
+                    }
+                }
+                if let Some(items) = unsafe { self.module.array_items(*entry) } {
+                    for (index, item) in items.iter().enumerate() {
+                        eprintln!("[opaque]       value[{index}] {:?}", item.node);
+                    }
+                }
+            }
+        }
         Err(format!(
             "a kernel body reached a node with neither a value nor an operation, so there is \
              nothing to emit for it (node={node:?}). A kernel is compiled from a template before \
@@ -1225,6 +1301,9 @@ where
     ) -> Result<ValueId, String> {
         // **The operands first**: the class is read off what they emitted, so asking
         // earlier reads nothing.
+        if std::env::var("DSH_TRACE").is_ok() {
+            eprintln!("[arith] {ty_op:?} left={left_operand:?} right={right_operand:?}");
+        }
         let left = self.value_item(left_operand)?;
         let right = self.value_item(right_operand)?;
         let class = self
@@ -1432,8 +1511,14 @@ where
             AnyFunctionId::Dynamic(function) => self.dynamic_compute_operator(function),
         };
         let Some(operator) = operator else {
+            if std::env::var("DSH_TRACE").is_ok() {
+                eprintln!("[route] {node:?} fn={function:?} NO OPERATOR");
+            }
             return Ok(None);
         };
+        if std::env::var("DSH_TRACE").is_ok() {
+            eprintln!("[route] {node:?} fn={function:?} operator={operator:?}");
+        }
         // The operator's operands are the call site's argument's value half.
         let Some(argument) = self
             .module
@@ -1510,6 +1595,9 @@ where
         if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);
         }
+        if std::env::var("DSH_TRACE").is_ok() {
+            eprintln!("[apply] {node:?} callee={callee:?} frozen={frozen}");
+        }
         // The routing case: emit the residual the clone wrote.
         if frozen {
             let residual = (unsafe { self.module.array_items(node) })
@@ -1519,6 +1607,9 @@ where
                     AnyNodeId::Dynamic(node) => Some(node),
                     AnyNodeId::Static(_) => None,
                 });
+            if std::env::var("DSH_TRACE").is_ok() {
+                eprintln!("[apply]   residual={residual:?}");
+            }
             if let Some(residual) = residual {
                 return self.value(residual);
             }
