@@ -1177,7 +1177,7 @@ where
                 let layout = module.full_width_layout().unwrap_or(0);
                 let width = module.attribute_layout(layout).len();
                 let mut values = Vec::with_capacity(length + 1);
-                values.push(ArrayItem::new(items[0].node));
+                values.push(ArrayItem::template(items[0].node));
                 for _ in 0..length {
                     values.push(ArrayItem::new(AnyNodeId::Dynamic(placeholder_expr(
                         module, block, width, layout,

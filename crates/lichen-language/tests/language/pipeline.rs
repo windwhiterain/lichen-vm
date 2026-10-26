@@ -793,7 +793,7 @@ fn an_assert_on_a_non_one_value_fails() {
 fn an_assert_on_a_failed_read_fails_with_none() {
     // `!([1, 2][5])` — the condition is a failed read, so its residue is the
     // computed-nothing value: the assert FAILS.
-    let d = diags("A := _x => [1, 2]\n@assert (A[5])");
+    let d = diags("A := _x => [1, 2]\na := A[1, 1]\n@assert (a[5])");
     assert!(
         d.iter().any(|d| {
             d.check.as_ref().is_some_and(|c| c.kind == DiagKind::Assert)

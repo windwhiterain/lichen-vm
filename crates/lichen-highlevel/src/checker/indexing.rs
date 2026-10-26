@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
@@ -145,11 +145,12 @@ where
         let length_value = self.value_of(length);
         let value = match self.constant_length(length) {
             Some(count) => {
-                let mut items = vec![template_term];
+                let mut items = Vec::with_capacity(count + 1);
+                items.push(ArrayItem::template(AnyNodeId::Dynamic(template_term)));
                 for _ in 0..count {
-                    items.push(self.placeholder_term());
+                    items.push(ArrayItem::new(AnyNodeId::Dynamic(self.placeholder_term())));
                 }
-                self.array_node(self.current_block, &items)
+                self.array_value_node(self.current_block, items, 0)
             }
             None => {
                 let operands = self.array_node(self.current_block, &[template_term, length_value]);
@@ -225,6 +226,8 @@ where
             self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
         // The constructor application supplies the array value and its shape.
         let template_value = self.value_of(template);
+        self.module
+            .evaluate_node(AnyNodeId::Dynamic(template_value), None);
         let (requirement, template_count) = match self.template_shape(template_value) {
             Some(shape) => shape,
             None => {
@@ -618,10 +621,17 @@ where
     /// The operand's two positions are the element template and length. Only
     /// an array template has this operand.
     fn named_shape(&self, template: ExprId, root: NodeId) -> Option<(NodeId, NodeId)> {
-        if !matches!(self.ir[template].kind, ExprKind::Array { .. }) {
-            return None;
-        }
-        let operation = self.module.node_operation(root)?;
+        let operation = match self.type_applies.get(&template).copied() {
+            Some(type_apply) => {
+                let applied = self.module.applied_exprs.get(&type_apply).copied()?;
+                let value = self.module.expr_value_half(applied)?;
+                self.module.node_operation(value)?
+            }
+            None if matches!(self.ir[template].kind, ExprKind::Array { .. }) => {
+                self.module.node_operation(root)?
+            }
+            None => return None,
+        };
         let operand = operation.operand?;
         let items = shape::value_items(&self.module, AnyNodeId::Dynamic(operand))?;
         if items.len() < 2 {
