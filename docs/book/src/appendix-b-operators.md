@@ -75,4 +75,3 @@ written only in a plugin's own source.
   two-element tuple.
 - There is no thin arrow; a function's signature is written with `=>` and
   constrained with `<:` against a function template.
-
