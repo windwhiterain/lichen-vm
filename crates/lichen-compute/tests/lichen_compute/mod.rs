@@ -52,6 +52,7 @@ mod tiled_reduction;
 mod tiling_visibility;
 mod trig_domain;
 mod union_ports;
+mod zz_constructor_compute_probe;
 mod zz_gc_panic_probe;
 
 mod zz_argmax_probe;
