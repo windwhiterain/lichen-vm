@@ -9,7 +9,7 @@ use lichen_utils::extend::AsEnum;
 
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{BinOp, ExprId};
+use crate::ir::{BinOp, ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
@@ -201,6 +201,15 @@ where
     /// the next. The clone's internal sharing survives: a template such as
     /// `('a, 'a)` stays one position inside one clone.
     ///
+    /// The clone is a clone of the template's **value**, so a template whose
+    /// value is computed — an array template's own operator, or a call's
+    /// answer — clones as one. A decided clone states its element template and
+    /// its element count. An undecided clone states them through the clone's
+    /// own reads, and only a length that depends on an enclosing lambda
+    /// parameter may be deferred: the apply binds that parameter, so the
+    /// length is decided there. Any other undecided length is refused — an
+    /// unchecked requirement is worse than a refusal.
+    ///
     /// The result's value is `[T's element template, the elements…]`, so a read
     /// of element `i` is the value's slot `i + 1`. The first slot is the element
     /// template, so it carries the template marker: the slot holds the layout and
@@ -231,8 +240,10 @@ where
         let element_depths: Vec<usize> =
             self.ir.depths[depths.start as usize..depths.end as usize].to_vec();
         // The clone's own shape: the element template is its value's first
-        // slot, and the element count is the rest of the value.
-        let Some(instance) = self.clone_instance(template) else {
+        // slot, and the element count is the rest of the value. The clone is a
+        // clone of the template's **value**, so a template whose value is
+        // computed clones as one.
+        let Some(instance) = self.clone_instance_value(template) else {
             self.record_guard(
                 template_ty,
                 template_ty,
@@ -242,18 +253,27 @@ where
             );
             return self.refused_expr(e);
         };
-        let (requirement, template_count) = self.clone_shape(&instance, template);
-        let (Some(mut requirement), Some(template_count)) = (requirement, template_count) else {
-            // An undecided clone states no element template and no length.
-            // An unchecked requirement is worse than a refusal.
-            self.record_guard(
-                template_ty,
-                template_ty,
-                self.loc(template, 0),
-                DiagKind::Guard,
-                Some("array instance"),
-            );
-            return self.refused_expr(e);
+        // A decided clone states its shape. An undecided one is read lazily,
+        // and only a length that depends on an enclosing lambda parameter may
+        // be deferred.
+        let (mut requirement, template_count) = match self.clone_shape(&instance) {
+            Some(shape) => shape,
+            None => {
+                if !self.length_depends_on_parameter(template) {
+                    // An undecided clone states no element template and no
+                    // length, and no parameter will decide it: an unchecked
+                    // requirement is worse than a refusal.
+                    self.record_guard(
+                        template_ty,
+                        template_ty,
+                        self.loc(template, 0),
+                        DiagKind::Guard,
+                        Some("array instance"),
+                    );
+                    return self.refused_expr(e);
+                }
+                self.deferred_shape(template, &instance)
+            }
         };
         let mut values = Vec::with_capacity(element_ids.len());
         let mut marked = Vec::with_capacity(element_ids.len());
@@ -279,7 +299,7 @@ where
             // Every element but the first gets its own clone, so the
             // template's holes are never shared between two elements.
             if index > 0 {
-                let Some(instance) = self.clone_instance(template) else {
+                let Some(instance) = self.clone_instance_value(template) else {
                     self.record_guard(
                         template_ty,
                         template_ty,
@@ -289,17 +309,7 @@ where
                     );
                     return self.refused_expr(e);
                 };
-                let (Some(next), _) = self.clone_shape(&instance, template) else {
-                    self.record_guard(
-                        template_ty,
-                        template_ty,
-                        self.loc(template, 0),
-                        DiagKind::Guard,
-                        Some("array instance"),
-                    );
-                    return self.refused_expr(e);
-                };
-                requirement = next;
+                requirement = self.element_requirement(template, &instance);
             }
             self.check_unify(
                 element,
@@ -311,20 +321,16 @@ where
             marked.push(is_marked);
         }
         // The count is the template's own length: a directed unify, so a
-        // mismatch is a diagnostic, not a bounds failure.
-
-        // The counts are fresh: the shared `0` and `1` are constants.
+        // mismatch is a diagnostic, not a bounds failure. The length is read
+        // first: a read of the parameter's cell joins the reader with the
+        // cell, so the unify below pins the cell — and the parameter with it.
         let count = self.alloc_node(
             self.current_block,
             None,
             Some(P::Value::from(LowValue::USize(values.len()))),
         );
-        let length = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(template_count))),
-        );
-        self.check_unify(count, length, self.loc(e, 0), DiagKind::ArrayElement);
+        self.compute_operands(count, template_count);
+        self.check_unify(count, template_count, self.loc(e, 0), DiagKind::ArrayElement);
         // The result's value: the template's own element template, then the
         // elements.
         let template_value = self.value_of(template);
@@ -606,27 +612,96 @@ where
     /// The clone's **shape**: the element template and the element count.
     ///
     /// # Invariant
-    /// Both are read from the clone's **value**, never from the syntax.
-    fn clone_shape(
-        &self,
-        instance: &TemplateInstance,
-        template: ExprId,
-    ) -> (Option<NodeId>, Option<usize>) {
-        let Some(clone_value) = self.state[template].val.map(|node| instance.node_of(node)) else {
-            return (None, None);
-        };
-        let requirement = shape::value_item(
+    /// Both are read from the clone's own **value**, never from the syntax. A
+    /// clone whose value is not decided yet states no shape.
+    fn clone_shape(&mut self, instance: &TemplateInstance) -> Option<(NodeId, NodeId)> {
+        let requirement = self.clone_element_template(instance)?;
+        // The array's first slot holds the element template, so the elements
+        // are the rest.
+        let length = shape::value_len(&self.module, AnyNodeId::Dynamic(instance.root))?;
+        // The count is fresh: the shared `0` and `1` are constants.
+        let count = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(length.saturating_sub(1)))),
+        );
+        Some((requirement, count))
+    }
+
+    /// The clone's **element template**: its value's first slot.
+    fn clone_element_template(&self, instance: &TemplateInstance) -> Option<NodeId> {
+        shape::value_item(
             &self.module,
-            AnyNodeId::Dynamic(clone_value),
+            AnyNodeId::Dynamic(instance.root),
             shape::ARRAY_VALUE_TEMPLATE_SLOT,
         )
         .and_then(|node| node.dynamic())
-        .map(|node| instance.node_of(node));
-        // The array's first slot holds the element template, so the elements
-        // are the rest.
-        let count = shape::value_len(&self.module, AnyNodeId::Dynamic(clone_value))
-            .map(|length| length.saturating_sub(1));
-        (requirement, count)
+    }
+
+    /// The clone's **deferred shape**: the element template and the length,
+    /// both read from the clone's own graph.
+    ///
+    /// # Invariant
+    /// A clone of the array template's own operator names the element template
+    /// and the length in its operand, so both are the clone's own cells: the
+    /// element template keeps its own holes, and the length is the node the
+    /// parameter's cell is read through, so a unify with it pins the cell. A
+    /// clone of any other computed value names neither, so the requirement is
+    /// the clone's own slot read and the count is the clone's own length.
+    fn deferred_shape(
+        &mut self,
+        template: ExprId,
+        instance: &TemplateInstance,
+    ) -> (NodeId, NodeId) {
+        match self.clone_operand(template, instance) {
+            Some((element, length)) => (element, length),
+            None => (
+                self.index_of(instance.root, self.zero()),
+                self.array_length_of(instance.root),
+            ),
+        }
+    }
+
+    /// One element's own **requirement**: the element template its clone
+    /// states.
+    ///
+    /// # Invariant
+    /// A decided clone states the element template in its value's first slot.
+    /// An undecided one states it in its operand, or — when the clone names
+    /// none — the clone's own slot read, which is stated when the clone's
+    /// value is decided.
+    fn element_requirement(&mut self, template: ExprId, instance: &TemplateInstance) -> NodeId {
+        if let Some(requirement) = self.clone_element_template(instance) {
+            return requirement;
+        }
+        match self.clone_operand(template, instance) {
+            Some((element, _)) => element,
+            None => self.index_of(instance.root, self.zero()),
+        }
+    }
+
+    /// The clone's **operand**: the element template and the length, when the
+    /// clone's value is the array template's own operator.
+    ///
+    /// # Invariant
+    /// The operand is the clone's own: its two positions are the clone's cells,
+    /// so the element template keeps its own holes and the length is the
+    /// clone's own read of the parameter's cell.
+    fn clone_operand(
+        &self,
+        template: ExprId,
+        instance: &TemplateInstance,
+    ) -> Option<(NodeId, NodeId)> {
+        if !matches!(self.ir[template].kind, ExprKind::Array { .. }) {
+            return None;
+        }
+        let operation = self.module.node_operation(instance.root)?;
+        let operand = operation.operand?;
+        let items = shape::value_items(&self.module, AnyNodeId::Dynamic(operand))?;
+        if items.len() < 2 {
+            return None;
+        }
+        Some((items[0].node.dynamic()?, items[1].node.dynamic()?))
     }
 
     /// The value one more than `value`: the `+ 1` an array read's subscript is.

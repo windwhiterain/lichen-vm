@@ -138,13 +138,29 @@ where
         boundary
     }
 
+    /// Whether the template's **length** depends on an enclosing lambda
+    /// parameter.
+    ///
+    /// # Invariant
+    /// Only an enclosing lambda's parameter counts: a `let` binding is the
+    /// template's own cell, and a hole is nothing at all. A template that is
+    /// not an array template states no length of its own, so its length is its
+    /// value's own and depends on the parameter through the template's own
+    /// graph.
+    pub(super) fn length_depends_on_parameter(&self, template: ExprId) -> bool {
+        match self.ir[template].kind {
+            ExprKind::Array { length, .. } => !self.reachable_parameters(length).is_empty(),
+            _ => !self.reachable_parameters(template).is_empty(),
+        }
+    }
+
     /// The lambda parameters the operand reaches.
     ///
     /// # Invariant
     /// Only the **enclosing** lambda's parameters are candidates: a parameter
     /// of a lambda *inside* the operand is that lambda's own cell and is cloned
     /// with it.
-    fn reachable_parameters(&self, value: ExprId) -> Vec<ExprId> {
+    pub(super) fn reachable_parameters(&self, value: ExprId) -> Vec<ExprId> {
         let mut seen: HashSet<ExprId> = HashSet::new();
         let mut found = Vec::new();
         let mut stack = vec![value];
