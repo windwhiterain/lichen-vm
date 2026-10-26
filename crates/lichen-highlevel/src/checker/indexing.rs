@@ -202,7 +202,10 @@ where
     /// `('a, 'a)` stays one position inside one clone.
     ///
     /// The result's value is `[T's element template, the elements…]`, so a read
-    /// of element `i` is the value's slot `i + 1`.
+    /// of element `i` is the value's slot `i + 1`. The first slot is the element
+    /// template, so it carries the template marker: the slot holds the layout and
+    /// not a user element, and a key comparison reads its presence, never its
+    /// value.
     pub(super) fn check_array_inst(
         &mut self,
         e: ExprId,
@@ -332,7 +335,7 @@ where
         // so its value stays lazy until a read asks for it.
         let mut mask = vec![false];
         mask.extend(marked);
-        let value = self.array_node_masked(self.current_block, &items, &mask);
+        let value = self.array_instance_node(self.current_block, &items, &mask);
         let ty_node = self.array_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);

@@ -112,8 +112,13 @@ where
             let layout = module.layout_with_indices(&indices)?;
             let element_type = element_type.map(|node| module.as_dynamic(node, block));
             let mut items: Vec<ArrayItem> = Vec::with_capacity(values.len() + 1);
-            // A sort preserves the input's element template and length.
-            items.push(ArrayItem::new(template.node));
+            // A sort preserves the input's element template and length — and the
+            // input's template marker, so the result is an array instance like
+            // the input was.
+            items.push(ArrayItem {
+                template: template.template,
+                ..ArrayItem::new(template.node)
+            });
             for n in values {
                 let value = module.add_node(
                     block,

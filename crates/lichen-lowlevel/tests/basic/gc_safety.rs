@@ -207,6 +207,7 @@ fn a_value_cycle_inside_the_scope_survives_the_collect() {
     let items = [ArrayItem {
         node: AnyNodeId::Dynamic(first),
         shallow: false,
+        template: false,
     }];
     let value = TestValue::LowValue(LowValue::Array(m.alloc_array(&items, child).into()));
     m.write_node_value(second, Some(value));

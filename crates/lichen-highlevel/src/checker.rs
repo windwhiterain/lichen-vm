@@ -1139,12 +1139,16 @@ where
         self.array_node_with_layout(block, ids, 0)
     }
 
-    /// An array value whose items carry their own **shallow** flags.
+    /// An array **instance**'s value: its items carry their own **shallow** flags,
+    /// and its first slot is the element template.
     ///
     /// # Invariant
     /// The flags are the items' own, so a marked position is the item a deep
     /// pass skips: the mask is on the item, not on the node that holds it.
-    pub(super) fn array_node_masked(
+    /// The first slot holds the array's **element template** — the layout, not one of
+    /// the user elements — so it carries the template marker: a key comparison reads
+    /// that slot's presence and never its value.
+    pub(super) fn array_instance_node(
         &mut self,
         block: BlockId,
         ids: &[NodeId],
@@ -1153,9 +1157,11 @@ where
         let items: Vec<ArrayItem> = ids
             .iter()
             .zip(mask.iter())
-            .map(|(&node, &shallow)| ArrayItem {
+            .enumerate()
+            .map(|(index, (&node, &shallow))| ArrayItem {
                 node: AnyNodeId::Dynamic(node),
                 shallow,
+                template: index == 0,
             })
             .collect();
         self.array_value_node(block, items, 0)
@@ -1253,6 +1259,7 @@ where
             .map(|(&node, &shallow)| ArrayItem {
                 node: AnyNodeId::Dynamic(node),
                 shallow,
+                template: false,
             })
             .collect();
         let any = self.any();

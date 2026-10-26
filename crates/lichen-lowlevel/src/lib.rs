@@ -142,16 +142,24 @@ pub enum LowShape {
     Table(Box<Option<LowShape>>, Box<Option<LowShape>>),
 }
 
-/// One element of a structural array value: its node and its `shallow` marker.
+/// One element of a structural array value: its node and its two markers.
 ///
 /// # Invariant
 /// `shallow` is inert metadata — structure and unification ignore it — but it travels
 /// through GC and apply clones, and [`Module::evaluate_node_deep`] skips a marked
 /// element's subtree.
+///
+/// # Invariant
+/// `template` marks the **element template** slot of an array instance: the position
+/// that carries the layout rather than one of the user elements. Its content is not
+/// key content — the table's hash and [`Module::key_eq`] read the slot's presence and
+/// never its value — and the flag travels with the payload through clone, GC, freeze
+/// and the artifact codec.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArrayItem {
     pub node: AnyNodeId,
     pub shallow: bool,
+    pub template: bool,
 }
 
 impl ArrayItem {
@@ -160,6 +168,20 @@ impl ArrayItem {
         ArrayItem {
             node,
             shallow: false,
+            template: false,
+        }
+    }
+
+    /// The **element template** slot of an array instance.
+    ///
+    /// # Invariant
+    /// The slot holds the array's layout, not one of its user elements, so a reader
+    /// that compares keys reads the slot's presence and not its value.
+    pub fn template(node: AnyNodeId) -> Self {
+        ArrayItem {
+            node,
+            shallow: false,
+            template: true,
         }
     }
 }

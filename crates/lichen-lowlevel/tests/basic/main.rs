@@ -317,6 +317,7 @@ fn array_node(
         .map(|(i, &node)| ArrayItem {
             node: lichen_lowlevel::AnyNodeId::Dynamic(node),
             shallow: mask.is_some_and(|mask| mask[i]),
+            template: false,
         })
         .collect();
     m.add_node(
