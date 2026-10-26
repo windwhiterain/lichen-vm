@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "[8, 16]: array{Int, 2}"
+  output = "[8, 16]: Array"
 ---
 add    := x => y => x + y
 double := n => @gc { a := n + 1

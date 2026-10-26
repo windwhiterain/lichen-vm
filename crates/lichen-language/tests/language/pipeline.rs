@@ -1071,12 +1071,9 @@ fn a_bound_struct_type_is_reusable() {
 
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
-    // Nominal identity is type-level: a struct type's kind is
-    // `[[TypeId(n), names, names_in_order], TypeStruct]`.
-
-    // Two distinct occurrences have different ids, so an array of two is
-    // heterogeneous and rejected.
-    let report = compile("[{.f @any : Int}, {.f @any : Int}]");
+    // Nominal identity lives in the struct value. Matching a second occurrence
+    // against the first must reject their different nominal ids.
+    let report = compile("S1 := {.f @any : Int}; S2 := {.f @any : Int}; [S1, 2][S1, S2]");
     assert!(
         !report.ok(),
         "two distinct struct occurrences are different nominal types: {:?}",
@@ -1146,7 +1143,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     assert_eq!(usize_of_node(&mut module, inner[1]), 20);
     // The id is the *occurrence*, not the instantiation.
     let d = diags(
-        "A := I => {.n @any : Int, .I I}\n\
+        "A := I => {.n @any : Int, .I @any : I}\n\
          S1 := A Int\n\
          S2 := A Float\n\
          x := S1{.n 3, .I 5}\n\
@@ -1162,7 +1159,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     // A pinned id alone does not fix this row — the copied name table is
     // what conflicts.
     let report = compile(
-        "A := I => {.n I}\n\
+        "A := I => {.n @any : I}\n\
          S1 := A Int\n\
          S2 := A Int\n\
          f := v => v <: S2\n\
@@ -1312,7 +1309,9 @@ fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Each body writes its own occurrence, so the nominal ids stay
     // distinct and `[f (Int), g (Int)]` is heterogeneous.
-    let report = compile("f := t => {.f t}; g := t => {.f t}; [@any, 2][f (Int), g (Int)]");
+    let report = compile(
+        "f := t => {.f t}; g := t => {.f t}; S1 := f (Int); S2 := g (Int); [S1, 2][S1, S2]",
+    );
     assert!(
         !report.ok(),
         "distinct body-local structs must keep distinct nominal ids: {:?}",
@@ -1359,14 +1358,14 @@ fn an_instantiation_through_an_undetermined_callee_is_refused() {
 
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
-    // arity: one field, two values — the excess is its own diagnostic
-    let d = diags("{.f @any : Int}(1, 2)");
+    // an unknown named field is refused at its own position
+    let d = diags("{.f @any : Int}{.f 1, .g 2}");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::StructExcessField);
-    assert!(d[0].message.contains("too many fields"), "{}", d[0].message);
+    assert_eq!(check.kind, DiagKind::StructUnknownField);
+    assert_eq!(check.field.as_deref(), Some("g"));
     // field types: the tuple's Ints are not Type, and the sentence names both
-    let d = diags("{.f @any : Type, .g @any : Type}(1, 2)");
+    let d = diags("S := {.f @any : Type, .g @any : Type}; S{.f 1, .g Int}");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
@@ -1377,15 +1376,20 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     );
     // a different source occurrence is a different nominal type
     let d = diags(
-        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; [@any, 2][s1(1, 2), s2(1, 2)]",
+        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; [s1, 2][s1{.f 1, .g 2}, s2{.f 1, .g 2}]",
     );
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
     assert!(
-        d[0].message.contains("struct{.f Int, .g Int}#"),
-        "the two struct occurrences must keep distinct nominal ids: {}",
-        d[0].message
+        matches!(
+            (&check.value_a, &check.value_b),
+            (
+                Some(LangValue::LowValue(LowValue::Table(a))),
+                Some(LangValue::LowValue(LowValue::Table(b)))
+            ) if a != b
+        ),
+        "the two struct occurrences keep different name tables: {d:?}"
     );
 }
 
@@ -1513,12 +1517,11 @@ fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
 }
 
 #[test]
-fn a_named_struct_instantiation_against_an_anonymous_struct_is_rejected() {
-    // Every struct field must carry a name, because the positional `a(k)` form
-    // is the tuple read.
+fn a_struct_instantiation_of_a_brace_block_is_rejected() {
+    // A brace group without named fields is a block, not a struct template.
     let d = diags("S := {Int, Type}; S{.x 1, .y Int}");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::StructFieldName);
+    assert_eq!(check.kind, DiagKind::InstantiateCallee);
 }
 
 #[test]
@@ -1547,19 +1550,19 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
 }
 
 #[test]
-fn a_lazy_named_read_over_an_anonymous_struct_is_refused() {
-    // The positional struct is refused at its definition now, before the lazy
-    // read ever resolves: its fields carry no names.
+fn a_lazy_named_read_of_a_brace_block_instance_is_refused() {
+    // The block is not a struct template, so instantiation is refused before
+    // the lazy read resolves.
 
     // The refusal is a check diagnostic, never a panic and never a false
     // non-termination report from the read that follows.
-    let d = diags("S := {Int, Type}\na := S(1, Int)\napply := s => s.x\napply (a)");
+    let d = diags("S := {Int, Type}\na := S{.x 1, .y Int}\napply := s => s.x\napply (a)");
     assert!(
         d.iter().any(|d| d
             .check
             .as_ref()
-            .is_some_and(|c| c.kind == DiagKind::StructFieldName)),
-        "the unnamed struct field is the refusal: {d:?}"
+            .is_some_and(|c| c.kind == DiagKind::InstantiateCallee)),
+        "the block is not a struct template: {d:?}"
     );
     assert!(
         !d.iter().any(|d| d
@@ -1578,7 +1581,7 @@ fn an_instantiation_through_a_call_result_checks() {
         common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\n(mk (Int)){.f 1, .g 2}");
     assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
     let (module, value, _) =
-        common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\nt := mk (Int)\nt(1, 2)");
+        common::evaluate("mk := u => {.f @any : Int, .g @any : Int}\nt := mk (Int)\nt{.f 1, .g 2}");
     assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
 }
 
@@ -1603,7 +1606,7 @@ fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
 fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
     // Structs are nominal: a tuple type and a function type cannot
     // instantiate, and the error points at the callee.
-    let d = diags("(@any : Int, @any : Int)(1, 2)");
+    let d = diags("(@any : Int, @any : Int){.f 1}");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::InstantiateCallee);
     assert!(
@@ -1612,7 +1615,7 @@ fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
         "{}",
         d[0].message
     );
-    let d = diags("(Int => Int)(1, 2)");
+    let d = diags("(x : Int => x){.f 1}");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::InstantiateCallee

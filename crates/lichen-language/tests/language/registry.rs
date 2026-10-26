@@ -57,14 +57,10 @@ fn imports_and_applies_a_function_package() {
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
     write(&dir, "s.lichen", "{.f @any : Int}\n");
-    let main = "---s = import \"s.lichen\"---s{.f 5}\n";
+    let main = "---s = import \"s.lichen\"---(s{.f 5}).f\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
-    assert_eq!(
-        common::usize_of(&common::array_values(&module, &value)[0]),
-        5,
-        "the struct instance is the one-element tuple (5,)"
-    );
+    let (_module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(common::usize_of(&value), 5);
 }
 
 #[test]

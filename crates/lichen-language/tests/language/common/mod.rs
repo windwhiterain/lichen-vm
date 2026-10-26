@@ -40,9 +40,10 @@ pub fn usize_struct_fields(module: &Module<LangProgram>, value: &LangValue) -> V
                 AnyNodeId::Dynamic(node) => node,
                 AnyNodeId::Static(_) => panic!("language values are dynamic"),
             };
-            let value = module
-                .node_value(AnyNodeId::Dynamic(node))
-                .expect("a field has a value");
+            let node = module
+                .element_value_node(AnyNodeId::Dynamic(node))
+                .unwrap_or(AnyNodeId::Dynamic(node));
+            let value = module.node_value(node).expect("a field has a value");
             usize_of(&value)
         })
         .collect()

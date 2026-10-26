@@ -674,7 +674,10 @@ mod plugins_arm_tests {
 mod sort_op_tests {
     //! A composed plugin vocabulary is executable: run `SortOp` end-to-end.
     #![allow(dead_code)]
-    use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
+    use lichen_highlevel::program::TypeValue;
+    use lichen_lowlevel::{
+        AnyNodeId, ArrayItem, ArrayValue, BlockId, LowValue, Module, NodeId, OperatorExt,
+    };
     use lichen_std_native::SortOp;
     use lichen_utils::extend::AsEnum;
 
@@ -699,13 +702,30 @@ mod sort_op_tests {
     fn sort_op_sorts_a_usize_array() {
         let mut module = Module::<LangProgram>::new();
         let block: BlockId = module.add_block(None);
-        let items: Vec<ArrayItem> = [3usize, 1, 2]
-            .iter()
-            .map(|&n| {
-                let node = module.add_node(block, None, Some(LangValue::from(LowValue::USize(n))));
-                ArrayItem::new(AnyNodeId::Dynamic(node))
-            })
-            .collect();
+        let layout = module.register_attribute_layout(&[0, 1]);
+        let any = module.add_node(block, None, Some(LangValue::from(LowValue::Any)));
+        let int_type = module.add_node(block, None, Some(LangValue::from(TypeValue::TypeInt)));
+        let defaults = [any, any, any, any].map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)));
+        let defaults = module.alloc_array(&defaults, block);
+        module.set_default_attributes(defaults);
+        let slot = |module: &mut Module<LangProgram>, value: NodeId| {
+            let items =
+                [value, int_type, any, any].map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)));
+            let handle = module.alloc_array(&items, block);
+            module.add_node(
+                block,
+                None,
+                Some(LangValue::from(LowValue::Array(ArrayValue::with_layout(
+                    handle, layout,
+                )))),
+            )
+        };
+        let template = slot(&mut module, any);
+        let mut items = vec![ArrayItem::new(AnyNodeId::Dynamic(template))];
+        items.extend([3usize, 1, 2].into_iter().map(|n| {
+            let node = module.add_node(block, None, Some(LangValue::from(LowValue::USize(n))));
+            ArrayItem::new(AnyNodeId::Dynamic(slot(&mut module, node)))
+        }));
         let array = module.alloc_array(&items, block);
         let operand = LangValue::from(LowValue::Array(array.into()));
         let out = LangOperator::SortOp(SortOp::Sort)
@@ -718,16 +738,16 @@ mod sort_op_tests {
         // allocated in a live block of this module.
         let sorted: Vec<usize> = unsafe { array.items() }
             .iter()
+            .skip(1)
             .map(|item| {
-                module
-                    .node_value(item.node)
-                    .and_then(|v| match v.as_enum() {
-                        Some(LowValue::USize(n)) => Some(n),
-                        _ => None,
-                    })
-                    .expect("each sorted element is a USize node")
+                let value = module.element_value_node(item.node)?;
+                module.node_value(value).and_then(|v| match v.as_enum() {
+                    Some(LowValue::USize(n)) => Some(n),
+                    _ => None,
+                })
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()
+            .expect("each sorted element is a USize slot");
         assert_eq!(sorted, vec![1, 2, 3]);
     }
 }

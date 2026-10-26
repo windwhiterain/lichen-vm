@@ -735,10 +735,9 @@ where
         // The owning diary entry: ranges are disjoint, so exactly one contains
         // this error.
         let entry = index.owner[i].map(|e| &self.diary[e]);
-        let (a, b) = match entry {
-            Some(entry) => (entry.a, entry.b),
-            None => (err.a, err.b),
-        };
+        // The conflicting classes are the values to print; the diary entry
+        // refines only the location and kind.
+        let (a, b) = (err.a, err.b);
         // The error's own expr and values are what the engine compared; a diary entry refines the
         // location, never the values.
         let value_a = err.value_a;
