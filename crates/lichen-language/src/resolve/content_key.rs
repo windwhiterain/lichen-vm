@@ -269,11 +269,6 @@ impl KeyWriter<'_> {
                 self.expr(actual);
                 self.expr(template);
             }
-            // `@clone e`: the value whose holes become fresh.
-            Expr::Clone { value, .. } => {
-                self.u(41);
-                self.expr(value);
-            }
             Expr::BinOp {
                 operator,
                 left,

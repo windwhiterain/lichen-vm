@@ -130,9 +130,8 @@ where
             // A prefix operator's operands' perspectives meet as a `BinOp`'s do.
             ExprKind::Prefix { .. } => self.range_children(e),
             ExprKind::NativeCall { .. } => self.range_children(e),
-            // The clone and the unify are leaves for stage 1: their own slots
-            // bind.
-            ExprKind::Clone { .. } | ExprKind::Unify { .. } => Vec::new(),
+            // Unification is a leaf for stage 1: its own slots bind.
+            ExprKind::Unify { .. } => Vec::new(),
         }
     }
 

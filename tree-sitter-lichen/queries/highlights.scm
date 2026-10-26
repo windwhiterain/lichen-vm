@@ -42,7 +42,6 @@
 "@assert" @keyword
 "@in" @keyword
 "@shallow" @keyword
-"@clone" @keyword
 
 ; `@any` is the `wildcard` node: the query syntax reads a `"@…"` string as a
 ; capture name, so the literal is reached by its node rather than by its text.

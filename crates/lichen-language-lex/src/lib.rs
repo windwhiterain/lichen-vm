@@ -70,8 +70,6 @@ pub enum TokenKind {
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
-    /// An internal clone node, not accepted as source syntax.
-    KwClone,
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).
     Any,
@@ -220,7 +218,6 @@ impl TokenKind {
             TokenKind::KwAssert => "'@assert'",
             TokenKind::KwIn => "'@in'",
             TokenKind::KwShallow => "'@shallow'",
-            TokenKind::KwClone => "'@clone'",
             TokenKind::Any => "'@any'",
             TokenKind::KwGc => "'@gc'",
             TokenKind::KwPub => "'pub'",

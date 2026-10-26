@@ -89,7 +89,6 @@ fn edge_cases_parse_without_error_nodes() {
         "v := table(k1 ==> v1)\nv",
         "w := { return 1 }\nw",
         "x := @any\nx",
-        "y := @clone a\ny",
         "z := T[@shallow 1, @shallow(2) 3]\nz",
         "o := t <== k\no",
         "g := v @in set(Int, Float)\ng",

@@ -86,11 +86,6 @@ pub(crate) fn shift_expr(
             shift_expr(actual, old_starts, new_starts, delta);
             shift_expr(template, old_starts, new_starts, delta);
         }
-        // `@clone e`: the value whose holes become fresh.
-        Expr::Clone { value, span } => {
-            shift(span, old_starts, new_starts, delta);
-            shift_expr(value, old_starts, new_starts, delta);
-        }
         Expr::If {
             condition,
             then_branch,

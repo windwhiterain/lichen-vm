@@ -591,13 +591,6 @@ pub enum ExprKind<L> {
     /// and every slot is the inner expression's, so the block boundary is the
     /// only thing the marker adds.
     Gc { inner: ExprId },
-    /// `@clone e` — a fresh instantiation of `e`'s value graph.
-    ///
-    /// # Invariant
-    /// The clone is a **new instance**, never the original: the template's own
-    /// open cells stay open in it, and a unify against the clone writes into
-    /// the clone. Every call produces its own instance.
-    Clone { value: ExprId },
     /// `a = b` — a unify of the actual with the expected.
     ///
     /// # Invariant
@@ -653,7 +646,6 @@ impl<L> ExprKind<L> {
             ExprKind::Record { value, .. } => push(*value),
             ExprKind::Assert { condition } => push(*condition),
             ExprKind::Gc { inner } => push(*inner),
-            ExprKind::Clone { value } => push(*value),
             ExprKind::Unify { actual, expected } => {
                 push(*actual);
                 push(*expected);
@@ -764,7 +756,6 @@ impl<L> ExprKind<L> {
             ExprKind::Record { value, .. } => fix(value),
             ExprKind::Assert { condition } => fix(condition),
             ExprKind::Gc { inner } => fix(inner),
-            ExprKind::Clone { value } => fix(value),
             ExprKind::Unify { actual, expected } => {
                 fix(actual);
                 fix(expected);
@@ -957,11 +948,6 @@ impl<A: AttrSpec, L> IR<A, L> {
             elements: range,
             depths,
         })
-    }
-
-    /// Allocate a clone `@clone e`.
-    pub fn alloc_clone(&mut self, value: ExprId) -> ExprId {
-        self.alloc(ExprKind::Clone { value })
     }
 
     /// Allocate a unify `a = b`.

@@ -595,8 +595,7 @@ fn applying_a_non_function_fails() {
 
 #[test]
 fn a_tuple_matches_a_tuple_template_elementwise() {
-    // (1, 2) <: (@any : int, @any : int) — the template is cloned first, so
-    // the match writes into the clone.
+    // (1, 2) = (@any : int, @any : int) — both sides are evaluated values.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
@@ -607,8 +606,7 @@ fn a_tuple_matches_a_tuple_template_elementwise() {
         "template",
         &[any_of(&w, "d_any", d), any_of(&w, "c_any", c)],
     );
-    let cloned = w.clone("cloned", template);
-    let a = w.unify("a", tup, cloned);
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
     assert!(b.ok, "(1, 2) against (@any : int, @any : int) should check");
     assert!(b.module.unify_errors.is_empty());
@@ -623,8 +621,7 @@ fn a_tuple_whose_length_differs_from_its_template_fails() {
     let tup = w.tuple("tup", &[e1, e2]);
     let d = w.int_type("d");
     let template = w.tuple("template", &[any_of(&w, "d_any", d)]);
-    let cloned = w.clone("cloned", template);
-    let a = w.unify("a", tup, cloned);
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
     assert!(
         !b.ok,
@@ -934,8 +931,7 @@ fn tuple_length_mismatch_reports_both_sides() {
     let tup = w.tuple("tup", &[e1, e2]);
     let d = w.int_type("d");
     let template = w.tuple("template", &[any_of(&w, "d_any", d)]);
-    let cloned = w.clone("cloned", template);
-    let a = w.unify("a", tup, cloned);
+    let a = w.unify("a", tup, template);
     let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
@@ -1235,8 +1231,7 @@ fn array_index_out_of_bounds_against_a_bound_length() {
     let read = w.index("read", x, three);
     let element = any_of(&w, "element", w.int_type("int_ty"));
     let template = w.array_template("template", element, w.int("len", 2));
-    let cloned = w.clone("cloned", template);
-    let matched = w.unify("matched", x, cloned);
+    let matched = w.unify("matched", x, template);
     let body = w.tuple("body", &[matched, read]);
     let l = w.lam("l", x, body);
     let e1 = w.int("e1", 1);
@@ -1518,8 +1513,7 @@ fn two_struct_values_conflict_on_their_name_tables() {
     let i1 = w.instantiate("i1", s1, args, &[Some("f")]);
     let f2 = any_of(&w, "f2", w.int_type("int_ty"));
     let s2 = w.struct_value("s2", &[(f2, Some("f"))]);
-    let cloned = w.clone("cloned", s2);
-    let matched = w.unify("matched", i1, cloned);
+    let matched = w.unify("matched", i1, s2);
     let b = build(matched, w);
     assert!(!b.ok, "two distinct struct occurrences must not unify");
     let diags = b.diagnostics();
@@ -2315,8 +2309,7 @@ fn a_struct_template_parameter_function_reads_a_named_field() {
     let int_x = any_of(&w, "int_x", w.int_type("int_ty"));
     let int_y = any_of(&w, "int_y", w.int_type("int_ty"));
     let template = w.struct_value("template", &[(int_x, Some("x")), (int_y, Some("y"))]);
-    let cloned = w.clone("cloned", template);
-    let matched = w.unify("matched", p, cloned);
+    let matched = w.unify("matched", p, template);
     let read = w.named_field("read", p, "x");
     let body = w.tuple("body", &[matched, read]);
     let f = w.lam("f", p, body);
@@ -2346,8 +2339,7 @@ fn two_written_struct_values_are_distinct_nominal_types() {
     let one = w.int("one", 1);
     let fields = w.tuple("fields", &[one]);
     let arg = w.instantiate("arg", written_in_argument, fields, &[Some("x")]);
-    let cloned = w.clone("cloned", written_in_annotation);
-    let matched = w.unify("matched", arg, cloned);
+    let matched = w.unify("matched", arg, written_in_annotation);
     let b = build(matched, w);
     assert!(
         !b.ok,
@@ -2360,8 +2352,7 @@ fn an_open_struct_template_lets_its_field_be_read() {
     // `F = t => { t <: A; t.I }` with `A = {.I _, .O _}` — the template names
     // the fields, leaving their types open.
 
-    // The parameter is matched against a **clone** of the template, so the
-    // body's `t.I` reads a field the template named.
+    // The parameter and argument use the same evaluated struct requirement.
     let w = Writer::new();
     let t = w.param("t");
     let open_i = w.hole("open_i");
@@ -2369,8 +2360,7 @@ fn an_open_struct_template_lets_its_field_be_read() {
     // **One** named struct value for both sides: two written `{.…}` are
     // distinct.
     let open_struct = w.struct_value("open_struct", &[(open_i, Some("I")), (open_o, Some("O"))]);
-    let cloned = w.clone("cloned", open_struct);
-    let matched = w.unify("matched", t, cloned);
+    let matched = w.unify("matched", t, open_struct);
     let read = w.named_field("read", t, "I");
     let body = w.tuple("body", &[matched, read]);
     let f = w.lam("f", t, body);
@@ -2399,8 +2389,7 @@ fn a_tuple_template_parameter_function_reads_an_element() {
     let int1 = any_of(&w, "int1", w.int_type("int_ty"));
     let int2 = any_of(&w, "int2", w.int_type("int_ty"));
     let tuple_ty = w.tuple("tuple_ty", &[int1, int2]);
-    let cloned = w.clone("cloned", tuple_ty);
-    let matched = w.unify("matched", p, cloned);
+    let matched = w.unify("matched", p, tuple_ty);
     let zero = w.int("zero", 0);
     let read = w.field("read", p, zero);
     let body = w.tuple("body", &[matched, read]);

@@ -1482,7 +1482,6 @@ where
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
             | ExprKind::Gc { .. }
-            | ExprKind::Clone { .. }
             | ExprKind::Unify { .. }
             | ExprKind::Index { .. }
             | ExprKind::Field { .. }
@@ -1659,7 +1658,6 @@ where
             } => self.check_array_inst(e, template, elements, depths),
             ExprKind::Set(_) => self.check_set_term(e),
             ExprKind::Table(_) => self.check_table_term(e),
-            ExprKind::Clone { value } => self.check_clone(e, value),
             ExprKind::Unify { actual, expected } => self.check_unify_expr(e, actual, expected),
             ExprKind::ErrorBlock => {
                 // A recovered-error region: an opaque leaf whose cells are never

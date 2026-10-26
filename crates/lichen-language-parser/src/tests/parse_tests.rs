@@ -171,7 +171,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a := ; 5");
     assert_eq!(
         err.message,
-        "expected '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(err.span, Some((1, 6)));
 }
@@ -641,7 +641,7 @@ fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -689,13 +689,6 @@ fn an_at_prefix_marker_parses_as_its_own_node() {
         }
     ));
     assert_eq!(span, (1, 1), "the assert's span starts at the `!`");
-    // `@clone e` is a clone of its own: the clone is not an application.
-    let e = parse_ok("@clone e");
-    let Expr::Clone { value, span } = e else {
-        panic!("expected a clone, got {e:?}")
-    };
-    assert!(matches!(*value, Expr::Name(n, _, _) if n == "e"));
-    assert_eq!(span, (1, 1), "the clone's span starts at the `@`");
 }
 
 #[test]
@@ -877,7 +870,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '@assert', '@gc', '@clone', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));

@@ -471,12 +471,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
         )
     }
 
-    /// `name = @clone e` — a clone of `e`: its holes become fresh, and
-    /// nothing else shares them.
-    pub fn clone(&self, name: &str, value: ExprId) -> ExprId {
-        self.named(name, ExprKind::Clone { value })
-    }
-
     /// `name = actual = expected` — the plain unify.
     ///
     /// # Invariant

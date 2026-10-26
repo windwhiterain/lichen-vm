@@ -1456,8 +1456,6 @@ fn classify_token_kind(
         | TokenKind::KwIn
         // `@shallow` is a prefix marker over one array position.
         | TokenKind::KwShallow
-        // `@clone` is the clone marker over one expression.
-        | TokenKind::KwClone
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // `@any` is the wildcard literal — a reserved form like `_`.
@@ -1629,7 +1627,6 @@ impl<'a> NameClass<'a> {
                 self.expr(actual);
                 self.expr(template);
             }
-            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -1944,7 +1941,6 @@ impl Walk {
                 self.expr(actual);
                 self.expr(template);
             }
-            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);
@@ -2288,7 +2284,6 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(actual);
                 self.expr(template);
             }
-            Expr::Clone { value, .. } => self.expr(value),
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
                     self.expr(operand);

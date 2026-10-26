@@ -1,14 +1,8 @@
-//! The template operations: the clone and the unify.
-//!
-//! # Invariant
-//! A clone is a **new instance**: the template's own holes stay open in it, so
-//! a unify against the clone writes into the clone and never into the
-//! template. The boundary is what the two sides share, and it is stated in
-//! [`Checker::clone_boundary`].
+//! Template unification and dependent-shape analysis.
 
 use std::collections::HashSet;
 
-use lichen_lowlevel::{NodeId, TemplateBoundary, TemplateInstance};
+use lichen_lowlevel::NodeId;
 
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
@@ -21,29 +15,6 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
-    /// `@clone e` — a fresh instantiation of `e`'s value graph.
-    ///
-    /// # Invariant
-    /// Every call builds its **own** instance: two clones of one template share
-    /// nothing but the cells the boundary names, so a hole filled through one
-    /// clone is not filled in the other.
-    pub(super) fn check_clone(&mut self, e: ExprId, value: ExprId) -> NodeId {
-        self.check_expr(value);
-        let Some(instance) = self.clone_instance(value) else {
-            // A budget stopped the walk: a partial instance is worse than none.
-            let term = self.state[value].term.unwrap_or(self.type_expr);
-            self.record_guard(term, term, self.loc(value, 0), DiagKind::Guard, None);
-            return self.refused_expr(e);
-        };
-        let term = instance.root;
-        let val = self.state[value].val.map(|node| instance.node_of(node));
-        let ty = self.state[value].ty.map(|node| instance.node_of(node));
-        self.state[e].term = Some(term);
-        self.state[e].val = val;
-        self.state[e].ty = ty;
-        term
-    }
-
     /// `a = b` — the unify of the **actual** with the **expected**.
     ///
     /// # Invariant
@@ -84,41 +55,6 @@ where
         self.state[e].val = self.state[actual].val;
         self.state[e].ty = self.state[actual].ty;
         actual_term
-    }
-
-    /// The instance of `value`'s value graph, or `None` when a budget stopped
-    /// the walk.
-    ///
-    /// # Invariant
-    /// The instance is **fresh**: the walk clones the graph it reaches and
-    /// shares only the cells the boundary names, so the template's own cells
-    /// are the template's.
-    pub(super) fn clone_instance(&mut self, value: ExprId) -> Option<TemplateInstance> {
-        let root = self.state[value].term?;
-        let boundary = self.clone_boundary(value);
-        self.module
-            .clone_template(root, self.current_block, self.current_function(), &boundary)
-    }
-
-    /// The cells a clone of `value` **shares** with the caller.
-    ///
-    /// # Invariant
-    /// Only the enclosing **lambda parameters** are shared: their cells are the
-    /// caller's, and a template that depends on one keeps the dependency.
-    ///
-    /// A `let` binding is **not** shared: its cell is the template's own, so
-    /// sharing it would let a unify write into the template's hole.
-    ///
-    /// The limit is deliberate: this slice does not decide a nested lambda's
-    /// binding ownership, so it shares none.
-    pub(super) fn clone_boundary(&self, value: ExprId) -> TemplateBoundary {
-        let mut boundary = TemplateBoundary::new();
-        for parameter in self.reachable_parameters(value) {
-            if let Some(term) = self.state[parameter].term {
-                boundary.share(term);
-            }
-        }
-        boundary
     }
 
     /// Whether the template's **length** depends on an enclosing lambda

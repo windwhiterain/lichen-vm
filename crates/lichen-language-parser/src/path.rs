@@ -127,7 +127,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 0, actual);
             push_index(&mut out, 1, template);
         }
-        Expr::Clone { value, .. } => push_index(&mut out, 0, value),
         Expr::BinOp { left, right, .. } => {
             push_index(&mut out, 0, left);
             push_index(&mut out, 1, right);

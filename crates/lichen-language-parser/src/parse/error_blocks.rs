@@ -55,7 +55,6 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(actual, out);
                 walk_expr(template, out);
             }
-            Expr::Clone { value, .. } => walk_expr(value, out),
             Expr::BinOp { left, right, .. } => {
                 walk_expr(left, out);
                 walk_expr(right, out);

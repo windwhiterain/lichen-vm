@@ -40,7 +40,7 @@ sugar:
 ```sytax
 `<expr'1> <: <expr'2>` => `<expr'1> = <expr'2> _`
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
-bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> [<expr'1>, <expr'2>]`
+bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
 `<expr'1> <: <expr'2>` => `<expr'1> = <expr'2> _`
 `<name> <annoation*> => <expr>` => `<name> => {<name> <annoation*>; <expr>}`
 `<name> = <expr'1> => <expr'2>` => `<name> => {<name> = <expr'1>; <expr'2>}`

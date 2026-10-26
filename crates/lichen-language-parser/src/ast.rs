@@ -142,8 +142,6 @@ pub enum Expr {
         template: Box<Expr>,
         span: Span,
     },
-    /// `@clone e` — instantiate `e` with fresh holes.
-    Clone { value: Box<Expr>, span: Span },
     /// `a op b` — a binary integer operation.
     BinOp {
         operator: BinOp,
@@ -384,7 +382,6 @@ impl Expr {
             Expr::Apply { span, .. } => *span,
             Expr::Unify { span, .. } => *span,
             Expr::TemplateUnify { span, .. } => *span,
-            Expr::Clone { span, .. } => *span,
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,

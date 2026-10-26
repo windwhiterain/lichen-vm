@@ -575,11 +575,6 @@ impl Compiler {
                 let expected = self.compile_expr(expected);
                 self.alloc_unify(actual, expected, span)
             }
-            // `@clone e`: the value's own holes become fresh.
-            Expr::Clone { value, span } => {
-                let value = self.compile_expr(value);
-                self.alloc_clone(value, span)
-            }
             // `actual <: template`: apply the template constructor to `_`,
             // then unify the actual with that fresh result.
             Expr::TemplateUnify {

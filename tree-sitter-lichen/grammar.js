@@ -176,13 +176,12 @@ module.exports = grammar({
     binary_addition: binaryLevel(PREC.addition, ['+', '-']),
     binary_product: binaryLevel(PREC.product, ['*', '/', '%']),
 
-    // The prefix level: `@assert e`, `@clone e`, the four one-operand keywords
+    // The prefix level: `@assert e`, the four one-operand keywords
     // and the two two-operand ones.  A one-operand keyword takes an application
     // (`int2float f x` converts `f x`); a two-operand one takes one atom each
     // (`docs/notes/operators.md` §3, §11).
     prefix: $ => prec(PREC.prefix, choice(
       seq('@assert', field('value', $.application)),
-      seq('@clone', field('value', $.application)),
       seq(
         field('operator', choice('int2float', 'float2int', 'exp', 'sqrt', 'floor')),
         field('value', $.application),

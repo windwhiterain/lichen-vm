@@ -183,8 +183,6 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(actual, deps);
             walk(template, deps);
         }
-        // `@clone e`: the value whose holes become fresh.
-        Expr::Clone { value, .. } => walk(value, deps),
         Expr::If {
             condition,
             then_branch,

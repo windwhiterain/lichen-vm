@@ -406,8 +406,6 @@ impl Resolver {
                 self.resolve_expr(actual);
                 self.resolve_expr(template);
             }
-            // `@clone e`: the value whose holes become fresh.
-            Expr::Clone { value, .. } => self.resolve_expr(value),
             Expr::If {
                 condition,
                 then_branch,

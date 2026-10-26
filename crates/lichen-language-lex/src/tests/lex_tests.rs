@@ -233,15 +233,6 @@ fn operators_and_keywords_lex() {
             TokenKind::Eof,
         ]
     );
-    // `@clone` is a keyword of its own, beside `@shallow`.
-    assert_eq!(
-        kinds("@clone e"),
-        vec![
-            TokenKind::KwClone,
-            TokenKind::Name("e".to_string()),
-            TokenKind::Eof,
-        ]
-    );
 }
 
 #[test]

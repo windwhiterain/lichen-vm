@@ -90,12 +90,6 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    /// Allocate a clone: the value whose holes become fresh.
-    pub(super) fn alloc_clone(&mut self, value: ExprId, span: &Span) -> ExprId {
-        let id = self.ir.alloc_clone(value);
-        self.spans.push(Some(*span));
-        id
-    }
     /// Allocate a unify: the actual value and the expected one.
     pub(super) fn alloc_unify(&mut self, actual: ExprId, expected: ExprId, span: &Span) -> ExprId {
         let id = self.ir.alloc_unify(actual, expected);
