@@ -1061,8 +1061,15 @@ where
 
     /// Native operands as values: a struct argument contributes its fields,
     /// while an ordinary operand array contributes its elements.
+    ///
+    /// # Invariant
+    /// A field that **computes** contributes the call that computes it: a call's
+    /// compound result arrives as `Index(call, 0)`, so the field's value half is
+    /// a read of the call's result, and the declaration a buffer names and the
+    /// computation an index is are the calls themselves
+    /// (`docs/notes/value-templates.md`).
     fn operand_values(&self, operand: NodeId) -> Result<Vec<NodeId>, String> {
-        super::value_leaves_of(self.module, operand, None)
+        super::operand_nodes_of(self.module, operand, None)
     }
 
     /// A declared slice: its declaration order is its output ordinal.
@@ -1313,17 +1320,31 @@ where
     }
 
     /// The dynamic function an apply's callee names, through its value or type.
-    fn dynamic_callee(&self, callee: NodeId, type_slot: Option<AnyNodeId>) -> Option<FunctionId> {
+    ///
+    /// # Invariant
+    /// A closure **materialised from a frozen function** answers that frozen
+    /// function: the clone's body holds the frozen operators by reference — a
+    /// residual operation keeps its frozen reference — so the operator is read
+    /// in the module that owns it, not in the clone.
+    fn dynamic_callee(&self, callee: NodeId, type_slot: Option<AnyNodeId>) -> Option<AnyFunctionId> {
         if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(callee))
             && let Some(LowValue::Function(AnyFunctionId::Dynamic(function))) =
                 AsEnum::<LowValue>::as_enum(&value)
         {
-            return Some(function);
+            if let Some(origin) = self
+                .module
+                .functions
+                .get(function)
+                .and_then(|function| function.static_origin)
+            {
+                return Some(AnyFunctionId::Static(origin));
+            }
+            return Some(AnyFunctionId::Dynamic(function));
         }
         let type_node = type_slot?.dynamic()?;
         match self.module.function_type_function(type_node)? {
-            AnyFunctionId::Dynamic(function) => Some(function),
-            AnyFunctionId::Static(_) => None,
+            AnyFunctionId::Dynamic(function) => Some(AnyFunctionId::Dynamic(function)),
+            AnyFunctionId::Static(function) => Some(AnyFunctionId::Static(function)),
         }
     }
 
@@ -1402,10 +1423,7 @@ where
         let function = self
             .static_callee(callee, type_slot)
             .map(AnyFunctionId::Static)
-            .or_else(|| {
-                self.dynamic_callee(callee, type_slot)
-                    .map(AnyFunctionId::Dynamic)
-            });
+            .or_else(|| self.dynamic_callee(callee, type_slot));
         let Some(function) = function else {
             return Ok(None);
         };

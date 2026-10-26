@@ -2151,6 +2151,62 @@ where
     items.get(element_base_of::<P>(module, value, ty)..)
 }
 
+/// The **operands** a compound argument contributes: each element's own node
+/// when it computes one, and the value it holds otherwise.
+///
+/// # Invariant
+/// A field's value half is the value the field holds, and a call's **compound**
+/// result arrives as `Index(call, 0)` — a read of the call's result, not the
+/// call. The kernel must lower the **call**: it is the declaration a buffer
+/// names and the computation an index is
+/// (`docs/notes/value-templates.md`).
+pub(super) fn operand_nodes_of<P>(
+    module: &Module<P>,
+    value: NodeId,
+    ty: Option<AnyNodeId>,
+) -> Result<Vec<NodeId>, String>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    // SAFETY: `value` is a live node of `module`.
+    let Some(items) = (unsafe { module.array_items(value) }) else {
+        return Ok(vec![value]);
+    };
+    let base = element_base_of::<P>(module, AnyNodeId::Dynamic(value), ty);
+    items
+        .iter()
+        .skip(base)
+        .map(|item| {
+            let node = item.node;
+            if let AnyNodeId::Dynamic(inner) = node
+                && let Some(operation) = module.node_operation(inner)
+                && matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Apply)
+                )
+            {
+                return Ok(inner);
+            }
+            match node {
+                AnyNodeId::Dynamic(node) => module
+                    .element_value_node(AnyNodeId::Dynamic(node))
+                    .and_then(|node| node.dynamic())
+                    .ok_or_else(|| {
+                        "a body reads a static reference into a frozen module, which has no node in \
+                         this graph"
+                            .to_string()
+                    }),
+                AnyNodeId::Static(_) => Err(
+                    "a body reads a static reference into a frozen module, which has no node in this \
+                     graph"
+                        .to_string(),
+                ),
+            }
+        })
+        .collect()
+}
+
 /// A value's leaves: itself, or a compound's elements.
 ///
 /// # Invariant
