@@ -40,7 +40,7 @@ This is the whole of `lichen-std-native`'s source: `$sort` is a native
 operator the plugin registers, and the surrounding code is ordinary
 lichen — the wrapper states the layout it accepts and the layout it
 answers, which is all a compound needs now that the shape lives in the
-template (Chapter 7). The `$` form is an atom — `$jit(f)`, `$launch(k, x)`,
+value (Chapter 7). The `$` form is an atom — `$jit(f)`, `$launch(k, x)`,
 `$noop()` — and it resolves only against the **private native-operator
 registry of the module being compiled**. The shipping compiler has no
 `sort` operator, so it refuses the same source:

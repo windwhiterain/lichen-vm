@@ -51,15 +51,15 @@ program. So a read that is written where a value is needed is checked
 there, even when the value would never be used:
 
 ```lichen
-f := x => ([@any : Int, 2][1, 2])[5]
+f := x => ([@any : Int, 3])[5]
 ```
 
 ```text
-error: index 5 out of bounds (array length 2)
-  --> 1:35
+error: index 5 out of bounds (array length 3)
+  --> 1:29
    |
- 1 | f := x => ([@any : Int, 2][1, 2])[5]
-   |                                   ^
+ 1 | f := x => ([@any : Int, 3])[5]
+   |                             ^
 ```
 
 The index is checked even though `f` is never applied and its body is
@@ -90,13 +90,19 @@ structures that need the first kind to be held back.
 
 ## Infinite structures and `@shallow`
 
-An array's elements share one template, and the checker evaluates them to
+An array's elements share one requirement, and the checker evaluates them to
 find it. A definition that puts a call to itself in an array would
 therefore be unfolded forever. The marker `@shallow` says the element's
 value stays lazy in the checker's evaluation:
 
+> **The array instance is not accepted yet.** The compiler refuses `T[1, 2]`
+> with `expected Array, found Array` — Chapter 7 says where — so the
+> programs in this section state the rule and the answers they are written
+> to give.
+
 ```lichen
-nats := (n : Int) => [@any, 2][n, @shallow nats (n + 1)]
+T := _x => [@any, 2]
+nats := (n : Int) => T[n, @shallow nats (n + 1)]
 ns := nats 0
 (ns[1][0], ns[1][1][0], ns[1][1][1][0], ns[1][1][1][1][0])
 ```
@@ -114,7 +120,8 @@ Without the marker the same definition does not check: the checker
 unfolds the element, and stops on its budget:
 
 ```lichen
-nats := (n : Int) => [@any, 2][n, nats (n + 1)]
+T := _x => [@any, 2]
+nats := (n : Int) => T[n, nats (n + 1)]
 ns := nats 0
 ns[1][0]
 ```
@@ -123,7 +130,7 @@ ns[1][0]
 error: the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The program may still terminate when run.
   --> 1:10
    |
- 1 | nats := (n : Int) => [@any, 2][n, nats (n + 1)]
+ 1 | T := _x => [@any, 2]
    |          ^
 ```
 
@@ -136,15 +143,16 @@ the first `n` levels of the element's type spine. The depth is a bound of
 at least `1`; a depth of `0` marks no level, and is refused:
 
 ```lichen
-[@any : Int, 2][@shallow(0) 5, 6]
+T := _x => [@any : Int, 2]
+T[@shallow(0) 5, 6]
 ```
 
 ```text
 error: a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely
-  --> 1:17
+  --> 2:3
    |
- 1 | [@any : Int, 2][@shallow(0) 5, 6]
-   |                 ^
+ 2 | T[@shallow(0) 5, 6]
+   |   ^
 ```
 
 The mark is a **value** mark, not a type mark: it says the element's
@@ -224,7 +232,8 @@ add := x => y => x + y
 double := n => @gc { a := n + 1
                    b := add a a
                    b }
-@gc [@any : Int, 2][double 3, double 7]
+T := _x => [@any : Int, 2]
+@gc T[double 3, double 7]
 ```
 
 ```text
@@ -272,7 +281,7 @@ scope leaves a dangling reference. The mechanism's note is
 ## Exercises
 
 1. Write an infinite stream of squares and read its first four values.
-2. Explain why `(1 / 0, 2)(1)` is `2` but `f := x => ([@any : Int, 2][1, 2])[5]`
+2. Explain why `(1 / 0, 2)(1)` is `2` but `f := x => ([@any : Int, 3])[5]`
    fails the build.
 3. What does `(1 / 0) + 1` print, and why is that not an error?
 4. Wrap a block in `@gc` and describe what the marker lets the program do

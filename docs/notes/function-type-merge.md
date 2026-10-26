@@ -3,10 +3,10 @@
 > Status: **current.** A function's type is the function itself (`f : f`) and
 > there is only one representation of a function type. Two functions unify the
 > way two arrays do. A signature is written by a **function template** — a
-> real function value — and matched with `<:`; the thin arrow `->` is gone from
-> the language. A struct's nominal identity is the **name table its value
-> carries**, so one written occurrence is one type however many times it is
-> evaluated.
+> real function value — and unified with plain `=`, which applies nothing; the
+> thin arrow `->` is gone from the language. A struct's nominal identity is the
+> **name table its value carries**, so one written occurrence is one type
+> however many times it is evaluated.
 >
 > This note absorbs the still-true halves of *"A function's type is the function
 > itself"* (the `f : f` half; its arrow half is what this note replaces) and of
@@ -16,8 +16,8 @@
 > arm, the function-type recognisers, the signature reads),
 > `crates/lichen-highlevel/src/checker/lambda.rs` (`check_lam` and the wiring
 > that makes a lambda's type its own expr),
-> `crates/lichen-highlevel/src/checker/templates.rs` (the `<:` match: the
-> clone and the unify),
+> `crates/lichen-highlevel/src/checker/templates.rs` (the unify, and the
+> direction it takes),
 > `crates/lichen-highlevel/src/checker/structs.rs` (the struct value's header
 > and its emitting sites), `crates/lichen-highlevel/src/shape.rs`
 > (`low_type_of`'s function arm),
@@ -31,10 +31,17 @@
 written-arrow form is retired. A signature is stated by a **function
 template**: a real function value written where a function would be, such as
 `(x : Int => _: Int)` — the parameter with its annotation, `=>`, and the
-result. A constraint on a function is the ordinary template match, `f <: (x :
-Int => _: Int)`, so a function is constrained by the same rule as every other
-template: the actual is unified with a fresh clone of the template
+result. A constraint on a function is the ordinary unify, `f = (x : Int =>
+_: Int)`, so a function is constrained by the same rule as every other
+requirement: the actual's **signature** is unified with the template's, and the
+actual's own body is kept
 (`crates/lichen-highlevel/src/checker/templates.rs`).
+
+Plain `=` is the spelling, not `<:`. The match operator applies its right
+hand side exactly once, and a function template is not a constructor to apply:
+it states a signature, not a requirement to be produced. A `<:` whose right
+hand side is a function template would apply that template and unify the
+actual with its **result**.
 
 Because the template *is* a function, the one-representation property this
 note records survives the change of spelling: there is no second shape for a
@@ -137,16 +144,15 @@ against its original compared two `Function` values and conflicted.
 ## A struct's nominal identity is its written occurrence
 
 > **The encoding below is the pre-template one.** A struct *type expression*
-> is retired: a struct is now a **value** — `{.name requirement, …}` is a
-> template, `S{.name value}` an instance — and the identity rides in the
+> is retired: a struct is now a **value**, and the identity rides in the
 > **value's own header**, `[name table, nominal id, fields…]`
 > (`crates/lichen-highlevel/src/checker/structs.rs`, `struct_value_node`).
 > The rule this section records is unchanged: one written occurrence is one
 > nominal type, and the name table is what carries it, because a table
-> compares by **identity**. Measured: two templates written apart do not
-> unify — `expected Table, found Table` — while two instances of one
-> template do. See [value templates](value-templates.md) for the migration
-> and the book's Chapter 8 for the surface.
+> compares by **identity**. Measured: two struct constructors written apart
+> produce instances that do not unify — `expected Table, found Table` — while
+> two instances of one constructor do. See [value templates](value-templates.md)
+> for the migration and the book's Chapter 8 for the surface.
 
 A struct type expression compiles to the expr `[shape, kind]`, and its nominal
 identity is a marker of the form
@@ -211,7 +217,7 @@ of one expression applied to one argument, and they must unify.
   [the kernel parameter's class](kernel-parameter-class.md). The arrow form
   itself has since been **retired from the language**: a frozen module now
   states a signature with a **function template** (`(x : Int => _: Int)`) and
-  matches it with `<:`, so there is no written arrow left to be frozen.
+  unifies it with plain `=`, so there is no written arrow left to be frozen.
 - **The function arm is a second implementation of the array rule.** It descends
   with a fresh `path` and `steps`, has no early break, and records a failed child
   **twice** — once at the child and once at the function-type level — so the same

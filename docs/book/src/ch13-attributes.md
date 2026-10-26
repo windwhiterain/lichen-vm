@@ -151,7 +151,7 @@ by any other, so a later `?` overrides an earlier one, and the printed
 value carries it:
 
 ```lichen
-D := {.tag @any : Int}
+D := _x => {.tag @any : Int}
 ((5 ? D{.tag 1}) ? D{.tag 2})
 ```
 
@@ -190,7 +190,7 @@ rest. So a new perspective keeps an old doc, and a new doc keeps an old
 perspective:
 
 ```lichen
-D := {.tag @any : Int}
+D := _x => {.tag @any : Int}
 ((5 # 8 ? D{.tag 1}) # 4)
 ```
 

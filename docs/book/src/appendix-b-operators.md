@@ -42,21 +42,22 @@ below.
 The container's layout is required by each form; a wrong layout is a
 check-time refusal, never a runtime dispatch (Chapter 7's table).
 
-## Annotations, templates and marks
+## Annotations, requirements and marks
 
 | form | slot | checked how |
 |---|---|---|
 | `e : T` | type | unification |
-| `a <: t` | template | unification of `a` with a fresh clone of `t` |
+| `a <: c` | constructor | `a` unified with the requirement `c _` returns; `c` is applied once |
 | `e # p` | perspective | divisibility of the requirement against the provider (Chapter 13) |
 | `e ! p` | refinement | the predicate must answer `1` (Chapter 11) |
 | `e ? d` | doc | never constrains; a later doc overrides |
 | `e ~ "text"` | mark | compile-time metadata; no slot, no value |
 
-A **template** is a value that states what a compound must be: a tuple of
+A **requirement** states what one position of a compound must be: a tuple of
 requirements, `[requirement, length]`, or `{.name requirement, …}`. The
 requirement `@any : T` asks for any value of type `T`, and `v : T` pins
-the value as well (Chapter 10).
+the value as well (Chapter 10). A **constructor** is the function that
+returns a fresh requirement when it is applied, and `<:` applies it once.
 
 ## The `$` form
 
@@ -74,4 +75,4 @@ written only in a plugin's own source.
 - There is no ternary; `if` is the lazy read of one element of a
   two-element tuple.
 - There is no thin arrow; a function's signature is written with `=>` and
-  constrained with `<:` against a function template.
+  unified with plain `=` against a function template.

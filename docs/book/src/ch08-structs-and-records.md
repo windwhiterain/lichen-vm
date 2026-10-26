@@ -4,51 +4,54 @@ A tuple groups values by **position**; a struct groups them by **name**.
 That difference is what the language's nominal types are built from: a
 struct's identity is its own name table, and two structs written apart
 are two types however alike they look. This chapter is about struct
-templates, their instances, their reads, and the form that builds a
+constructors, their instances, their reads, and the form that builds a
 struct from a block of bindings — the **record**.
 
-## A struct template
+## A struct constructor
 
-A struct template is written with a leading `.` before each field's name,
-and each field carries a **requirement** — the value the field must
-hold:
+A **constructor** is a function that returns a fresh requirement when it
+is applied, and a struct's requirement is written with a leading `.` before
+each field's name, each field carrying a **requirement** — the value the
+field must hold:
 
 ```lichen
-S := {.x @any : Int, .y @any : Type}
+S := _x => {.x @any : Int, .y @any : Type}
 S
 ```
 
 ```text
-(@any, @any): Struct
+?a => Struct: ?a => Struct
 ```
 
-The template is a struct value: its fields are the requirements, and its
-type is the shared layout type `Struct` (Chapter 7's read table lists
-what that layout enables). `@any : Int` is the requirement "any `Int`
-will do"; a field may require a concrete value instead, as Chapter 10's
-pinned slots do.
+The constructor is an ordinary function, so it prints as one; what it
+returns is the struct value, and that value's type is the shared layout type
+`Struct` (Chapter 7's read table lists what that layout enables).
+`@any : Int` is the requirement "any `Int` will do"; a field may require a
+concrete value instead, as Chapter 10's pinned slots do.
 
 The fields are named; there is no positional struct definition.
 
 ## A struct's identity is its own name table
 
-Each written occurrence of a struct template is a **new** type. The
+Each written occurrence of a struct constructor is a **new** type. The
 occurrence carries a name table, and that table is the identity: two
-templates written apart do not unify, however identical their fields
+constructors written apart do not unify, however identical their fields
 look:
 
 ```lichen
-S1 := {.x @any : Int}
-S2 := {.x @any : Int}
-S1 = S2
+S1 := _x => {.x @any : Int}
+S2 := _x => {.x @any : Int}
+a := S1{.x 1}
+b := S2{.x 2}
+a = b
 ```
 
 ```text
 error: expected Table, found Table
-  --> 1:7
+  --> 3:6
    |
- 1 | S1 := {.x @any : Int}
-   |       ^
+ 3 | a := S1{.x 1}
+   |      ^
 ```
 
 The message names the thing that differs — the **name table** — because
@@ -60,7 +63,7 @@ Bind one occurrence and the binding is the type, so one identity can be
 used in many places:
 
 ```lichen
-S := {.x @any : Int}
+S := _x => {.x @any : Int}
 a := S{.x 1}
 b := S{.x 2}
 (a, b)
@@ -75,7 +78,7 @@ Both instances are of the *same* `S`, so they share a tuple. This is what
 a tuple of the same fields:
 
 ```lichen
-S := {.x @any : Int}
+S := _x => {.x @any : Int}
 a := S{.x 1}
 a : Tuple
 ```
@@ -90,11 +93,11 @@ error: expected Tuple, found Struct
 
 ## Instantiating a struct
 
-An instance is the template applied to the field **values**, written after
-the template with the same `.name` spelling:
+An instance applies the constructor **once** and fills the struct value it
+returns, written after the constructor with the same `.name` spelling:
 
 ```lichen
-S := {.x @any : Int, .y @any : Type}
+S := _x => {.x @any : Int, .y @any : Type}
 S{.x 1, .y Int}
 ```
 
@@ -102,12 +105,16 @@ S{.x 1, .y Int}
 (1, Int): Struct
 ```
 
-The instance's fields are checked against the template's requirements as
-they are given, so a value that does not meet the requirement is refused
-at the field:
+There is no second application. `S` is a constructor, `S{…}` applies it to a
+placeholder and fills what comes back, and `(S _){…}` would apply the
+returned struct value a second time, which is not the constructor form.
+
+The instance's fields are checked against the requirements the constructor
+returned as they are given, so a value that does not meet the requirement is
+refused at the field:
 
 ```lichen
-S := {.x @any : Int}
+S := _x => {.x @any : Int}
 S{.x "s"}
 ```
 
@@ -122,7 +129,7 @@ error: expected Int, found string
 A field left unsupplied is refused, naming the field:
 
 ```lichen
-S := {.x @any : Int, .y @any : Int}
+S := _x => {.x @any : Int, .y @any : Int}
 S{.x 1}
 ```
 
@@ -137,7 +144,7 @@ error: missing field y in the struct type Struct
 and an unknown name is refused at the field:
 
 ```lichen
-S := {.x @any : Int}
+S := _x => {.x @any : Int}
 S{.y 1}
 ```
 
@@ -152,7 +159,7 @@ error: no field named y in the struct type Struct
 A struct with no fields is written `{}`, and its instance is `S{}`:
 
 ```lichen
-S := {}
+S := _x => {}
 S{}
 ```
 
@@ -165,7 +172,7 @@ S{}
 A field is read by name with a dot:
 
 ```lichen
-S := {.x @any : Int, .y @any : Type}
+S := _x => {.x @any : Int, .y @any : Type}
 s := S{.x 1, .y Int}
 (s.x, s.y)
 ```
@@ -179,7 +186,7 @@ its type is the field's. A miss is a diagnostic at the read, with a
 suggestion when a field is close:
 
 ```lichen
-S := {.x @any : Int, .y @any : Int}
+S := _x => {.x @any : Int, .y @any : Int}
 a := S{.x 1, .y 2}
 a.xx
 ```
@@ -314,12 +321,14 @@ whose value is its record.
 
 ## Summary
 
-- A struct template is `{.name requirement, …}`; each field is named, and
-  each written occurrence is a fresh identity.
-- The identity is the value's own name table, so two templates written
-  apart do not unify; bind a template to use one identity in many places.
-- An instance is `S{.x 1, .y Int}`; every field must be supplied and must
-  meet the template's requirement.
+- A struct **constructor** is a function that returns a fresh requirement
+  when applied: `S := _x => {.x @any : Int}`. Each field is named, and each
+  written occurrence is a fresh identity.
+- The identity is the value's own name table, so two constructors written
+  apart do not unify; bind a constructor to use one identity in many places.
+- An instance is `S{.x 1, .y Int}`: it applies the constructor once and
+  fills the struct value it returns. Every field must be supplied and must
+  meet the requirement.
 - Fields are read by name, `s.x`; the container's layout must be
   `Struct`, and a miss is diagnosed with a suggestion when one is close.
 - There is no `::` read: the names live in the value, so read the value
@@ -332,14 +341,14 @@ whose value is its record.
 
 ## Exercises
 
-1. Define a template `S := {.x @any : Int, .y @any : Int}`, build an
-   instance, and read both fields.
-2. Explain why two templates written apart do not unify, in terms of the
+1. Define a constructor `S := _x => {.x @any : Int, .y @any : Int}`, build
+   an instance, and read both fields.
+2. Explain why two constructors written apart do not unify, in terms of the
    name table.
 3. Write a record block with a `let` and a `pub` binding and list which
    fields the record has.
 4. Write a record program that exports two functions and read one of them
    through a block-bound name.
-5. Write `mk = (x : Int) => S{.y x + 1, .z x + 2}` for a template `S` and
+5. Write `mk = (x : Int) => S{.y x + 1, .z x + 2}` for a constructor `S` and
    read the fields after binding the call's result. What does the same
    read answer without the binding?
