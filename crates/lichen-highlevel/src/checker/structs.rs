@@ -488,6 +488,8 @@ where
     ) -> NodeId {
         self.check_expr(template);
         self.check_expr(value);
+        let template_value = self.value_of(template);
+        self.module.evaluate_node_deep(template_value, None);
         let template_ty = self.state[template].ty.unwrap();
         self.module.evaluate_node_deep(template_ty, None);
         if !self.type_is_concrete(template_ty) {
@@ -547,9 +549,6 @@ where
             self.check_expr(el);
             vals.push(self.state[el].term.expect("an argument is compiled"));
         }
-        // The template's own value: a call result is decided by running it.
-        let template_value = self.value_of(template);
-        self.module.evaluate_node_deep(template_value, None);
         // The template's clone: the requirements are the clone's own fields.
         let Some(instance) = self.clone_instance_value(template) else {
             self.record_guard(

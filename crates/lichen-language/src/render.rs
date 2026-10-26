@@ -221,6 +221,22 @@ pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) 
 // Re-render the highlevel's facts in the CLI's vocabulary, through one shared
 // printer so a class keeps one `?a` name.
 
+/// Print the recorded leaf value when it has a standalone spelling; otherwise
+/// keep the original operand's node rendering.
+fn mismatch_side<P>(
+    printer: &mut TypePrinter<'_, P>,
+    value: Option<P::Value>,
+    node: NodeId,
+) -> String
+where
+    P: HighProgram + 'static,
+    P::Value: ValueType,
+{
+    value
+        .and_then(|value| printer.diagnostic_value(value))
+        .unwrap_or_else(|| printer.node(node))
+}
+
 /// Re-render a checker diagnostic's message from the highlevel's facts.
 ///
 /// # Invariant
@@ -240,8 +256,8 @@ where
         | DiagKind::Guard => {
             format!(
                 "expected {}, found {}",
-                printer.node(d.b),
-                printer.node(d.a)
+                mismatch_side(printer, d.value_b, d.b),
+                mismatch_side(printer, d.value_a, d.a)
             )
         }
 

@@ -134,6 +134,24 @@ where
             .unwrap_or_else(|| "?".to_string())
     }
 
+    /// Render a recorded mismatch value without an owning node. Array values
+    /// need their node and answer `None`, so the caller can use that node.
+    pub fn diagnostic_value(&mut self, value: P::Value) -> Option<String> {
+        if let Some(structural) = value.as_enum() {
+            return match structural {
+                LowValue::USize(n) => Some(n.to_string()),
+                LowValue::Float(value) => Some(float_literal(value)),
+                LowValue::Str(s) => Some(format!("\"{s}\"")),
+                LowValue::Array(_) => None,
+                LowValue::Table(_) => Some("Table".to_string()),
+                LowValue::Function(fid) => Some(self.function_spelling(fid)),
+                LowValue::None | LowValue::Error => Some("none".to_string()),
+                LowValue::Any => Some("@any".to_string()),
+            };
+        }
+        self.type_constant(&value)
+    }
+
     /// The spelling of a type constant, or of an extension's own variant.
     pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
         if value == &P::Value::int_marker() {
