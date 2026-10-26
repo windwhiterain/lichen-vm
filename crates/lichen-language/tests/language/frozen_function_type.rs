@@ -43,4 +43,13 @@ fn a_function_template_in_a_frozen_module_is_a_function() {
         out, "2: Int",
         "the template constrains the function without replacing its body"
     );
+
+    let out = render_imported_wrapper(
+        "wrap := f => {f <: (x => _); f 1}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y)",
+    );
+    assert_eq!(
+        out, "2: Int",
+        "a frozen generic function template admits a concrete function"
+    );
 }

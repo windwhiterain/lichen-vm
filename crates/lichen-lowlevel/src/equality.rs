@@ -960,6 +960,16 @@ impl<P: Program> Module<P> {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
                     self.unify_array_items(pa, pb, path, depth, steps, any_path, root)
                 }
+                (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
+                    match self.unify_function_signatures(a, b, path, depth, steps, any_path, root) {
+                        Some(ok) => ok,
+                        None if self.function_identity_equal(a, b) => true,
+                        None => {
+                            self.record_value_error(root, Some(x), Some(y));
+                            false
+                        }
+                    }
+                }
                 // Two functions are one when their identities resolve to one
                 // logical function — the frozen/static expr included.
                 _ if self.value_expr_equal(x, y) => true,
@@ -1010,53 +1020,30 @@ impl<P: Program> Module<P> {
                         }
                         ok
                     }
-                    // A function's own cells, as an array's elements are the array's:
-                    // `[parameter, return]` decides it.
+                    // A function's parameter and return decide its signature.
                     (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
-                        let (Some((parameter_a, return_a)), Some((parameter_b, return_b))) =
-                            (self.function_cells(a), self.function_cells(b))
-                        else {
-                            // A template that states no signature states nothing: only
-                            // the values themselves can decide.
-                            return if self.function_identity_equal(a, b) {
+                        path.insert(ra, rb);
+                        let matched = self
+                            .unify_function_signatures(a, b, path, depth, steps, any_path, root);
+                        path.remove(ra, rb);
+                        match matched {
+                            Some(true) => {
                                 self.add_equality(ra, rb);
                                 true
-                            } else {
-                                self.record_error(ra, rb, steps, root);
-                                false
-                            };
-                        };
-                        path.insert(ra, rb);
-                        let mut ok = true;
-                        for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]
-                            .into_iter()
-                            .enumerate()
-                        {
-                            steps.push(UnifyStep {
-                                index: i,
-                                a: node_or_default(na),
-                                b: node_or_default(nb),
-                            });
-                            let child_ok = self.unify_inner(
-                                Side::of(na, self.node_value(na)),
-                                Side::of(nb, self.node_value(nb)),
-                                path,
-                                depth + 1,
-                                steps,
-                                any_path,
-                                root,
-                            );
-                            steps.pop();
-                            if !child_ok {
-                                ok = false;
-                                break;
+                            }
+                            Some(false) => false,
+                            None => {
+                                // A template that states no signature states nothing: only
+                                // the values themselves can decide.
+                                if self.function_identity_equal(a, b) {
+                                    self.add_equality(ra, rb);
+                                    true
+                                } else {
+                                    self.record_error(ra, rb, steps, root);
+                                    false
+                                }
                             }
                         }
-                        path.remove(ra, rb);
-                        if ok {
-                            self.add_equality(ra, rb);
-                        }
-                        ok
                     }
                     // Fully equal by content ([`ValueExt::value_eq`]), not the cheap [`PartialEq`].
                     _ if x.value_eq(&y) => {
@@ -1070,6 +1057,51 @@ impl<P: Program> Module<P> {
                 }
             }
         }
+    }
+
+    /// Compare two functions by their parameter and return cells. `None` means
+    /// that at least one side has no readable signature.
+    fn unify_function_signatures(
+        &mut self,
+        a: AnyFunctionId,
+        b: AnyFunctionId,
+        path: &mut AncestorPairs<NodeId>,
+        depth: usize,
+        steps: &mut Vec<UnifyStep>,
+        any_path: &mut AncestorPairs<AnyNodeId>,
+        root: (NodeId, NodeId),
+    ) -> Option<bool> {
+        let (Some((parameter_a, return_a)), Some((parameter_b, return_b))) =
+            (self.function_cells(a), self.function_cells(b))
+        else {
+            return None;
+        };
+        let mut ok = true;
+        for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]
+            .into_iter()
+            .enumerate()
+        {
+            steps.push(UnifyStep {
+                index: i,
+                a: node_or_default(na),
+                b: node_or_default(nb),
+            });
+            let child_ok = self.unify_inner(
+                Side::of(na, self.node_value(na)),
+                Side::of(nb, self.node_value(nb)),
+                path,
+                depth + 1,
+                steps,
+                any_path,
+                root,
+            );
+            steps.pop();
+            if !child_ok {
+                ok = false;
+                break;
+            }
+        }
+        Some(ok)
     }
 
     /// Whether two decided leaf values are one: functions by identity, else full value equality.
