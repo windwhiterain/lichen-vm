@@ -12,7 +12,6 @@ use super::common;
 
 use lichen_compute::ComputeValue;
 use lichen_highlevel::program::TypeValue;
-use lichen_highlevel::shape::{TypeRef, field_type};
 use lichen_kernel_ir::ScalarClass;
 use lichen_lowlevel::AnyNodeId;
 use lichen_utils::extend::AsEnum;
@@ -52,14 +51,7 @@ fn the_module_holds_a_decided_float_element_type() {
         !reads.is_empty(),
         "the module carries `Buf`-shaped type terms"
     );
-    for (id, _read) in &reads {
-        let slot = AnyNodeId::Dynamic(*id);
-        let element = [TypeRef::Term(slot), TypeRef::Slot(slot)]
-            .into_iter()
-            .find_map(|ty| field_type(&module, ty, 1));
-        let Some(element) = element else {
-            continue;
-        };
+    for (id, element) in common::buf_element_fields(&module) {
         let value = module
             .element_value_node(element)
             .and_then(|node| node.dynamic())
