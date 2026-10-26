@@ -52,4 +52,25 @@ fn a_function_template_in_a_frozen_module_is_a_function() {
         out, "2: Int",
         "a frozen generic function template admits a concrete function"
     );
+
+    let out = render_imported_wrapper(
+        "wrap := f => {O := f 1; r := f 1; r <: O}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y)",
+    );
+    assert_eq!(out, "2: Int", "an applied result is a reusable template");
+
+    let out = render_imported_wrapper(
+        "K := _x => {.native _, .I _, .O _}\nlaunch := k <: K _ => r => {r <: k.O}\nwrap := f => x => {I := _; f <: (i <: I => _); x <: I; O := f I; r := f x; launch ((K _){.native _, .I I, .O O}) r}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y) 1",
+    );
+    assert_eq!(out, "2: Int", "a struct field carries the output template");
+
+    let out = render_imported_wrapper(
+        "wrap := f => x => {I := _; f <: (i <: I => _); x <: I; O := f I; r := f x; r <: O}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y) 1",
+    );
+    assert_eq!(
+        out, "2: Int",
+        "the input template drives the output template"
+    );
 }
