@@ -1347,8 +1347,8 @@ where
         if let Some(function) = self.module.static_function_of_callee(callee) {
             return Some(function);
         }
-        let type_node = type_slot?.dynamic()?;
-        match self.module.function_type_function(type_node)? {
+        let expr = type_slot?.dynamic()?;
+        match self.module.function_expr_function(expr)? {
             AnyFunctionId::Static(function) => Some(function),
             AnyFunctionId::Dynamic(_) => None,
         }
@@ -1380,8 +1380,8 @@ where
             }
             return Some(AnyFunctionId::Dynamic(function));
         }
-        let type_node = type_slot?.dynamic()?;
-        match self.module.function_type_function(type_node)? {
+        let expr = type_slot?.dynamic()?;
+        match self.module.function_expr_function(expr)? {
             AnyFunctionId::Dynamic(function) => Some(AnyFunctionId::Dynamic(function)),
             AnyFunctionId::Static(function) => Some(AnyFunctionId::Static(function)),
         }
@@ -1583,7 +1583,7 @@ where
                     .ok()
                     .and_then(|items| items.get(3).map(|item| item.node))
                     .and_then(|item| item.dynamic())
-                    .and_then(|type_node| self.module.function_type_function(type_node))
+                    .and_then(|expr| self.module.function_expr_function(expr))
                     .and_then(|function| match function {
                         AnyFunctionId::Dynamic(function) => Some(function),
                         AnyFunctionId::Static(_) => None,

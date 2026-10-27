@@ -1,6 +1,6 @@
 ---
   order = "3"
-  output = "Tuple => Int: Tuple => Int"
+  output = "Tuple => Int: TypeFunction"
 ---
 f1 := x => x : Int
 f2 := x => {

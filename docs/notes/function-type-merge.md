@@ -1,16 +1,19 @@
 # Function types, and a struct type's nominal identity
 
-> Status: **current.** A function's type is the function itself (`f : f`) and
-> there is only one representation of a function type. Two functions unify the
-> way two arrays do. A signature is written by a **function template** — a
-> real function value — and unified with plain `=`, which applies nothing; the
-> thin arrow `->` is gone from the language. A struct's nominal identity is the
-> **name table its value carries**, so one written occurrence is one type
-> however many times it is evaluated.
+> Status: **the `f : f` half is superseded** (the user's ruling, recorded
+> below); the rest is current. A function value's own type is now the shared
+> **`FunctionType` marker** — the spec's `Function` — and no longer the
+> function itself. Two functions unify the way two arrays do. A signature is
+> written by a **function template** — a real function value — and unified with
+> plain `=`, which applies nothing; the thin arrow `->` is gone from the
+> language. A struct's nominal identity is the **name table its value
+> carries**, so one written occurrence is one type however many times it is
+> evaluated.
 >
-> This note absorbs the still-true halves of *"A function's type is the function
-> itself"* (the `f : f` half; its arrow half is what this note replaces) and of
-> *"An applied struct type expression is not a function"*.
+> This note absorbs the still-true half of *"A function's type is the function
+> itself"* — its **arrow** half, which a function template replaced — and of
+> *"An applied struct type expression is not a function"*. Its `f : f` half is
+> retired: see the ruling below.
 >
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (the function/array unify
 > arm, the function-type recognisers, the signature reads),
@@ -25,12 +28,92 @@
 > (the kernel signature readers).
 > Open questions are in [What is open](#what-is-open).
 
+## The ruling: a function value's type is the `FunctionType` marker
+
+**The user's ruling (authoritative).** The spec's `Function` section
+(`docs/language-spec.md`) states a function value as
+`@raw[@raw p => body, Function, ...]` and `Function` as
+`@raw[@raw FunctionType, Type, ...]`. So:
+
+- A function **value**'s own type is the shared **`FunctionType` marker** — the
+  `Function` type constant — and **not** the legacy self-referential `f : f`
+  (`[Function(fid), ↺]`). The type names no particular function, so the type
+  chain never cycles at a function.
+- A function's **identity** lives in its **value** (`LowValue::Function(fid)`),
+  never in its type. The lowlevel reads it with `function_value_function` (a
+  value) and `function_expr_function` (an expr's value half, the **direct**
+  reader), with `function_apply_function` reading a deferred `Unify`'s expected
+  operand for the apply side; the retired
+  `function_type_function` / `is_function_type` / `static_function_type_function`
+  are gone, and the marker predicate is the highlevel's
+  `shape::is_function_type_any`.
+- There is **no separate signature concept**: a function is unified with the
+  template **directly**. The current spelling of a template is
+  `_x : Int => _: Int`; the constraint is that unify, with `=` or `<:`.
+  `unify_function_signatures` still compares two functions' parameter and
+  return cells, and `Module::function_signature` reads a known function's
+  signature.
+- The retired **arrow term** (`[[domain, codomain], [FunctionType, K]]`, built
+  by `Ctx::arrow`) goes with the representation it belonged to; a signature is
+  a function template, not a type structure.
+
+**What changed in the code.** `check_lam` builds the function's expr as
+`[value, FunctionType, attrs…]` and makes the shared `Function` constant its
+type; `function_pattern` (a fake function whose type was a self-cycle) is
+replaced by that constant; the apply's fourth operand carries the callee's
+**expr**, whose value half names the function, so the type side can be applied
+where the value cannot. The **runtime** type application still runs — for a
+callee whose value is not concrete it applies the signature the callee's expr
+names, and a frozen callee goes through `static_function_type_apply` so its
+codomain binds — but it no longer reads a function out of a **type**: the
+identity comes from the expr. The type side of a call is also applied at check
+time, by `apply_function_type`, from the callee the check names.
+
+**How the constraint is stated.** A template against an actual whose value is
+still undecided is a **direct unify** of the two exprs, deferred as a graph
+statement over `[actual_term, expected_term]`: the actual's **type** is
+unified with the shared `Function` type — never with the template, so no
+type carries a template — and the parameter's later uses read the `Unify`
+term, while the function's own parameter record is untouched, so the argument
+is still bound before the body runs. The unify returns the actual's own expr,
+so the value side applies the supplied function and not the template. The
+type side reads the template through `function_apply_function`, which prefers
+the term's computed value and falls back to the `Unify`'s **expected**
+operand only while the actual is still undecided — a decided non-function, or
+an `Error`, never falls back to it. `function_expr_function` is the **direct**
+reader: the expr's own value half, with no template fallback, so a lowering
+never routes to the template body.
+
+**Why the runtime type application is restricted to the undecided callee.**
+Beside a **concrete** value apply it instantiated the callee a second time,
+next to the value side's own instantiation. Under the old representation the
+two never shared the parameter cell (the cloned function type's self-reference
+was *not* re-established in every clone, so the cloned type named no function
+and the type application did not fire). Under the shared `FunctionType` marker
+the clones are uniform, the two instantiations share the parameter cell, and
+the value side's binding was **refused** — so a `@loop` recursion's state never
+advanced and the loop spun. Measured: with the type application running beside
+a concrete value apply, the loop test performed >2000 iterations without
+terminating; restricted to the undecided callee — where the value side has no
+instantiation of its own — `loop_run::the_loop_and_the_unroll_answer_the_same_value`
+and `loop_run::a_marked_reduction_runs_a_count_the_expansion_cannot_afford`
+pass. The type application itself is **not** retired: it still applies the
+signature the callee's expr names, and a frozen callee goes through
+`static_function_type_apply` so its codomain binds.
+
+**The artifact decision.** The wire codec is unchanged, but an artifact's
+*meaning* is not: a frozen module written by the old compiler carries the
+retired self-referential function type, and a reader that met it would read a
+function type where the new reader expects the shared marker. The artifact
+format version therefore moves, so old artifacts are rebuilt rather than read
+under the new meaning (`docs/notes/artifact-cache.md`).
+
 ## One representation: a function template is a function
 
 **There is no thin arrow.** `A -> B` is not a token in the language, and the
 written-arrow form is retired. A signature is stated by a **function
 template**: a real function value written where a function would be, such as
-`(x : Int => _: Int)` — the parameter with its annotation, `=>`, and the
+`_x : Int => _: Int` — the parameter with its annotation, `=>`, and the
 result. A constraint on a function is the ordinary unify, `f = (x : Int =>
 _: Int)`, so a function is constrained by the same rule as every other
 requirement: the actual's **signature** is unified with the template's, and the
@@ -49,23 +132,27 @@ function's type, and a signature is never a distinct term.
 
 A function value's *own* type is then the same thing, and it needs no second
 node: `check_lam` binds the function expr's type cell to the expr itself, so a
-function's type is the self-referential node
+function's type is the self-referential node — **superseded**
 
-```text
-[Function(fid), ↺]
-```
-
-— value slot holds the function, type slot points back at itself, exactly the
-shape the universe `K = [Type, ↺]` has. It is recognised as a type by that
-self-cycle (`Module::is_function_type`), and distinguished from the universe by
-slot 0: the universe holds the `Type` marker, a function type holds a
-`LowValue::Function`.
+> **This subsection is history.** It describes the representation the user's
+> ruling retired: a function's type was the self-referential node
+>
+> ```text
+> [Function(fid), ↺]
+> ```
+>
+> — value slot holds the function, type slot points back at itself — recognised
+> as a type by that self-cycle (`Module::is_function_type`). The type is now
+> the shared `FunctionType` marker, and the recogniser is the highlevel's
+> `shape::is_function_type_any`; the identity is read from the **value**
+> (`Module::function_value_function`, `Module::function_expr_function`).
 
 Two consequences, and both are deliberate:
 
 - **`f : f` is a consequence, not a rule anybody maintains.** The type chain
   closes at the function the way it closes at `Type`, so a function's type is the
-  function (`overview.md`).
+  function (`overview.md`). — **superseded:** the chain does not close at a
+  function any more; a function's type is the shared marker.
 - **A function's signature is not in the type node.** It lives in the function
   template: the parameter is the `[value, type, attrs…]` expr the body binds and
   the apply clone walk clones (`Function::parameter`), and the return side is
@@ -74,10 +161,11 @@ Two consequences, and both are deliberate:
   clones those two cells fresh per call and never binds the template, so a
   function's signature is let-polymorphic: `f := x => x` accepts `1` and `1.5`
   in turn, and an annotation checks a clone rather than specialising the
-  template.
+  template. — **still true:** the signature lives in the function's own cells,
+  and the type carries none of it.
 
 The template's *return* position is an ordinary expression, which is how the
-placeholder spells "a result of this type": `(x : Int => _: Int)` states a
+placeholder spells "a result of this type": `_x : Int => _: Int` states a
 function of one `Int` whose result is a hole of type `Int`. The hole is filled
 by the actual function the match supplies.
 
@@ -216,7 +304,7 @@ of one expression applied to one argument, and they must unify.
   measured, with its reproductions, in
   [the kernel parameter's class](kernel-parameter-class.md). The arrow form
   itself has since been **retired from the language**: a frozen module now
-  states a signature with a **function template** (`(x : Int => _: Int)`) and
+  states a signature with a **function template** (`_x : Int => _: Int`) and
   unifies it with plain `=`, so there is no written arrow left to be frozen.
 - **The function arm is a second implementation of the array rule.** It descends
   with a fresh `path` and `steps`, has no early break, and records a failed child
@@ -264,7 +352,9 @@ of one expression applied to one argument, and they must unify.
   so the function-ness guard skipped during checking — is mutated in place into the
   self-referential `[Function(fid), ↺]`, the same shape as the universe
   `K = [Type, ↺]`: slot 0 the function's own value node, slot 1 the expr itself, so
-  the type chain cycles at the function (`f : f : f : …`).
+  the type chain cycles at the function (`f : f : f : …`). — **superseded:**
+  the pre-body expr is no longer mutated into a self-cycle; the function's type
+  is the shared marker.
 - A signature's `domain` and `codomain` compile before the shell opens: the two type
   expressions' nodes belong to the *enclosing* template and are cloned per call like
   any other node in scope, and the shell's own parent is that enclosing function,
@@ -280,12 +370,13 @@ of one expression applied to one argument, and they must unify.
   the lambda's syntax was compiled. The frontend's `fn_parents` invariant encodes
   the sibling rule.
 - The function-ness guard refuses only a concrete non-function, and that is what
-  makes it safe to run for every application: a concrete function type is the
-  self-referential `[Function(fid), ↺]`, recognised by the two cells it has, while
+  makes it safe to run for every application: a concrete function type is the shared
+  `FunctionType` marker, recognised by the marker its value slot holds, while
   undecided types (parameters, lambdas, call results) are left to the runtime apply,
   because unifying the shared cell here would chain the type cells of every use of a
   polymorphic value. A failed unify never merges classes, so the guard itself cannot
-  chain either.
+  chain either. — **superseded:** the guard now unifies the callee's type with the
+  shared `Function` marker, not with a self-referential function pattern.
 - `TypeValue` and `TypeOperator` are the highlevel's own leaves: each layer provides
   a plain enum of its own variants — the lowlevel's `LowValue`/`LowOperator`, the
   highlevel's type values and type-level operators — and the composed vocabularies

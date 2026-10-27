@@ -196,8 +196,8 @@ A compound's type is its layout — `Tuple`, `Array` or `Struct` — and never
 `Type` (Chapter 5). A wrong container is an ordinary type error; no read
 inspects a requirement's component at run time. A table's type is
 `table{K, V}`, a set's is `set{E}`, and the one type that is not a value
-of a kind type is a function's: its type is the function itself (Chapter
-4), and Chapter 12 is about that self-referential node.
+of a kind type is a function's: its type is the shared `FunctionType` marker
+(Chapter 4), and Chapter 12 is about a function's own cells.
 
 ## Summary
 

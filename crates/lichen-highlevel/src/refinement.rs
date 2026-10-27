@@ -50,8 +50,8 @@ where
     /// The comparison is of the two slots' **value** nodes
     /// ([`slot_value_node`]), not of the slots: the predicate is a slot's `[value,
     /// type]` expr's element 0, and comparing slots would unify that expr against
-    /// the predicate's own self-referential `[Function(fid), ↺]` type, so the
-    /// descent walks into the cycle and refuses a refinement that should pass.
+    /// the predicate's own type, so the descent walks into the predicate's
+    /// function and refuses a refinement that should pass.
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
         let a = slot_value_node(ctx, a);
         let b = slot_value_node(ctx, b);

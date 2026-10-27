@@ -35,4 +35,4 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// The reader accepts only this value, so a change to either half bumps it and
 /// retires the artifacts written before it: they fail the version check and
 /// recompile. See docs/notes/artifact-cache.md.
-const ARTIFACT_FORMAT_VERSION: u32 = 23;
+const ARTIFACT_FORMAT_VERSION: u32 = 24;

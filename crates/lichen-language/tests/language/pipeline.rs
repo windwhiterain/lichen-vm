@@ -313,7 +313,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
     // The printer recognizes a cell unified into the universe class.
     assert_eq!(
         lichen_language::run::evaluate("x : Int => x").unwrap(),
-        "Int => Int: Int => Int"
+        "Int => Int: TypeFunction"
     );
     assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
 }
@@ -701,7 +701,7 @@ fn operator_precedence_and_associativity() {
 
     assert_eq!(
         lichen_language::run::evaluate("x => x + 1").unwrap(),
-        "Int => Int: Int => Int"
+        "Int => Int: TypeFunction"
     );
     // Each new level is checked against the reading that would come out
     // wrong in the wrong place.
@@ -1982,7 +1982,8 @@ fn a_heterogeneous_array_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
-    // The conflict is top-level: a function's type (`f : f`) is not `Int`.
+    // The conflict is top-level: a function's type (the `FunctionType` marker)
+    // is not `Int`.
 }
 
 #[test]

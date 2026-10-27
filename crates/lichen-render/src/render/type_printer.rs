@@ -196,10 +196,9 @@ where
         if elements.len() >= 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
-        // A function-type node `[Function(fid), ↺]`: its signature lives in the
-        // template, not a `[dom, cod]` shape.
+        // An expr carrying a **function** in its value slot reads as that
+        // function's signature.
         if elements.len() >= 2
-            && self.slot1_is_self(elements[1].node, AnyNodeId::Dynamic(node))
             && let Some(fv) = self.module.node_value(elements[0].node)
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)
@@ -293,63 +292,6 @@ where
         self.arrows.is_some_and(|arrows| {
             disjoint::members(&self.module.nodes, rep).any(|m| arrows.contains(&m))
         })
-    }
-
-    /// Whether element 1 **is** the node's own self-cycle, marking a function
-    /// type `[Function(fid), ↺]`.
-    ///
-    /// # Invariant
-    ///
-    /// Two forms count: a **dynamic** self-cycle, compared by class, so a cell
-    /// bound to the function-type counts; and a **static** self-ref, because a
-    /// materialized static function-type carries the frozen node's value, so its
-    /// slot 1 names that node's cycle, not the copy.
-    pub(super) fn slot1_is_self(&self, slot1: AnyNodeId, ty: AnyNodeId) -> bool {
-        match (slot1, ty) {
-            (AnyNodeId::Dynamic(slot1), AnyNodeId::Dynamic(ty)) => {
-                representative(self.module, slot1) == representative(self.module, ty)
-            }
-            (AnyNodeId::Static(sref), _) => self.static_function_type_function(sref).is_some(),
-            (AnyNodeId::Dynamic(_), AnyNodeId::Static(_)) => false,
-        }
-    }
-
-    /// The function a **static** node's value is the type of: a
-    /// `[Function(fid), t]` whose slot 1 is itself a function type.
-    ///
-    /// # Invariant
-    ///
-    /// Slot 1 is about the node `t` names, never about the node printed: a
-    /// materialized member of a function type's class carries the frozen type's
-    /// value, so its slot 1 names the frozen node that *is* the cycle.  See
-    /// docs/notes/class-channel.md.
-    fn static_function_type_function(
-        &self,
-        sref: lichen_lowlevel::StaticNodeId,
-    ) -> Option<AnyFunctionId> {
-        let value = self.module.static_read(sref)?;
-        let LowValue::Array(array) = value.as_enum()? else {
-            return None;
-        };
-        // SAFETY: `array` is the value read through `sref`, whose registered
-        // module pins the arena.
-        let items = unsafe { array.items() };
-        let [head, tail, ..] = items else {
-            return None;
-        };
-        let head = self.module.node_value(head.node)?;
-        let LowValue::Function(fid) = head.as_enum()? else {
-            return None;
-        };
-        let AnyNodeId::Static(tail) = tail.node else {
-            return None;
-        };
-        matches!(
-            self.module.static_read(tail).and_then(|value| value.as_enum()),
-            Some(LowValue::Array(items))
-                if unsafe { items.items() }.get(1).is_some_and(|item| item.node == AnyNodeId::Static(tail))
-        )
-        .then_some(fid)
     }
 
     /// A function value's own spelling: `domain => codomain`.
@@ -556,15 +498,8 @@ where
             // registered module pins the arena.
             Some(LowValue::Array(array)) => {
                 let items = unsafe { array.items() };
-                // A static function-type node, or a member carrying one, prints
-                // the template's signature rather than the raw expr.
-                if let Some(fid) = self.static_function_type_function(sref)
-                    && let Some((dom, cod)) = self.function_signature(fid)
-                {
-                    format!("{dom} => {cod}")
-                } else {
-                    self.static_elements(sref, items, visiting)
-                }
+                // A frozen function value's type is the shared marker too.
+                self.static_elements(sref, items, visiting)
             }
             None => self
                 .type_constant(&value)
@@ -589,6 +524,15 @@ where
         // render the head (`int`, `Type`, `Tuple`, …).
         if elements.len() >= 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
+        }
+        // An expr carrying a **function** in its value slot reads as that
+        // function's signature.
+        if elements.len() >= 2
+            && let Some(fv) = self.module.node_value(elements[0].node)
+            && let Some(LowValue::Function(fid)) = fv.as_enum()
+            && let Some((dom, cod)) = self.function_signature(fid)
+        {
+            return format!("{dom} => {cod}");
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.

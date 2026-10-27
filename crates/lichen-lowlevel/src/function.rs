@@ -165,16 +165,12 @@ impl<P: Program> Module<P> {
                 return None;
             };
             let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
-            // A closure's type cell is the call's own; the expr sync below owns the verdict.
+            // The call's own result type is the applied return's type cell.
             if let Some(cell) = cell
                 && let Some(codomain) = self.expr_type_item(instantiation.applied)
             {
                 self.evaluate_node(codomain, Some(block));
-                if !self.is_function_type_ref(codomain) {
-                    let before = self.unify_errors.len();
-                    self.unify_ref(cell, codomain);
-                    self.unify_errors.truncate(before);
-                }
+                self.unify_ref(cell, codomain);
             }
             self.wire_apply_result(node, result, instantiation.applied, block)
         })();
@@ -182,14 +178,15 @@ impl<P: Program> Module<P> {
         result
     }
 
-    /// Apply a function's **type** where its value is not concrete yet.
+    /// Apply a function's **signature** where its value is not concrete yet.
     ///
     /// # Invariant
-    /// `f : f` — the type is the function — so an apply of an unknown value still
-    /// applies the type. The domain and codomain are this application's own
-    /// clones ([`Self::instantiate`]), so a call site never monomorphises a
-    /// polymorphic template; the body is not evaluated, so only the signature is
-    /// applied.
+    /// The function is named by the caller, never by a type: a function's type
+    /// is the shared `FunctionType` marker and carries no signature, so the
+    /// apply states the function it means. The domain and codomain are this
+    /// application's own clones ([`Self::instantiate`]), so a call site never
+    /// monomorphises a polymorphic template; the body is not evaluated, so
+    /// only the signature is applied.
     pub(super) fn apply_type(
         &mut self,
         function: FunctionId,
@@ -248,18 +245,20 @@ impl<P: Program> Module<P> {
     /// names no function binds nothing. `report` runs the parameter check at
     /// the type side and keeps its errors; otherwise only the signature clones.
     /// Answers whether the type side applied (the cloned codomain was bound).
+    ///
+    /// # Invariant
+    /// The **function** is named, never a type: a function's type is the shared
+    /// `FunctionType` marker and carries no signature, so the caller states the
+    /// function it means.
     pub fn apply_function_type(
         &mut self,
-        type_node: NodeId,
+        function: AnyFunctionId,
         argument: AnyNodeId,
         block: BlockId,
         node: NodeId,
         cell: AnyNodeId,
         report: bool,
     ) -> bool {
-        let Some(function) = self.function_type_function(type_node) else {
-            return false;
-        };
         let check = if report {
             ParameterCheck::Report
         } else {

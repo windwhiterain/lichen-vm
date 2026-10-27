@@ -108,12 +108,10 @@ pub struct NativeApply { pub value: NodeId, pub decided: bool }
   is managed internally, so an extension can never build into the wrong block. The one
   deliberate exception is the lowlevel-only constructs a native operator genuinely needs — a
   fresh cell, an op node, an array shape; those are the *shape* of the grammar, not a bypass.
-- `Ctx::arrow` builds `[[domain, codomain], [FunctionType, Type]]` — the single spelling of
-  the arrow encoding — but does **not** register it in the checker's `arrows` set. That set
-  drives the type *printer* (it is what renders an expr as `T -> U` instead of `tuple{T, T}`), so
-  only a genuinely source-level arrow belongs in it: an arrow built as a unification *pattern*,
-  such as the function-ness guard's `[[?d, ?c], [FunctionType, K]]`, must stay out, and the
-  caller that prints inserts it.
+- There is no arrow encoder: the arrow term `[[domain, codomain], [FunctionType, Type]]` is
+  retired with the representation it belonged to. A signature is stated by a **function
+  template** — a real function value — and unified with `=`, so an extension states one by
+  building the template, not by assembling a type term.
 - The call's `[value, type]` expr is the checker's to build, never the builder's: `build`
   returns the value node it emitted. A builder that assembled a term by hand would be a
   second source of truth for the encoding.

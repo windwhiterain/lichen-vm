@@ -59,9 +59,11 @@ walked into it would cut there.
 
 ## Recursive functions, same shape
 
-A function's type **is** the function (`f : f`, Chapter 4): an applied
-function's value and type are the same self-referential node. That is the
-same pattern as the universe's cycle and the same pattern as `A`/`B`.
+A function's **value** is the function and its **type** is the shared
+`FunctionType` marker (Chapter 4), so the function's own cells are reached
+through the value rather than through a self-referential type node. That is
+the same pattern as `A`/`B`: the cycle is in the program's types, not in the
+function's.
 
 A recursive function's result is as decided as its signature. When the
 signature is stated, the recursive calls read it and the result follows:
@@ -142,9 +144,8 @@ inputs.
   the apply-depth budget.
 - The printer cuts a cycle with `…`: a finite notation for an infinite
   value, never a truncation.
-- A function's type is the function itself, which is the same
-  self-referential shape; a constrained recursive function has a decided
-  result.
+- A function's type is the shared `FunctionType` marker, which names no
+  function; a constrained recursive function has a decided result.
 - A result may depend on an argument's value, because checking evaluates;
   a concrete argument decides the answer, an open one leaves it open.
 - A dependent array length is the same mechanism as a pinned requirement.

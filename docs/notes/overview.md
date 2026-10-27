@@ -14,9 +14,9 @@ Because the expr is *just data*, the checker and the runtime are the same thing 
 unifying is a runtime operation, so **checking happens while building**. Types are
 first-class values (`Int`, `Type`, function/tuple/array types) living in the expr's
 type slot; `Type : Type` holds — the type chain closes in a cycle at `Type`,
-which is its terminal, not a supertype — and a **function's type is the function
-itself** (`f : f`), so its chain closes at `f` the same way
-([function-type-merge](function-type-merge.md)); there is no separate
+which is its terminal, not a supertype — and a **function's type is the shared
+`FunctionType` marker**, which names no function, so the chain never cycles at
+one ([function-type-merge](function-type-merge.md)); there is no separate
 kind system: a "kinding" mistake is an ordinary type error. This is why the README
 says "the runtime *is* the typechecker."
 

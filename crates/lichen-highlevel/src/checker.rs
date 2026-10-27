@@ -284,6 +284,14 @@ where
     /// Its type slot is itself: the struct layout closes on itself, so the
     /// template needs no second node and no payload.
     struct_template: NodeId,
+    /// The shared **`Function` type** — the `[FunctionType, Type]` expression
+    /// every function value's type is.
+    ///
+    /// # Invariant
+    /// One node for the whole program: a function value's type is this node, so
+    /// the type names no particular function and the type chain never cycles at
+    /// a function. See `docs/notes/function-type-merge.md`.
+    function_template: NodeId,
     /// The shared wildcard value node: a compound type's unconstrained positions.
     ///
     /// # Invariant
@@ -629,6 +637,7 @@ where
             tuple_template: NodeId::default(),
             array_template: NodeId::default(),
             struct_template: NodeId::default(),
+            function_template: NodeId::default(),
             any_value: NodeId::default(),
             type_expr: NodeId::default(),
             zero_value: NodeId::default(),
@@ -653,6 +662,9 @@ where
         checker
             .module
             .evaluate_node_deep(checker.struct_template, None);
+        checker
+            .module
+            .evaluate_node_deep(checker.function_template, None);
         let root = checker.ir.root;
         // Type-check every user-written top-level statement, then the final root.
         let stmt_roots = checker.ir.stmt_roots.clone();
@@ -949,6 +961,9 @@ where
         self.tuple_template = self.kind_expr(root, self.markers.tuple_type_marker);
         self.array_template = self.kind_expr(root, self.markers.array_type_marker);
         self.struct_template = self.self_referential_template(root);
+        // The **`Function` type**: it names no function, so the chain never
+        // cycles at one.
+        self.function_template = self.kind_expr(root, self.markers.function_type_marker);
         // The positional-read constants, the subscripts of `Index(expr, 0)` and
         // `Index(expr, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
@@ -982,6 +997,12 @@ where
     /// The shared **`Struct` template** — the `[StructType, ↺]` expression.
     pub(super) fn struct_template(&self) -> NodeId {
         self.struct_template
+    }
+
+    /// The shared **`Function` type** — the `[FunctionType, Type]` expression
+    /// every function value's type is.
+    pub(super) fn function_template(&self) -> NodeId {
+        self.function_template
     }
 
     /// A **self-referential** template expression `[marker, ↺]`: its type slot
@@ -1418,31 +1439,6 @@ where
         self.slot_expr(block, marker, self.type_expr)
     }
 
-    /// The function type expression `[[domain, codomain], [FunctionType, K]]`
-    /// — the one construction point for arrows.
-    ///
-    /// # Invariant
-    /// It is deliberately not registered in [`Checker::arrows`]: that set feeds
-    /// the type printer, whose members render as `T -> U`, so it holds only
-    /// source-level arrows. The caller decides membership.
-    pub(super) fn arrow(&mut self, block: BlockId, domain: NodeId, codomain: NodeId) -> NodeId {
-        self.arrow_parts(block, domain, codomain).2
-    }
-
-    /// [`Self::arrow`] returning all three nodes `(shape, kind, expr)` for a
-    /// caller that also needs the halves.
-    fn arrow_parts(
-        &mut self,
-        block: BlockId,
-        domain: NodeId,
-        codomain: NodeId,
-    ) -> (NodeId, NodeId, NodeId) {
-        let shape = self.array_node(block, &[domain, codomain]);
-        let kind = self.kind_expr(block, self.markers.function_type_marker);
-        let expr = self.slot_expr(block, shape, kind);
-        (shape, kind, expr)
-    }
-
     /// A struct type's nominal id node: one value per written struct type
     /// occurrence, minted while the graph is built.
     ///
@@ -1849,10 +1845,6 @@ where
         Checker::kind_expr(self, self.current_block, marker)
     }
 
-    fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId {
-        Checker::arrow(self, self.current_block, domain, codomain)
-    }
-
     fn fresh(&mut self) -> NodeId {
         Checker::fresh_cell(self)
     }
@@ -1883,6 +1875,10 @@ where
 
     fn struct_template(&self) -> NodeId {
         Checker::struct_template(self)
+    }
+
+    fn function_template(&self) -> NodeId {
+        Checker::function_template(self)
     }
 
     // The 9 marker-node accessors — registry-derived.

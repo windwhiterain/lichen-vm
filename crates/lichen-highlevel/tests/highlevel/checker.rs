@@ -65,15 +65,16 @@ fn array_ids(
         .collect()
 }
 
-/// The `FunctionId` a function-type node `[Function(fid), ↺]` carries (`f : f`).
-fn function_type_id(
+/// The `FunctionId` a function's **value** carries — the identity is never in
+/// the type.
+fn function_id(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
-    ftype: lichen_lowlevel::NodeId,
+    expr: lichen_lowlevel::NodeId,
 ) -> lichen_lowlevel::FunctionId {
-    let slot0 = array_ids(b, ftype)[0];
+    let slot0 = array_ids(b, expr)[0];
     match b.module.node_value(AnyNodeId::Dynamic(slot0)) {
         Some(HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(fid)))) => fid,
-        _ => panic!("expected a function-type node"),
+        _ => panic!("expected a function expr"),
     }
 }
 
@@ -274,35 +275,34 @@ fn lambda_has_arrow_type() {
     let l = w.lam("l", x, x);
     let b = build(l, w);
     assert!(b.ok, "\\x. x should check");
-    // The lambda's type is the function itself: a self-referential
-    // `[Function(fid), ↺]`, slot 1 being the node itself.
+    // The lambda's type is the shared `Function` type: the `[FunctionType, Type]`
+    // expr, which names no function.
     let ftype = b.state[l].ty.unwrap();
     let ids = array_ids(&b, ftype);
     assert_eq!(
         ids.len(),
         width(),
-        "a function-type node is an expr [func, self]"
+        "the Function type is an expr [marker, universe]"
+    );
+    assert_ne!(
+        ids[1], ftype,
+        "the Function type is not self-referential: the chain never cycles at a function"
     );
     assert_eq!(
-        ids[1], ftype,
-        "slot 1 is the node itself (self-referential)"
-    );
-    assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(ids[0])),
-        Some(HighProgramValue::LowValue(LowValue::Function(_)))
-    ));
+        Some(HighProgramValue::TypeValue(TypeValue::TypeFunction)),
+        "the value slot holds the FunctionType marker"
+    );
 }
 
 #[test]
-fn lambda_checks_against_arrow_annotation() {
+fn lambda_checks_against_the_function_type_annotation() {
     // (\x. x) : int → int
     let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
-    let d = w.int_type("d");
-    let c = w.int_type("c");
-    let t = w.type_function("t", d, c);
+    let t = w.function_type("t");
     let a = w.annotate("a", l, t);
     let b = build(a, w);
     assert!(b.ok, "(\\x. x) : int → int should check");
@@ -750,12 +750,13 @@ fn applying_a_non_function_reports_expected_function() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    // The expected side is the function the guard built, not an arrow term:
-    // it clashes with the callee's `int` marker.
-    assert!(matches!(
+    // The expected side is the shared `Function` type, not an arrow term: it
+    // clashes with the callee's `int` marker.
+    assert_eq!(
         diags[0].value_b,
-        Some(HighProgramValue::LowValue(LowValue::Function(_)))
-    ));
+        Some(HighProgramValue::TypeValue(TypeValue::TypeFunction)),
+        "the expected side is the FunctionType marker"
+    );
 }
 
 #[test]
@@ -863,11 +864,13 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // The found side is the function's leaf: the arm compares functions by their cells.
-    assert!(matches!(
+    // The found side is the shared `Function` type: a function's type is the
+    // marker, and the marker is not `Type`.
+    assert_eq!(
         diags[0].value_a,
-        Some(HighProgramValue::LowValue(LowValue::Function(_)))
-    ));
+        Some(HighProgramValue::TypeValue(TypeValue::TypeFunction)),
+        "the found side is the FunctionType marker"
+    );
 }
 
 #[test]
@@ -1857,7 +1860,7 @@ fn an_underscore_annotation_binds_a_function_type() {
         "the placeholder binds to the function-type node"
     );
     // The template's parameter type cell stays undecided.
-    let fid = function_type_id(&b, b.state[l].ty.unwrap());
+    let fid = function_id(&b, b.state[l].term.unwrap());
     assert!(
         b.module
             .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
@@ -1867,7 +1870,7 @@ fn an_underscore_annotation_binds_a_function_type() {
 }
 
 #[test]
-fn partial_inference_in_an_arrow_type() {
+fn partial_inference_in_a_function_template() {
     // (\x. x) : (Int -> _) — the annotation binds the two functions' own
     // cells; nothing is cloned.
 
@@ -1879,11 +1882,11 @@ fn partial_inference_in_an_arrow_type() {
     let it = w.int_type("it");
     let h = w.hole("h");
     let t = w.type_function("t", it, h);
-    let a = w.annotate("a", l, t);
+    let a = w.unify("a", l, t);
     let mut b = build(a, w);
     assert!(b.ok, "the identity fits Int -> _");
     // The annotation's domain reached the template's own parameter type cell.
-    let fid = function_type_id(&b, b.state[l].ty.unwrap());
+    let fid = function_id(&b, b.state[l].term.unwrap());
     let param_type = param_type_cell(&b, fid);
     assert!(
         b.module
@@ -2458,8 +2461,7 @@ fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
 
     let b = build(g, w);
     assert!(b.ok, "the wrapper must check");
-    let gtype = b.state[g].ty.expect("a lambda has a type");
-    let gid = function_type_id(&b, gtype);
+    let gid = function_id(&b, b.state[g].term.unwrap());
     let cell = param_type_cell(&b, gid);
     assert!(
         b.module.node_value(AnyNodeId::Dynamic(cell)).is_some(),

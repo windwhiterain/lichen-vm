@@ -4,8 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue,
-    EXPR_ATTR_BASE, FunctionIdentity, LocalNodeId, LowShape, LowValue, Module, Node, NodeId,
-    Program, StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
+    EXPR_ATTR_BASE, FunctionIdentity, LocalNodeId, LowOperator, LowShape, LowValue, Module, Node,
+    NodeId, Program, StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -529,63 +529,88 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// [`Self::is_function_type`] for a ref: a frozen function type is read in its own
-    /// module.
-    pub fn is_function_type_ref(&self, id: AnyNodeId) -> bool {
-        self.function_type_function_ref(id).is_some()
-    }
-
-    /// [`Self::function_type_function`] over a ref.
-    pub fn function_type_function_ref(&self, id: AnyNodeId) -> Option<AnyFunctionId> {
-        match id {
-            Dyn(node) => self.function_type_function(node),
-            AnyNodeId::Static(sref) => self.static_function_type_function(sref),
-        }
-    }
-    pub fn is_self_referential(&self, id: AnyNodeId) -> bool {
-        match id {
-            Dyn(node) => {
-                let rep = self.class_root(node);
-                let Some(LowValue::Array(array)) =
-                    self.nodes[node].value.and_then(|value| value.as_enum())
-                else {
-                    return false;
-                };
-                // SAFETY: `array` is the payload of `node`, a live node of
-                // this module, so its home block has not been dropped.
-                if unsafe { array.items() }.len() < 2 {
-                    return false;
-                }
-                // SAFETY: as above — `node` is a live node of this module.
-                for item in unsafe { array.items() } {
-                    match item.node {
-                        Dyn(item) => {
-                            if self.class_root(item) == rep {
-                                return true;
-                            }
-                        }
-                        AnyNodeId::Static(_) => {
-                            if self.is_self_referential(item.node) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
-            AnyNodeId::Static(sref) => self.is_static_universe_id(sref),
+    /// The function a **value** names, dynamic or frozen; `None` when the value
+    /// is not a function.
+    ///
+    /// # Invariant
+    /// A function's identity lives in its **value**, never in its type: the type
+    /// is the shared `FunctionType` marker, which names no particular function.
+    /// See `docs/notes/function-type-merge.md`.
+    pub fn function_value_function(&self, id: AnyNodeId) -> Option<AnyFunctionId> {
+        let value = self.node_value(id)?;
+        match value.as_enum()? {
+            LowValue::Function(function) => Some(self.resolve_constructor(function)),
+            _ => None,
         }
     }
 
-    fn is_static_universe_id(&self, sref: StaticNodeId) -> bool {
-        let Some(LowValue::Array(array)) = self.static_read(sref).and_then(|value| value.as_enum())
-        else {
-            return false;
+    /// The function an **expr** names **directly**, through its value half.
+    ///
+    /// # Invariant
+    /// The value half is read, never the type half: a function's type names no
+    /// function, so the value half is the only place the identity can be. A
+    /// deferred `Unify` names no function here — the template it carries is
+    /// read by [`Self::function_apply_function`].
+    pub fn function_expr_function(&self, expr: NodeId) -> Option<AnyFunctionId> {
+        // The term's own value: a decided function ✓.
+        if let Some(function) = self.function_value_function(AnyNodeId::Dynamic(expr)) {
+            return Some(function);
+        }
+        // An expr's value half ✓.
+        // SAFETY: `expr` is a live node of this module; nothing here drops a block.
+        let items = unsafe { self.array_items(expr) }?;
+        self.function_value_function(items.first()?.node)
+    }
+
+    /// The function an **apply** names: its computed value, or a deferred
+    /// `Unify`'s template while the actual is absent.
+    ///
+    /// # Invariant
+    /// A **decided** actual is read as it stands: a decided non-function, or an
+    /// `Error`, never falls back to the template. The template is read only
+    /// while the actual's result is genuinely absent.
+    pub fn function_apply_function(&self, expr: NodeId) -> Option<AnyFunctionId> {
+        // The computed value ✓ — the actual's own function ✓.
+        if let Some(function) = self.function_value_function(AnyNodeId::Dynamic(expr)) {
+            return Some(function);
+        }
+        // An expr's value half ✓.
+        // SAFETY: `expr` is a live node of this module; nothing here drops a block.
+        if let Some(items) = unsafe { self.array_items(expr) }
+            && let Some(function) = self.function_value_function(items.first()?.node)
+        {
+            return Some(function);
+        }
+        // A deferred `Unify`: its **expected** operand is the template ✓.
+        let operation = self.node_operation(expr)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Unify)
+        ) {
+            return None;
+        }
+        let operands = self.operand_items(operation.operand?).ok()?;
+        let actual = operands.first()?.node;
+        let expected = operands.get(1)?.node;
+        // Only while the actual's result is genuinely absent ✓.
+        if self.expr_value_is_decided(actual) {
+            return None;
+        }
+        // SAFETY: the expected operand is a live node of this module.
+        let items = unsafe { self.array_items_ref(expected) }?;
+        self.function_value_function(items.first()?.node)
+    }
+
+    /// Whether an expr's value half holds a decided value.
+    fn expr_value_is_decided(&self, expr: AnyNodeId) -> bool {
+        // SAFETY: `expr` is a live node of this module; nothing here drops a block.
+        let Some(items) = (unsafe { self.array_items_ref(expr) }) else {
+            return true;
         };
-        // SAFETY: `array` is a static payload read through `sref`; the registered module pins it.
-        let items = unsafe { array.items() };
-        items.len() >= 2
-            && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
+        match items.first() {
+            Some(value) => self.node_value(value.node).is_some(),
+            None => true,
+        }
     }
 
     /// Whether two function values name one logical function, after resolving origins.
@@ -625,32 +650,6 @@ impl<P: Program> Module<P> {
             .and_then(|function| function.origin)
     }
 
-    /// Whether `node` names a function type — the self-referential `[Function(fid), ↺]`.
-    pub fn is_function_type(&self, node: NodeId) -> bool {
-        self.function_type_function(node).is_some()
-    }
-
-    /// The function a function-type node names; `None` otherwise. A read. See
-    /// docs/notes/function-type-merge.md.
-    pub fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
-        let carrier = self.class_root(node);
-        if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
-            return None;
-        }
-        // SAFETY: `carrier` is a live node of this module; nothing here drops
-        // a block.
-        let items = (unsafe { self.array_items(carrier) })?;
-        if items.len() < 2 {
-            return None;
-        }
-        self.node_value(items[0].node)
-            .and_then(|v| match v.as_enum()? {
-                LowValue::Function(fid) => Some(fid),
-                _ => None,
-            })
-            .map(|function| self.resolve_constructor(function))
-    }
-
     /// The parameter expr and return type cell a function itself states, or `None`
     /// when the template states neither.
     ///
@@ -686,13 +685,14 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The domain and codomain type cells of the function type `node` names; a read, never cloned.
-    pub fn function_type_signature(&self, node: AnyNodeId) -> Option<(AnyNodeId, AnyNodeId)> {
-        let function = match node {
-            Dyn(node) => self.function_type_function(node)?,
-            // A frozen function's own type is the same self-cycle in the artifact.
-            AnyNodeId::Static(sref) => self.static_function_type_function(sref)?,
-        };
+    /// The domain and codomain type cells a **known function** states; a read,
+    /// never cloned.
+    ///
+    /// # Invariant
+    /// The signature is read from the **function**, never from a type: a
+    /// function's type is the shared `FunctionType` marker and names no
+    /// signature, so the function is the only carrier of one.
+    pub fn function_signature(&self, function: AnyFunctionId) -> Option<(AnyNodeId, AnyNodeId)> {
         match function {
             AnyFunctionId::Dynamic(function) => {
                 let function = self.functions.get(function)?;
@@ -708,38 +708,6 @@ impl<P: Program> Module<P> {
             }
             AnyFunctionId::Static(sref) => self.static_function_signature(sref),
         }
-    }
-
-    /// The function a frozen function-type node names, the static mirror of the recogniser.
-    fn static_function_type_function(&self, sref: StaticNodeId) -> Option<AnyFunctionId> {
-        let value = self.static_read(sref)?;
-        let LowValue::Array(array) = value.as_enum()? else {
-            return None;
-        };
-        // SAFETY: a static payload read through `sref`; the registered module pins it.
-        let items = unsafe { array.items() };
-        if items.len() < 2 {
-            return None;
-        }
-        // Asked by class, as the dynamic recogniser does: a frozen class may keep the cycle on a member.
-        let static_module = self.static_module(sref.module);
-        let representative = crate::static_module::static_find(&static_module.nodes, sref.index);
-        let own_class = |node: AnyNodeId| match node {
-            AnyNodeId::Static(tail) if tail.module == sref.module => {
-                crate::static_module::static_find(&static_module.nodes, tail.index)
-                    == representative
-            }
-            _ => false,
-        };
-        if !items.iter().any(|item| own_class(item.node)) {
-            return None;
-        }
-        self.node_value(items[0].node)
-            .and_then(|value| match value.as_enum()? {
-                LowValue::Function(function) => Some(function),
-                _ => None,
-            })
-            .map(|function| self.resolve_constructor(function))
     }
 
     /// How many canonical attributes the array's layout lists.

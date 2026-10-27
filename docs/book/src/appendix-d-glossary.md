@@ -44,11 +44,12 @@ has already shown. Chapter 12.
 Chapter 3.
 
 **function template** — a function written where a function would be, used
-as the requirement of a plain `=` unification: `(x : Int => _: Int)`.
+as the requirement of a plain `=` unification: `_x : Int => _: Int`.
 Chapter 4.
 
-**function type** — a function's type is the function itself (`f : f`), so
-its printed halves are one signature, written with `=>`. Chapters 4 and 12.
+**function type** — the shared `FunctionType` marker every function value's
+type is; it names no function, so a signature is stated by a **function
+template** instead. Chapters 4 and 12.
 
 **generic (parametric) constructor** — a constructor built by a function,
 such as `Box Int`. Chapter 10.

@@ -316,6 +316,12 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `24` retired the self-referential function type. A frozen module written by the
+  previous compiler carries a function's type as the self-cycle `[Function(fid), ↺]`;
+  the new reader expects the shared `FunctionType` marker, so a v23 artifact's
+  function types would be read under a meaning they do not carry. The wire
+  encoding is unchanged — the node encoding is unchanged — but its *meaning* is
+  not, so the artifacts are rebuilt rather than read.
 - `23` added the apply-result owner table, mapping a returned value node to the apply
   that produced it. A computed struct result can lose its operator while its value is
   materialized; the table preserves the ownership needed to recover that computation

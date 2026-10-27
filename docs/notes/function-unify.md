@@ -1,6 +1,13 @@
 # A function unifies by its own cells
 
-> Status: **complete on today's `dev`.** The one suite failure this status used to name — the diagnostic-shape
+> Status: **history.** This note records the branch that unified two
+> functions by their own cells, under the retired `f : f` representation: a
+> lambda's term *was* its type, and the self-referential node is what the
+> branch's measurements are about. The representation it measured is retired
+> (see [function-type-merge](function-type-merge.md)); the note is kept as the
+> measurement that justified the repair, not as current design.
+>
+> Status at the time: **complete on today's `dev`.** The one suite failure this status used to name — the diagnostic-shape
 > pin — does not fail there: `lichen-highlevel` is 140 passed / 0 failed, measured on `dev`. The numbers this
 > paragraph used to quote were taken on the branch before the collection trigger was disabled and before the
 > epoch run gate was retired, so they are kept only as the measurement that justified the repair.

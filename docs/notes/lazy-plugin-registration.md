@@ -26,7 +26,8 @@ program that never writes `compute.` still bought the whole compute sub-language
 ## Why it is not free to compile
 
 The wrapper is small, but the checker's encoding is not: every definition is a
-`[value, type, attributes]` slot, a function's type is the function itself, and the
+`[value, type, attributes]` slot, a function's type is the shared `FunctionType`
+marker, and the
 wrapper's fourteen type constructors (`KT`, `P`, `A`, `S`, `Buf`, `Read`, `Write`, …)
 are dependent functions, so one line costs ~160 nodes. There is no artifact to reuse
 either: a wrapper's values are a plugin's own runtime-only values, so the artifact

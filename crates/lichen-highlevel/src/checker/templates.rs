@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use lichen_lowlevel::NodeId;
+use lichen_lowlevel::{AnyNodeId, NodeId};
 
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
@@ -19,8 +19,8 @@ where
     ///
     /// # Invariant
     /// A non-function template unifies whole terms, so a value is matched
-    /// against its layout. A function template unifies the actual function's
-    /// type with the signature, preserving the actual body for calls.
+    /// against its layout. A function template unifies the actual **function**
+    /// with the signature, preserving the actual body for calls.
     /// The direction is fixed: `actual` is found and `expected` the requirement.
     /// The `:` annotation does **not** come through here: it states a type, and a type is unified as a type.
     pub(super) fn check_unify_expr(
@@ -38,7 +38,7 @@ where
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);
-        let deferred = !self.module.is_function_type(expected_ty)
+        let deferred = !self.is_function_type(expected_ty)
             && self.is_struct_layout(expected_ty)
             && matches!(self.ir[expected].kind, ExprKind::NamedField { .. })
             && !matches!(self.ir[actual].kind, ExprKind::Parameter)
@@ -61,8 +61,40 @@ where
             self.state[e].ty = self.state[actual].ty;
             return node;
         }
+        // A template against an undecided actual: a **direct unify** of the
+        // two exprs, deferred as a graph statement.
+        if self.is_function_type(expected_ty) && !self.actual_value_is_decided(actual_value) {
+            self.check_unify(
+                actual_ty,
+                expected_ty,
+                self.loc(actual, 0),
+                DiagKind::Annotation,
+            );
+            let operands = self.array_node(self.current_block, &[actual_term, expected_term]);
+            let node = self.op_node(
+                self.current_block,
+                P::Operator::from(lichen_lowlevel::LowOperator::Unify),
+                Some(operands),
+            );
+            self.state[e].term = Some(node);
+            self.state[e].val = None;
+            self.state[e].ty = self.state[actual].ty;
+            // The actual's own state, so a later read of it sees the constraint.
+            self.state[actual].term = Some(node);
+            self.state[actual].val = None;
+            // The parameter's later uses read this term.
+            if matches!(self.ir[actual].kind, ExprKind::Parameter) {
+                self.update_binding_term(actual, node);
+            }
+            return node;
+        }
         self.compute_operands(actual_term, expected_term);
-        let found = if self.module.is_function_type(expected_ty) {
+        // A known function is unified through its expr, so the constraint
+        // compares two signatures.
+        let found = if self.is_function_type(expected_ty)
+            && self.actual_value_is_decided(actual_value)
+            && self.module.function_expr_function(actual_term).is_none()
+        {
             actual_ty
         } else {
             actual_term
@@ -79,6 +111,26 @@ where
         self.state[e].val = self.state[actual].val;
         self.state[e].ty = self.state[actual].ty;
         actual_term
+    }
+
+    /// Whether an expression's value is already decided.
+    pub(super) fn actual_value_is_decided(&self, value: NodeId) -> bool {
+        self.module.node_value(AnyNodeId::Dynamic(value)).is_some()
+    }
+
+    /// The nearest binding of a parameter, with its term replaced.
+    ///
+    /// # Invariant
+    /// The **nearest** scope wins: a shadowing parameter's own binding is the
+    /// one a use reads. The function's parameter record is not touched, so the
+    /// argument is still bound before the body runs.
+    fn update_binding_term(&mut self, parameter: ExprId, term: NodeId) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(binding) = scope.get_mut(&parameter) {
+                binding.term = term;
+                return;
+            }
+        }
     }
 
     /// Whether the template's **length** depends on an enclosing lambda

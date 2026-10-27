@@ -554,8 +554,8 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   through a function (auto-derivation); the return value reads the body's slot. That
   was blamed on the representation — an arrow carried `dom` and `cod` and nowhere to
   hang an attribute — and
-  [a function's type is the function](function-type-merge.md) removed the excuse: a
-  function type *is* a function, so a signature's parameter and return are terms and
+  [a function's signature is the function's own cells](function-type-merge.md) removed
+  the excuse: a signature's parameter and return are terms and
   carry attribute cells, and `?a: Int => ?a: Int` states one cell on both the
   argument and the result. What landed is the ability to *state* the constraint, not
   the flow of it, so auto-derivation remains a non-goal here.

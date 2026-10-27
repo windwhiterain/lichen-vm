@@ -35,8 +35,8 @@ Int => Int: Int => Int
 ```
 
 A function's value is printed as its **signature** — the parameter's
-type, `=>`, the result's type — and its type is the function itself, so
-the two halves are the same signature.
+type, `=>`, the result's type — and its type is the shared `FunctionType`
+marker, which names no function.
 
 The identity function shows what the compiler does with a function whose
 parameter has no decided type yet:
@@ -55,13 +55,13 @@ nothing has said what the identity function's parameter is. Chapter 5
 explains the cell model; for now, `?a` is the compiler saying "this is
 one type, and it is not known yet".
 
-## A function's value and type are the same cells
+## A function's value and its type
 
-The output `Int => Int: Int => Int` has two halves, and they describe the
-same thing. A function's value is the function, and its type is *also*
-the function: the type's parameter and result cells are the function's own
-parameter and return cells. The rule is written `f : f`, and it is why
-the two halves print as one signature.
+The output `Int => Int: TypeFunction` has two halves, and they say different
+things. A function's **value** is the function, and it prints its signature
+(`Int => Int`); its **type** is the shared `FunctionType` marker
+(`TypeFunction`), which names no function — so the type chain never cycles at
+a function, and a signature is stated by a **function template** instead.
 
 The consequence is that annotating a function is not adding a check
 beside it. The annotation writes the function's own cells:
@@ -81,14 +81,14 @@ would be, and it is unified with plain `=`:
 
 ```lichen
 inc := (x : Int) => x + 1
-inc = (x : Int => _: Int)
+inc = _x : Int => _: Int
 ```
 
 ```text
 Int => Int: Int => Int
 ```
 
-The template `(x : Int => _: Int)` says: a function whose parameter is
+The template `_x : Int => _: Int` says: a function whose parameter is
 annotated `Int`, and whose result is a placeholder of type `Int`. The `=`
 asks the actual's **signature** to agree with it — and the actual's own body
 is kept; only its signature is constrained. There is no separate
@@ -249,7 +249,8 @@ error: this tuple read cannot be checked: the container's type is not decided he
 
 A read states its requirement from the type of its container, and `p`
 has none here: nothing in the program has said what its elements are,
-and a recursive function's type is the function itself. A
+and a recursive function's type is the shared `FunctionType` marker, which
+names no function. A
 **constructor** states the shape — here a tuple constructor whose two
 positions require an `Int` — and the result follows from it:
 
@@ -369,9 +370,9 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 ## Summary
 
 - A function is an expression, `x => body`, and a value like any other.
-- A function's type is the function itself (`f : f`); its two printed
-  halves are one signature, written with `=>`.
-- A signature is stated with a **function template** — `(x : Int => _: Int)`
+- A function's type is the shared `FunctionType` marker; the **value**
+  prints the signature, written with `=>`.
+- A signature is stated with a **function template** — `_x : Int => _: Int`
   — and unified with plain `=`, which applies nothing; there is no thin
   arrow.
 - An application instantiates the parameter fresh, so a binding is

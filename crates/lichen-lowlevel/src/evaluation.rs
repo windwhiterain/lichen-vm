@@ -332,8 +332,8 @@ impl<P: Program> Module<P> {
                         // SAFETY: `array` is a live operand value; its home block is not dropped.
                         let operands = unsafe { array.items() };
                         let Some(callee) = self.evaluate_node(operands[0].node, Some(block)) else {
-                            // `f : f`: the value is not concrete yet, so the
-                            // apply applies the type element 3 carries.
+                            // The value is not concrete yet, so the apply applies
+                            // the signature the callee's expr names.
                             self.apply_callee_type(operands, block, node);
                             return self.ran_undecided(node);
                         };
@@ -344,8 +344,6 @@ impl<P: Program> Module<P> {
                                 // by value, so nothing is materialized.
                                 let argument = operands[1].node;
                                 let cell = operands.get(2).map(|item| item.node);
-                                // Both slots are applied: the type's, then the value's.
-                                self.apply_callee_type(operands, block, node);
                                 match function {
                                     AnyFunctionId::Dynamic(function) => {
                                         self.function_apply(function, argument, block, node, cell)
@@ -550,25 +548,40 @@ impl<P: Program> Module<P> {
         None
     }
 
-    /// Apply the **type** an apply's operand carries, for a callee whose value is
-    /// not concrete yet.
+    /// Apply the **signature** an apply's operand carries, for a callee whose
+    /// value is not concrete yet.
     ///
     /// # Invariant
-    /// `f : f` — a function's type names the same function — so the type is
-    /// applied where the value cannot be. Element 3 is the callee's type; a
-    /// non-function one applies nothing. [`Module::apply_type`] clones the
-    /// signature per application, so this never monomorphises the template.
+    /// Element 3 is the callee's **expr**, and its value half names the
+    /// function: a function's type is the shared `FunctionType` marker and
+    /// carries no signature, so the value half is the only place the identity
+    /// can be. A callee that names no function applies nothing.
     fn apply_callee_type(&mut self, operands: &[crate::ArrayItem], block: BlockId, node: NodeId) {
-        let Some(type_node) = operands.get(3).map(|item| item.node) else {
+        let Some(expr) = operands.get(3).map(|item| item.node) else {
             return;
         };
-        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function_ref(type_node)
-        else {
+        let Some(expr) = expr.dynamic() else {
             return;
         };
         let argument = operands[1].node;
         let cell = operands.get(2).map(|item| item.node);
-        self.apply_type(function, argument, block, node, cell);
+        match self.function_apply_function(expr) {
+            Some(AnyFunctionId::Dynamic(function)) => {
+                self.apply_type(function, argument, block, node, cell);
+            }
+            // A frozen callee's signature applies too, so its codomain binds.
+            Some(AnyFunctionId::Static(function)) => {
+                self.static_function_type_apply(
+                    function,
+                    argument,
+                    block,
+                    node,
+                    cell,
+                    crate::function::ParameterCheck::Type,
+                );
+            }
+            None => {}
+        }
     }
 
     /// Run [`Self::evaluate_node`] for every node in the reachable subtree of `id` — the only

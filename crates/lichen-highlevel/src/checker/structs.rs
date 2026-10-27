@@ -483,11 +483,40 @@ where
         let callee = self
             .module
             .as_dynamic(items.first()?.node, self.current_block);
-        let ty = items.get(3)?.node.dynamic()?;
-        if !self.module.is_function_type(ty) {
+        // Element 3 is the callee's expr; its result type is the callee's.
+        let expr = items.get(3)?.node.dynamic()?;
+        let ty = self.result_type_of(expr)?;
+        if !crate::shape::is_function_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(ty),
+        ) {
             return None;
         }
         Some((callee, ty))
+    }
+
+    /// The **result type** an expr states, following a deferred `Unify` to the
+    /// actual's own result type.
+    ///
+    /// # Invariant
+    /// The **actual** is followed, never the template: a decided actual states
+    /// its own type, so a decided non-function — or an `Error` — is never read
+    /// as the template's.
+    fn result_type_of(&mut self, expr: NodeId) -> Option<NodeId> {
+        if let Some(ty) = self.module.expr_type_item(expr) {
+            return ty.dynamic();
+        }
+        let operation = self.module.node_operation(expr)?;
+        if !matches!(
+            lichen_utils::extend::AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Unify)
+        ) {
+            return None;
+        }
+        let items = self.module.operand_items(operation.operand?).ok()?;
+        let actual = items.first()?.node.dynamic()?;
+        self.result_type_of(actual)
     }
 
     /// A placeholder callee takes the template the **context requires**.
@@ -545,8 +574,8 @@ where
     /// states only a type keeps the requirement in its type slot, as the
     /// annotation's own term.
     fn expected_argument_requirement(&mut self, function: ExprId) -> Option<NodeId> {
-        let function_ty = self.state[function].ty?;
-        let callee = self.module.function_type_function(function_ty)?;
+        let function_expr = self.state[function].term?;
+        let callee = self.module.function_apply_function(function_expr)?;
         let parameter = match callee {
             AnyFunctionId::Dynamic(fid) => self.module.functions[fid].parameter,
             AnyFunctionId::Static(sref) => {

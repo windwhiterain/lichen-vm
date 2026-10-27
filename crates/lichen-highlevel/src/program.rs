@@ -168,13 +168,6 @@ pub trait Ctx<P: Program> {
     fn expr(&mut self, value: NodeId, ty: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
-    /// A function type expression `[[domain, codomain], [FunctionType, Type]]`.
-    ///
-    /// # Invariant
-    /// It does **not** register the result in the checker's `arrows` set: that
-    /// set drives the type *printer*, so only a source-level arrow belongs in
-    /// it. An arrow built as a unification *pattern* stays out.
-    fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId;
     /// A fresh undecided type cell.
     fn fresh(&mut self) -> NodeId;
     /// The canonical universe node `[Type, ↺]`, referenced rather than
@@ -214,6 +207,13 @@ pub trait Ctx<P: Program> {
     /// Its type slot is itself, so the layout closes on itself and a struct
     /// value's type needs no second node.
     fn struct_template(&self) -> NodeId;
+    /// The shared **`Function` type**: the `[FunctionType, Type]` expression every
+    /// function value's type is.
+    ///
+    /// # Invariant
+    /// Referenced, never rebuilt, as [`Self::tuple_template`]'s is: the type names
+    /// no function, so one node serves every function value.
+    fn function_template(&self) -> NodeId;
     // The 9 marker-node accessors are registry-derived — one per kind marker.
     for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification, executed through the highlevel's own
@@ -539,6 +539,35 @@ where
     }
 }
 
+/// The built-in **`Function` type** constant — the shared `[FunctionType, Type]`.
+///
+/// # Invariant
+/// It is shared, as [`TupleTemplateLit`]'s is: a function value's type is this
+/// one node, and it names no function. See `docs/notes/function-type-merge.md`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FunctionTemplateLit;
+
+impl<P> LiteralExt<P> for FunctionTemplateLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.function_type_marker_node();
+        let ty = ctx.universe();
+        let expr = ctx.function_template();
+        LiteralBuild {
+            expr,
+            value: value_node,
+            ty,
+        }
+    }
+
+    /// A type constant is a shared type value, not this occurrence's expression.
+    fn decides_attributes(&self) -> bool {
+        false
+    }
+}
+
 // The highlevel program's literal vocabulary: the built-in literals as sibling
 // carry variants.
 lichen_utils::enum_ext! {
@@ -556,6 +585,7 @@ lichen_utils::enum_ext! {
     + TupleTemplateLit as TupleTemplate;
     + ArrayTemplateLit as ArrayTemplate;
     + StructTemplateLit as StructTemplate;
+    + FunctionTemplateLit as FunctionTemplate;
 }
 
 impl<P> LiteralExt<P> for HighProgramLiteral
@@ -575,6 +605,7 @@ where
             HighProgramLiteral::TupleTemplate(lit) => lit.build(ctx),
             HighProgramLiteral::ArrayTemplate(lit) => lit.build(ctx),
             HighProgramLiteral::StructTemplate(lit) => lit.build(ctx),
+            HighProgramLiteral::FunctionTemplate(lit) => lit.build(ctx),
         }
     }
 

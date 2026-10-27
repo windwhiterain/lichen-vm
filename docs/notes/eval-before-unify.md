@@ -716,10 +716,13 @@ unchecked.
 
 ### 7.1 The apply applies the function's type
 
-A function type is the function it names (`f : f`), so an apply does not have to
-wait for the callee's value: the checker carries the callee's type as the
+A function's **identity** lives in its value, so an apply does not have to
+wait for the callee's value: the checker carries the callee's **expr** as the
 apply's fourth operand, and the runtime apply, finding the value undecided,
-applies that type instead. `Module::apply_type` runs the same `instantiate` a
+applies the signature that expr names instead. (The `f : f` rule this replaced
+is retired: a function's type is the shared `FunctionType` marker, which names
+no function — see [function-type-merge](function-type-merge.md).)
+`Module::apply_type` runs the same `instantiate` a
 value apply runs — the parameter check compares the argument against a **fresh**
 domain, and the result cell binds to a **fresh** codomain — and skips only the
 body evaluation.

@@ -63,7 +63,7 @@ The counters also exposed a second cost, larger than the allocations: **1 053 08
 64.
 
 The descent was an expr of *frozen* nodes: `[value, type, attributes]` arrays whose type
-slot is a function type, and a function type is the function itself. The recursion guard
+slot is a function type, and a function type carried the function itself. The recursion guard
 is a set of node **exprs on the current path**, and it cannot see a static ref: `Side::of`
 turns a static id into a `value` with no node, so the expr `(static ref, static ref)` has
 no name. Each level of the descent re-read the same frozen node into the same expr again,

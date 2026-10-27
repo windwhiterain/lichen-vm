@@ -305,12 +305,12 @@ the kind node.
 
 ### Arrow terms, and the guard that skips them
 
-`is_arrow_type_any` recognises a concrete **arrow-term** function type —
-`[shape, [FunctionType, K]]`, the spelling a written `A -> B` lowers to —
-because the checker's function-ness guard skips these: only concretely
-*non*-function types are caught statically. A function's **own** type
-(`f : f`) needs no recognition here, because the unifier already descends into
-the two functions' cells when it reaches one.
+The arrow-term function type `[shape, [FunctionType, K]]` is **retired** with
+the representation it belonged to: a written `A -> B` no longer lowers to one,
+and `Ctx::arrow` is gone. The checker's function-ness guard now recognises the
+shared `FunctionType` marker (`shape::is_function_type_any`), the type a
+function value's own type is; a signature is stated by a function template and
+unified with `=`.
 
 ### The set instance's exact encoding
 

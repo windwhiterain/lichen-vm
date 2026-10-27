@@ -3,9 +3,7 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, ArrayValue, LowOperator, LowValue, NodeId,
-};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, LowOperator, LowValue, NodeId};
 
 use crate::attr::{AttrSet, slot_value_node};
 use crate::diagnostic::DiagKind;
@@ -84,29 +82,13 @@ where
         // The expr is registered before the body, so a self-reference
         // resolves to it instead of re-entering this check.
 
-        // The term is its own type (`f : f : f …`), stated once, before the body.
+        // The function's own type is the shared `Function` type.
         let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
-        let expr = self.alloc_node(return_block, None, None);
-        // One node, not a type node beside the expr: a distinct one collides
-        // under the clone's topology re-establishment.
-        let any = self.any();
-        let mut items = vec![
-            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
-            ArrayItem::new(AnyNodeId::Dynamic(expr)), // the self-reference
-        ];
-        items.extend(std::iter::repeat_n(
-            ArrayItem::new(AnyNodeId::Dynamic(any)),
-            P::Attr::ORDER.len(),
-        ));
-        let layout = self.full_width_layout();
-        self.module.write_node_value(
-            expr,
-            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
-                self.module.alloc_array(&items, return_block),
-                layout,
-            )))),
-        );
+        let function_type = self.function_template();
+        // One expr, `[value, type, attrs…]`: a type node beside it would
+        // collide under the clone's topology re-establishment.
+        let expr = self.slot_expr(return_block, func_node, function_type);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(ty_cell);
@@ -188,13 +170,13 @@ where
             )))),
         );
         self.lambda_value_nodes.push(func_node);
-        // The placeholder type cell joins the expr's class, so a body reference
-        // to it now reads the function type.
-        self.module.unify(ty_cell, expr);
+        // The placeholder type cell joins the `Function` type's class, so a body
+        // reference to it now reads the function type.
+        self.module.unify(ty_cell, function_type);
         self.function_stack.pop();
         self.state[e].term = Some(expr);
         self.state[e].val = Some(func_node);
-        self.state[e].ty = Some(expr);
+        self.state[e].ty = Some(function_type);
         expr
     }
 
@@ -370,7 +352,9 @@ where
         // The callee's canonical attribute positions, source or frozen: the
         // position is the marker.
         let function_ty = self.state[function].ty.unwrap();
-        let callee = self.module.function_type_function(function_ty);
+        // The callee's **expr** names the function: its value half holds it.
+        let callee_expr = self.state[function].term.unwrap();
+        let callee = self.module.function_apply_function(callee_expr);
         // The callee's **parameter expr** states its requirement: the same read as
         // its type slot (`docs/notes/attributes.md`).
         let parameter_expr = match callee {
@@ -426,15 +410,16 @@ where
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return expr.
         let c = self.fresh_cell();
-        // The callee's **type** rides with the apply: `f : f` (apply §7).
+        // The callee's **expr** rides with the apply: the type side reads the
+        // function from its value half (apply §7).
         let static_callee = match callee {
             Some(AnyFunctionId::Static(sref)) => Some(sref),
             _ => None,
         };
         // A **decided** non-function callee is refused here; an
         // undecided one waits for the runtime apply.
-        if self.type_is_concrete(function_ty) && !self.module.is_function_type(function_ty) {
-            let fn_ty = self.function_pattern();
+        if self.type_is_concrete(function_ty) && !self.is_function_type(function_ty) {
+            let fn_ty = self.function_template();
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // **The body's own requirements are replayed here**, where the caller's slot
@@ -457,7 +442,7 @@ where
         // Both slots' applications carry the four elements the apply arm reads.
         let value_operands = self.array_node(
             self.current_block,
-            &[function_value, value_argument_expr, c, function_ty],
+            &[function_value, value_argument_expr, c, callee_expr],
         );
         let value_apply = self.op_node(
             self.current_block,
@@ -468,7 +453,7 @@ where
         let undecided_callee = self.fresh_cell();
         let type_operands = self.array_node(
             self.current_block,
-            &[undecided_callee, type_argument_expr, c, function_ty],
+            &[undecided_callee, type_argument_expr, c, callee_expr],
         );
         let type_apply = self.op_node(
             self.current_block,
@@ -486,9 +471,9 @@ where
         // (`docs/notes/apply-type-side-check.md`).
         self.module.apply_exprs.insert(type_apply, value_apply);
         // The call's type application at check; a function under check is skipped.
-        if self.module.is_function_type(function_ty) {
+        if self.is_function_type(function_ty) {
             let in_progress = matches!(
-                self.module.function_type_function(function_ty),
+                callee,
                 Some(AnyFunctionId::Dynamic(function))
                     if self.function_stack.iter().any(|&(checked, _)| checked == function)
             );
@@ -509,14 +494,17 @@ where
                 } else {
                     value_argument_expr
                 };
-                let applied = self.module.apply_function_type(
-                    function_ty,
-                    AnyNodeId::Dynamic(type_slot_argument),
-                    self.current_block,
-                    type_apply,
-                    AnyNodeId::Dynamic(c),
-                    report,
-                );
+                let applied = match callee {
+                    Some(callee) => self.module.apply_function_type(
+                        callee,
+                        AnyNodeId::Dynamic(type_slot_argument),
+                        self.current_block,
+                        type_apply,
+                        AnyNodeId::Dynamic(c),
+                        report,
+                    ),
+                    None => false,
+                };
                 // A Check failure settles its node: the shallow pass walks it again.
                 if report && !applied {
                     self.module
@@ -610,52 +598,14 @@ where
         node
     }
 
-    /// A fresh **function pattern**: a real function whose own cells are open.
+    /// Whether a type cell is the **`Function` type** — the shared
+    /// `[FunctionType, Type]` expression.
     ///
     /// # Invariant
-    /// The pattern's parameter and return are fresh cells, so it states
-    /// nothing: it says "a function", not "this function". It is a real
-    /// function object — the shape a lambda has — and not a second shape for
-    /// a function type.
-    fn function_pattern(&mut self) -> NodeId {
-        let return_block = self.module.add_block(None);
-        let saved = self.current_block;
-        self.current_block = return_block;
-        let parent = self.current_function();
-        let function = self.module.begin_function(return_block, parent);
-        self.function_stack.push((function, None));
-        // Both value positions are unconstrained: the pattern states no
-        // requirement at all.
-        let parameter_value = self.fresh_cell();
-        let parameter_type = self.fresh_cell();
-        let parameter = self.slot_expr(return_block, parameter_value, parameter_type);
-        let return_value = self.fresh_cell();
-        let return_type = self.fresh_cell();
-        let body = self.slot_expr(return_block, return_value, return_type);
-        self.module.finish_function(function, body, parameter);
-        self.module.functions[function].return_type = return_type;
-        let func_node = self.alloc_node(return_block, None, None);
-        self.module.write_node_value(
-            func_node,
-            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
-                function,
-            )))),
-        );
-        // The paired term `[Function(fid), ↺]`: the self-reference is what
-        // makes it a function type.
-        let expr = self.alloc_node(return_block, None, None);
-        let items = [
-            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
-            ArrayItem::new(AnyNodeId::Dynamic(expr)),
-        ];
-        self.module.write_node_value(
-            expr,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block).into(),
-            ))),
-        );
-        self.function_stack.pop();
-        self.current_block = saved;
-        expr
+    /// The predicate reads the **marker**, never a function: the type names no
+    /// function, so a callee that is a function is recognised by its type and a
+    /// callee's identity is read from its value.
+    pub(super) fn is_function_type(&mut self, ty: NodeId) -> bool {
+        crate::shape::is_function_type_any(&mut self.module, self.type_expr, AnyNodeId::Dynamic(ty))
     }
 }

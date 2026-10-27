@@ -237,22 +237,15 @@ where
     ///
     /// # Invariant
     ///
-    /// A leaf class is two cells whose **class slot** names what it holds: a
-    /// function type is a `Function` value and closes on itself
-    /// (`[Function(fid), ↺]`), every other class a type constant whose kind slot
-    /// is the self-looping universe (`[Int, ↺]`, `[string, ↺]`, …).
-    fn leaf_class(&mut self, value: P::Value, ty: AnyNodeId, tys: &[ArrayItem]) -> Option<String> {
+    /// A leaf class is two cells whose type slot is the self-looping universe
+    /// (`[Int, ↺]`, `[string, ↺]`, …); a function value's type is the shared
+    /// `FunctionType` marker, whose type slot is the universe too, so the
+    /// spelling comes from the value — a function prints its signature.
+    fn leaf_class(&mut self, value: P::Value, _ty: AnyNodeId, tys: &[ArrayItem]) -> Option<String> {
         if tys.len() < 2 {
             return None;
         }
-        let class = self.module.node_value(tys[0].node)?;
-        // The class slot distinguishes a function type from a type constant.
-        let leaf = if matches!(class.as_enum(), Some(LowValue::Function(_))) {
-            self.printer.slot1_is_self(tys[1].node, ty)
-        } else {
-            self.printer.is_universe_any(tys[1].node)
-        };
-        if !leaf {
+        if !self.printer.is_universe_any(tys[1].node) {
             return None;
         }
         self.spelling(value)

@@ -12,11 +12,11 @@ fn root_type(source: &str) -> String {
     print_type(&build.module, build.root_ty)
 }
 
-/// Reading one: `?a` printed twice is one class; naming cells moves it to `?b`.
+/// Reading one: a function value's type is the shared `FunctionType` marker.
 #[test]
-fn a_repeated_class_cell_is_one_unification_class() {
-    // "a repeated `?a` says two slots are one unification class" — spec §5.
-    assert_eq!(root_type("f := x => x; f"), "?a => ?a");
+fn a_function_values_type_is_the_shared_marker() {
+    // A function value's type names no function: it is the shared marker.
+    assert_eq!(root_type("f := x => x; f"), "TypeFunction");
 }
 
 /// The §7.6 lazy spine: the cut; one level short prints `tuple{Float, tuple{Float, …}}`.
@@ -46,7 +46,8 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
 fn a_three_name_cycle_terminates_at_its_first_revisit() {
     // The cycle stops at its first revisit; the struct values keep their shape.
     let printed = root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x <: (_x => A) => 0; f");
-    assert_eq!(printed, "Struct => Int");
-    assert_eq!(printed.matches("Struct").count(), 1);
+    // The struct cycle is not in the type at all: the printer walks none.
+    assert_eq!(printed, "TypeFunction");
+    assert_eq!(printed.matches("Struct").count(), 0);
     assert_eq!(printed.matches('…').count(), 0);
 }

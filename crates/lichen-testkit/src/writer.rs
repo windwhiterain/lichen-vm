@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use lichen_highlevel::attr::{AttrSpec, NoAttr};
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, PrefixOp};
 use lichen_highlevel::program::{
-    FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
-    TypeTypeLit,
+    FloatLit, FloatTypeLit, FunctionTemplateLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit,
+    StringTypeLit, TypeTypeLit,
 };
 
 /// The IR under construction, plus the name each expression was written with.
@@ -624,6 +624,11 @@ impl<A: AttrSpec> Writer<A, HighProgramLiteral> {
     /// `name = Float`.
     pub fn float_type(&self, name: &str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(FloatTypeLit))
+    }
+
+    /// `name = Function` — the shared `Function` type. It names no function.
+    pub fn function_type(&self, name: &str) -> ExprId {
+        self.literal(name, HighProgramLiteral::from(FunctionTemplateLit))
     }
 
     /// `name = string`.

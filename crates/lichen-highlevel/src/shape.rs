@@ -19,8 +19,8 @@
 //! accessor's. The encoding lives here, above `lichen-lowlevel`, never inside it.
 
 use lichen_lowlevel::{
-    AnyHandle, AnyNodeId, ArrayItem, LowShape, LowValue, Module, NodeId, Program, StaticNodeId,
-    TableItem, UnifyStep,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, LowShape, LowValue, Module, NodeId, Program,
+    StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -368,9 +368,12 @@ where
     kind_marker_is_any(module, universe, AnyNodeId::Dynamic(kind), marker)
 }
 
-/// Whether `ty` is a concrete **arrow-term** function type — what a written
-/// `A -> B` lowers to.
-pub fn is_arrow_type_any<P: Program>(
+/// Whether `ty` is the **`Function` type** — the shared `[FunctionType, Type]`.
+///
+/// # Invariant
+/// The marker is read by its **value** and its type slot is the universe, so
+/// the type names no function: the function's identity lives in its value.
+pub fn is_function_type_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
     ty: AnyNodeId,
@@ -378,26 +381,8 @@ pub fn is_arrow_type_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, ty) }) else {
-        return false;
-    };
-    items.len() >= 2
-        && kind_marker_is_any(
-            module,
-            universe,
-            items[TYPE_KIND_SLOT].node,
-            P::Value::function_type_marker(),
-        )
-}
-
-/// [`is_arrow_type_any`] over a dynamic node.
-pub fn is_function_type<P: Program>(module: &mut Module<P>, universe: NodeId, ty: NodeId) -> bool
-where
-    P::Value: ValueType,
-{
-    is_arrow_type_any(module, universe, AnyNodeId::Dynamic(ty))
+    template_is_any(module, ty, P::Value::function_type_marker(), false)
+        && universe_is_any(module, universe, ty)
 }
 
 /// Whether `ty` is the **struct template** — the shared self-referential
@@ -654,6 +639,19 @@ pub fn prepare_template_low_types<P: Program>(
         let Some(shape) = low_type_of_slot(module, items[EXPR_TYPE_SLOT].node) else {
             continue;
         };
+        // A function's detailed halves come from the function the expr names ✓.
+        let shape = match shape {
+            LowShape::Function(domain, codomain) if domain.is_none() && codomain.is_none() => {
+                match module
+                    .function_apply_function(node)
+                    .and_then(|fid| function_shape(module, fid))
+                {
+                    Some(detailed) => detailed,
+                    None => LowShape::Function(domain, codomain),
+                }
+            }
+            shape => shape,
+        };
         let Some(value) = items[EXPR_VALUE_SLOT].node.dynamic() else {
             continue;
         };
@@ -783,10 +781,10 @@ where
     if kinded.len() < 2 {
         return None;
     }
-    // A **function value's own type**, `f : f`: its halves are its own
-    // signature cells, read by `function_shape`.
-    if let Some((domain, codomain)) = module.function_type_signature(type_value) {
-        return Some(function_shape(module, domain, codomain));
+    // The **`Function` type**: it names a function and carries no
+    // signature, so its halves are unknown here.
+    if node_value(module, kinded[TYPE_SHAPE_SLOT].node) == Some(P::Value::function_type_marker()) {
+        return Some(LowShape::Function(Box::new(None), Box::new(None)));
     }
     let shape = kinded[TYPE_SHAPE_SLOT].node;
     // An atomic type: its shape slot holds the marker itself.
@@ -824,40 +822,25 @@ where
             Box::new(half(halves[TABLE_TYPE_VALUE_SLOT].node)),
         ));
     }
-    if marker == P::Value::function_type_marker() {
-        // A function type's shape is the `[domain, codomain]` expr.
-
-        // SAFETY: `shape` is a live node of `module`; nothing in this crate
-        // calls `Module::drop_block`.
-        let halves = (unsafe { array_items(module, shape) })?;
-        return Some(function_shape(
-            module,
-            halves[FUNCTION_TYPE_DOMAIN_SLOT].node,
-            halves[FUNCTION_TYPE_CODOMAIN_SLOT].node,
-        ));
-    }
     // A kind this decoder does not know.
     None
 }
 
-/// A **function shape** built from its two halves — the one spelling of "read
-/// the two positions".
+/// A **function's** low shape, read from the function itself.
 ///
 /// # Invariant
-/// Each half is read through [`low_type_of_slot`]: a half may be a type value or
-/// a term's type cell, and that reader is the authority for telling them apart.
-fn function_shape<P: Program>(
-    module: &Module<P>,
-    domain: AnyNodeId,
-    codomain: AnyNodeId,
-) -> LowShape
+/// The halves come from the function's own cells (`Module::function_signature`),
+/// never from a type: a function's type is the shared marker and carries no
+/// signature. A function with no readable signature has **unknown** halves.
+pub fn function_shape<P: Program>(module: &Module<P>, fid: AnyFunctionId) -> Option<LowShape>
 where
     P::Value: ValueType,
 {
-    LowShape::Function(
+    let (domain, codomain) = module.function_signature(fid)?;
+    Some(LowShape::Function(
         Box::new(low_type_of_slot(module, domain)),
         Box::new(low_type_of_slot(module, codomain)),
-    )
+    ))
 }
 
 /// Whether `node` holds a **kind marker** — the type position of a type expr.
