@@ -1069,7 +1069,7 @@ fn a_nested_lambda_hangs_under_its_enclosing_function() {
     let outer_id = function_of(&b, outer);
     let inner_id = function_of(&b, inner);
     assert_eq!(
-        b.module.functions[inner_id].parent,
+        b.module.function_parent(inner_id),
         Some(outer_id),
         "the inner closure's parent is the enclosing function"
     );
@@ -1086,12 +1086,12 @@ fn a_sibling_lambda_hangs_under_nothing() {
     let b = build(other, w);
     assert!(b.ok, "the sibling binding must check");
     assert_eq!(
-        b.module.functions[function_of(&b, sibling)].parent,
+        b.module.function_parent(function_of(&b, sibling)),
         None,
         "a same-level sibling hangs under nothing"
     );
     assert_eq!(
-        b.module.functions[function_of(&b, other)].parent,
+        b.module.function_parent(function_of(&b, other)),
         None,
         "the enclosing lambda is itself top level"
     );

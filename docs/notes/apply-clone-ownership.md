@@ -11,9 +11,12 @@
 > check; that note is **closed** now (its named disagreement no longer reproduces),
 > and it points here for the clone rules.
 >
-> Points at: `crates/lichen-lowlevel/src/function.rs` (`node_apply`, the dynamic
-> clone rule), `crates/lichen-lowlevel/src/static_module/apply.rs`
-> (`static_node_apply`, the frozen mirror), `crates/lichen-lowlevel/src/apply.rs`
+> Points at: `crates/lichen-lowlevel/src/scope.rs` (the lexical scope tree and
+> the class scope summaries), `crates/lichen-lowlevel/src/function.rs`
+> (`node_apply`, the dynamic clone rule), `crates/lichen-lowlevel/src/template.rs`
+> (`clone_template`, the general-purpose clone walk),
+> `crates/lichen-lowlevel/src/static_module/apply.rs` (`static_node_apply`, the
+> frozen mirror), `crates/lichen-lowlevel/src/apply.rs`
 > (`answer_elements_are_undecided`, the shared policy).
 
 ## 1. The rule
@@ -166,7 +169,115 @@ own entry point, not the language. Before the rule both printed `parameterized`,
 so the value loss was real on both paths; only the *type name* is resolved by the
 registry path alone.
 
-## 4. What it does not fix, and what closed underneath it
+## 4. The scope rule is class-wide
+
+A clone decision is a fact of the **equality class**, not of the node the walk
+reached. A class is cloned only when **every** member of it lies inside the
+scope of the function whose body the walk is instantiating; a class that
+reaches outside that scope is **referenced as a whole**. A clone therefore
+never splits a class, and the verdict is the same for every member of one
+class.
+
+- **The scope of a function** is a node of the immutable lexical scope tree
+  (`scope.rs`): a function's scope hangs under the scope of the function it is
+  written inside, and the tree is built once, when the function is created.
+  The tree outlives the function: a summary that names a scope keeps naming the
+  same lexical place after the function itself is collected.
+- **The scope of a walk** is the scope of the function whose body the walk
+  instantiates: the applied function's for an apply, the closure's own for the
+  walk that mints a closure from its template. A capture — a cell owned
+  outside that scope — is therefore **referenced**, not cloned, which is the
+  rule the user's `@clone` examples ask for (`x => @clone y => x+1` references
+  `x`; `x => @clone y => y+1` clones `y`).
+- **The summary of a class** is the nearest common ancestor of the owner scopes
+  of its members, held by the class's representative. A member with no owner —
+  a top-level cell, or one whose owner was collected — names the **virtual
+  root**: it is outside every scope, so the class that holds it is external and
+  is referenced whole.
+- **The verdict** is one ancestor test: the scope root must be an
+  ancestor-or-self of the class's summary. The scope tree carries a
+  binary-lifting table, so the test is `O(log F)` in the number of functions
+  and independent of the class's size; the clone walk caches the verdict per
+  class, so the hot path is `O(1)` per node.
+
+The rule is maintained at every write that can move it: a node's creation (its
+own owner's scope), an owner retag (the class is recomputed from its members),
+a class union (the two summaries merge), the collector's class rebuild (the
+survivors are recomputed), and the freeze (the artifact records every frozen
+node's owner and every frozen function's parent, so a load rebuilds the frozen
+scope tree and every class's summary from the artifact's own tables).
+
+### Implementation boundaries exposed by the virtual root
+
+The virtual-root rule is exact. A top-level cell deliberately has no owner
+(`Checker::alloc_node`), so unifying it with a function-owned cell can make the
+whole class external. That is a sharing decision the implementation must
+respect, not a reason to make unowned members neutral. Two measurements
+separate implementation defects from that rule.
+
+**A reference still participates in the parameter check.** In
+`apply_unify_binds_an_undecided_argument_into_the_param_class`, the parameter
+belongs to `f`, a constant has no owner, and the two are unified before `f` is
+applied to an unowned, undecided argument. The class is therefore external and
+the parameter image is the original parameter cell. The old apply skipped the
+check whenever the remap contained no clone for the parameter: the call
+returned `1` but left the argument undecided. The fix stores `parameter_image`
+and runs `apply_parameter_check` against it whether it is a clone or a
+reference. This test and `apply_time_conflict_records_an_error` pass without
+changing the external verdict.
+
+**The recursive expansion was not a loop-backedge contamination.** The old
+function-value type was the self-referential `f : f` expr. Its class contained
+both function-owned cells and the unowned type cell reserved for a top-level
+recursive binding, so the strict verdict referenced one polymorphic function
+type class at every unrolled application. A managed trace measured more than
+534,900 applies with depths oscillating around 54–62 instead of reaching the
+500 budget; marked-loop iterations advanced, and no external parameter root
+occurred. Restoring the old owner-chain membership made the loop finish in
+0.05s, and narrowing that exception to the function type expr alone was
+sufficient; the function value and the shared `Int` type-index node were not
+the cause.
+
+The user's ruling removed that obsolete representation: a function value's
+type is the shared Unit `FunctionType`, and a function constraint is a direct
+`Unify` of the two exprs, deferred in the graph when the actual is undecided
+([function-type-merge](function-type-merge.md)). With that implementation in
+place, both `loop_run::the_loop_and_the_unroll_answer_the_same_value` and
+`loop_run::a_marked_reduction_runs_a_count_the_expansion_cannot_afford` pass in
+0.11s total under the strict class rule. No unowned semantics, assertion, loop
+count, or apply-depth budget changed.
+
+### The frozen path
+
+The frozen artifact carries the same facts: every frozen node's owner and every
+frozen function's parent. Loading validates those function links, rebuilds the
+scope tree, and computes each class summary on its representative. An unowned
+or invalid owner absorbs into the virtual root exactly as in the dynamic path.
+Version 25 retires artifacts without this metadata.
+
+A frozen open cell is read-only, so *reference* cannot mean writing to the
+artifact. Materialization uses one canonical dynamic **outer instance** for an
+external open cell per top-level pass and shares that mapping with nested
+re-homes; it does not allocate a fresh `materialize_leaf` at each encounter.
+An instance created for an external verdict starts **unowned**: tagging it with
+the nested caller would make its later class summary internal and re-instantiate
+the capture per call. If the same source image is later reached from an
+enclosing scope whose verdict is inside, the image is reused and receives that
+enclosing owner; a nested external verdict never strips an existing outer
+owner. Inside-scope cells are instantiated per call, while an external class is
+never made internal by a nested owner retag. `static_node_apply`, static signature
+materialization, and `template_map_ref` all use the same class verdict, and the
+static parameter check consumes the parameter image whether it is a clone or
+an outer-instance reference.
+
+When a dynamic template walk judges a frozen class, only the template scope's
+**own** function can supply the counterpart scope, through a `static_origin` in
+the same frozen module. No origin, or an origin in another module, means
+external. The walk does not fall back to a dynamic ancestor's origin: that
+ancestor is not the lexical scope being instantiated and would wrongly make a
+nested wrapper's captures internal.
+
+## 5. What it does not fix, and what closed underneath it
 
 The rule removes one generation of re-computed cells. A callee that **is** re-run
 per call — a program that binds its argument before the instantiate, say — still

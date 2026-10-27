@@ -45,7 +45,7 @@ two questions the template walk answers differently:
 
 | | the apply | the template |
 |---|---|---|
-| membership | the cell belongs to the applied function | the cell is reachable from the root |
+| membership | the cell's **class** lies inside the applied function's scope | the cell's **class** lies inside the template's own scope |
 | freshness | the cell depends on the argument | the cell's own content is not closed |
 
 Everything else is the apply's, reused rather than restated: one clone per
@@ -64,9 +64,16 @@ the actual's value fills it.
 
 ## 3. The rules
 
-- **The root is always cloned.** An instantiation is an instance, and the root's
-  own class may hold the template's internal cells. (The caller's marking wins
-  over this: a marked root shares the whole template.)
+- **The class decides, not the cell.** A cell is cloned when its **class** lies
+  inside the scope of the function that wrote the template's root cell, and
+  the class needs a fresh cell (one of its members is open); otherwise the
+  class is referenced in place, as a whole. The scope is the **template's own**,
+  not the caller's: the caller names where the instance lands, not the lexical
+  scope being instantiated. A template with no owner has no source scope, so
+  no unmarked class is inside one: the virtual root is external, never neutral.
+  The caller's marking wins over all of this: a marked cell is referenced in
+  place, and a marked root shares the whole template. The rule and its
+  measurements are in [`apply-clone-ownership.md`](apply-clone-ownership.md) §4.
 - **A template's own open cells are fresh.** The instance's cell for an open
   cell is a new empty cell, so a unify that fills it writes into the instance
   and not into the template. The template keeps its own open cells; nothing the

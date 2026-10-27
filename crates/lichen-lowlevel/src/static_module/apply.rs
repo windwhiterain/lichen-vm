@@ -37,6 +37,8 @@ impl<P: Program> Module<P> {
                 module: static_module,
                 remap: HashMap::new(),
                 applied: function.index,
+                source: function.index,
+                rule: FrozenClassRule::new(),
                 branch_top: None,
                 tag: self.nodes[node].function,
                 // The caller-side node every clone is attributed through: the apply or
@@ -48,7 +50,8 @@ impl<P: Program> Module<P> {
             };
             // Clone the parameter before the return so its fields share one instance.
             ctx.in_parameter = true;
-            self.static_node_apply(parameter, &mut ctx);
+            // The parameter's **image**: the clone, or the shared cell.
+            let parameter_image = self.static_node_apply(parameter, &mut ctx);
             ctx.in_parameter = false;
             let applied = self.static_node_apply(r#return, &mut ctx);
             // Each assert instantiates through the shared remap; a baked
@@ -66,31 +69,30 @@ impl<P: Program> Module<P> {
             }
             // The parameter unify, as in `function_apply`: regroup clones by their
             // static reps, then unify against the argument.
-            if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-                if ctx.remap.len() > 1 {
-                    let groups = crate::apply::regroup_clones(
-                        ctx.remap
-                            .iter()
-                            .map(|(&template, &clone)| (template, clone)),
-                        |template| static_find(&ctx.module.nodes, template),
-                    )
-                    .into_iter()
-                    .filter(|(_, clone)| crate::apply::clone_is_a_plain_cell(self, *clone))
-                    .collect();
-                    crate::apply::unify_clone_groups(groups, |first, clone| {
-                        self.unify(first, clone);
-                    });
-                }
-                if self.apply_parameter_check(
-                    cloned_param,
-                    argument,
-                    block,
-                    node,
-                    AnyFunctionId::Static(function),
-                    cloned_param,
-                ) {
-                    break 'frame None;
-                }
+            if ctx.remap.len() > 1 {
+                let groups = crate::apply::regroup_clones(
+                    ctx.remap
+                        .iter()
+                        .map(|(&template, &clone)| (template, clone)),
+                    |template| static_find(&ctx.module.nodes, template),
+                )
+                .into_iter()
+                .filter(|(_, clone)| crate::apply::clone_is_a_plain_cell(self, *clone))
+                .collect();
+                crate::apply::unify_clone_groups(groups, |first, clone| {
+                    self.unify(first, clone);
+                });
+            }
+            // The check runs against the image, never the template's cell.
+            if self.apply_parameter_check(
+                parameter_image,
+                argument,
+                block,
+                node,
+                AnyFunctionId::Static(function),
+                parameter_image,
+            ) {
+                break 'frame None;
             }
             let result = self.evaluate_node(Dyn(applied), Some(block));
             // A static callee's type is static too, which the dynamic guard refuses.
@@ -122,8 +124,9 @@ impl<P: Program> Module<P> {
         if self.depth_exhausted(node) {
             return false;
         }
+        let mut rule = FrozenClassRule::new();
         let Some((parameter, codomain, mut remap)) =
-            self.materialize_static_signature_with_classes(function, block)
+            self.materialize_static_signature_with_classes(function, block, &mut rule)
         else {
             return false;
         };
@@ -142,6 +145,8 @@ impl<P: Program> Module<P> {
                 module: module.clone(),
                 remap,
                 applied: function.index,
+                source: function.index,
+                rule,
                 branch_top: None,
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
@@ -153,6 +158,7 @@ impl<P: Program> Module<P> {
             self.record_applied_expr(node, applied);
             remap = ctx.remap;
             minted = ctx.minted;
+            rule = ctx.rule;
         }
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
@@ -172,7 +178,7 @@ impl<P: Program> Module<P> {
                 return false;
             }
             // The asserts re-check on this call's copies (apply-type-side-check §6).
-            self.register_static_type_asserts(function, block, node, remap, minted);
+            self.register_static_type_asserts(function, block, node, remap, minted, rule);
         }
         let Some(cell) = cell else {
             return true;
@@ -244,8 +250,9 @@ impl<P: Program> Module<P> {
         };
         // One materialization per call: the clone and the return share one remap; a
         // reference names the argument-bound clone.
+        let mut rule = FrozenClassRule::new();
         let Some((parameter, _codomain, remap)) =
-            self.materialize_static_signature_with_classes(function, block)
+            self.materialize_static_signature_with_classes(function, block, &mut rule)
         else {
             return;
         };
@@ -255,6 +262,8 @@ impl<P: Program> Module<P> {
             module,
             remap,
             applied: function.index,
+            source: function.index,
+            rule,
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
@@ -281,6 +290,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         remap: HashMap<LocalNodeId, NodeId>,
         minted: HashMap<StaticFunctionRef, FunctionId>,
+        rule: FrozenClassRule,
     ) {
         let module = self.static_module(function.module);
         if module.functions[function.index.0].asserts.is_empty() {
@@ -291,6 +301,8 @@ impl<P: Program> Module<P> {
             module,
             remap,
             applied: function.index,
+            source: function.index,
+            rule,
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
@@ -327,7 +339,15 @@ impl<P: Program> Module<P> {
             entry.parameter
         };
         let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        Some(self.clone_static_signature_node(&module, local, block, &mut remap))
+        let mut rule = FrozenClassRule::new();
+        Some(self.clone_static_signature_node(
+            &module,
+            local,
+            block,
+            &mut remap,
+            function.index,
+            &mut rule,
+        ))
     }
 
     /// The frozen signature copied into `block`, its frozen classes preserved.
@@ -336,6 +356,7 @@ impl<P: Program> Module<P> {
         &mut self,
         function: StaticFunctionRef,
         block: BlockId,
+        rule: &mut FrozenClassRule,
     ) -> Option<(NodeId, NodeId, HashMap<LocalNodeId, NodeId>)> {
         let module = self.static_module(function.module);
         let (parameter, return_type) = {
@@ -343,8 +364,22 @@ impl<P: Program> Module<P> {
             (entry.parameter, entry.return_type)
         };
         let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        let parameter = self.clone_static_signature_node(&module, parameter, block, &mut remap);
-        let codomain = self.clone_static_signature_node(&module, return_type, block, &mut remap);
+        let parameter = self.clone_static_signature_node(
+            &module,
+            parameter,
+            block,
+            &mut remap,
+            function.index,
+            rule,
+        );
+        let codomain = self.clone_static_signature_node(
+            &module,
+            return_type,
+            block,
+            &mut remap,
+            function.index,
+            rule,
+        );
         if remap.len() > 1 {
             let groups = crate::apply::regroup_clones(
                 remap.iter().map(|(&template, &clone)| (template, clone)),
@@ -361,6 +396,12 @@ impl<P: Program> Module<P> {
     }
 
     /// One node of the frozen signature, copied; an array's items are copied with it.
+    ///
+    /// # Invariant
+    ///
+    /// An open cell whose class reaches outside the source scope is **shared**:
+    /// it becomes the pass's canonical outer image, one cell per frozen cell,
+    /// so the class is not split and a later encounter names the same cell.
     #[stacksafe]
     fn clone_static_signature_node(
         &mut self,
@@ -368,26 +409,40 @@ impl<P: Program> Module<P> {
         local: LocalNodeId,
         block: BlockId,
         remap: &mut HashMap<LocalNodeId, NodeId>,
+        source: StaticFunctionId,
+        rule: &mut FrozenClassRule,
     ) -> NodeId {
         if let Some(&clone) = remap.get(&local) {
             return clone;
         }
+        if let Some(image) = rule.outer_instance(local) {
+            return image;
+        }
+        // The **class** decides: an open cell outside the source scope is
+        // shared whole.
+        let shared = module.nodes[local.index].undecided() && !rule.inside(module, local, source);
         let clone = self.add_node(block, None, None);
         remap.insert(local, clone);
+        if shared {
+            // The canonical outer image of this frozen cell: unowned, so its
+            // class stays external.
+            rule.set_outer_instance(local, clone);
+        }
         // A frozen operation is copied with it: a value-only copy loses what it computes.
         let operation = module.nodes[local.index].operation;
         let Some(value) = module.read(local) else {
             if let Some(operation) = operation {
-                let operand = operation
-                    .operand
-                    .map(|operand| self.clone_static_signature_node(module, operand, block, remap));
+                let operand = operation.operand.map(|operand| {
+                    self.clone_static_signature_node(module, operand, block, remap, source, rule)
+                });
                 self.nodes[clone].operation = Some(Operation {
                     operator: operation.operator,
                     operand,
                 });
             }
             if let Some(owner) = module.apply_result_owners.get(&local).copied() {
-                let owner = self.clone_static_signature_node(module, owner, block, remap);
+                let owner =
+                    self.clone_static_signature_node(module, owner, block, remap, source, rule);
                 self.apply_result_owners.insert(clone, owner);
             }
             return clone;
@@ -400,19 +455,11 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            // A value is copied; so is a per-call cell with no value and no
-                            // operation — the parameter's own positions.
-
-                            // A residual operation keeps its frozen reference, which the reader
-                            // resolves in that module.
-                            if module.read(sref.index).is_some()
-                                || module.nodes[sref.index.index].operation.is_none()
-                            {
-                                Dyn(self
-                                    .clone_static_signature_node(module, sref.index, block, remap))
-                            } else {
-                                item.node
-                            }
+                            // Every same-module cell is materialized, an open
+                            // residual included: its operand uses the same state.
+                            Dyn(self.clone_static_signature_node(
+                                module, sref.index, block, remap, source, rule,
+                            ))
                         }
                         node => node,
                     };
@@ -426,9 +473,9 @@ impl<P: Program> Module<P> {
             _ => value,
         };
         if let Some(operation) = operation {
-            let operand = operation
-                .operand
-                .map(|operand| self.clone_static_signature_node(module, operand, block, remap));
+            let operand = operation.operand.map(|operand| {
+                self.clone_static_signature_node(module, operand, block, remap, source, rule)
+            });
             self.nodes[clone].operation = Some(Operation {
                 operator: operation.operator,
                 operand,
@@ -436,7 +483,7 @@ impl<P: Program> Module<P> {
         }
         self.write_node_value(clone, Some(copied));
         if let Some(owner) = module.apply_result_owners.get(&local).copied() {
-            let owner = self.clone_static_signature_node(module, owner, block, remap);
+            let owner = self.clone_static_signature_node(module, owner, block, remap, source, rule);
             self.apply_result_owners.insert(clone, owner);
         }
         clone
@@ -446,9 +493,8 @@ impl<P: Program> Module<P> {
     /// static recursion runs through here.
     #[stacksafe]
     fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
-        if let Some(&clone) = ctx.remap.get(&local) {
-            return clone;
-        }
+        // The wildcard comes first, as in the dynamic walk: a parameter
+        // receives a fresh hole, never cached.
         if (ctx.in_parameter || ctx.reconcile_cached_answer)
             && matches!(
                 ctx.module.read(local).and_then(|value| value.as_enum()),
@@ -466,6 +512,22 @@ impl<P: Program> Module<P> {
             node.operation,
             node.low_shape.clone(),
         );
+        // The **class** decides: a class outside the source scope is shared
+        // whole. A decided cell is not governed by the rule.
+        let inside = !undecided || ctx.rule.inside(&ctx.module, local, ctx.source);
+        // The canonical outer instance of a shared cell: one cell per frozen
+        // cell, reused on every later encounter.
+        if let Some(instance) = ctx.rule.outer_instance(local) {
+            // The current verdict decides the owner: a class inside the
+            // current scope is promoted out of the unowned state.
+            if undecided && inside && self.nodes[instance].function.is_none() {
+                self.set_node_owner(instance, ctx.tag);
+            }
+            return instance;
+        }
+        if let Some(&clone) = ctx.remap.get(&local) {
+            return clone;
+        }
         // Reserve the clone id before recursing: diamonds then resolve to one clone,
         // and a value cycle to the clone's own id.
         let clone = self.add_node(ctx.target, None, None);
@@ -473,14 +535,20 @@ impl<P: Program> Module<P> {
         // are not this module's, so it is never the origin.
         self.nodes[clone].origin = Some(ctx.origin);
         ctx.remap.insert(local, clone);
+        if undecided && !inside {
+            // The canonical outer instance of this frozen cell.
+            ctx.rule.set_outer_instance(local, clone);
+        }
         // A clone keeps its template's class (`docs/notes/compound-element-slots.md`).
         if let Some(shape) = template_shape {
             self.seed_class_low_type(clone, shape);
         }
         if undecided {
-            // A residual clone joins the caller's template; unowned it is read
-            // in place forever (`apply-clone-ownership.md` §1).
-            self.nodes[clone].function = ctx.tag;
+            // A residual clone joins the caller's template; a shared cell
+            // stays unowned, so its class stays external.
+            if inside {
+                self.set_node_owner(clone, ctx.tag);
+            }
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
@@ -684,14 +752,25 @@ impl<P: Program> Module<P> {
             template: None,
             asserts: Vec::new(),
             parent: ctx.branch_top,
+            scope: None,
             block: ctx.target,
             // An instance, not a template; the `@loop` mark does not travel here.
             looping: None,
         });
+        // The re-homed closure's scope hangs under its branch.
+        let branch_scope = ctx
+            .branch_top
+            .and_then(|branch| self.function_scope(branch));
+        let fresh_scope = Scope::child(fresh, branch_scope.as_ref());
+        self.functions[fresh].scope = Some(fresh_scope);
         // Recorded before the walk: the closure's own value node names it again.
         ctx.minted.insert(sref, fresh);
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
+        // The **source** of this walk is the closure being re-homed; its
+        // cells are the fresh closure's, as in the dynamic walk.
+        let outer_source = std::mem::replace(&mut ctx.source, sref.index);
+        let outer_tag = std::mem::replace(&mut ctx.tag, Some(fresh));
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
         let return_type_clone = self.static_node_apply(return_type, ctx);
@@ -711,15 +790,25 @@ impl<P: Program> Module<P> {
         let mut own = Vec::with_capacity(scope.len());
         for &node in &scope {
             let clone = self.static_node_apply(node, ctx);
-            self.nodes[clone].function = Some(fresh);
+            // A class outside this closure's scope is shared, so its cell
+            // keeps its owner: the retag must not make it internal.
+            if ctx.rule.inside(&ctx.module, node, ctx.source) {
+                self.set_node_owner(clone, Some(fresh));
+            }
             own.push(clone);
         }
-        for clone in [ret_clone, param_clone, return_type_clone] {
-            if self.nodes.contains_key(clone) {
-                self.nodes[clone].function = Some(fresh);
+        for (node, clone) in [
+            (r#return, ret_clone),
+            (parameter, param_clone),
+            (return_type, return_type_clone),
+        ] {
+            if self.nodes.contains_key(clone) && ctx.rule.inside(&ctx.module, node, ctx.source) {
+                self.set_node_owner(clone, Some(fresh));
             }
         }
         ctx.branch_top = outer_top;
+        ctx.source = outer_source;
+        ctx.tag = outer_tag;
         let fresh_function = &mut self.functions[fresh];
         fresh_function.nodes = own;
         fresh_function.r#return = ret_clone;
@@ -799,6 +888,13 @@ fn static_node_holds_open_closure<P: Program>(module: &StaticModule<P>, node: Lo
 /// The fixed context of one static materialize pass: target block, module, remap,
 /// applied function, owner tag.
 struct StaticApplyCtx<P: Program> {
+    /// The block every cell of this pass lands in.
+    ///
+    /// # Invariant
+    ///
+    /// The target never changes within a pass, so a canonical outer instance
+    /// lands in the pass's own block however deep the walk reached it: its
+    /// lifetime does not depend on the traversal order.
     target: BlockId,
     module: Arc<StaticModule<P>>,
     remap: HashMap<LocalNodeId, NodeId>,
@@ -807,6 +903,19 @@ struct StaticApplyCtx<P: Program> {
     /// The applied function: its own value node is the recursion self-reference and
     /// must stay baked.
     applied: StaticFunctionId,
+    /// The **source** function whose body this walk instantiates.
+    ///
+    /// # Invariant
+    ///
+    /// The source is the function the walk reads the body of, not the one the
+    /// walk is called from: a nested re-home switches it to the closure being
+    /// re-homed, so the class verdicts are made in the scope of the body the
+    /// walk is instantiating. It is not the recursion point — that is
+    /// [`Self::applied`].
+    source: StaticFunctionId,
+    /// The frozen class rule this pass applies: the verdict per class and the
+    /// shared classes' outer instances.
+    rule: FrozenClassRule,
     /// The enclosing **fresh dynamic closure** a nested re-home hangs under;
     /// `None` at the top of a static apply.
     ///

@@ -24,23 +24,12 @@ fn function_homed_in(
     asserts: &[NodeId],
     r#return: NodeId,
 ) -> FunctionId {
-    let function = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return,
-        parameter: NodeId::default(),
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: home,
-        looping: None,
-    });
+    let function = m.begin_function(home, None);
+    m.functions[function].r#return = r#return;
     for &node in nodes {
         m.register_in_function(function, node);
     }
     m.functions[function].asserts = asserts.to_vec();
-    m.blocks[home].functions.push(function);
     function
 }
 

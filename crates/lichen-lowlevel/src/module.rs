@@ -295,6 +295,7 @@ impl<P: Program> Module<P> {
             operation,
             low_shape: None,
             function: None,
+            scope_summary: None,
             origin: None,
             depth: u16::try_from(self.stamp_depth).unwrap_or(u16::MAX),
             block,
@@ -615,10 +616,9 @@ impl<P: Program> Module<P> {
             self.functions.contains_key(function),
             "a node cannot be owned by a function that does not exist: {function:?}"
         );
-        self.nodes[node].function = Some(function);
+        self.set_node_owner(node, Some(function));
         self.functions[function].nodes.push(node);
     }
-
     /// Record a diagnostic a **layer above the lowlevel** produced. See
     /// [`ExtensionDiagnostic::fails_build`].
     ///
@@ -684,12 +684,90 @@ impl<P: Program> Module<P> {
             static_origin: None,
             template: None,
             parent,
+            scope: None,
             asserts: Vec::new(),
             block,
             looping: None,
         });
+        // The scope hangs under the parent's scope, so a class summary names the
+        // lexical nesting the source wrote.
+        let parent_scope = parent.and_then(|parent| self.function_scope(parent));
+        let scope = Scope::child(function, parent_scope.as_ref());
+        self.functions[function].scope = Some(scope);
         self.blocks[block].functions.push(function);
         function
+    }
+
+    /// The lexical parent of `function`, or `None` at top level.
+    pub fn function_parent(&self, function: FunctionId) -> Option<FunctionId> {
+        self.functions.get(function).and_then(|entry| entry.parent)
+    }
+
+    /// Re-home `function` under another parent.
+    ///
+    /// # Invariant
+    /// The scope tree under the function moves with it, and every class
+    /// summary is rebuilt from the owners' scopes, so no summary names the
+    /// old place. The rebuild is linear in the module: this is a
+    /// construction-time path.
+    pub fn set_function_parent(&mut self, function: FunctionId, parent: Option<FunctionId>) {
+        let moved = self.scope_descendants(function);
+        self.functions[function].parent = parent;
+        let parent_scope = parent.and_then(|parent| self.function_scope(parent));
+        let scope = Scope::child(function, parent_scope.as_ref());
+        self.functions[function].scope = Some(scope);
+        // The scopes below the function hang under their own parent's new
+        // scope, so the tree keeps naming one nesting.
+        for descendant in moved {
+            let parent_scope = self
+                .functions
+                .get(descendant)
+                .and_then(|entry| entry.parent)
+                .and_then(|parent| self.function_scope(parent));
+            let scope = Scope::child(descendant, parent_scope.as_ref());
+            self.functions[descendant].scope = Some(scope);
+        }
+        self.refresh_all_class_summaries();
+    }
+
+    /// The functions whose scope hangs under `function`'s, nearest first.
+    fn scope_descendants(&self, function: FunctionId) -> Vec<FunctionId> {
+        let Some(root) = self.function_scope(function) else {
+            return Vec::new();
+        };
+        let mut descendants: Vec<(u32, FunctionId)> = Vec::new();
+        for (candidate, entry) in self.functions.iter() {
+            if candidate == function {
+                continue;
+            }
+            let Some(candidate_scope) = entry.scope.clone() else {
+                continue;
+            };
+            // The lifting table answers ancestry without walking the candidate's
+            // whole parent chain.
+            if root.is_ancestor_or_self(&candidate_scope) {
+                descendants.push((candidate_scope.depth(), candidate));
+            }
+        }
+        // The parents come first: a scope is rebuilt under its parent's new one.
+        descendants.sort_by_key(|(depth, _)| *depth);
+        descendants
+            .into_iter()
+            .map(|(_, function)| function)
+            .collect()
+    }
+
+    /// Rebuild every class's scope summary from its members' owners.
+    fn refresh_all_class_summaries(&mut self) {
+        let representatives: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.equality.parent().is_none())
+            .map(|(node, _)| node)
+            .collect();
+        for representative in representatives {
+            self.refresh_class_summary(representative);
+        }
     }
 
     /// Stamp `function` as a `@loop` binding — its recursion may become a loop.
@@ -757,7 +835,7 @@ impl<P: Program> Module<P> {
                 function,
             )))),
         );
-        self.nodes[func_node].function = Some(function);
+        self.set_node_owner(func_node, Some(function));
         func_node
     }
 }

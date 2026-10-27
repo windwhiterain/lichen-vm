@@ -91,6 +91,14 @@ where
             }
         }
         w.u32(node.equality.size());
+        // The owner: the function whose body wrote this node.
+        match node.owner {
+            None => w.u8(0),
+            Some(owner) => {
+                w.u8(1);
+                w.u64(owner.0 as u64);
+            }
+        }
         // Store the two axes rather than the collapsed `undecided` read: the
         // materialize pass's carry rule needs them apart.
         w.u8(node.runned as u8);
@@ -125,6 +133,15 @@ where
         w.u64(function.nodes.len() as u64);
         for &node in &function.nodes {
             w.u64(node.index as u64);
+        }
+        // The lexical parent: the frozen scope tree mirrors the source's
+        // nesting.
+        match function.parent {
+            None => w.u8(0),
+            Some(parent) => {
+                w.u8(1);
+                w.u64(parent.0 as u64);
+            }
         }
     }
     let mut owners: Vec<_> = module.apply_result_owners.iter().collect();
@@ -293,6 +310,85 @@ fn read_node_id(r: &mut Reader<'_>, node_count: usize, what: &str) -> Result<Loc
     Ok(LocalNodeId { index })
 }
 
+/// The function-indexed links an artifact carries: a node's owner and a
+/// function's lexical parent.
+///
+/// # Invariant
+///
+/// Every function-indexed link names a function the artifact has, and the
+/// parents form a forest: the scope tree is built from them, so a link that
+/// names no function, or a cycle of parents, is refused rather than turned
+/// into a scope that names no real place.
+fn check_function_links<P: Program>(
+    nodes: &[StaticNode<P>],
+    functions: &[StaticFunction],
+) -> Result<(), String> {
+    for (index, node) in nodes.iter().enumerate() {
+        if let Some(owner) = node.owner
+            && owner.0 >= functions.len()
+        {
+            return Err(format!(
+                "artifact node {index} names owner function {}, not among the module's {} functions",
+                owner.0,
+                functions.len()
+            ));
+        }
+    }
+    for (index, function) in functions.iter().enumerate() {
+        if let Some(parent) = function.parent
+            && parent.0 >= functions.len()
+        {
+            return Err(format!(
+                "artifact function {index} names parent function {}, not among the module's {} functions",
+                parent.0,
+                functions.len()
+            ));
+        }
+    }
+    check_parent_forest(functions)
+}
+
+/// The lexical parents must form a forest: a cycle has no scope.
+///
+/// # Invariant
+///
+/// Every function's parent chain ends at a function that has no parent, so
+/// the scope tree the walk builds is a tree.
+fn check_parent_forest(functions: &[StaticFunction]) -> Result<(), String> {
+    // 0: unvisited, 1: on the chain being walked, 2: the chain is settled.
+    let mut state = vec![0u8; functions.len()];
+    for start in 0..functions.len() {
+        if state[start] != 0 {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut current = start;
+        loop {
+            state[current] = 1;
+            chain.push(current);
+            let Some(parent) = functions[current].parent else {
+                break;
+            };
+            match state[parent.0] {
+                // The chain meets itself: a cycle.
+                1 => {
+                    return Err(format!(
+                        "artifact function {current} names parent function {}, which is its own ancestor",
+                        parent.0
+                    ));
+                }
+                // The chain reaches a settled chain, which is acyclic too.
+                2 => break,
+                _ => current = parent.0,
+            }
+        }
+        for index in chain {
+            state[index] = 2;
+        }
+    }
+    Ok(())
+}
+
 /// Deserialize an artifact, verifying `key` and `hash` against the header.
 ///
 /// # Invariant
@@ -388,6 +484,11 @@ where
             None
         };
         let size = r.u32()?;
+        let owner = match r.u8()? {
+            0 => None,
+            1 => Some(StaticFunctionId(r.u64()? as usize)),
+            _ => return Err("bad node owner tag".into()),
+        };
         let runned = r.u8()? != 0;
         let evaluated_deep = match r.u8()? {
             0 => None,
@@ -402,6 +503,7 @@ where
             operation,
             low_shape,
             equality: lichen_utils::disjoint::Meta::new(parent, next, tail, size),
+            owner,
             runned,
             evaluated_deep,
         });
@@ -435,6 +537,11 @@ where
         for _ in 0..scope_count {
             scope.push(read_node_id(&mut r, node_count, "function template node")?);
         }
+        let parent = match r.u8()? {
+            0 => None,
+            1 => Some(StaticFunctionId(r.u64()? as usize)),
+            _ => return Err("bad function parent tag".into()),
+        };
         functions.push(StaticFunction {
             parameter,
             r#return,
@@ -442,11 +549,16 @@ where
             origin,
             asserts,
             nodes: scope,
+            parent,
             // Not serialized: recomputed from the loaded tables, so an artifact
             // cannot disagree with its graph.
             open_captures: false,
         });
     }
+
+    // The owner and the parent must name the artifact's own functions: the
+    // scope tree is built from them.
+    check_function_links(&nodes, &functions)?;
 
     let owner_count = r.u64()? as usize;
     let mut apply_result_owners = reserve(&r, owner_count, "apply result owners")?;
@@ -490,8 +602,13 @@ where
         // A loaded artifact owns no out-of-arena resource: a resource handle
         // is process-local and cannot be in the bytes.
         releases: Vec::new(),
+        // The scope tree and the class summaries are recomputed from the
+        // loaded tables, as the freeze's walk does.
+        scopes: Vec::new(),
+        scope_summaries: Vec::new(),
     };
     // Recompute the verdict from the loaded tables, as the freeze's walk does.
     module.fill_open_captures();
+    module.fill_scope_summaries();
     Ok((module, export))
 }

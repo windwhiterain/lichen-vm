@@ -101,6 +101,9 @@ impl<P: Program> Module<P> {
             _ => {}
         }
         let representative = disjoint::union(&mut self.nodes, root_a, root_b);
+        // The merged class's scope summary is the nearest common ancestor of the
+        // two classes' summaries.
+        self.merge_class_summaries(root_a, root_b, representative);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
         }

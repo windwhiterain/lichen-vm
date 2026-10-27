@@ -252,18 +252,9 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         TestOperator::LowOperator(LowOperator::Index),
         Some(e_index_ops),
     );
-    let even = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: e_ret,
-        parameter: e_param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let even = m.begin_function(body, None);
+    m.functions[even].r#return = e_ret;
+    m.functions[even].parameter = e_param;
     tag_scope(
         &mut m,
         even,
@@ -301,18 +292,9 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         TestOperator::LowOperator(LowOperator::Index),
         Some(o_index_ops),
     );
-    let odd = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: o_ret,
-        parameter: o_param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let odd = m.begin_function(body, None);
+    m.functions[odd].r#return = o_ret;
+    m.functions[odd].parameter = o_param;
     tag_scope(
         &mut m,
         odd,

@@ -19,8 +19,8 @@ mod verdict;
 
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,
-    EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId,
-    Operation, OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
+    EvaluatedDeep, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId, Operation,
+    OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -488,20 +488,10 @@ fn finish_function(
     func_node: NodeId,
 ) -> FunctionId {
     let nodes: Vec<NodeId> = m.blocks[block].nodes.to_vec();
-    let function = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: ret,
-        parameter: param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block,
-        looping: None,
-    });
+    let function = m.begin_function(block, None);
+    m.functions[function].r#return = ret;
+    m.functions[function].parameter = param;
     tag_scope(m, function, nodes);
-    m.blocks[block].functions.push(function);
     m.write_node_value(
         func_node,
         Some(TestValue::LowValue(LowValue::Function(
@@ -527,20 +517,10 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
         Some(operands),
     );
     let ret = array_node(m, body, &[param, apply], None);
-    let function = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: ret,
-        parameter: param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let function = m.begin_function(body, None);
+    m.functions[function].r#return = ret;
+    m.functions[function].parameter = param;
     tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
-    m.blocks[body].functions.push(function);
     m.write_node_value(
         func_node,
         Some(TestValue::LowValue(LowValue::Function(
@@ -577,33 +557,14 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
         Some(g_ops),
     );
     let g_ret = array_node(m, body, &[g_param, g_apply], None);
-    let f = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: f_ret,
-        parameter: f_param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let f = m.begin_function(body, None);
+    m.functions[f].r#return = f_ret;
+    m.functions[f].parameter = f_param;
     tag_scope(m, f, vec![f_param, f_func, f_ops, f_apply, f_ret]);
-    let g = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: g_ret,
-        parameter: g_param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: Vec::new(),
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let g = m.begin_function(body, None);
+    m.functions[g].r#return = g_ret;
+    m.functions[g].parameter = g_param;
     tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
-    m.blocks[body].functions.extend([f, g]);
     m.write_node_value(
         f_func,
         Some(TestValue::LowValue(LowValue::Function(

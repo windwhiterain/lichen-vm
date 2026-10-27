@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, Function,
-    FunctionId, LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
+    FunctionId, LowValue, Module, NodeId, Operation, PendingAssert, Program, Scope, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -54,15 +55,20 @@ struct ApplyCtx<'a> {
     /// The membership anchor: the applied function.  A node belongs to it iff its
     /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
-    /// [`Self::anchor`]'s own template, which the membership test also accepts.
-    anchor_template: Option<FunctionId>,
-    /// The chain half of the membership verdict for the last `Node::function` tested.
+    /// The scope the walk's decisions are made in: the scope of the function whose
+    /// body this walk instantiates.
     ///
     /// # Invariant
-    /// The chain verdict is a function of the node's own function and the pass's two
-    /// anchors alone, so one entry answers a run of nodes of one function; the
-    /// closure-scope hit stays per-node and is never cached here.
-    last_member: Option<(Option<FunctionId>, bool)>,
+    /// The scope names the function the walk instantiates, so a class is cloned
+    /// only when **every** member of it lies inside that scope. See
+    /// `docs/notes/apply-clone-ownership.md` §4.
+    scope_root: Option<Arc<Scope<FunctionId>>>,
+    /// The scope verdict of each class this walk has judged.
+    ///
+    /// # Invariant
+    /// One entry per class judged, so every member of one class reads one answer
+    /// and a clone never splits a class.
+    scope_verdicts: HashMap<NodeId, bool>,
     /// The branch stack top: the id a freshly cloned closure hangs under
     /// ([`Function::parent`]).
     ///
@@ -392,10 +398,11 @@ impl<P: Program> Module<P> {
         let mut ctx = ApplyCtx {
             target: block,
             blocks: HashMap::new(),
-            // Membership is the chain test, not a scope snapshot.
+            // The scope is the applied function's own: the body this walk
+            // instantiates is that function's.
             anchor: function,
-            anchor_template: self.functions[function].template,
-            last_member: None,
+            scope_root: self.function_scope(function),
+            scope_verdicts: HashMap::new(),
             branch_top: function,
             closure_scope: None,
             applied: function,
@@ -411,7 +418,8 @@ impl<P: Program> Module<P> {
         // The parameter is a walk entry point: its unify fires even when the body
         // never references it.  Idempotent.
         ctx.in_parameter = true;
-        self.node_apply(parameter, &mut ctx);
+        // The parameter's image: the clone, or the template's own cell.
+        let parameter_image = self.node_apply(parameter, &mut ctx);
         ctx.in_parameter = false;
         let applied = self.node_apply(r#return, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
@@ -429,7 +437,7 @@ impl<P: Program> Module<P> {
             }
         }
         // The clone is unified with the argument, not replaced by it, so the binding propagates.
-        if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+        if ctx.remap.contains_key(&parameter) {
             // Re-establish the template's class topology among the fresh singleton
             // clones — among the plain cells only.
             if ctx.remap.len() > 1 {
@@ -446,24 +454,24 @@ impl<P: Program> Module<P> {
                     self.unify(first, clone);
                 });
             }
-            // A signature clone binds nothing; the other modes probe the parameter.
-            if check != ParameterCheck::Skip {
-                let recorded = self.unify_errors.len();
-                let failed = self.apply_parameter_check(
-                    cloned_param,
-                    argument,
-                    block,
-                    node,
-                    AnyFunctionId::Dynamic(function),
-                    parameter,
-                );
-                // The type side discards only the errors this check records.
-                if check == ParameterCheck::Type {
-                    self.unify_errors.truncate(recorded);
-                }
-                if failed {
-                    return None;
-                }
+        }
+        // A signature clone binds nothing; the other modes probe the parameter.
+        if check != ParameterCheck::Skip {
+            let recorded = self.unify_errors.len();
+            let failed = self.apply_parameter_check(
+                parameter_image,
+                argument,
+                block,
+                node,
+                AnyFunctionId::Dynamic(function),
+                parameter,
+            );
+            // The type side discards only the errors this check records.
+            if check == ParameterCheck::Type {
+                self.unify_errors.truncate(recorded);
+            }
+            if failed {
+                return None;
             }
         }
         Some(Instantiation { applied, remap })
@@ -607,12 +615,6 @@ impl<P: Program> Module<P> {
             }
             return fresh;
         }
-        // A closure is instantiated from its template, whose body a clone never names.
-        let member = self.template_member(function, ctx)
-            || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
-        if !member {
-            return node; // outside the template scope — reference as-is
-        }
         // Only the parts whose value could differ per call get fresh clones — see
         // `docs/notes/apply-clone-ownership.md`.
 
@@ -651,6 +653,10 @@ impl<P: Program> Module<P> {
         if !depends_on_parameter {
             return node;
         }
+        // The scope rule: the class decides, so a clone never splits one.
+        if !self.node_class_inside_scope(node, ctx) {
+            return node; // outside the scope — reference as-is
+        }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
         let scope = block;
         let target = self.clone_target(scope, ctx);
@@ -665,11 +671,12 @@ impl<P: Program> Module<P> {
         self.nodes[clone].origin = Some(node);
         // The owner tag: an apply's clones take the apply node's owner; a closure's own scope
         // takes the fresh id.
-        self.nodes[clone].function = match ctx.closure_scope {
+        let owner = match ctx.closure_scope {
             Some(scope) if scope.contains(&node) => ctx.tag,
             Some(_) => function,
             None => ctx.tag,
         };
+        self.set_node_owner(clone, owner);
         ctx.remap.insert(node, clone);
         if let Some(keys) = ctx.minted_keys.as_deref_mut() {
             keys.push(node);
@@ -835,11 +842,17 @@ impl<P: Program> Module<P> {
                     template: Some(self.functions[function].template.unwrap_or(function)),
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
+                    scope: None,
                     block: target,
                     // A clone does not carry its template's `@loop` mark: an instance is expanded like
                     // any other call.
                     looping: None,
                 });
+                // The fresh closure's scope hangs under the branch it was minted
+                // in, so it names the same lexical place its parent does.
+                let branch_scope = self.function_scope(ctx.branch_top);
+                let fresh_scope = Scope::child(fresh, branch_scope.as_ref());
+                self.functions[fresh].scope = Some(fresh_scope);
                 // The fresh id is recorded before the scope walk; a scope can name it again.
                 ctx.minted.insert(function, fresh);
                 // The nested function's scope joins the clone's template, so its captures
@@ -861,8 +874,9 @@ impl<P: Program> Module<P> {
                     target,
                     blocks: HashMap::new(),
                     anchor: ctx.anchor,
-                    anchor_template: ctx.anchor_template,
-                    last_member: None,
+                    // The closure's own scope: a capture is outside it.
+                    scope_root: self.function_scope(function),
+                    scope_verdicts: HashMap::new(),
                     branch_top: fresh,
                     closure_scope: Some(&scope),
                     applied: function,
@@ -925,7 +939,7 @@ impl<P: Program> Module<P> {
                 // re-instantiates per call.
                 for &id in &nodes {
                     if self.nodes[id].block == target {
-                        self.nodes[id].function = Some(fresh);
+                        self.set_node_owner(id, Some(fresh));
                     }
                 }
                 let fresh_function = &mut self.functions[fresh];
@@ -944,40 +958,45 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `function`'s chain reaches the pass's anchor or its template.
-    fn template_member(&self, function: Option<FunctionId>, ctx: &mut ApplyCtx<'_>) -> bool {
-        if let Some((tested, verdict)) = ctx.last_member
-            && tested == function
-        {
+    /// Whether the class `node` belongs to lies inside the walk's scope.
+    ///
+    /// # Invariant
+    /// The verdict is a fact of the class, so every member of one class reads
+    /// the same answer: a clone never splits a class, and a class that reaches
+    /// outside the scope is referenced whole.
+    fn node_class_inside_scope(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> bool {
+        let Some(scope) = ctx.scope_root.clone() else {
+            return false; // no scope: nothing is inside it
+        };
+        let representative = self.class_root(node);
+        if let Some(&verdict) = ctx.scope_verdicts.get(&representative) {
             return verdict;
         }
-        let verdict = self.function_descends_from(function, ctx.anchor)
-            || ctx
-                .anchor_template
-                .is_some_and(|template| self.function_descends_from(function, template));
-        ctx.last_member = Some((function, verdict));
+        let verdict = self.class_inside_scope(node, &scope);
+        ctx.scope_verdicts.insert(representative, verdict);
         verdict
     }
 
-    /// Whether `function`'s chain of lexical parents reaches `anchor` — the template
-    /// membership test.
+    /// Whether `function`'s scope is under `anchor`'s — the lexical membership test.
     ///
     /// # Invariant
-    /// Walks with [`SlotMap::get`], so a dangling parent reads as non-membership rather
-    /// than panicking.
+    /// A function with no scope — one that was never created through
+    /// [`Module::begin_function`], or one whose record is gone — is a member of
+    /// nothing, so the answer is `false` rather than a panic.
     pub(crate) fn function_descends_from(
         &self,
         function: Option<FunctionId>,
         anchor: FunctionId,
     ) -> bool {
-        let mut current = function;
-        while let Some(f) = current {
-            if f == anchor {
-                return true;
-            }
-            current = self.functions.get(f).and_then(|f| f.parent);
-        }
-        false
+        let Some(function) = function else {
+            return false;
+        };
+        let (Some(function), Some(anchor)) =
+            (self.function_scope(function), self.function_scope(anchor))
+        else {
+            return false;
+        };
+        anchor.is_ancestor_or_self(&function)
     }
 
     /// Whether an answer's own slots are undecided — the dynamic read of the shared

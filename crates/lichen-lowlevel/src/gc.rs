@@ -327,6 +327,9 @@ impl<P: Program> Module<P> {
         let Some((&representative, _)) = survivors.split_first() else {
             return;
         };
+        // The summary moves with the class: the survivors' owners are the whole
+        // class now, so the summary is rebuilt from them.
+        self.refresh_class_summary(representative);
         if let Some(value) = survivors
             .iter()
             .find_map(|&member| self.nodes.get(member).and_then(|node| node.value))
@@ -365,7 +368,19 @@ impl<P: Program> Module<P> {
                 .get(function)
                 .is_some_and(|function| function.block == block)
             {
+                // The nodes it owns lose their owner: the refresh runs
+                // after the record is gone, so it reads as invalid.
+                let owned: Vec<NodeId> = self
+                    .functions
+                    .get(function)
+                    .map(|entry| entry.nodes.clone())
+                    .unwrap_or_default();
                 self.functions.remove(function);
+                for node in owned {
+                    if self.nodes.get(node).is_some_and(|node| node.block != block) {
+                        self.refresh_class_summary(node);
+                    }
+                }
             }
         }
         let nodes = std::mem::take(&mut self.blocks[block].nodes);

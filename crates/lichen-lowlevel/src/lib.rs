@@ -17,6 +17,7 @@ pub use crate::loop_conversion::{
     LoopArm, LoopConversion, LoopExit, LoopRefusal, LoopStep, LoopTest,
 };
 pub use crate::resolve::{Define, Selection};
+pub use crate::scope::Scope;
 pub use crate::static_module::Rehome;
 pub(crate) use crate::static_module::StaticModuleCache;
 pub use crate::template::{TemplateBoundary, TemplateInstance};
@@ -35,6 +36,7 @@ mod low_type;
 mod module;
 mod registry;
 pub mod resolve;
+pub mod scope;
 mod static_module;
 mod table;
 mod template;
@@ -833,7 +835,21 @@ pub struct Function {
     /// lexical chain never names the clone.
     pub template: Option<FunctionId>,
     /// The lexical parent function, or `None` at top level; not a keep-alive edge.
-    pub parent: Option<FunctionId>,
+    ///
+    /// # Invariant
+    /// The parent is written once, when the function is created, and [`Self::scope`]
+    /// is built from it then: a function's lexical place never changes, so the
+    /// scope tree the class summaries name stays the truth.
+    parent: Option<FunctionId>,
+    /// The function's place in the immutable lexical scope tree.
+    ///
+    /// # Invariant
+    /// The scope hangs under the scope of [`Self::parent`], so a scope names
+    /// the lexical nesting the source wrote. It is written once, with the
+    /// function, and only [`Module::set_function_parent`] moves it — and that
+    /// moves the whole scope tree under it. See
+    /// `docs/notes/apply-clone-ownership.md` §4.
+    scope: Option<Arc<Scope<FunctionId>>>,
     /// The body's assert conditions, cloned and re-registered per apply.
     ///
     /// # Invariant
@@ -871,6 +887,13 @@ pub struct StaticFunction {
     pub nodes: Vec<LocalNodeId>,
     /// The body reaches an `undecided` node outside this function's own template scope.
     pub open_captures: bool,
+    /// The lexical parent function, or `None` at top level.
+    ///
+    /// # Invariant
+    /// The parent is the enclosing scope, so the frozen scope tree mirrors the
+    /// source's nesting and a frozen class's scope summary names the place its
+    /// members were written in.
+    pub parent: Option<StaticFunctionId>,
 }
 
 /// The deep pass's verdict on one node: whether its reachable subtree is undecided.
@@ -906,6 +929,15 @@ pub struct Node<P: Program> {
     operation: Option<Operation<P>>,
     /// The function whose body owns this node, or `None`; private, read via `node_function`.
     function: Option<FunctionId>,
+    /// The scope summary of this node's **class**, held by the class's
+    /// representative; `None` is the virtual root.
+    ///
+    /// # Invariant
+    /// The summary is the nearest common ancestor of the owner scopes of every
+    /// member of the class, and it is read only from the representative: a
+    /// member's own slot is not a summary of anything. See
+    /// `docs/notes/apply-clone-ownership.md` §4.
+    scope_summary: Option<Arc<Scope<FunctionId>>>,
     /// The node this clone is attributed through, or `None` for every other node.
     ///
     /// # Invariant
@@ -955,6 +987,13 @@ pub struct StaticNode<P: Program> {
     pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
+    /// The function whose body owns this node, or `None` when it has none.
+    ///
+    /// # Invariant
+    /// The owner names the lexical scope the node was written in, so a frozen
+    /// class's scope summary is the nearest common ancestor of its members'
+    /// owners' scopes. A node with no owner names the virtual root.
+    pub owner: Option<StaticFunctionId>,
     /// Whether the source node's operator had run: an artifact carries no run clock, so this
     /// mirror is its zero test.
     pub runned: bool,
@@ -1292,6 +1331,22 @@ pub struct StaticModule<P: Program> {
     /// Empty for an artifact loaded from the store: bytes cannot carry a resource handle, so the
     /// store's own eviction is the only path with one to run.
     pub releases: Vec<Box<dyn Release>>,
+    /// The frozen scope of each function, in slot order.
+    ///
+    /// # Invariant
+    ///
+    /// A scope hangs under its parent's scope, so the tree mirrors the source's
+    /// nesting. Filled by [`StaticModule::fill_scope_summaries`], which a host
+    /// that assembles an artifact by hand must call.
+    pub scopes: Vec<Option<Arc<Scope<StaticFunctionId>>>>,
+    /// The scope summary of each node's class, in slot order.
+    ///
+    /// # Invariant
+    ///
+    /// Only a class's representative carries its summary: the nearest common
+    /// ancestor of the owner scopes of the class's members. `None` is the
+    /// virtual root — the class has no member with an owner of its own.
+    pub scope_summaries: Vec<Option<Arc<Scope<StaticFunctionId>>>>,
 }
 
 impl<P: Program> Drop for StaticModule<P> {

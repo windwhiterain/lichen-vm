@@ -306,7 +306,7 @@ fn nested_function_is_called_by_the_outer_body() {
         },
     );
     let (f_node, f_id) = wrap_function(&mut m, f, ret, param);
-    m.functions[g_id].parent = Some(f_id);
+    m.set_function_parent(g_id, Some(f_id));
     m.evaluate_node_deep(ret, None); // definition pass: the nested g is concrete
 
     let arg = u128_node(&mut m, root, 42);
@@ -347,7 +347,7 @@ fn outer_call_returns_a_nested_function_value() {
     );
     let param = m.add_node(f, None, None);
     let (f_node, f_id) = wrap_function(&mut m, f, ret, param);
-    m.functions[g_id].parent = Some(f_id);
+    m.set_function_parent(g_id, Some(f_id));
     m.evaluate_node_deep(ret, None); // definition pass: Id(g) is concrete
 
     let one = u128_node(&mut m, root, 1);
@@ -402,7 +402,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
         },
     );
     let (func_node, f_id) = wrap_function(&mut m, f, ret, param);
-    m.functions[g_id].parent = Some(f_id);
+    m.set_function_parent(g_id, Some(f_id));
 
     let forty_two = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, forty_two);

@@ -1,19 +1,19 @@
 //! The template instantiation: the walk that clones a template's value graph.
 //!
 //! # Invariant
-//! The walk is the apply's own clone walk with two decisions replaced: membership
-//! is reachability from the root, and freshness is the cell's own closure. Every
-//! other rule — one clone per source cell, the operator travelling with its
-//! operand, the class topology rebuilt by the shared regroup — is the apply's.
+//! The walk is the apply's own clone walk with two decisions replaced:
+//! membership is the class's scope, and freshness is the cell's own closure.
 //! See `docs/notes/template-instantiation.md`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LowValue,
-    Module, NodeId, Operation, Program, StaticNodeId, TableItem, ValueExt,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LocalNodeId,
+    LowValue, Module, NodeId, Operation, Program, Scope, StaticFunctionRef, StaticNodeId,
+    TableItem, ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -94,6 +94,19 @@ struct TemplateCtx<'a> {
     target: BlockId,
     /// The owner the clones are registered with, when the caller named one.
     owner: Option<FunctionId>,
+    /// The scope the walk's decisions are made in: the scope of the function
+    /// that owns the template's root.
+    ///
+    /// # Invariant
+    /// The scope names the function the template was written in, so a class
+    /// whose members reach outside it is shared whole rather than cloned.
+    scope: Option<Arc<Scope<FunctionId>>>,
+    /// The class verdicts this walk has judged, keyed by the class's root.
+    ///
+    /// # Invariant
+    /// One entry per class judged, so every member of one class is cloned or
+    /// shared alike and a class is never split by the instance.
+    verdicts: HashMap<NodeId, bool>,
     /// The boundary the caller marked.
     boundary: &'a TemplateBoundary,
     /// The template cell → the instance's cell.
@@ -102,6 +115,18 @@ struct TemplateCtx<'a> {
     shared: HashSet<NodeId>,
     /// The frozen cell → the instance's cell.
     static_remap: HashMap<StaticNodeId, NodeId>,
+    /// The frozen cell → its class representative.
+    ///
+    /// # Invariant
+    /// The immutable union-find is read once per frozen cell per pass; every
+    /// later verdict uses the cached representative.
+    static_representatives: HashMap<StaticNodeId, LocalNodeId>,
+    /// Frozen class verdicts, keyed by source function and representative.
+    ///
+    /// # Invariant
+    /// Every member of one frozen class reads the same verdict in one source
+    /// scope; a different module or source scope has a different entry.
+    static_verdicts: HashMap<(StaticFunctionRef, LocalNodeId), bool>,
     /// Whether a template cell's own content is closed.
     closed: HashMap<NodeId, bool>,
     /// Whether a frozen cell's own content is closed.
@@ -114,11 +139,11 @@ impl<P: Program> Module<P> {
     /// Instantiate the template rooted at `root`.
     ///
     /// # Invariant
-    /// The root is cloned, so an instantiation is an instance — unless the caller
-    /// marked the root itself, which shares the whole template. A cell the caller
-    /// did not mark is cloned, so the template keeps its own open cells; a marked
-    /// cell is referenced in place, so the dependency on an outer binding is kept.
-    /// `None` answers a walk a budget stopped: a budget is not a success.
+    /// A cell the caller did not mark is cloned when its **class** lies inside
+    /// the template's own scope and the class needs a fresh cell; otherwise the
+    /// class is referenced in place, as a whole. A marked cell is referenced in
+    /// place, so the dependency on an outer binding is kept. `None` answers a
+    /// walk a budget stopped: a budget is not a success.
     pub fn clone_template(
         &mut self,
         root: NodeId,
@@ -129,13 +154,21 @@ impl<P: Program> Module<P> {
         if !self.nodes.contains_key(root) {
             return None;
         }
+        // The template's own scope: the function that wrote the root cell.
+        let scope = self.nodes[root]
+            .function
+            .and_then(|owner| self.function_scope(owner));
         let mut ctx = TemplateCtx {
             target,
             owner,
+            scope,
+            verdicts: HashMap::new(),
             boundary,
             remap: HashMap::new(),
             shared: HashSet::new(),
             static_remap: HashMap::new(),
+            static_representatives: HashMap::new(),
+            static_verdicts: HashMap::new(),
             closed: HashMap::new(),
             static_closed: HashMap::new(),
             exhausted: false,
@@ -145,7 +178,7 @@ impl<P: Program> Module<P> {
         self.template_closure_map(root, &mut ctx);
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(root) + 1;
-        let clone = self.template_clone(root, &mut ctx, true);
+        let clone = self.template_clone(root, &mut ctx);
         self.stamp_depth = stamp;
         if ctx.exhausted {
             return None;
@@ -402,18 +435,67 @@ impl<P: Program> Module<P> {
             .collect()
     }
 
+    /// Whether the class of `source` is cloned by this walk.
+    ///
+    /// # Invariant
+    /// The verdict is a fact of the class: every member of one class is cloned
+    /// or shared alike, so the instance never splits a class. A class is cloned
+    /// when it lies inside the walk's scope **and** it needs a fresh cell — one
+    /// of its members is open. The root's own class is cloned whatever it
+    /// holds: an instantiation is an instance.
+    fn template_class_is_cloned(&mut self, source: NodeId, ctx: &mut TemplateCtx<'_>) -> bool {
+        let representative = disjoint::find(&mut self.nodes, source);
+        if let Some(&verdict) = ctx.verdicts.get(&representative) {
+            return verdict;
+        }
+        let verdict = self.template_class_verdict(representative, ctx);
+        ctx.verdicts.insert(representative, verdict);
+        verdict
+    }
+
+    /// The verdict of one class: cloned, or shared as a whole.
+    fn template_class_verdict(
+        &mut self,
+        representative: NodeId,
+        ctx: &mut TemplateCtx<'_>,
+    ) -> bool {
+        // The scope axis: every member of the class must lie inside the scope,
+        // or the class is shared whole.
+        if let Some(scope) = ctx.scope.clone()
+            && !self.class_inside_scope(representative, &scope)
+        {
+            return false;
+        }
+        // The freshness axis: the class needs a fresh cell when one of its
+        // members is open.
+        self.template_class_needs_freshness(representative, ctx)
+    }
+
+    /// Whether one member of the class is open, so the class needs a fresh cell.
+    fn template_class_needs_freshness(
+        &self,
+        representative: NodeId,
+        ctx: &TemplateCtx<'_>,
+    ) -> bool {
+        let mut member = Some(representative);
+        while let Some(current) = member {
+            member = self.nodes[current].equality.next();
+            // A cell the walk never reached is not one of the class's open
+            // cells: the walk does not instance it.
+            if !ctx.closed.get(&current).copied().unwrap_or(true) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The instance's cell for the template's `source`.
     ///
     /// # Invariant
     /// One template cell has one instance cell: the map is written before the walk
     /// descends, so a diamond names one cell and a cycle names the instance's own.
     #[stacksafe]
-    fn template_clone(
-        &mut self,
-        source: NodeId,
-        ctx: &mut TemplateCtx<'_>,
-        is_root: bool,
-    ) -> NodeId {
+    fn template_clone(&mut self, source: NodeId, ctx: &mut TemplateCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&source) {
             return clone;
         }
@@ -426,9 +508,9 @@ impl<P: Program> Module<P> {
             ctx.exhausted = true;
             return source;
         }
-        // A closed cell is shared: nothing can be written into it, so the instance
-        // gains nothing by copying it.
-        if !is_root && ctx.closed.get(&source).copied().unwrap_or(false) {
+        // The **class** decides: the whole class is cloned or the whole class is
+        // shared, so the instance never splits one.
+        if !self.template_class_is_cloned(source, ctx) {
             ctx.shared.insert(source);
             return source;
         }
@@ -450,7 +532,7 @@ impl<P: Program> Module<P> {
             operator: operation.operator,
             operand: operation
                 .operand
-                .map(|operand| self.template_clone(operand, ctx, false)),
+                .map(|operand| self.template_clone(operand, ctx)),
         });
         // The wildcard is decided but never carried: the instance's own cell replaces
         // it, so the caller's value can fill it.
@@ -534,6 +616,50 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether a frozen cell's class lies inside the template's source scope.
+    ///
+    /// # Invariant
+    /// Only the template scope's own function supplies a source scope, through
+    /// a same-module `static_origin`. No origin, module, or scope is external;
+    /// a dynamic ancestor is never a substitute lexical scope.
+    fn template_static_inside_scope(
+        &mut self,
+        sref: StaticNodeId,
+        ctx: &mut TemplateCtx<'_>,
+    ) -> bool {
+        let Some(scope) = ctx.scope.clone() else {
+            return false;
+        };
+        let Some(origin) = self
+            .functions
+            .get(scope.function())
+            .and_then(|entry| entry.static_origin)
+        else {
+            return false;
+        };
+        if origin.module != sref.module {
+            return false;
+        }
+        let module = self.static_module(sref.module);
+        let Some(source_scope) = module.static_function_scope(origin.index) else {
+            return false;
+        };
+        let representative = if let Some(&representative) = ctx.static_representatives.get(&sref) {
+            representative
+        } else {
+            let representative = crate::static_module::static_find(&module.nodes, sref.index);
+            ctx.static_representatives.insert(sref, representative);
+            representative
+        };
+        let key = (origin, representative);
+        if let Some(&verdict) = ctx.static_verdicts.get(&key) {
+            return verdict;
+        }
+        let verdict = module.static_class_inside_scope(representative, &source_scope);
+        ctx.static_verdicts.insert(key, verdict);
+        verdict
+    }
+
     /// The instance's cell for one payload reference.
     #[stacksafe]
     fn template_map_ref(
@@ -545,7 +671,7 @@ impl<P: Program> Module<P> {
     ) -> AnyNodeId {
         match reference {
             Dyn(_) if frozen => reference,
-            Dyn(node) => Dyn(self.template_clone(node, ctx, false)),
+            Dyn(node) => Dyn(self.template_clone(node, ctx)),
             AnyNodeId::Static(sref) => {
                 // A frozen cell that is closed is read in place: it holds a value
                 // nothing can write into.
@@ -562,9 +688,9 @@ impl<P: Program> Module<P> {
     /// The instance's own cell for a frozen cell that is open.
     ///
     /// # Invariant
-    /// The clone is the instance's own cell: it is homed in the target block, owned
-    /// by the owner, shaped by the frozen cell, and its origin is the cell that
-    /// named the frozen one — a frozen cell has no dynamic node of its own.
+    /// One source cell has one canonical image per pass. An external class's
+    /// image is unowned; an inside class's image belongs to the instance owner.
+    /// The frozen artifact is never written.
     #[stacksafe]
     fn template_materialize_static(
         &mut self,
@@ -572,27 +698,70 @@ impl<P: Program> Module<P> {
         named_by: NodeId,
         ctx: &mut TemplateCtx<'_>,
     ) -> NodeId {
+        let module = self.static_module(sref.module);
+        let (undecided, operation, evaluated_deep) = {
+            let node = &module.nodes[sref.index.index];
+            (node.undecided(), node.operation, node.evaluated_deep)
+        };
+        let inside = !undecided || self.template_static_inside_scope(sref, ctx);
         if let Some(&clone) = ctx.static_remap.get(&sref) {
+            if undecided
+                && inside
+                && self.nodes[clone].function.is_none()
+                && let Some(owner) = ctx.owner
+            {
+                self.register_in_function(owner, clone);
+            }
             return clone;
         }
         let clone = self.add_node(ctx.target, None, None);
         ctx.static_remap.insert(sref, clone);
         self.nodes[clone].origin = Some(named_by);
         // The frozen cell's own shape is the clone's shape.
-        let shape = self.static_module(sref.module).nodes[sref.index.index]
-            .low_shape
-            .clone();
+        let shape = module.nodes[sref.index.index].low_shape.clone();
         if let Some(shape) = shape {
             self.seed_class_low_type(clone, shape);
         }
-        if let Some(owner) = ctx.owner {
+        if undecided
+            && inside
+            && let Some(owner) = ctx.owner
+        {
             self.register_in_function(owner, clone);
         }
-        // The frozen value's payload: the instance's own cells where the frozen ones
-        // are open.
+        // The operator and its operand travel through the same canonical map.
+        let operation = operation.map(|operation| Operation {
+            operator: operation.operator,
+            operand: operation.operand.map(|operand| {
+                self.template_materialize_static(
+                    StaticNodeId {
+                        module: sref.module,
+                        index: operand,
+                    },
+                    clone,
+                    ctx,
+                )
+            }),
+        });
         let value = self.static_read(sref);
-        let mapped = value.map(|value| self.template_map_value(value, clone, ctx, true));
+        let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
+        let carried = match operation {
+            None => !wildcard,
+            Some(_) => evaluated_deep.is_some() && !wildcard,
+        };
+        let mapped = if carried {
+            value.map(|value| self.template_map_value(value, clone, ctx, true))
+        } else {
+            None
+        };
         self.write_node_value(clone, mapped);
+        let claimed = evaluated_deep.is_some_and(|deep| !deep.undecided)
+            && mapped.is_some_and(|value| {
+                !crate::apply::answer_elements_are_undecided::<P>(value, |node| {
+                    self.node_value(node).is_none()
+                })
+            });
+        self.stamp_node_ran_if(clone, claimed);
+        self.nodes[clone].operation = operation;
         clone
     }
 
@@ -610,11 +779,30 @@ impl<P: Program> Module<P> {
             .map(|(&template, &clone)| (template, clone))
             .collect();
         entries.extend(ctx.shared.iter().map(|&node| (node, node)));
+        if entries.len() > 1 {
+            let groups = crate::apply::regroup_clones(entries, |template| {
+                disjoint::find(&mut self.nodes, template)
+            });
+            crate::apply::unify_clone_groups(groups, |first, clone| {
+                self.unify(first, clone);
+            });
+        }
+        // Frozen classes rebuild inside their own module: local indices from
+        // different modules never share a group.
+        let entries: Vec<_> = ctx
+            .static_remap
+            .iter()
+            .map(|(&sref, &clone)| ((sref.module, sref.index), clone))
+            .collect();
         if entries.len() < 2 {
             return;
         }
-        let groups = crate::apply::regroup_clones(entries, |template| {
-            disjoint::find(&mut self.nodes, template)
+        let groups = crate::apply::regroup_clones(entries, |(module, index)| {
+            let frozen = self.static_module(module);
+            (
+                module,
+                crate::static_module::static_find(&frozen.nodes, index),
+            )
         });
         crate::apply::unify_clone_groups(groups, |first, clone| {
             self.unify(first, clone);

@@ -316,6 +316,10 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `25` added every frozen node's owner and every frozen function's lexical parent.
+  A load validates those function links and rebuilds the frozen scope tree and class
+  summaries from them. A v24 artifact has no such metadata, so it cannot reproduce the
+  class-wide clone decisions and is rebuilt rather than accepted with different sharing.
 - `24` retired the self-referential function type. A frozen module written by the
   previous compiler carries a function's type as the self-cycle `[Function(fid), ↺]`;
   the new reader expects the shared `FunctionType` marker, so a v23 artifact's

@@ -10,8 +10,9 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId,
     Function, FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation,
-    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
-    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    PendingAssert, Program, Scope, StaticFunction, StaticFunctionId, StaticFunctionRef,
+    StaticHandle, StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem,
+    ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -58,6 +59,106 @@ impl<P: Program> StaticModuleCache<P> {
     /// [`StaticModule::read`] through the cache.
     pub(crate) fn read(&mut self, host: &Module<P>, sref: StaticNodeId) -> Option<P::Value> {
         self.module(host, sref.module).read(sref.index)
+    }
+}
+
+/// The frozen class rule one pass applies: the verdict per class, and the
+/// canonical outer instance of each shared cell.
+///
+/// # Invariant
+///
+/// The verdict is a fact of the **class**, not of the cell the walk reached:
+/// every member of one class reads the same answer, so a clone never splits a
+/// class. The scope the verdict is made in is the **source** function's — the
+/// function whose body the pass instantiates, nested closures included — so a
+/// cell the source does not own is shared whole.
+pub(crate) struct FrozenClassRule {
+    /// The verdict of each class this pass judged, keyed by the source
+    /// function and the class's representative.
+    ///
+    /// # Invariant
+    ///
+    /// One entry per class per source scope, so every member of one class
+    /// reads one answer and the hot path is one map read.
+    verdicts: HashMap<(StaticFunctionId, LocalNodeId), bool>,
+    /// The class representative of each cell the walk reached.
+    ///
+    /// # Invariant
+    ///
+    /// The artifact's union-find has no path compression, so the
+    /// representative is found once per cell and read afterwards.
+    representatives: HashMap<LocalNodeId, LocalNodeId>,
+    /// The canonical outer instance of each shared cell, keyed by the frozen
+    /// cell it stands for.
+    ///
+    /// # Invariant
+    ///
+    /// One instance per frozen cell per pass, so a later encounter names the
+    /// same cell and a nested re-home of the pass shares it: a capture is one
+    /// cell and not one per closure. The instance is per **cell** and not per
+    /// class, because the members of a class keep their own operator and their
+    /// own answer; the class topology is rebuilt by the walk's own regroup.
+    outer: HashMap<LocalNodeId, NodeId>,
+}
+
+impl FrozenClassRule {
+    /// A rule with nothing judged yet.
+    pub(crate) fn new() -> Self {
+        Self {
+            verdicts: HashMap::new(),
+            representatives: HashMap::new(),
+            outer: HashMap::new(),
+        }
+    }
+
+    /// The class representative of a frozen cell.
+    pub(crate) fn representative<P: Program>(
+        &mut self,
+        module: &StaticModule<P>,
+        local: LocalNodeId,
+    ) -> LocalNodeId {
+        if let Some(&representative) = self.representatives.get(&local) {
+            return representative;
+        }
+        let representative = static_find(&module.nodes, local);
+        self.representatives.insert(local, representative);
+        representative
+    }
+
+    /// Whether the frozen cell's class lies inside the **source** function's scope.
+    ///
+    /// # Invariant
+    ///
+    /// The verdict is a fact of the class, so every member of one class reads
+    /// the same answer: a clone never splits a class, and a class that
+    /// reaches outside the source scope is shared whole. A source with no
+    /// scope of its own shares every class, because nothing is inside it.
+    pub(crate) fn inside<P: Program>(
+        &mut self,
+        module: &StaticModule<P>,
+        local: LocalNodeId,
+        source: StaticFunctionId,
+    ) -> bool {
+        let Some(scope) = module.static_function_scope(source) else {
+            return false; // no scope: nothing is inside it
+        };
+        let representative = self.representative(module, local);
+        if let Some(&verdict) = self.verdicts.get(&(source, representative)) {
+            return verdict;
+        }
+        let verdict = module.static_class_inside_scope(representative, &scope);
+        self.verdicts.insert((source, representative), verdict);
+        verdict
+    }
+
+    /// The canonical outer instance of a shared cell, when the pass has one.
+    pub(crate) fn outer_instance(&self, local: LocalNodeId) -> Option<NodeId> {
+        self.outer.get(&local).copied()
+    }
+
+    /// Record the canonical outer instance of a shared cell.
+    pub(crate) fn set_outer_instance(&mut self, local: LocalNodeId, instance: NodeId) {
+        self.outer.insert(local, instance);
     }
 }
 
@@ -593,6 +694,165 @@ fn static_closure_has_open_captures<P: Program>(
 }
 
 impl<P: Program> StaticModule<P> {
+    /// Fill every function's scope and every class's scope summary, once.
+    ///
+    /// # Safety
+    ///
+    /// The graph is the only source: a host that assembles a [`StaticModule`] by hand
+    /// must call this after assembly, so a stored verdict cannot disagree with the graph.
+    pub fn fill_scope_summaries(&mut self) {
+        let mut scopes: Vec<Option<Arc<Scope<StaticFunctionId>>>> =
+            vec![None; self.functions.len()];
+        for index in 0..self.functions.len() {
+            let mut visiting = HashSet::new();
+            self.static_scope(StaticFunctionId(index), &mut scopes, &mut visiting);
+        }
+        let summaries = self.static_scope_summaries(&scopes);
+        self.scopes = scopes;
+        self.scope_summaries = summaries;
+    }
+
+    /// The scope of one frozen function, built from its parent's scope.
+    ///
+    /// # Invariant
+    ///
+    /// A function whose parent chain fails has no scope of its own: the
+    /// failure travels up the chain, so no member of an invalid cycle is
+    /// given a scope that names no real place.
+    fn static_scope(
+        &self,
+        index: StaticFunctionId,
+        scopes: &mut Vec<Option<Arc<Scope<StaticFunctionId>>>>,
+        visiting: &mut HashSet<usize>,
+    ) -> Option<Arc<Scope<StaticFunctionId>>> {
+        // A scope that is already built is reused.
+        if let Some(scope) = scopes.get(index.0).and_then(|scope| scope.clone()) {
+            return Some(scope);
+        }
+        // A cycle in the parents has no scope: the walk stops there.
+        if !visiting.insert(index.0) {
+            return None;
+        }
+        let scope = self.build_scope(index, scopes, visiting);
+        visiting.remove(&index.0);
+        // Only a function with a scope of its own is given one.
+        if let Some(scope) = &scope {
+            scopes[index.0] = Some(scope.clone());
+        }
+        scope
+    }
+
+    /// One function's own scope, hung under its parent's.
+    fn build_scope(
+        &self,
+        index: StaticFunctionId,
+        scopes: &mut Vec<Option<Arc<Scope<StaticFunctionId>>>>,
+        visiting: &mut HashSet<usize>,
+    ) -> Option<Arc<Scope<StaticFunctionId>>> {
+        // A function the artifact does not have has no scope.
+        let parent = self.functions.get(index.0)?.parent;
+        match parent {
+            // A top-level function's scope hangs under nothing.
+            None => Some(Scope::child(index, None)),
+            // A parent with no scope of its own leaves this one without one.
+            Some(parent) => {
+                let parent_scope = self.static_scope(parent, scopes, visiting)?;
+                Some(Scope::child(index, Some(&parent_scope)))
+            }
+        }
+    }
+
+    /// The scope a member's owner names, or `None` for the virtual root.
+    ///
+    /// # Invariant
+    ///
+    /// A member with no owner, one whose owner names no function of the
+    /// artifact, or one whose owner has no scope of its own names the virtual
+    /// root: it is outside every scope, so the class that holds it is
+    /// external.
+    fn static_owner_scope(
+        &self,
+        node: LocalNodeId,
+        scopes: &[Option<Arc<Scope<StaticFunctionId>>>],
+    ) -> Option<Arc<Scope<StaticFunctionId>>> {
+        let owner = self.nodes.get(node.index)?.owner?;
+        scopes.get(owner.0).cloned().flatten()
+    }
+
+    /// The scope summary of every class: the nearest common ancestor of the
+    /// owner scopes of its members.
+    ///
+    /// # Invariant
+    ///
+    /// The summary is the nearest common ancestor of the members' owner
+    /// scopes, and a member with no owner of its own names the virtual root,
+    /// which absorbs every other member's scope.
+    fn static_scope_summaries(
+        &self,
+        scopes: &[Option<Arc<Scope<StaticFunctionId>>>],
+    ) -> Vec<Option<Arc<Scope<StaticFunctionId>>>> {
+        let mut summaries: Vec<Option<Arc<Scope<StaticFunctionId>>>> = vec![None; self.nodes.len()];
+        for index in 0..self.nodes.len() {
+            // Only a class's representative carries its summary.
+            if self.nodes[index].equality.parent().is_some() {
+                continue;
+            }
+            let mut summary: Option<Arc<Scope<StaticFunctionId>>> = None;
+            let mut seen = false;
+            let mut member = Some(LocalNodeId { index });
+            while let Some(current) = member {
+                // A member the artifact cannot name ends the walk: the class
+                // reaches outside every scope.
+                member = self
+                    .nodes
+                    .get(current.index)
+                    .and_then(|node| node.equality.next());
+                let owner_scope = self.static_owner_scope(current, scopes);
+                summary = if seen {
+                    crate::scope::merge_summaries(summary, owner_scope)
+                } else {
+                    seen = true;
+                    owner_scope
+                };
+            }
+            summaries[index] = summary;
+        }
+        summaries
+    }
+
+    /// The scope summary of the class the frozen node belongs to.
+    ///
+    /// # Invariant
+    ///
+    /// Only a class's representative carries its summary, so the node is
+    /// resolved to its representative first: every member of one class reads
+    /// the same answer.
+    pub fn static_scope_summary(&self, node: LocalNodeId) -> Option<Arc<Scope<StaticFunctionId>>> {
+        self.nodes.get(node.index)?;
+        let representative = static_find(&self.nodes, node);
+        self.scope_summaries.get(representative.index)?.clone()
+    }
+
+    /// Whether every member of the frozen node's class lies inside `scope`.
+    pub fn static_class_inside_scope(
+        &self,
+        node: LocalNodeId,
+        scope: &Arc<Scope<StaticFunctionId>>,
+    ) -> bool {
+        let Some(summary) = self.static_scope_summary(node) else {
+            return false; // the virtual root is inside no scope
+        };
+        scope.is_ancestor_or_self(&summary)
+    }
+
+    /// The scope of a frozen function, or `None` when it has none.
+    pub fn static_function_scope(
+        &self,
+        function: StaticFunctionId,
+    ) -> Option<Arc<Scope<StaticFunctionId>>> {
+        self.scopes.get(function.0)?.clone()
+    }
+
     /// Fill every function's [`StaticFunction::open_captures`] from the artifact's own
     /// tables, once, at build time.
     ///

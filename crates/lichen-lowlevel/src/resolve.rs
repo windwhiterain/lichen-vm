@@ -416,17 +416,7 @@ impl<P: Program> Module<P> {
     /// Whether `node`'s owner chain reaches `function` — the membership test
     /// the apply clone walk uses.
     pub fn belongs_to(&self, node: NodeId, function: FunctionId) -> Result<bool, String> {
-        let mut owner = self.nodes[node].function;
-        while let Some(current) = owner {
-            if current == function {
-                return Ok(true);
-            }
-            owner = self
-                .functions
-                .get(current)
-                .and_then(|function| function.parent);
-        }
-        Ok(false)
+        Ok(self.function_descends_from(self.nodes[node].function, function))
     }
 
     /// The **type** half of a `[value, type]` expr node, or `None` when it is

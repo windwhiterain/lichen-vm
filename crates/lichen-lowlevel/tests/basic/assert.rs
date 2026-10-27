@@ -349,20 +349,11 @@ fn gc_moves_an_assert_condition_with_its_function() {
         .copied()
         .filter(|&id| id != condition)
         .collect();
-    let function = m.functions.insert(Function {
-        nodes: Vec::new(),
-        r#return: ret,
-        parameter: param,
-        return_type: NodeId::default(),
-        static_origin: None,
-        template: None,
-        asserts: vec![condition],
-        parent: None,
-        block: body,
-        looping: None,
-    });
+    let function = m.begin_function(body, None);
+    m.functions[function].r#return = ret;
+    m.functions[function].parameter = param;
+    m.functions[function].asserts = vec![condition];
     tag_scope(&mut m, function, nodes);
-    m.blocks[body].functions.push(function);
     m.write_node_value(
         func_placeholder,
         Some(TestValue::LowValue(LowValue::Function(

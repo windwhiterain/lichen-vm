@@ -115,6 +115,11 @@ impl<P: Program> StaticModule<P> {
                 );
             }
         }
+        // The function map comes first: a node records its owner.
+        let mut function_map: HashMap<FunctionId, StaticFunctionId> = HashMap::new();
+        for (index, &id) in function_ids.iter().enumerate() {
+            function_map.insert(id, StaticFunctionId(index));
+        }
         let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_ids.len());
         let mut values: Vec<Option<P::Value>> = Vec::with_capacity(node_ids.len());
         for &id in node_ids {
@@ -142,17 +147,20 @@ impl<P: Program> StaticModule<P> {
                     equality.tail().map(|t| node_map[&t]),
                     equality.size(),
                 ),
+                // The owner: the function whose body wrote this node.
+                owner: node
+                    .function
+                    .and_then(|owner| function_map.get(&owner))
+                    .copied(),
                 // The two axes of [`Node::value`] travel uncollapsed; the run axis
                 // is the stamp's zero test.
                 runned: node.runned,
                 evaluated_deep: node.evaluated_deep,
             });
         }
-        let mut function_map: HashMap<FunctionId, StaticFunctionId> = HashMap::new();
         let mut functions: Vec<StaticFunction> = Vec::with_capacity(function_ids.len());
         for &id in function_ids {
             let function = &module.functions[id];
-            function_map.insert(id, StaticFunctionId(functions.len()));
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
                 r#return: node_map[&function.r#return],
@@ -172,6 +180,12 @@ impl<P: Program> StaticModule<P> {
                 nodes: function.nodes.iter().map(|&node| node_map[&node]).collect(),
                 // Filled below, once every value is in static form.
                 open_captures: false,
+                // The lexical parent: the frozen scope tree mirrors the
+                // source's nesting.
+                parent: function
+                    .parent
+                    .and_then(|parent| function_map.get(&parent))
+                    .copied(),
             });
         }
 
@@ -283,8 +297,11 @@ impl<P: Program> StaticModule<P> {
                 .map(|handle| static_array_handle(handle, key, base, &offsets, &node_map)),
             read_only: mode == FreezeMode::ReadOnly,
             releases,
+            scopes: Vec::new(),
+            scope_summaries: Vec::new(),
         };
         artifact.fill_open_captures();
+        artifact.fill_scope_summaries();
         (artifact, node_map)
     }
 }
