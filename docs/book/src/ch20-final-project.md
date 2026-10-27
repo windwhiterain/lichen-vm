@@ -73,9 +73,9 @@ compute.collect out.y : Array
 ```
 
 **This program does not run today**, for the reason Chapter 17 states: the
-compute surface has not caught up with the constructor model, and the
-parallel lowering of a kernel that carries buffers and structs is refused
-with a *definition cycle* diagnostic. The arithmetic it is written to do is
+compute surface has not caught up with the constructor model, so the kernel's
+read of `k.in.x` is refused with `expected Struct, found ?a => Struct` before
+the parallel lowering can place it. The arithmetic it is written to do is
 exact: the row is `1, 2, 3, 4`, whose mean is `2.5`, so the values it
 writes are `-1.5`, `-0.5`, `0.5`, `1.5`, every one of them exact in
 `f32`. The book does not print that line as the program's answer,
@@ -207,6 +207,7 @@ right — and the fix belongs in both, in the same commit.
   once.
 - A layer norm is this project plus a second reduction and a square root.
 - While the parallel path is under repair, the book states what a kernel
-  program means rather than printing an answer it does not produce.
+  program means rather than printing an answer it does not produce; the first
+  refusal is the field read on a constructor-valued parameter.
 - Publishing a program is the program, its `output` promise, and the tool
   that keeps them equal.

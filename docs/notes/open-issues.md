@@ -1,12 +1,13 @@
 # Open issues after the slot isomorphism
 
-> **Status:** current. The attribute slot is handled exactly like the type slot — every
-> expression term is a full-width `[value, type, attributes]` slot, every reader takes a
-> slot the same way, and the checker states its facts instead of reading values that
-> the check has not decided. The evidence is the parity suite: **`lichen-highlevel`
-> 136/136** (the suite built for exactly this question), `lichen-language` **275/275**,
-> `lichen-lowlevel` **164** (one ignored), compute JIT **30/40**. This note lists what is
-> still open, in one place, and points at the measurements rather than repeating them.
+> **Status:** historical. This note records the slot-isomorphism investigation and
+> the questions that were open while it was running, with the measurements taken at
+> those commits. The counts below predate the function-template migration and are not
+> the current suite state; [constructor templates](value-templates.md) records what
+> the compute migration still fails on. The attribute-slot rule itself remains the
+> design this note measured: every expression term is a full-width
+> `[value, type, attributes]` slot, every reader takes a slot the same way, and the
+> checker states its facts instead of reading values that the check has not decided.
 
 ## 1. The compute graph block is red — a regression of the slot encoding
 

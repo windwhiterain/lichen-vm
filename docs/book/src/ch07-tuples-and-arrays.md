@@ -160,19 +160,16 @@ T := _x => [@any : Int, 3]
 T[10, 20, 30]
 ```
 
+```text
+[10, 20, 30]: Array
+```
+
 Every element is unified with the **one** element requirement the
 constructor returned, so the array is homogeneous by construction, and the
 returned length is checked against the instance's element count.
 
 There is no empty array: an array template's length is at least one, and
 `[]` is a parse error.
-
-> **The array instance is not accepted yet.** The compiler refuses
-> `T[10, 20, 30]` with `expected Array, found Array`, and the plain
-> template `[@any : Int, 3][10, 20, 30]` is refused as a call of a
-> non-function. The rule above is the one the language states; the
-> [constructor note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/value-templates.md)
-> records the measurement.
 
 ### Reading an array
 
@@ -189,8 +186,8 @@ a := [@any : Int, 3]
 (?a, ?b, ?b): Tuple
 ```
 
-The elements read here are the template's own holes, because the instance
-that would fill them is not accepted yet (above).
+The elements read here are the template's own holes: no instance has filled
+them, so the reads are the requirement's.
 
 `a[i]` reads; `a[i, j]` and `a[i,]` instantiate the constructor `a` is
 written on. The array **layout** is required, so a tuple or a struct is
@@ -339,8 +336,7 @@ shape is in the value, and the value is what the elements are read from.
   unifies the actual with the result; plain `=` applies nothing.
 - An array template is `[requirement, length]`, and an array instance
   applies its constructor once and fills the returned element requirement.
-  The instance is not accepted by the compiler yet. An array's type is
-  `Array`.
+  An array's type is `Array`.
 - An array's element is read by position, `a[i]`, with a comma-free
   index; the read requires the array layout.
 - The read form is chosen by the container's layout; a wrong layout is a

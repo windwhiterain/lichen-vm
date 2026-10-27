@@ -189,8 +189,6 @@ pinning, not via a separate type-level language. The pin is the same
 mechanism as a pinned slot: a position of a requirement that states a value.
 It is why a length that is a parameter's is a legal requirement, and why a
 read that supplies a different length fails rather than silently resizing.
-(The array instance itself is not accepted by the compiler yet — Chapter 7
-says where.)
 
 ## Types are checked by their layout
 

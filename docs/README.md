@@ -91,7 +91,7 @@ authority, and this table only names the state.
 | [A nested apply loses the parameter it consumed](notes/nested-apply-none.md) | `lichen-lowlevel` (`evaluation`/`apply`/`function`), `lichen-highlevel` (`checker`) | current |
 | [Array attribute view](notes/array-attribute-view.md) | `lichen-lowlevel` (`lib`/`module`/`codec`/`static_module`), `lichen-highlevel` (`shape`/`checker`) | current |
 | [Compound element slots](notes/compound-element-slots.md) | `lichen-lowlevel` (`equality`/`evaluation`), `lichen-highlevel` (`checker`/`shape`), `lichen-compute`, `lichen-render`, `tree-sitter-lichen` | current |
-| [Value templates](notes/value-templates.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel`, `lichen-lowlevel` | in progress |
+| [Constructor templates](notes/value-templates.md) | `lichen-language-lex`/`-parser`, `lichen-language` (`compile`, `persist`), `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`/`function`/`static_module`), `lichen-compute` | current (compute migration incomplete) |
 | [The template instantiation](notes/template-instantiation.md) | `lichen-lowlevel` (`template`) | current |
 | [Operator polymorphism](notes/operator-polymorphism.md) | `lichen-highlevel`, `lichen-lowlevel` (`assert`), `lichen-language`, `lichen-compute`, `lichen-std` | current |
 | [`core`: the built-in prelude](notes/core-prelude.md) | `lichen-language` (`core.lichen`), `lichen-registry` | current |
@@ -149,7 +149,7 @@ authority, and this table only names the state.
 | [Does the tail closure reach `@shallow(n)`?](notes/shallow-depth-closure.md) | `lichen-highlevel` (`checker/indexing.rs`'s `check_shallow_array_term`/`wrap_shallow`/`close_shallow_tail`), `lichen-language` (`tests/language/pipeline.rs`, `src/resolve.rs`), `examples/` (the survey) | current |
 | [What closing the depth mark's type cell actually does](notes/shallow-depth-mechanism.md) | `lichen-highlevel` (`checker/indexing.rs`'s registration, `checker.rs`'s walk), `lichen-lowlevel` (`shape`) | current |
 | [What a depth-marked element holds, and where the arithmetic went](notes/shallow-depth-element-values.md) | `lichen-highlevel` (`checker/indexing.rs`'s `check_shallow_array_term`/`wrap_shallow`, `checker.rs`'s registration walk), `lichen-lowlevel` (`evaluation`'s `Index`), `lichen-language` (`testing`, `tests/language/pipeline.rs`) | current |
-| [LLM inference operators, and what the machinery says about them](notes/llm-operators.md) | `examples/rmsnorm.lichen`, `lichen-runtime` (the passes), `lichen-fusion-bridge` | current |
+| [LLM inference operators, and what the machinery says about them](notes/llm-operators.md) | `examples/rmsnorm.lichen`, `lichen-runtime` (the passes), `lichen-fusion-bridge` | current (compute migration incomplete) |
 | [The ladder's device leg, measured](notes/device-leg-of-the-ladder.md) | `examples/{sample,topk,kvcache,decode_loop,generate}.lichen`, `lichen-compute-gpu` (the dispatch) | current |
 | [The sampler's crash, localised to one emitted id](notes/dispatch-crash.md) | `crates/lichen-compute-gpu/src/spirv.rs` (the emitter), `examples/sample.lichen` | current |
 | [The operators' device legs, one example at a time](notes/device-operator-sweep.md) | `examples/{rope,silu,softmax,rmsnorm,layernorm,attention,gemv,matmul}.lichen`, `lichen-compute-gpu` (the backend and the validator) | current |
@@ -179,7 +179,7 @@ authority, and this table only names the state.
 | [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language`, `lichen-lowlevel`, external `whiting-definition` | proposed |
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current |
-| [Open issues after the slot isomorphism](notes/open-issues.md) | `lichen-lowlevel` (`function.rs`'s clone rule), `lichen-compute` (the recording pass) | current |
+| [Open issues after the slot isomorphism](notes/open-issues.md) | `lichen-lowlevel` (`function.rs`'s clone rule), `lichen-compute` (the recording pass) | historical |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current |
 | [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current |
 | [The attribute isomorphism — handoff](notes/attribute-isomorphism.md) | `lichen-highlevel` (`checker`, `checker/annotations`, `checker/lambda`, `shape`), `lichen-lowlevel` (`apply`, `static_module/apply`), `lichen-compute` (`compile_fragment`) | current |

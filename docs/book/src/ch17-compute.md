@@ -119,8 +119,9 @@ suite is device-independent; the device legs are measured separately
 
 **This program does not run today.** The compute layer is mid-migration: the
 constructor form above is the shape the language states, but the compute
-package's own surface has not caught up with it, and the compiler refuses
-the program at the kernel's parameter:
+package's own surface has not caught up with it. The kernel body reads
+`k.in.x`, and `k.in` is the constructor `In`, not an instance of it, so the
+field read has no struct to read:
 
 ```text
 error: expected Struct, found ?a => Struct
@@ -130,25 +131,11 @@ error: expected Struct, found ?a => Struct
    |                                          ^
 ```
 
-A kernel's parameter carries the input's **type** in the new model, and the
-kernel body reads the buffer through that type rather than through a struct
-value; the *lowering* of a parallel kernel that carries buffers and structs
-is refused as well:
-
-```text
-error: compute.parallel: a definition cycle: NodeId(2211v1) is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)
-  --> 7:16
-   |
- 7 | double_raw := (k <: Par) => {
-   |                ^
-```
-
-The same refusal is what the repository's own buffer-valued examples
-report today (`examples/gemv.lichen`, `examples/stencil.lichen`,
-`examples/generate.lichen` and the rest), so this is a property of the
-compute layer's current state and not of the program above. The defect
-and the measurements around it are in
-[the open issues](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/open-issues.md).
+The same refusal reaches every read through a constructor-valued field, and
+the launch's argument then reports `no field named n` and `no field named I`
+on `Struct`. The repository's buffer-valued operator examples are at different
+stages of the same migration; the measured failures are recorded in
+[the constructor note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/value-templates.md).
 
 What the program *means* is nevertheless stated by its own text, and it
 is the shape every kernel in the repository has: the fill kernel writes
@@ -267,11 +254,11 @@ was measured and what is next.
   declares a buffer, `compute.parallel` builds a kernel and `compute.plrun`
   runs it; `compute.collect` reads a buffer back as an array, and it is the
   only way out.
-- **The parallel path is under repair**: the compute surface has not caught
-  up with the constructor model, and a kernel that carries buffers and
-  structs is refused as well — by the lowering, with a *definition cycle*
-  diagnostic, and the repository's buffer-valued examples report the same.
-  The book's programs state their semantics; they do not print answers.
+- **The parallel path is under repair**: a kernel body reads `k.in.x`, but
+  `k.in` is the constructor `In` rather than an instance, so the compiler
+  refuses it with `expected Struct, found ?a => Struct`; the launch then loses
+  its field names. The book's programs state their semantics; they do not print
+  answers.
 - The backend is a string, `"cpu"` or `"gpu"`, and both run the same kernel.
 - `compute.jit`/`compute.launch` is the scalar path, and it runs.
 - The graph path records a chain and lets the fusion pass merge regions from

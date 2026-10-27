@@ -95,14 +95,9 @@ find it. A definition that puts a call to itself in an array would
 therefore be unfolded forever. The marker `@shallow` says the element's
 value stays lazy in the checker's evaluation:
 
-> **The array instance is not accepted yet.** The compiler refuses `T[1, 2]`
-> with `expected Array, found Array` — Chapter 7 says where — so the
-> programs in this section state the rule and the answers they are written
-> to give.
-
 ```lichen
 T := _x => [@any, 2]
-nats := (n : Int) => T[n, @shallow nats (n + 1)]
+nats := n => T[n, @shallow nats (n + 1)]
 ns := nats 0
 (ns[1][0], ns[1][1][0], ns[1][1][1][0], ns[1][1][1][1][0])
 ```
@@ -121,17 +116,17 @@ unfolds the element, and stops on its budget:
 
 ```lichen
 T := _x => [@any, 2]
-nats := (n : Int) => T[n, nats (n + 1)]
+nats := n => T[n, nats (n + 1)]
 ns := nats 0
 ns[1][0]
 ```
 
 ```text
 error: the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The program may still terminate when run.
-  --> 1:10
+  --> 1:6
    |
  1 | T := _x => [@any, 2]
-   |          ^
+   |      ^
 ```
 
 `@shallow` is what makes an infinite list expressible, and it appears

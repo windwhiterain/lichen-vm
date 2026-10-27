@@ -2,14 +2,14 @@
 
 > Status: **the lowlevel API is current; the source-level `@clone` is retired.**
 > The walk below is still in the tree — `Module::clone_template` and its
-> `TemplateBoundary` — and the checker still carries the `ExprKind::Clone`
-> arm, but the parser no longer produces a clone expression: there is no
-> source-level `@clone` any more. Freshness comes from **function
-> application** instead, which instantiates a function's parameter and body
-> and shares the captured cells; that is the model the
-> [constructor note](value-templates.md) records. The walk's own rules are
-> kept here because the apply's walk shares them and because the API is
-> still the lowlevel's only general-purpose instantiation.
+> `TemplateBoundary` — but the parser no longer produces a clone expression
+> and the checker has no clone arm: there is no source-level `@clone` any
+> more. Freshness comes from **function application** instead, which
+> instantiates a function's parameter and body and shares the captured cells;
+> that is the model the [constructor note](value-templates.md) records. The
+> walk's own rules are kept here because the apply's walk shares them and
+> because the API is still the lowlevel's only general-purpose
+> instantiation.
 >
 > Points at: `crates/lichen-lowlevel/src/template.rs` (the walk),
 > `crates/lichen-lowlevel/src/apply.rs` (the regroup the class topology uses),

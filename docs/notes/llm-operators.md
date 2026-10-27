@@ -1,6 +1,8 @@
 # LLM inference operators, and what the machinery says about them
 
-> Status: **current** — one operator landed, and the friction it produced is the roadmap.
+> Status: **current, with the compute migration incomplete.** The landing history
+> below predates the function-template changes; the current compute failures are in
+> [constructor templates](value-templates.md).
 > Points at: `examples/rmsnorm.lichen` (landed at `419aab56`), `crates/lichen-runtime`
 > (the passes, the claim schema, `automatic_tiling.rs`), `crates/lichen-fusion-bridge/src/lower.rs`
 > (what a marked body can bridge), `crates/lichen-compute/src/compute/graph.rs` (the graph path).

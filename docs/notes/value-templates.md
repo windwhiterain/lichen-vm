@@ -1,15 +1,21 @@
 # Constructor templates
 
-> Status: in progress
-> Points at: `crates/lichen-highlevel/src/checker` (value construction and reads),
-> `crates/lichen-language-parser` (the template syntax), and
-> `crates/lichen-language/src/compile.rs` (lowering).
+> Status: **current for the source language; the compute migration is
+> incomplete.**
+> Points at: `crates/lichen-language-parser` (the template syntax),
+> `crates/lichen-language/src/compile.rs` (the two applications),
+> `crates/lichen-highlevel/src/checker` (value construction and reads),
+> `crates/lichen-lowlevel/src/apply.rs`, `function.rs`, and
+> `static_module/apply.rs` (the apply's scope and its frozen mirror),
+> `crates/lichen-lowlevel/src/equality.rs` (a materialized result's owner), and
+> `crates/lichen-compute/src/compute.rs` / `compute/body.rs` (the compute
+> surface).
 
 Compound layout lives in a value, not in a shape-bearing type. `Tuple`, `Array`,
 and `Struct` are the shared layout types; a template is a function whose
 application produces a fresh requirement. The source of truth is [the language
-spec](../language-spec.md); this note records the migration decisions and the
-reasons for them.
+spec](../language-spec.md); this note records the migration decisions, the
+reasons for them, and the measurements that now hold.
 
 ## Confirmed rulings
 
@@ -38,7 +44,8 @@ reasons for them.
   application, whose existing parameter scope instantiates the body and
   shares captured cells. Cloning every reachable node would be wrong: an outer
   `x` must not be cloned into an unrelated class when a struct is
-  instantiated.
+  instantiated. Function scope, closed-cell sharing, and the per-application
+  remap are the ownership model; graph reachability is not.
 - A struct's constructor is a function, for example
   `S := _x => {.x @any : Int}`. `S{.x 1}` applies `S` to `_` once and fills the
   fresh struct value it returns. There is no second application. Writing
@@ -81,28 +88,27 @@ returns, applied once, and that `f`'s result is a hole. `O := f (I _)` applies
 The result is then reused with plain `=`: `r = O` for a local result and
 `r = k.O` for a result that came out of a kernel struct.
 
-## Implementation direction
+## Implementation
 
-The existing lazy expression graph already supplies the required scope. A
-function application instantiates the function's parameter and body, preserving
-captured cells and nominal struct identity. The constructor result is an
-ordinary value: `[name table, nominal id, fields…]` for a struct,
-`[element template, elements…]` for an array, and `[elements…]` for a tuple.
-The shared layout type is `Struct`, `Array`, or `Tuple` respectively.
+The source-to-IR step performs the application the syntax names: `<:` inserts
+`T _` before unification, and an instance inserts the constructor application
+before filling the returned fields or element requirement. The apply's own
+scope supplies freshness. `ApplyCtx` clones the callee's template, shares the
+cells the template captured, mints a fresh closure per call, and rebuilds the
+class topology with `apply::regroup_clones` / `unify_clone_groups`. `Node::origin`
+records where a clone came from; it is not a keep-alive edge, and no pass infers
+ownership from it. `LowOperator::Unify` evaluates the actual value once before it
+evaluates the requirement, so a deferred unify compares the value and not an
+unevaluated apply.
 
-The compiler performs only the two desugarings:
+The constructor result is an ordinary value: `[name table, nominal id, fields…]`
+for a struct, `[element template, elements…]` for an array, and `[elements…]`
+for a tuple. The shared layout type is `Struct`, `Array`, or `Tuple`
+respectively.
 
-- `<:` inserts an application of the constructor to `_` before unification.
-- Struct and array instantiation inserts the same application before reading
-  the returned value's fields or element requirement.
+### The renderer
 
-No arbitrary-clone scope is inferred from graph reachability. Function scope,
-closed-cell sharing, and the per-application remap remain the ownership model.
-`Node::origin` is not a keep-alive edge.
-
-## The renderer
-
-The renderer reads layout from the type marker and the value's own offsets:
+The renderer reads the layout from the type marker and the value's own offsets:
 tuples start at `0`, arrays at `1` (after the element template), and structs at
 `2` (after the name table and nominal id). Struct headers and array templates
 are internal, so a struct prints as its field tuple and an array as its
@@ -112,7 +118,21 @@ Recursive bindings may leave a two-cell `[value, type]` skeleton. The renderer
 reads those cells and guards cycles by equality class, not just node id; the
 shared layout type does not truncate a nested value merely because it appears
 again in the type position. Array template metadata is ignored for table-key
-content but retained for template presence, keeping arrays and tuples distinct.
+content but retained for template presence, keeping arrays and tuples
+distinct.
+
+### A materialized result keeps its owner
+
+A computed struct result is an ordinary value, and materializing it can drop the
+operation that produced it. The module therefore carries `apply_result_owners`,
+a map from a returned value node to the apply that produced it.
+`apply::record_applied_expr` is the dynamic write; `function::node_apply` and the
+static mirror carry the mapping across clones, and the frozen form persists it.
+`equality::applied_constructor` reads the table — directly, by the class root, or
+by any node in the class — to recover the constructor of a value whose operation
+is gone. The table is part of the artifact's format version 23: a v22 artifact
+has no way to represent that ownership, so it is rebuilt rather than loaded with
+a different answer. See [artifact-cache](artifact-cache.md).
 
 ## The compute layer
 
@@ -135,6 +155,26 @@ returned a value, and the instantiation form applies a *constructor* once.
 `type_of` to the field read; `type_of(k.O)` is a parenthesized read — the
 tuple read of the name `type_of` — and it is refused as such.
 
+The migration itself is not complete. The parts that follow the constructor
+model now:
+
+- `value_parameter_domain` reads a parameter's value-level tuple domain and
+  evaluates a computed element whose type is not yet materialized; its fallback
+  reads the applied expression's own type before `element_type_of`.
+- `domain_value_leaves_of` and `body::domain_leaves` flatten nested tuple
+  domains recursively, and `parameter_path` maps a leaf's empty path to the
+  flattened ordinal. Before this a nested domain routed every leaf read at slot
+  0.
+- A residual `TypeOperator` node in a kernel body is lowered through the
+  `Apply` it came from, not as a second operator. Before this a computed tuple's
+  arithmetic emitted `[Bin(Add), Bin(Add)]` and answered `16` where the source
+  says `8`.
+- A computed conditional read shares a result type only when both branch type
+  nodes resolve to the same class root; otherwise the read keeps the lazy type.
+- In the frozen mirror, an in-parameter `@any` becomes a fresh hole, the plain
+  cells are regrouped on the value and signature sides, and a cached `Index`
+  answer reconciles its wildcard payload as the actual binds.
+
 ## Dependent lengths
 
 A decidable array length is built directly. A length that depends on an
@@ -144,34 +184,50 @@ is a **runtime** error, not a check-time one. A top-level `_` remains guarded;
 `[T, _]` does not infer a length. A layout-only constraint can use ordinary
 `Array` annotation.
 
-## Open details
+## Measured status
 
-- The lazy fallback for an arbitrary computed template is not yet a proven
-  element/length check. Computed struct templates remain part of the compute
-  API, and their reachability must be measured rather than assumed.
-- Parallel compute lowering for buffer/struct-valued kernels remains under
-  repair. The scalar nested `compute.jit` path returns `6: Int`.
-- The highlevel clone boundary for nested lambdas is deliberately limited to
-  enclosing lambda parameters. Constructor application must not be used as an
-  excuse to infer lexical ownership for local `let` bindings.
-- **Measured at `254cd301`:** the array instance path does not accept a
-  constructor yet. `T := _x => [@any : Int, 2]` followed by `T[1, 2]` is
-  refused with `expected Array, found Array`, and the plain array template
-  `[@any : Int, 2][1, 2]` is refused as a call of a non-function. The struct
-  instance path accepts a constructor (`S := _x => {.x @any : Int}` then
-  `S{.x 1}`), and the tuple match accepts one
-  (`T := _x => (@any : Int, @any : Int)` then `(1, 2) <: T`). The array
-  instance is therefore documented as the rule, not as a measured acceptance.
-- The language spec's grammar has no source-level `clone` form, but its
-  *Function* section still spells an application's internal instantiation
-  with the lowlevel `@clone` primitive. That primitive is the apply's own
-  clone walk, which is what the constructor model reuses; it is not a form a
-  program can write. The spec is the contract and is not edited here.
+At `ea08077b`, after the function-template and computed-ownership squash
+(`bd360fac`):
+
+- `cargo test -p lichen-highlevel --test highlevel`: 136 passed.
+- `cargo test -p lichen-language --test language`: 275 passed.
+- `cargo test -p lichen-lowlevel --test basic`: 164 passed, 1 ignored.
+- The grammar-consistency check: 2 passed.
+- `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/gcd.lichen`
+  prints `6: Int`, and `examples/compute_jit.lichen` prints `6: Int`.
+- The array instance path is measured: `A := _x => [@any : Int, 2]; A[1, 2] :
+  Array` reads `[1, 2]`. The previous note's `expected Array, found Array`
+  refusal no longer reproduces.
+- The full `lichen-compute` suite is 111 passed, 129 failed, 1 ignored (it was
+  88 passed, 152 failed before the migration). The compute failures are the
+  remaining work, not evidence for the source model.
+
+## Known remaining gaps
+
+- `examples/rmsnorm.lichen` fails in parallel lowering: a kernel body reaches a
+  node with neither a value nor an operation, and a read's buffer argument is
+  not an input buffer.
+- `examples/struct_recursion.lichen` did not finish within 120 seconds and was
+  stopped as nonterminating.
+- `crates/lichen-compute/examples/reduction_interface.rs` still spells a retired
+  compound form and does not parse.
+- The Rust `recursion` example needs the optional `device` feature; it was not
+  run because no backend is started.
+- `a_write_inside_a_conditional_is_refused` still reports an output-class error
+  instead of the conditional-write cause.
+- A parameter annotation on a recursive array constructor still loses the array
+  result type: `nats := (n : Int) => T[n, @shallow nats (n + 1)]` is refused
+  with `expected Array, found Int`; the unannotated `nats := n => …` runs. This
+  is the same source shape the book used to illustrate laziness, so the book
+  now spells the working form.
 
 ## Verification boundary
 
-The slice is not complete when only the new syntax parses. It must demonstrate
-that compound shape is read from values, constructor application produces fresh
-requirements without cloning outer captures, `<:` applies exactly once, plain
-`=` applies never, and no compiler consumer still requires the retired
-`tuple{…}`, `array{…}`, `struct{…}`, or source `@clone` spellings.
+The source model is measured when `<:` applies exactly once, plain `=` applies
+never, every compound instance applies its constructor once without cloning an
+outer capture, and the grammar and language suite no longer accept the retired
+`tuple{…}`, `array{…}`, `struct{…}`, or source `@clone` spellings. The remaining
+consumer is the compute layer's parallel lowering: its scalar `compute.jit` path
+is measured at `6: Int`, while the buffer-valued kernels listed above still
+fail. The one source file that still requires a retired compound spelling is
+`reduction_interface.rs`, named above.
