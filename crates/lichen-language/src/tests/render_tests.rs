@@ -56,7 +56,7 @@ fn a_node_the_module_no_longer_holds_renders_without_panicking() {
 #[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
     // The message uses the CLI's type spellings, not the raw `TypeInt → TypeInt`.
-    let report = crate::compile("5 <: (x : Int => _: Int)");
+    let report = crate::compile("5 = (x : Int => _: Int)");
     assert_eq!(
         report.diagnostics[0].message,
         "expected Int => Int, found Int"
@@ -65,8 +65,8 @@ fn a_checker_message_uses_the_cli_type_syntax() {
 
 #[test]
 fn an_array_element_conflict_renders_undecided_arrow_cells() {
-    // The found side is the lambda's arrow shape, its two cells sharing one name.
-    let report = crate::compile("[Int, 2][Int, x => x]");
+    // The arrow shape is the found side; the instance applies its template once.
+    let report = crate::compile("T := _x => [Int, 2]\nT[Int, x => x]");
     assert_eq!(
         report.diagnostics[0].message,
         "expected Int, found ?a => ?a"
@@ -105,7 +105,9 @@ fn a_struct_template_renders_as_its_field_tuple() {
 #[test]
 fn a_struct_instance_renders_its_field_tuple() {
     assert_eq!(
-        output("A := {.f @any : Int, .t @any : Type}\na := A{.f 1, .t Int}\n(A, a, a.f, a.t)"),
+        output(
+            "A := {.f @any : Int, .t @any : Type}\nmk := _x => A\na := mk{.f 1, .t Int}\n(A, a, a.f, a.t)"
+        ),
         "((@any, @any), (1, Int), 1, Int): Tuple"
     );
 }
@@ -114,7 +116,7 @@ fn a_struct_instance_renders_its_field_tuple() {
 fn a_single_field_struct_instance_keeps_the_tuple_comma() {
     // A one-element tuple's comma `(1,)` shows even though the source has none.
     assert_eq!(
-        output("B := {.f @any : Int}\nb := B{.f 1}\n(B, b)"),
+        output("B := {.f @any : Int}\nmk := _x => B\nb := mk{.f 1}\n(B, b)"),
         "((@any,), (1,)): Tuple"
     );
 }
@@ -128,7 +130,10 @@ fn a_tuple_value_renders_with_parens() {
 
 #[test]
 fn an_array_value_keeps_brackets() {
-    assert_eq!(output("[@any : Int, 3][1, 2, 3]"), "[1, 2, 3]: Array");
+    assert_eq!(
+        output("T := _x => [@any : Int, 3]\nT[1, 2, 3]"),
+        "[1, 2, 3]: Array"
+    );
 }
 
 #[test]
@@ -206,7 +211,10 @@ fn type_of_is_first_class() {
 
 #[test]
 fn type_of_reads_compound_types() {
-    assert_eq!(with_type_of("type_of [@any, 2][1, 2]"), "Array: Type");
+    assert_eq!(
+        with_type_of("T := _x => [@any, 2]\ntype_of T[1, 2]"),
+        "Array: Type"
+    );
     assert_eq!(with_type_of("type_of (1, Int)"), "Tuple: Type");
     assert_eq!(with_type_of("type_of (type_of (1))"), "Type: Type");
 }

@@ -961,9 +961,11 @@ impl<P: Program> Module<P> {
     /// Whether the class `node` belongs to lies inside the walk's scope.
     ///
     /// # Invariant
-    /// The verdict is a fact of the class, so every member of one class reads
-    /// the same answer: a clone never splits a class, and a class that reaches
-    /// outside the scope is referenced whole.
+    /// The verdict is a fact of the class: every member of one class reads the
+    /// same answer, so a clone never splits a class and a class reaching outside
+    /// the scope is referenced whole.  A class inside the **applied function's**
+    /// scope is cloned too: a closure minted there captures it into the enclosing
+    /// call's remap, and the body reads that one image.
     fn node_class_inside_scope(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> bool {
         let Some(scope) = ctx.scope_root.clone() else {
             return false; // no scope: nothing is inside it
@@ -972,7 +974,12 @@ impl<P: Program> Module<P> {
         if let Some(&verdict) = ctx.scope_verdicts.get(&representative) {
             return verdict;
         }
-        let verdict = self.class_inside_scope(node, &scope);
+        // A minted closure's captures are this call's body: clone them in the anchor.
+        let verdict = self.class_inside_scope(node, &scope)
+            || (ctx.closure_scope.is_some()
+                && self
+                    .function_scope(ctx.anchor)
+                    .is_some_and(|anchor| self.class_inside_scope(node, &anchor)));
         ctx.scope_verdicts.insert(representative, verdict);
         verdict
     }

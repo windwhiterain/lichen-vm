@@ -185,10 +185,22 @@ class.
   same lexical place after the function itself is collected.
 - **The scope of a walk** is the scope of the function whose body the walk
   instantiates: the applied function's for an apply, the closure's own for the
-  walk that mints a closure from its template. A capture — a cell owned
-  outside that scope — is therefore **referenced**, not cloned, which is the
-  rule the user's `@clone` examples ask for (`x => @clone y => x+1` references
-  `x`; `x => @clone y => y+1` clones `y`).
+  walk that mints a closure from its template. A class owned outside the
+  walk's scope — and outside the applied function's — is therefore
+  **referenced**, not cloned, which is the rule the user's `@clone` examples
+  ask for (`x => @clone y => x+1` references `x`; `x => @clone y => y+1`
+  clones `y`).
+- **A closure's capture belongs to the applied function's walk.** The closure's
+  own scope is too narrow for a capture owned by the function being applied
+  (or one between it and the closure): that cell is part of this call's body,
+  so the mint walk clones it into the **shared enclosing remap**, not into the
+  closure's own template. The enclosing pass's parameter check then binds that
+  one image, and the closure body reads it. Without the second scope test a
+  capture referenced only inside the closure stayed the template's cell and
+  was never bound: `mk := n => x => x + n; (mk 1) 2` answered `none`, and
+  `language::gc_block::a_closure_released_from_a_scope_is_still_callable` and
+  `a_gc_block_calls_a_curried_binding_per_element` failed. With it the whole
+  language integration suite passes (275/275).
 - **The summary of a class** is the nearest common ancestor of the owner scopes
   of its members, held by the class's representative. A member with no owner —
   a top-level cell, or one whose owner was collected — names the **virtual
