@@ -1191,6 +1191,12 @@ pub struct Module<P: Program> {
     pattern_seen: Vec<std::collections::HashSet<(AnyNodeId, AnyNodeId)>>,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
+    /// Whether a replay is being built for the apply now being instantiated.
+    ///
+    /// # Invariant
+    /// Raised for the whole of one replay's construction and lowered after it, so a
+    /// replay's own instantiation never links a second replay.
+    replaying: bool,
     deep_depth: usize,
     /// Function templates whose value body is open in this application chain.
     ///

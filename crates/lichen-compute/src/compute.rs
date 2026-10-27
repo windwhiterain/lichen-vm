@@ -1250,6 +1250,9 @@ where
                     else {
                         return None;
                     };
+                    if !function_materialized(module, function) {
+                        return None;
+                    }
                     match compile_fragment(module, function) {
                         Ok(fragment) => {
                             // The claim is read **here**, where the kernel is compiled,
@@ -1387,6 +1390,9 @@ where
                         // function-ness gate; stay lazy rather than panicking.
                         return None;
                     };
+                    if !function_materialized(module, function) {
+                        return None;
+                    }
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
                             // The claim is read **here**, where the kernel is compiled,
@@ -3076,6 +3082,36 @@ where
     matches!(unsafe { module.array_items(value) }, Some(items) if !items.is_empty())
 }
 
+/// Whether a function's parameter type is **materialized**: not the open function
+/// template a wildcard constructor is.
+///
+/// # Invariant
+/// A kernel is compiled only from a function whose parameter type is a decided
+/// non-function value; an open `I := _x => _` type defers, because compiling it
+/// would lower the template's placeholder body.
+fn function_materialized<P>(module: &Module<P>, function: AnyFunctionId) -> bool
+where
+    P: Program,
+    P::Value: AsEnum<LowValue>,
+{
+    let AnyFunctionId::Dynamic(fid) = function else {
+        return true;
+    };
+    let Some(entry) = module.functions.get(fid) else {
+        return false;
+    };
+    let Some(ty) = expr_type(module, entry.parameter).and_then(|node| node.dynamic()) else {
+        return true;
+    };
+    match module
+        .node_value(AnyNodeId::Dynamic(ty))
+        .and_then(|value| value.as_enum())
+    {
+        Some(LowValue::Function(_)) | None => false,
+        Some(_) => true,
+    }
+}
+
 /// Lower a single-arg index function into a parallel kernel ([`KernelFragment`]).
 ///
 /// # Invariant
@@ -4063,7 +4099,7 @@ where
 /// the name table and the nominal id hold the two slots before the first field
 /// (`docs/notes/value-templates.md`). A value that is not a struct value — the
 /// retired tuple `cfg` — keeps its own positions.
-fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
+fn value_at_path<P>(module: &Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
@@ -4877,16 +4913,30 @@ where
     };
     if let Some(roles) = &slot.roles {
         // The peeled node names the buffer; the wrapper's own projection chain does not.
-        let path = param_path(module, slot.expr, node)?;
-        let Some(path) = path else {
-            return Ok(None);
-        };
-        let mut as_field = vec![0];
-        as_field.extend(path.iter().copied());
-        if let Some(position) = roles.input_pos(&as_field) {
-            return Ok(Some(position));
+        if let Some(path) = param_path(module, slot.expr, node)? {
+            let mut as_field = vec![0];
+            as_field.extend(path.iter().copied());
+            if let Some(position) = roles.input_pos(&as_field) {
+                return Ok(Some(position));
+            }
+            if let Some(position) = roles.input_pos(&path) {
+                return Ok(Some(position));
+            }
         }
-        return Ok(roles.input_pos(&path));
+        // A field read and the parameter's field are one class, though the chain differs.
+        if let Some(root) = expr_value(module, slot.expr) {
+            let read_root = module.class_root(node);
+            for (position, path) in roles.inputs.iter().enumerate() {
+                let Some(Some(field)) = value_at_path::<P>(module, root, path).map(|f| f.dynamic())
+                else {
+                    continue;
+                };
+                if module.class_root(field) == read_root {
+                    return Ok(Some(position));
+                }
+            }
+        }
+        return Ok(None);
     }
     let cfg_value = slot.value;
     let operation = match module.node_operation(node) {
@@ -6445,6 +6495,9 @@ where
         );
         return None;
     };
+    if !function_materialized(module, function) {
+        return None;
+    }
     // The parameter's shape is the placeholder's shape: the type walk gives the
     // cells' paths.
 

@@ -38,6 +38,8 @@ impl<P: Program> Module<P> {
                 remap: HashMap::new(),
                 applied: function.index,
                 source: function.index,
+                enclosing_source: None,
+                enclosing_tag: None,
                 rule: FrozenClassRule::new(),
                 branch_top: None,
                 tag: self.nodes[node].function,
@@ -146,6 +148,8 @@ impl<P: Program> Module<P> {
                 remap,
                 applied: function.index,
                 source: function.index,
+                enclosing_source: None,
+                enclosing_tag: None,
                 rule,
                 branch_top: None,
                 tag: self.nodes[node].function,
@@ -263,6 +267,8 @@ impl<P: Program> Module<P> {
             remap,
             applied: function.index,
             source: function.index,
+            enclosing_source: None,
+            enclosing_tag: None,
             rule,
             branch_top: None,
             tag: self.nodes[node].function,
@@ -302,6 +308,8 @@ impl<P: Program> Module<P> {
             remap,
             applied: function.index,
             source: function.index,
+            enclosing_source: None,
+            enclosing_tag: None,
             rule,
             branch_top: None,
             tag: self.nodes[node].function,
@@ -512,9 +520,12 @@ impl<P: Program> Module<P> {
             node.operation,
             node.low_shape.clone(),
         );
-        // The **class** decides: a class outside the source scope is shared
-        // whole. A decided cell is not governed by the rule.
-        let inside = !undecided || ctx.rule.inside(&ctx.module, local, ctx.source);
+        // The class decides: outside the source is shared; a nested re-home also accepts the enclosing scope.
+        let inside = !undecided
+            || ctx.rule.inside(&ctx.module, local, ctx.source)
+            || ctx
+                .enclosing_source
+                .is_some_and(|source| ctx.rule.inside(&ctx.module, local, source));
         // The canonical outer instance of a shared cell: one cell per frozen
         // cell, reused on every later encounter.
         if let Some(instance) = ctx.rule.outer_instance(local) {
@@ -544,10 +555,14 @@ impl<P: Program> Module<P> {
             self.seed_class_low_type(clone, shape);
         }
         if undecided {
-            // A residual clone joins the caller's template; a shared cell
-            // stays unowned, so its class stays external.
+            // A capture cloned for the enclosing call takes that call's tag, never the closure's.
             if inside {
-                self.set_node_owner(clone, ctx.tag);
+                let owner = if ctx.rule.inside(&ctx.module, local, ctx.source) {
+                    ctx.tag
+                } else {
+                    ctx.enclosing_tag
+                };
+                self.set_node_owner(clone, owner);
             }
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument.
@@ -771,6 +786,9 @@ impl<P: Program> Module<P> {
         // cells are the fresh closure's, as in the dynamic walk.
         let outer_source = std::mem::replace(&mut ctx.source, sref.index);
         let outer_tag = std::mem::replace(&mut ctx.tag, Some(fresh));
+        let outer_enclosing_source =
+            std::mem::replace(&mut ctx.enclosing_source, Some(outer_source));
+        let outer_enclosing_tag = std::mem::replace(&mut ctx.enclosing_tag, outer_tag);
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
         let return_type_clone = self.static_node_apply(return_type, ctx);
@@ -809,6 +827,8 @@ impl<P: Program> Module<P> {
         ctx.branch_top = outer_top;
         ctx.source = outer_source;
         ctx.tag = outer_tag;
+        ctx.enclosing_source = outer_enclosing_source;
+        ctx.enclosing_tag = outer_enclosing_tag;
         let fresh_function = &mut self.functions[fresh];
         fresh_function.nodes = own;
         fresh_function.r#return = ret_clone;
@@ -913,6 +933,10 @@ struct StaticApplyCtx<P: Program> {
     /// walk is instantiating. It is not the recursion point — that is
     /// [`Self::applied`].
     source: StaticFunctionId,
+    /// The enclosing function's source while a closure is re-homed; a capture owned by it is this call's body.
+    enclosing_source: Option<StaticFunctionId>,
+    /// The owner tag of that enclosing call, which a capture clone keeps.
+    enclosing_tag: Option<FunctionId>,
     /// The frozen class rule this pass applies: the verdict per class and the
     /// shared classes' outer instances.
     rule: FrozenClassRule,

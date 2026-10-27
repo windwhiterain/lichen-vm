@@ -474,7 +474,97 @@ impl<P: Program> Module<P> {
                 return None;
             }
         }
+        // A clone's open cells reach the value of the call that made them through the
+        // replay, not through the template.
+        if check == ParameterCheck::Value {
+            self.link_replay(function, argument, block, node, &remap);
+        }
         Some(Instantiation { applied, remap })
+    }
+
+    /// Link a clone's open cells to a replay of the apply that made them.
+    ///
+    /// # Invariant
+    /// One replay per apply: every open clone cell the applied function's scope owns is
+    /// unified with the cell of the replay's own instantiation standing for the same
+    /// template node. The replay is stamped run, so the scope that built it leaves the
+    /// replay to a later clone of that scope.
+    fn link_replay(
+        &mut self,
+        function: FunctionId,
+        argument: AnyNodeId,
+        block: BlockId,
+        node: NodeId,
+        remap: &HashMap<NodeId, NodeId>,
+    ) {
+        if self.replaying {
+            return;
+        }
+        // Only a template's own hole is what a call has yet to fill.
+        let Some(return_value) = self.expr_value_half(self.functions[function].r#return) else {
+            return;
+        };
+        if self.nodes[return_value].operation.is_some() || self.class_value(return_value).is_some()
+        {
+            return;
+        }
+        let mut open: Vec<(NodeId, NodeId)> = remap
+            .iter()
+            .filter(|&(&template, &clone)| {
+                self.nodes[clone].operation.is_none()
+                    && self.class_value(clone).is_none()
+                    && self.function_descends_from(self.nodes[template].function, function)
+            })
+            .map(|(&template, &clone)| (template, clone))
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        // A map's order is not the graph's, and a class's representative depends on order.
+        open.sort_by_key(|&(template, _)| template);
+        // The apply's own operands: the callee the caller named and the argument it supplied.
+        let Ok(operands) = self.operands_of(node) else {
+            return;
+        };
+        let Some((callee, supplied)) = operands.first().zip(operands.get(1)) else {
+            return;
+        };
+        let items = [ArrayItem::new(Dyn(*callee)), ArrayItem::new(Dyn(*supplied))];
+        let array = self.alloc_array(&items, block);
+        let operand = self.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::from(array)))),
+        );
+        let replay = self.add_node(
+            block,
+            Some(Operation {
+                operator: P::Operator::from(crate::LowOperator::Apply),
+                operand: Some(operand),
+            }),
+            None,
+        );
+        // The run stamp is whether the operator runs; this scope has not run it.
+        self.stamp_node_ran_if(replay, true);
+        // The correspondence: one instantiation of the same template, whose cells stand for
+        // the replay's result at every depth.
+        self.replaying = true;
+        let replay = self.instantiate(function, argument, block, replay, ParameterCheck::Skip);
+        self.replaying = false;
+        let Some(replay) = replay else {
+            return;
+        };
+        for (template, clone) in open {
+            // A node the replay referenced in place is decided: never unify that with an open
+            // cell.
+            let Some(&cell) = replay.remap.get(&template) else {
+                continue;
+            };
+            if cell == clone || self.class_value(cell).is_some() {
+                continue;
+            }
+            self.unify(clone, cell);
+        }
     }
 
     /// Evaluate `argument` as deep as `pattern` references it, so the unify sees element

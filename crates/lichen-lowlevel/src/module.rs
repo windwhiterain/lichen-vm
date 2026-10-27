@@ -94,6 +94,7 @@ impl<P: Program> Module<P> {
             item_clone_scratch: Vec::new(),
             pattern_seen: Vec::new(),
             stamp_depth: 0,
+            replaying: false,
             deep_depth: 0,
             value_templates: HashSet::new(),
             budget_exhausted: None,
