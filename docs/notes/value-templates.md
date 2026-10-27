@@ -204,6 +204,10 @@ At `ea08077b`, after the function-template and computed-ownership squash
 
 ## Known remaining gaps
 
+- A kernel body that reads a field through a constructor-valued parameter —
+  `k.in.x`, where `k.in` is the constructor `In` rather than an instance — is
+  refused with `expected Struct, found ?a => Struct`. The book's compute
+  programs show this first refusal.
 - `examples/rmsnorm.lichen` fails in parallel lowering: a kernel body reaches a
   node with neither a value nor an operation, and a read's buffer argument is
   not an input buffer.
