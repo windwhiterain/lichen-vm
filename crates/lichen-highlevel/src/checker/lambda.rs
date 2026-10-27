@@ -439,37 +439,19 @@ where
             self.module.evaluate_node_deep(declared, None);
             self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
         }
-        // Both slots' applications carry the four elements the apply arm reads.
-        let value_operands = self.array_node(
+        // **One apply per call**: this node's check pass states the signature and its
+        // run computes the value.
+        let operands = self.array_node(
             self.current_block,
             &[function_value, value_argument_expr, c, callee_expr],
         );
-        let value_apply = self.op_node(
+        let apply = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Apply),
-            Some(value_operands),
+            Some(operands),
         );
-        // The same four elements over an undecided callee: the type applies, the body does not.
-        let undecided_callee = self.fresh_cell();
-        let type_operands = self.array_node(
-            self.current_block,
-            &[undecided_callee, type_argument_expr, c, callee_expr],
-        );
-        let type_apply = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Apply),
-            Some(type_operands),
-        );
-        self.module
-            .apply_result_owners
-            .insert(value_apply, value_apply);
-        self.module
-            .apply_result_owners
-            .insert(type_apply, type_apply);
-        self.type_applies.insert(e, type_apply);
-        // The call's value-side apply is recorded against its type side
-        // (`docs/notes/apply-type-side-check.md`).
-        self.module.apply_exprs.insert(type_apply, value_apply);
+        self.module.apply_result_owners.insert(apply, apply);
+        self.call_applies.insert(e, apply);
         // The call's type application at check; a function under check is skipped.
         if self.is_function_type(function_ty) {
             let in_progress = matches!(
@@ -479,10 +461,10 @@ where
             );
             if !in_progress {
                 let report = self.module.report_type_side_failures;
-                // The check's failure is attributed to the argument, and the type
-                // apply has its own node: it needs the same edge.
+                // The check's failure is attributed to the argument: the edge is this
+                // call's.
                 self.apply_edges.insert(
-                    type_apply,
+                    apply,
                     ApplyEdge {
                         argument_expr: argument,
                         apply_expr: e,
@@ -499,7 +481,7 @@ where
                         callee,
                         AnyNodeId::Dynamic(type_slot_argument),
                         self.current_block,
-                        type_apply,
+                        apply,
                         AnyNodeId::Dynamic(c),
                         report,
                     ),
@@ -508,11 +490,11 @@ where
                 // A Check failure settles its node: the shallow pass walks it again.
                 if report && !applied {
                     self.module
-                        .write_node_value(type_apply, Some(P::Value::from(LowValue::Error)));
+                        .write_node_value(apply, Some(P::Value::from(LowValue::Error)));
                 }
             }
         }
-        let node = value_apply;
+        let node = apply;
         // The checker alone knows this application's argument span; the
         // edge is per-application even when the node is shared.
         self.apply_edges.insert(
@@ -545,7 +527,7 @@ where
             false => self
                 .module
                 .applied_exprs
-                .get(&type_apply)
+                .get(&apply)
                 .copied()
                 .and_then(|expr| self.stated_attributes(expr).first().copied())
                 .map(|(attribute, slot)| (slot, attribute.order_index() as u32)),
@@ -566,15 +548,13 @@ where
                     let mut field = self
                         .module
                         .applied_parameters
-                        .get(&type_apply)
+                        .get(&apply)
                         .copied()
                         .and_then(|parameter| self.certificate_field(value, parameter, argument));
-                    // The clone that bound the argument's value is the value side's,
-                    // and the certificate's class may name that one.
+                    // The apply's own parameter clone is the one that bound the
+                    // argument's value, and the certificate's class may name it.
                     if field.is_none()
-                        && let Some(value_apply) = self.module.apply_exprs.get(&type_apply).copied()
-                        && let Some(parameter) =
-                            self.module.applied_parameters.get(&value_apply).copied()
+                        && let Some(parameter) = self.module.applied_parameters.get(&apply).copied()
                     {
                         field = self.certificate_field(value, parameter, argument);
                     }

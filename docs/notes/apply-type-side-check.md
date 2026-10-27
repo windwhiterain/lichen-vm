@@ -27,25 +27,32 @@ apply, and a body never ran.
 
 ## 2. The ruling and the landed shape
 
-A call's type is the **type-slot function's application**, run at check. The
-landed form of that:
+A call's type is the **callee's application**, run at check. The landed form of
+that:
 
-- `check_app` builds the type-level apply with a **type-only argument** — an
-  undecided value slot, the argument's type, and its attribute — so the type
-  side's parameter check never evaluates the argument's value. The value apply
-  keeps the real `[value, type, attr]` expr.
-- For a decided function type whose function is not under check, `check_app`
-  calls `Module::apply_function_type` **at check**: the per-call signature
-  clone binds `c` to the call's codomain and optionally runs the parameter
-  check. A function under check is skipped, so a recursive call's result stays
-  connected (the call-result shape of [undecided-reads](undecided-reads.md) §4
-  depends on it).
-- The type-level apply node registers the same `ApplyEdge` as the value apply,
-  so a failed parameter check is attributed to the argument's cursor
-  (`mismatch` in `diagnostic.rs` reads the edge).
-- `ParameterCheck::Report` is the fourth mode: run the check and **keep** its
-  errors and their `Loc`; `Type` still truncates, `Value` reports, `Skip`
-  clones the signature only.
+- `check_app` builds **one** apply node per call — operands `[callee value,
+  argument expr, result cell `c`, callee expr]` — and the call's signature and its
+  value are two **passes of that one apply**, not two nodes.
+- The **check pass** calls `Module::apply_function_type` at check: the per-call
+  signature clone binds `c` to the call's codomain and optionally runs the
+  parameter check. A function under check is skipped, so a recursive call's result
+  stays connected (the call-result shape of
+  [undecided-reads](undecided-reads.md) §4 depends on it).
+- The **value pass** is the same node's run: `function_apply` instantiates the
+  callee for this call, evaluates the body, binds `c` from the applied return's
+  type cell, and wires the result onto the node.
+- The one node registers the call's `ApplyEdge`, so a failed parameter check is
+  attributed to the argument's cursor (`mismatch` in `diagnostic.rs` reads the
+  edge).
+- `ParameterCheck` names what each pass does with the parameter's classes:
+  `Report` runs the check and **keeps** its errors and their `Loc`; `Type`
+  truncates them; `Value` reports them as runtime failures; `Skip` clones the
+  signature only.
+
+The old shape built a **second** node for the check pass, with a fresh undecided
+callee cell so that evaluating it applied the signature and not the body, and
+`apply_exprs` mapped that node to the value one. Both are gone: the check pass
+runs on the call's own node, and nothing maps one apply to another.
 
 `Module::report_type_side_failures` selects which check the type side runs:
 `apply_function_type(..., report)` chooses `Skip` when it is off (`Evaluate`:
@@ -61,6 +68,11 @@ runs, so the lowlevel never learns a mode.
 array{Int, n}` prints `array{Int, 5}` and two different computed lengths print
 `(array{Int, 5}, array{Int, 6})`. Language 265/0, highlevel 136/0, compute
 245/0 + 2 ignored, all 48 example files, `fmt` and `comments-check` clean.
+
+Re-measured on the one-node apply: `lichen-lowlevel` 164/0 (+1 ignored) and
+`lichen-language` 275/0, `fmt` and `comments-check` clean. `lichen-compute` is
+77/163 both with and without the one-node apply: its refusals belong to the
+compute lowering, not to the apply's shape ([replay-apply](replay-apply.md)).
 
 `Check` is not runnable on this branch (the `Mode` is not on `dev`); the
 colleague runs the two-mode table on the merge tip. The design makes the

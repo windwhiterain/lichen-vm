@@ -232,7 +232,7 @@ where
     /// The call's applied return slot for `marker`: the same expr whose type slot
     /// is the call's type (spec §3).
     fn applied_attribute_slot(&mut self, pe: ExprId, marker: &P::Attr) -> Option<NodeId> {
-        let apply = self.type_applies.get(&pe)?;
+        let apply = self.call_applies.get(&pe)?;
         let expr = self.module.applied_exprs.get(apply).copied()?;
         self.stated_attributes(expr)
             .into_iter()

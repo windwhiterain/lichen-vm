@@ -140,8 +140,9 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
 * **An apply of a deferred non-function was reported twice, and it now reports once.**
   `f = g => g 1` ; `f 5` printed `this value is not a function — it cannot be applied`
-  at `1:5` **twice**: `check_app` builds a value apply and a type apply at one site, and
-  the runtime-failure dedup keyed by the blamed **node** kept both. That kind is now
+  at `1:5` **twice**: `check_app` then built a value apply and a type apply at one site
+  (one apply node since [apply-type-side-check](apply-type-side-check.md)), and the
+  runtime-failure dedup keyed by the blamed **node** kept both. That kind is now
   keyed by the error's resolved **location**, so one mistake is one diagnostic — the
   two `an_apply_of_a_deferred_*` tests pass, and the language suite went 7 red to 5.
 

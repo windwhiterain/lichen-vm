@@ -476,9 +476,7 @@ impl<P: Program> Module<P> {
         }
         // A clone's open cells reach the value of the call that made them through the
         // replay, not through the template.
-        if check == ParameterCheck::Value {
-            self.link_replay(function, argument, block, node, &remap);
-        }
+        self.link_replay(function, argument, block, node, &remap);
         Some(Instantiation { applied, remap })
     }
 

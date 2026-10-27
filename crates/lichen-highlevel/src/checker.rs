@@ -203,8 +203,9 @@ where
     arrows: HashSet<NodeId>,
     /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,
-    /// Each apply's **type-only** application, keyed by the apply's expression.
-    type_applies: HashMap<ExprId, NodeId>,
+    /// Each call expression's one apply node: its check pass states the signature and
+    /// its run computes the value.
+    call_applies: HashMap<ExprId, NodeId>,
     /// Each marked position's `(type application, tail cell, inner type)`.
     ///
     /// # Invariant
@@ -619,7 +620,7 @@ where
             check_seq: 0,
             arrows: HashSet::new(),
             apply_edges: HashMap::new(),
-            type_applies: HashMap::new(),
+            call_applies: HashMap::new(),
             shallow_types: Vec::new(),
             shallow_regions: HashSet::new(),
             node_edges: HashMap::new(),

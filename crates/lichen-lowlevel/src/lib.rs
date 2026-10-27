@@ -1049,10 +1049,8 @@ pub struct Module<P: Program> {
     pub apply_result_owners: HashMap<NodeId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
-    /// The clone's parameter of each type-side apply, keyed by the apply node.
+    /// The clone's parameter of each apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
-    /// The value-side apply of a call, keyed by its type-side apply.
-    pub apply_exprs: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant

@@ -321,7 +321,7 @@ where
         let inner = self.state[el].ty.expect("an element is compiled");
         // A call's own type application is what decides the element's type;
         // an element that is not a call has nothing to apply.
-        let type_apply = self.type_applies.get(&el).copied();
+        let type_apply = self.call_applies.get(&el).copied();
         self.shallow_types.push((type_apply, ty, inner));
         self.element_expr(value, ty, element)
     }
@@ -556,7 +556,7 @@ where
     /// The constructor result used for shape checks, or a direct template's value.
     fn array_constructor_value(&mut self, template: ExprId) -> NodeId {
         let applied = self
-            .type_applies
+            .call_applies
             .get(&template)
             .copied()
             .and_then(|type_apply| self.module.applied_exprs.get(&type_apply).copied())
@@ -673,7 +673,7 @@ where
     /// The operand's two positions are the element template and length. Only
     /// an array template has this operand.
     fn named_shape(&self, template: ExprId, root: NodeId) -> Option<(NodeId, NodeId)> {
-        let operation = match self.type_applies.get(&template).copied() {
+        let operation = match self.call_applies.get(&template).copied() {
             Some(type_apply) => {
                 let applied = self.module.applied_exprs.get(&type_apply).copied()?;
                 let value = self.module.expr_value_half(applied)?;

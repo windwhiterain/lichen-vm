@@ -540,14 +540,7 @@ fn dump_comparisons(source: &str) -> String {
                 // A routed selector emits over its argument's leaves, so each leaf is
                 // read with the operator it carries of its own.
                 if own == "an Apply" {
-                    let mut frontier = vec![selector];
-                    if let Some(value_side) = module.apply_exprs.get(&selector).copied() {
-                        frontier.push(value_side);
-                        lines.push(format!(
-                            "            selector's value-side apply {}",
-                            read(value_side)
-                        ));
-                    }
+                    let frontier = vec![selector];
                     for apply in frontier {
                         let Some(apply_operation) = module.node_operation(apply) else {
                             continue;

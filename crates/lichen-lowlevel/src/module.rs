@@ -69,7 +69,6 @@ impl<P: Program> Module<P> {
             applied_exprs: HashMap::new(),
             apply_result_owners: HashMap::new(),
             constructor_bindings: HashMap::new(),
-            apply_exprs: HashMap::new(),
             applied_parameters: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,

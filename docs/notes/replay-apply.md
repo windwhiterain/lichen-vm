@@ -131,12 +131,12 @@ Two reasons, both about the design as written:
 
 ### Landed: the two conditions that make it sound
 
-The design is implemented (`link_replay`, `crates/lichen-lowlevel/src/function.rs`)
-with two conditions the first attempt was missing, and no others:
+The design is implemented (`link_replay`, `crates/lichen-lowlevel/src/function.rs`).
+Once a call is **one** apply node with a check pass and a value pass
+([apply-type-side-check](apply-type-side-check.md)), the replay runs for every
+instantiation; its one condition is the template's own:
 
-1. **The value-side apply only.** A type-side or signature clone links nothing: it
-   runs at check time, where the replay would perturb the check itself.
-2. **The applied function's return expr is still open.** A template's own hole is
+1. **The applied function's return expr is still open.** A template's own hole is
    what a call has yet to fill; an apply whose return expr is a computation has
    nothing to replay.
 
@@ -148,10 +148,11 @@ class representatives do not depend on a map's order.
 
 | shape | lowlevel | language | compute |
 |---|---|---|---|
-| broad trigger, both applies, no guards | 163/1 | 272/3 | 50/190 |
-| value-side only | 163/1 | 274/1 | 50/190 |
-| + open-return trigger | 164/1 | 275 | 77/163 |
-| + guards and sort (landed) | 164/1 | 275 | 77/163 |
+| broad trigger, two apply nodes, no guards | 163/1 | 272/3 | 50/190 |
+| value-side only, two nodes | 163/1 | 274/1 | 50/190 |
+| + open-return trigger, two nodes | 164/1 | 275 | 77/163 |
+| + guards and sort | 164/1 | 275 | 77/163 |
+| one apply node, replay on every pass (landed) | 164/1 | 275 | 77/163 |
 
 The language layer is green with the replay in place; `lichen-compute` is
 unchanged and stays out of scope for this step — its dominant refusal is the

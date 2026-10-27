@@ -1613,17 +1613,6 @@ where
             };
             return self.cross_kernel_call(AnyNodeId::Dynamic(callee), arg);
         }
-        // A type-side apply states no callee
-        // (`docs/notes/apply-type-side-check.md`).
-        if let Some(value_apply) = self.module.apply_exprs.get(&node).copied()
-            && let Some(operand) = self
-                .module
-                .node_operation(value_apply)
-                .and_then(|operation| operation.operand)
-        {
-            return self.apply(value_apply, operand);
-        }
-
         // **Style 1, an ordinary lichen-function call, is refused by name**.
         let _ = node;
         Err(
