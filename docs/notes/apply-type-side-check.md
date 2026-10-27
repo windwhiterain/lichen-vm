@@ -33,7 +33,9 @@ that:
 - `check_app` builds **one** apply node per call — operands `[callee value,
   argument expr, result cell `c`, callee expr]` — and the call's signature and its
   value are two **passes of that one apply**, not two nodes.
-- The **check pass** calls `Module::apply_function_type` at check: the per-call
+- The **check pass** calls `Module::apply_function_type` at check, which is this
+  call's own apply: `function_apply` and `apply_function_type` are wrappers of one
+  `Module::apply`, and only the mode decides whether the body runs. The per-call
   signature clone binds `c` to the call's codomain and optionally runs the
   parameter check. A function under check is skipped, so a recursive call's result
   stays connected (the call-result shape of

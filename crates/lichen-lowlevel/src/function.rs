@@ -23,6 +23,16 @@ pub(crate) enum ParameterCheck {
     Report,
 }
 
+/// What one apply answered.
+///
+/// # Invariant
+/// The answer is the mode's own: a value apply answers the call's value (`None` is
+/// undecided) and a signature apply whether it bound the call's codomain.
+enum Applied<P: Program> {
+    Value(Option<P::Value>),
+    Signature(bool),
+}
+
 /// A failed apply-time parameter check's context: the key back into [`Module::unify_errors`].
 ///
 /// # Invariant
@@ -135,9 +145,7 @@ impl Instantiation {
 }
 
 impl<P: Program> Module<P> {
-    /// `#[stacksafe]`: apply recursion is one frame per level, so the depth guard must be
-    /// able to grow the stack.
-    #[stacksafe]
+    /// The **value pass** of one apply, for the evaluator.
     pub(super) fn function_apply(
         &mut self,
         function: FunctionId,
@@ -146,20 +154,55 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<AnyNodeId>,
     ) -> Option<P::Value> {
+        match self.apply(function, argument, block, node, cell, ParameterCheck::Value) {
+            Applied::Value(value) => value,
+            Applied::Signature(_) => None,
+        }
+    }
+
+    /// One **apply**: instantiate the callee, bind `cell`, and — in `Value` mode — run the
+    /// body.
+    ///
+    /// # Invariant
+    /// The signature pass and the value pass are one path: both instantiate the callee
+    /// once for this call and bind the same cell, and only the mode decides whether the
+    /// body runs. The answer is the mode's own (see [`Applied`]).
+    #[stacksafe]
+    fn apply(
+        &mut self,
+        function: FunctionId,
+        argument: AnyNodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<AnyNodeId>,
+        check: ParameterCheck,
+    ) -> Applied<P> {
+        if check != ParameterCheck::Value {
+            return Applied::Signature(
+                self.apply_signature(function, argument, block, node, cell, check),
+            );
+        }
         // The nesting guard, first: `node`'s depth bounds the expansion, so a loop never nests.
         if self.depth_exhausted(node) {
-            return None;
+            return Applied::Value(None);
         }
         // A marked recursion whose shape converts runs as a loop — one instantiation per
         // iteration, not one per nested level.
         if self.function_is_looping(function)
             && let Ok(conversion) = self.loop_conversion(function)
         {
-            return self.apply_loop(&conversion, function, argument, block, node, cell);
+            return Applied::Value(self.apply_loop(
+                &conversion,
+                function,
+                argument,
+                block,
+                node,
+                cell,
+            ));
         }
         let template = self.functions[function].template.unwrap_or(function);
         if self.report_type_side_failures && self.value_templates.contains(&template) {
-            return None;
+            return Applied::Value(None);
         }
         self.value_templates.insert(template);
         let result = (|| {
@@ -181,7 +224,7 @@ impl<P: Program> Module<P> {
             self.wire_apply_result(node, result, instantiation.applied, block)
         })();
         self.value_templates.remove(&template);
-        result
+        Applied::Value(result)
     }
 
     /// Apply a function's **signature** where its value is not concrete yet.
@@ -201,11 +244,15 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<AnyNodeId>,
     ) -> bool {
-        self.apply_type_with(function, argument, block, node, cell, ParameterCheck::Type)
+        matches!(
+            self.apply(function, argument, block, node, cell, ParameterCheck::Type),
+            Applied::Signature(true)
+        )
     }
 
-    /// The shared body of the two type applications; the check decides the bind.
-    fn apply_type_with(
+    /// The **signature pass** of one apply: bind `cell` to the codomain, no body.
+    /// Answers whether it bound.
+    fn apply_signature(
         &mut self,
         function: FunctionId,
         argument: AnyNodeId,
@@ -273,7 +320,10 @@ impl<P: Program> Module<P> {
         // A frozen callee's signature applies too (`static_function_type_apply`).
         match function {
             AnyFunctionId::Dynamic(function) => {
-                self.apply_type_with(function, argument, block, node, Some(cell), check)
+                matches!(
+                    self.apply(function, argument, block, node, Some(cell), check),
+                    Applied::Signature(true)
+                )
             }
             // The value side owns a static callee's signature when nothing reports:
             // it binds the cell when it materializes the body.
