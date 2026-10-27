@@ -61,6 +61,31 @@ had) and `Report` when it is on (`Check`). The flag is set once per build; the
 colleague's `Checker::build_with` sets it from `Mode::Check` before the check
 runs, so the lowlevel never learns a mode.
 
+### One instantiation: measured, not landed
+
+The check pass and the value pass still instantiate **twice** per apply node, and
+every shape that shared one instantiation was measured and rejected:
+
+| shape | lowlevel | language |
+|---|---|---|
+| two instantiations (current) | 164/1 | 275 |
+| the check pass runs the value apply | 164/1 | 272/3 |
+| the check pass records, the run evaluates the record | 164/1 | 260/15 |
+| + reuse only a decided-argument record | 164/1 | 261/14 |
+| + bind the open codomain without evaluating it | 164/1 | 264/11 |
+
+The lost program is the same in every variant:
+`language::gc_block::a_gc_block_calls_a_curried_binding_per_element`
+(`A := _x => [@any, 2]; add := x => y => x + y; double := n => @gc { a := n + 1;
+b := add a a; b }; @gc A[double 3, double 7]`) answers `[none, none]` instead of
+`[8, 16]`. A traced run shows every apply **deciding** at run time, so the loss is
+not in the apply: the body's nodes were evaluated once with the argument open and
+then answer the stale undecided value. Sharing one instantiation therefore needs
+the runtime to re-open an operation that ran undecided when its argument's class
+gains a value — the `runned` stamp forbids exactly that, and clearing it for all
+undecided runs was measured too (lowlevel 163/1, language 272/3, same program
+lost).
+
 ## 3. Measurements
 
 `Evaluate` keeps today's answers: `f = (x : Int) => x; f "s"` reports **one**
