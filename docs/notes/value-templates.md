@@ -141,7 +141,14 @@ required field's exact value node names the actual field supplied for it. The
 link never unifies the two nodes and never uses an equality-class representative
 as its key.
 
-Struct instantiation records the link while filling each field. A template
+Struct instantiation records the link while filling each field. If the supplied
+value is still undecided, the field's **value position is not unified** with a
+decided requirement: that comparison is vacuous and joining the classes would
+let the requirement displace the actual. Type and attribute positions are still
+checked. A decided supplied value keeps the ordinary whole-slot comparison and
+conflict reporting.
+
+A template
 refinement whose actual is the current function parameter instead records a
 constant projection of that parameter on the constructor's own template return
 fields; a concrete actual is never written back into a shared template. Dynamic

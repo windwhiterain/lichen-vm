@@ -315,7 +315,8 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   through struct population, template refinement, apply cloning, argument
   binding and freezing. Parallel input placement follows those links. The
   design is in [value-templates](value-templates.md#constructor-fields-keep-their-source);
-  compute is **115 passed / 125 failed**, with lowlevel and language green.
+  undecided actual field values are no longer displaced by decided requirements.
+  Compute is **121 passed / 119 failed**, with lowlevel and language green.
 - **Open**: the remaining failures include graph return/value-table errors,
   empty body nodes, definition cycles, and root materialization issues. They
   are not one replay or provenance failure family.

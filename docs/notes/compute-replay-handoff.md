@@ -2,9 +2,10 @@
 
 > Status: **field provenance is implemented and measured.** The launch replay
 > fix is landed; the parallel read source chain now uses explicit per-instance
-> field links. Lowlevel and language are green, and compute is **115 passed / 125
+> field links. Lowlevel and language are green, and compute is **121 passed / 119
 > failed**. Root materialization, graph values, and definition-cycle failures
-> remain open.
+> remain open. Undecided actual field values are preserved instead of being
+> displaced by decided requirements.
 >
 > Read [value-templates](value-templates.md#constructor-fields-keep-their-source)
 > for the field-source contract, [replay-apply](replay-apply.md) for replay, and
@@ -262,15 +263,23 @@ Measured after cleanup:
 - the reduced `a + a` parallel probe compiles;
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
-- compute: **115 passed, 125 failed, 1 ignored**, up from 113/127;
-- `parallel_read_input_buffer` now gets past the input-position refusal but its
-  root is undecided;
+- compute: **121 passed, 119 failed, 1 ignored**, up from 113/127;
+- `parallel_read_input_buffer` passes: the second launch reads the first buffer
+  and the final host read answers `22: Int`;
 - `silu` now compiles a kernel but the test's root item is static.
 
-The last two are follow-on root/materialization failures, not evidence that the
-field link is missing. Do not reintroduce the direct-wrapper or shared
-callee-template experiments: the former regressed the suite, and the latter
-lets unrelated fields overwrite one another's source.
+The last one is a follow-on root/materialization failure, not evidence that the
+field link is missing. The complete two-kernel reproduction initially answered
+`raw none: Struct` because `check_instantiate` unified an undecided actual field
+with a decided compound requirement, displacing the actual before runtime. Its
+field's type and attributes are still checked, but the undecided value position
+is no longer joined into that class; decided actuals retain the whole-slot
+check. This is what allowed the second launch and final read to answer `22`.
+
+Do not reintroduce the direct-wrapper or shared callee-template experiments:
+the former regressed the suite, and the latter lets unrelated fields overwrite
+one another's source. Post-return rebinding, GC-root retention, and making
+`buf_payload` follow sources were also measured as irrelevant to this failure.
 
 ## 9. Workspace and workflow
 

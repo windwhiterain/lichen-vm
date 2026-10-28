@@ -812,13 +812,47 @@ where
                 self.module
                     .field_sources
                     .insert(required_value, actual_value);
-                // A field read unifies like any other argument: no deferred node.
-                self.check_unify(
-                    vals[*argument],
-                    field,
-                    self.loc(argument_expr, 1),
-                    DiagKind::Annotation,
-                );
+                if self.actual_value_is_decided(actual_value) {
+                    // A field read unifies like any other argument: no deferred node.
+                    self.check_unify(
+                        vals[*argument],
+                        field,
+                        self.loc(argument_expr, 1),
+                        DiagKind::Annotation,
+                    );
+                } else {
+                    // Undecided values cannot mismatch; check only type and attributes.
+                    let width = shape::value_len(&self.module, AnyNodeId::Dynamic(field))
+                        .into_iter()
+                        .chain(shape::value_len(
+                            &self.module,
+                            AnyNodeId::Dynamic(vals[*argument]),
+                        ))
+                        .max()
+                        .unwrap_or(0);
+                    for position in 1..width {
+                        let Some(expected) =
+                            shape::value_item(&self.module, AnyNodeId::Dynamic(field), position)
+                        else {
+                            continue;
+                        };
+                        let Some(actual) = shape::value_item(
+                            &self.module,
+                            AnyNodeId::Dynamic(vals[*argument]),
+                            position,
+                        ) else {
+                            continue;
+                        };
+                        let expected = self.module.as_dynamic(expected, self.current_block);
+                        let actual = self.module.as_dynamic(actual, self.current_block);
+                        self.check_unify(
+                            actual,
+                            expected,
+                            self.loc(argument_expr, position),
+                            DiagKind::Annotation,
+                        );
+                    }
+                }
             }
         }
         let mut value_items = vec![
