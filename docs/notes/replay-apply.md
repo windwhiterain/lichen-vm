@@ -233,6 +233,43 @@ instantiation would reference the same external operation cell. The open design
 question is therefore how the replay instantiates a computation's per-call
 operands while preserving the link to its external result class.
 
+### Measured: the native wrapper's applied pair
+
+The maintainer proposed applying the template inside the native wrapper and
+handing the apply's placeholder argument and applied return to the native
+operator, using them where it previously read the function template's parameter
+and return. The source shape is:
+
+```lichen
+a := I _
+O := f a
+native(f, a, O)
+```
+
+This was measured without changing the class-wide verdict. The `$jit` wrapper
+compiled its kernel once the native side resolved the two apply expressions and
+the body walker peeled a constant capture-block view. The scalar launch still
+answered `none` because its separate execution-side cutoff remained. The
+jit-only suite reading was 79 passed / 161 failed, with lowlevel and language
+still green.
+
+The same pair did not repair the parallel read's provenance. Both forms —
+`applied_exprs`' cloned return and the apply expression container itself —
+left the minimal `lane.in.d` read at the same
+`read's buffer argument is not an input buffer` refusal. The applied return's
+class and the applied parameter field's class differed, and following the
+constructor application's return produced only the value-projection `[0]`, not
+the input path. The parallel suite reading was 73 passed / 167 failed, so that
+experiment was not kept either. Pre-applying a launch runner to a placeholder
+also still deferred: the actual argument had not bound the runner's parameter
+when its computation return was evaluated.
+
+These measurements leave two questions for the design's next step: which exact
+node the proposal calls the applied **return**, and how the actual argument is
+bound to the placeholder before a launch or parallel launch evaluates that
+return. The jit compilation success alone does not answer the execution-side or
+constructor-provenance halves.
+
 ## Native calls
 
 `$jit`, `$parallel` and `$graph` return undecided (`None`) when the function's
