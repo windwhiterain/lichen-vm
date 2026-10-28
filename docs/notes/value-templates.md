@@ -222,8 +222,32 @@ The parameter check of that last apply binds the argument into the parameter
 read of the same parameter is `Index(parameter_slot, 0)` and was *referenced in
 place* instead of cloned — its class was judged outside the walk's scope. The
 two are not one class, so the bind and the read land on different cells and
-`$launch` sees an empty argument. Which class member supplies the external
-summary is not yet measured; the unowned-owner case of a **baked** clone with
+`$launch` sees an empty argument.
+
+**The external member is measured.** Printed on the refusal of each verdict, the
+apply of the minted closure (its own `FunctionId`) refuses exactly two nodes:
+`595` — an operation with no value — and `602` — a decided cell — and each is
+its class's **only** member, with `owner=None`. So the member is the node
+itself: the frozen walk left it unowned because `FrozenClassRule::inside` said
+its frozen class reaches outside the closure's scope, and an unowned class
+summarizes to the virtual root, which no scope contains. The parameter's own
+slot, by contrast, is owned by the minted closure and is cloned — hence the
+split: the argument lands in the clone, the body reads the unowned cell.
+
+Why the frozen class of a body node reaches outside is the open question. The
+manifestation this slice can already name: `a <: k.I` in the frozen body is a
+`Unify` that joins the parameter's cell with the kernel struct's field class,
+whose owner is outside the closure — so the node is the closure's *own* and its
+class is not. The dynamic path does not split here (`launch := k <: K => a =>
+{a}` applied directly answers `3`), because every clone it makes is owned by
+the call.
+
+Two candidate repairs, neither taken: (a) judge ownership as well as the class
+summary — a frozen node whose own function is inside the source scope stays
+owned even when its class reaches out, accepting that the class is then only
+partly instantiated; (b) keep the class verdict and make the parameter follow
+it, so the argument binds the shared cell the body reads, accepting one
+parameter cell per kernel call. The unowned-owner case of a **baked** clone with
 open content was tried as the cause and changed nothing (reverted).
 
 ## Dependent lengths
