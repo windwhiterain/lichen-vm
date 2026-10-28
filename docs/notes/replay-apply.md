@@ -180,6 +180,59 @@ The language layer is green with the replay in place; `lichen-compute` is
 unchanged and stays out of scope for this step — its dominant refusal is the
 compile-time provenance gap measured above, not the replay.
 
+### Measured: an external computation cell cuts off the operand walk
+
+The compute reproduction exposes a gap in the open-return condition above. In
+
+```lichen
+a := 42
+k := compute.jit (x => x + a)
+compute.launch k 1
+```
+
+the minted `launch` closure's value apply clones its return shell `594 → 685`
+and parameter `599 → 682`. The return shell's value half is the launch operation
+cell `595`; its class is external, so the class-wide verdict references it in
+place. Consequently the walk never reaches the operation's operands: the
+argument read `597` and its operand `598` have no entry in the instantiation
+remap. The parameter check binds `682`, but `$launch` still reads the template's
+empty `597` and defers, leaving `none: Int`.
+
+This is not specific to freezing. The control
+
+```lichen
+choose := x => if x == 0 then 1 else 2
+launch2 := k <: compute.K => a => {
+  a <: k.I
+  r := choose a
+  r = k.O
+  r
+}
+```
+
+answers `none` both when written in the caller and when imported from a frozen
+module. Replacing `choose a` with `a + a` answers `2` in both positions: the
+arithmetic unifies its result with the input class, so the parameter follows the
+external output class and masks the cutoff. A computation whose result is
+independent of its input class is the distinguishing shape.
+
+A diagnostic experiment cloned only an operation cell owned by the function
+being instantiated, with the static clone stamped by `ctx.tag` rather than the
+empty enclosing tag. It answered `43: Int` for the launch reproduction and `2`
+for the frozen `choose` control; lowlevel stayed at 164 passed / 1 ignored,
+language at 275 passed, and compute moved from **78 passed / 162 failed to 116
+passed / 124 failed**. Removing the separate outer-instance regroup experiment
+left all three readings unchanged. The dynamic `choose` control still answered
+`none`.
+
+That experiment is **not landed**: it splits the external class, contrary to the
+class-wide verdict, and does not cover the dynamic control. It measures where
+the replay must reach, not a repair to keep. The current `link_replay` cannot
+reach it: the open-return guard rejects a computation return, and a second
+instantiation would reference the same external operation cell. The open design
+question is therefore how the replay instantiates a computation's per-call
+operands while preserving the link to its external result class.
+
 ## Native calls
 
 `$jit`, `$parallel` and `$graph` return undecided (`None`) when the function's

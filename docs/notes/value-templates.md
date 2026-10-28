@@ -254,21 +254,22 @@ top-level cell.
 The verdict is class-wide, but the **outer instance is per cell** by design
 (`FrozenClassRule::outer`: "the members of a class keep their own operator and
 their own answer; the class topology is rebuilt by the walk's own regroup"), and
-the regroup unifies only **plain cells** (`clone_is_a_plain_cell`). A class whose
-members carry values is therefore not re-unified, and two members' outer
-instances stay two classes. At the dynamic apply of the minted closure both are
-unowned, so both are referenced and nobody clones them; the parameter check had
-already bound the parameter's *own* instance.
+the regroup unifies only **plain cells** (`clone_is_a_plain_cell`). A follow-up
+experiment included the outer instances of value-carrying members too: the two
+classes really were re-unified, but the probe still answered `none`. Removing
+that experiment also left the later 116-pass diagnostic candidate unchanged, so
+the outer-instance key is **not** the root cause.
 
-Three candidate repairs, none taken. (a) Judge ownership as well as the class
-summary — tried and measured: the unowned member stays unowned, so the
-`inside` OR changes nothing on this program and was reverted. (b) Key the outer
-instance by class instead of by cell, so one external class is one instance —
-needs the regroup to carry value-carrying members too, which is where the
-union-by-size rule decides the class's answer. (c) Make the parameter follow the
-class verdict, so the argument binds the shared cell the body reads, accepting
-one parameter cell per kernel call. A **baked** clone's unowned owner was tried
-as the cause earlier and changed nothing (reverted).
+The freeze was checked at the source-to-static boundary: the unowned cells
+already had `function=None` in the dynamic module, so the freeze is not dropping
+an owner. The direct cutoff is instead the external launch **operation** cell:
+its reference stops the clone walk before the parameter-read operands, while
+the parameter itself is cloned and bound. The measured trace, the dynamic
+control, and the unlanded operation-cloning experiment (compute 116/124,
+lowlevel and language green) are recorded in
+[replay-apply](replay-apply.md#measured-an-external-computation-cell-cuts-off-the-operand-walk).
+The repair must cover that computation-return case without splitting the
+external class; the earlier candidates (a), (b), and (c) do not address it.
 
 ## Dependent lengths
 
