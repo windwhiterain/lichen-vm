@@ -568,10 +568,11 @@ impl<P: Program> Module<P> {
     /// Link a clone's open cells to a replay of the apply that made them.
     ///
     /// # Invariant
-    /// One replay per apply: every open clone cell the applied function's scope owns is
-    /// unified with the cell of the replay's own instantiation standing for the same
-    /// template node. The replay is stamped run, so the scope that built it leaves the
-    /// replay to a later clone of that scope.
+    /// One replay per apply: each open clone cell owned by the applied function's scope
+    /// unifies with the replay instantiation's cell for the same template. The replay is
+    /// stamped run, so this scope leaves it to a later clone. An external operation return
+    /// triggers with no plain open cell; its replay instance binds the argument and supplies
+    /// the result.
     fn link_replay(
         &mut self,
         function: FunctionId,
@@ -583,24 +584,33 @@ impl<P: Program> Module<P> {
         if self.replaying {
             return;
         }
-        // Only a template's own hole is what a call has yet to fill.
+        // An answered return needs no replay; an internal operation runs normally.
         let Some(return_value) = self.expr_value_half(self.functions[function].r#return) else {
             return;
         };
-        if self.nodes[return_value].operation.is_some() || self.class_value(return_value).is_some()
-        {
+        if self.class_value(return_value).is_some() {
+            return;
+        }
+        let external_operation = self.nodes[return_value].operation.is_some()
+            && self
+                .function_scope(function)
+                .is_none_or(|scope| !self.class_inside_scope(return_value, &scope));
+        if self.nodes[return_value].operation.is_some() && !external_operation {
             return;
         }
         let mut open: Vec<(NodeId, NodeId)> = remap
             .iter()
             .filter(|&(&template, &clone)| {
-                self.nodes[clone].operation.is_none()
-                    && self.class_value(clone).is_none()
+                self.class_value(clone).is_none()
+                    && (self.nodes[clone].operation.is_none()
+                        || self
+                            .function_scope(function)
+                            .is_some_and(|scope| !self.class_inside_scope(template, &scope)))
                     && self.function_descends_from(self.nodes[template].function, function)
             })
             .map(|(&template, &clone)| (template, clone))
             .collect();
-        if open.is_empty() {
+        if open.is_empty() && !external_operation {
             return;
         }
         // A map's order is not the graph's, and a class's representative depends on order.
@@ -632,8 +642,17 @@ impl<P: Program> Module<P> {
         // The correspondence: one instantiation of the same template, whose cells stand for
         // the replay's result at every depth.
         self.replaying = true;
-        let instantiation =
-            self.instantiate(function, argument, block, replay, ParameterCheck::Skip);
+        let instantiation = self.instantiate(
+            function,
+            argument,
+            block,
+            replay,
+            if external_operation {
+                ParameterCheck::Value
+            } else {
+                ParameterCheck::Skip
+            },
+        );
         self.replaying = false;
         let Some(instantiation) = instantiation else {
             return;
@@ -645,9 +664,14 @@ impl<P: Program> Module<P> {
             replay,
             instantiation.node_of(self.functions[function].parameter),
         );
-        // The trigger: the result cell joins the replay's class, so a reader runs it first.
+        // Plain results join the replay class; external operation results use the
+        // replay instance's corresponding cell.
         if let Some(&result) = remap.get(&self.functions[function].r#return) {
-            self.unify(result, replay);
+            if external_operation {
+                self.unify(result, instantiation.applied);
+            } else {
+                self.unify(result, replay);
+            }
         }
         for (template, clone) in open {
             // A node the replay referenced in place is decided: never unify that with an open
@@ -838,8 +862,14 @@ impl<P: Program> Module<P> {
         if !depends_on_parameter {
             return node;
         }
-        // The scope rule: the class decides, so a clone never splits one.
-        if !self.node_class_inside_scope(node, ctx) {
+        // Classes decide ordinary clones. Replay may rebuild an owned operation so its
+        // operands reset with the run stamp.
+        let class_inside = self.node_class_inside_scope(node, ctx);
+        let replay_operation = self.replaying
+            && operation.is_some()
+            && (self.function_descends_from(function, ctx.anchor)
+                || self.functions[ctx.anchor].nodes.contains(&node));
+        if !class_inside && !replay_operation {
             return node; // outside the scope — reference as-is
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.

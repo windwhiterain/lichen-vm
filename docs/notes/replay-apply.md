@@ -1,13 +1,11 @@
 # A template's clone replays the apply
 
-> Status: **landed at the language layer.** The maintainer's verdict: a clone and
-> its template cannot be unified; a clone's undecided cells are linked to a
-> **replay** of the apply instead. The replay and the native-call half are in;
-> lowlevel 164/1 ignored and language 275 are green with them. `lichen-compute`
-> is unchanged by the replay: its dominant refusal was measured to be a
-> *compile-time* provenance gap (a read chain ending at `Index(Apply, 0)`), which
-> is a separate piece of work, and one half of it — resolving the read's input
-> position by equality class — is landed.
+> Status: **landed at the language layer, with external-operation replay.** The
+> maintainer's verdict: a clone and its template cannot be unified; a clone's
+> undecided cells are linked to a **replay** of the apply instead. Lowlevel 164/1
+> ignored and language 275 are green. `lichen-compute` is at 113 passed / 127
+> failed after the replay covers external operation cells; its remaining
+> compile-time provenance gap is separate work.
 
 ## The problem
 
@@ -158,9 +156,10 @@ Once a call is **one** apply node with a check pass and a value pass
 ([apply-type-side-check](apply-type-side-check.md)), the replay runs for every
 instantiation; its one condition is the template's own:
 
-1. **The applied function's return expr is still open.** A template's own hole is
-   what a call has yet to fill; an apply whose return expr is a computation has
-   nothing to replay.
+1. **A decided return has nothing to replay.** A plain open return uses the
+   original correspondence. An internal operation runs normally; an **external**
+   operation return triggers even when no plain cell is open. Its replay
+   instance performs the parameter check and supplies the result directly.
 
 The correspondence stays as stated — the replay's own instantiation, every depth —
 with two guards: only a template node the replay actually cloned has a cell to link
@@ -175,10 +174,10 @@ class representatives do not depend on a map's order.
 | + open-return trigger, two nodes | 164/1 | 275 | 77/163 |
 | + guards and sort | 164/1 | 275 | 77/163 |
 | one apply node, replay on every pass (landed) | 164/1 | 275 | 77/163 |
+| + external operation replay (current) | 164/1 | 275 | **113/127** |
 
-The language layer is green with the replay in place; `lichen-compute` is
-unchanged and stays out of scope for this step — its dominant refusal is the
-compile-time provenance gap measured above, not the replay.
+The language layer is green with the replay in place. External operation cells
+are now covered; the remaining compile-time provenance gap is separate work.
 
 ### Measured: an external computation cell cuts off the operand walk
 
@@ -226,12 +225,13 @@ left all three readings unchanged. The dynamic `choose` control still answered
 `none`.
 
 That experiment is **not landed**: it splits the external class, contrary to the
-class-wide verdict, and does not cover the dynamic control. It measures where
-the replay must reach, not a repair to keep. The current `link_replay` cannot
-reach it: the open-return guard rejects a computation return, and a second
-instantiation would reference the same external operation cell. The open design
-question is therefore how the replay instantiates a computation's per-call
-operands while preserving the link to its external result class.
+class-wide verdict, and does not cover the dynamic control. The landed repair
+keeps ordinary apply class-wide and puts the exception in replay instead. An
+external operation return triggers even with `open=0`; replay instantiation
+rebuilds operations whose membership is the owner chain **or a scope hit**, runs
+the parameter check, and links the original return to the replay instance's
+applied return. The launch reproduction now answers `43: Int`, lowlevel and
+language stay green, and compute is 113 passed / 127 failed.
 
 ### Measured: the native wrapper's applied pair
 
@@ -291,6 +291,10 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
 - **Landed**: the replay runs **its own instantiation** — `replay_applied` /
   `replay_parameters` — instead of instantiating the callee a second time, so the
   cells the open clone cells joined are exactly the cells the run fills.
+- **Landed**: external operation returns use that instantiation directly. An
+  external operation is rebuilt during replay when its membership is the owner
+  chain or a scope hit; the parameter check binds the placeholder and the
+  original return links the replay instance's applied return.
 - **Landed**: the deferred `Unify` is gone from every producer. The function
   template (`f = (i <: I => _)`), the struct-layout term and a struct instance's
   field-read argument now record a **requirement** (`Module::requirements`: cell →
