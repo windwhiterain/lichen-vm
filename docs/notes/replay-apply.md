@@ -188,6 +188,23 @@ instead of refusing. After the enclosing scope is cloned the actual argument has
 unified `f`, the parameter type is a decided struct, and the op compiles. See
 `crates/lichen-compute/src/compute.rs` (`function_materialized`).
 
+## Progress
+
+- **Landed**: the native gate (`function_materialized`; `$jit`/`$parallel`/
+  `$graph` answer undecided instead of refusing an unmaterialized parameter).
+- **Landed**: `link_replay` — one replay node per apply, in the caller's block,
+  `runned` stamped, each open clone cell unified with the replay instantiation's
+  cell for the same template node.
+- **Landed**: one apply node per call, and one `Module::apply` entry behind
+  both passes ([apply-type-side-check](apply-type-side-check.md)).
+- **Open**: nothing evaluates the replay node. It is a node no reader names, so
+  the enclosing scope's clone resets its stamp but never runs it, and the linked
+  cells stay undecided. The next step is the trigger: the replay has to sit in
+  the class of the call's own result cell, so the runtime's
+  `evaluate_class_first` runs it before a reader takes the answer.
+- **Then**: delete `check_unify_expr`'s function-template branch once the replay
+  answers for it (measured cost of deleting it first, above).
+
 ## Implementation points
 
 - `crates/lichen-lowlevel/src/function.rs`: `instantiate_stamped` (the replay
