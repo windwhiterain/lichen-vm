@@ -168,6 +168,7 @@ authority, and this table only names the state.
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-language-lex`/`-parser`, `lichen-highlevel`, `lichen-kernel-ir`, `lichen-lowlevel`, `lichen-compute`, `lichen-compute-gpu` | in progress |
 | [The wasm backend: handoff](notes/wasm-backend-handoff.md) | `lichen-compute` (`compute/wasm/`), `lichen-kernel-ir` | in progress |
+| [Compute replay: handoff](notes/compute-replay-handoff.md) | `lichen-lowlevel` (apply replay), `lichen-compute` (parallel lowering) | in progress |
 | [Lowering structured control flow to WebAssembly](notes/wasm-control-flow.md) | `lichen-compute` (`compute/wasm/`) | in progress |
 | [One channel for a class's value and its low type](notes/class-channel.md) | `lichen-lowlevel` (`equality`), `lichen-highlevel` (`shape`), `lichen-compute` | current |
 | [The GPU algorithm roadmap](notes/gpu-algorithm-roadmap.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute-gpu` | proposed |
