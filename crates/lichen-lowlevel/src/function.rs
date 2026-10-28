@@ -142,6 +142,14 @@ impl Instantiation {
     pub fn node_of(&self, template: NodeId) -> NodeId {
         self.remap.get(&template).copied().unwrap_or(template)
     }
+
+    /// An instantiation made earlier: its applied expr is the whole answer, no remap.
+    fn recorded(applied: NodeId) -> Self {
+        Instantiation {
+            applied,
+            remap: HashMap::new(),
+        }
+    }
 }
 
 impl<P: Program> Module<P> {
@@ -206,12 +214,39 @@ impl<P: Program> Module<P> {
         }
         self.value_templates.insert(template);
         let result = (|| {
-            let Some(instantiation) =
-                self.instantiate(function, argument, block, node, ParameterCheck::Value)
-            else {
-                // A failed parameter check leaves the apply's result unknown:
-                // the body must not run under a mismatched argument.
-                return None;
+            // A replay evaluates the instantiation it was built from, not a second one.
+            let replay = match (
+                self.replay_applied.get(&node).copied(),
+                self.replay_parameters.get(&node).copied(),
+            ) {
+                (Some(applied), Some(parameter)) => Some((applied, parameter)),
+                _ => None,
+            };
+            let instantiation = match replay {
+                Some((applied, parameter)) => {
+                    let template_parameter = self.functions[function].parameter;
+                    if self.apply_parameter_check(
+                        parameter,
+                        argument,
+                        block,
+                        node,
+                        AnyFunctionId::Dynamic(function),
+                        template_parameter,
+                    ) {
+                        return None;
+                    }
+                    Instantiation::recorded(applied)
+                }
+                None => {
+                    let Some(instantiation) =
+                        self.instantiate(function, argument, block, node, ParameterCheck::Value)
+                    else {
+                        // A failed parameter check leaves the apply's result unknown:
+                        // the body must not run under a mismatched argument.
+                        return None;
+                    };
+                    instantiation
+                }
             };
             let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
             // The call's own result type is the applied return's type cell.
@@ -597,15 +632,27 @@ impl<P: Program> Module<P> {
         // The correspondence: one instantiation of the same template, whose cells stand for
         // the replay's result at every depth.
         self.replaying = true;
-        let replay = self.instantiate(function, argument, block, replay, ParameterCheck::Skip);
+        let instantiation =
+            self.instantiate(function, argument, block, replay, ParameterCheck::Skip);
         self.replaying = false;
-        let Some(replay) = replay else {
+        let Some(instantiation) = instantiation else {
             return;
         };
+        // The replay carries this instantiation: its cells are the ones the open clones
+        // join below.
+        self.replay_applied.insert(replay, instantiation.applied);
+        self.replay_parameters.insert(
+            replay,
+            instantiation.node_of(self.functions[function].parameter),
+        );
+        // The trigger: the result cell joins the replay's class, so a reader runs it first.
+        if let Some(&result) = remap.get(&self.functions[function].r#return) {
+            self.unify(result, replay);
+        }
         for (template, clone) in open {
             // A node the replay referenced in place is decided: never unify that with an open
             // cell.
-            let Some(&cell) = replay.remap.get(&template) else {
+            let Some(&cell) = instantiation.remap.get(&template) else {
                 continue;
             };
             if cell == clone || self.class_value(cell).is_some() {

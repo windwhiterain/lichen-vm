@@ -52,6 +52,15 @@ impl<P: Program> Module<P> {
             self.garbage_collect_node(node, source, target);
         }
         self.drop_block(source);
+        // Records whose cell went with the block name nothing any more.
+        self.requirements
+            .retain(|node, _| self.nodes.contains_key(*node));
+        self.replay_applied.retain(|node, applied| {
+            self.nodes.contains_key(*node) && self.nodes.contains_key(*applied)
+        });
+        self.replay_parameters.retain(|node, parameter| {
+            self.nodes.contains_key(*node) && self.nodes.contains_key(*parameter)
+        });
         value
     }
 

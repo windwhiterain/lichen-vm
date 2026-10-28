@@ -742,33 +742,14 @@ where
                 let field = *field;
                 let argument_expr = elements[*argument];
                 let actual_value = self.value_of(argument_expr);
-                let deferred = matches!(
-                    self.ir[argument_expr].kind,
-                    ExprKind::NamedField { .. } | ExprKind::Field { .. }
-                ) && self.module.node_operation(actual_value).is_some();
-                if deferred {
-                    if let Some(expected_ty) = self.module.expr_type_half(field) {
-                        self.check_unify(
-                            self.state[argument_expr].ty.unwrap(),
-                            expected_ty,
-                            self.loc(argument_expr, 1),
-                            DiagKind::Annotation,
-                        );
-                    }
-                    let operands = self.array_node(self.current_block, &[vals[*argument], field]);
-                    vals[*argument] = self.op_node(
-                        self.current_block,
-                        P::Operator::from(LowOperator::Unify),
-                        Some(operands),
-                    );
-                } else {
-                    self.check_unify(
-                        vals[*argument],
-                        field,
-                        self.loc(argument_expr, 1),
-                        DiagKind::Annotation,
-                    );
-                }
+                let _ = actual_value;
+                // A field read unifies like any other argument: no deferred node.
+                self.check_unify(
+                    vals[*argument],
+                    field,
+                    self.loc(argument_expr, 1),
+                    DiagKind::Annotation,
+                );
             }
         }
         let mut value_items = vec![

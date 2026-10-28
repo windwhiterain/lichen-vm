@@ -38,31 +38,8 @@ where
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);
-        let deferred = !self.is_function_type(expected_ty)
-            && self.is_struct_layout(expected_ty)
-            && matches!(self.ir[expected].kind, ExprKind::NamedField { .. })
-            && !matches!(self.ir[actual].kind, ExprKind::Parameter)
-            && self.module.node_operation(actual_value).is_some();
-        if deferred {
-            self.check_unify(
-                actual_ty,
-                expected_ty,
-                self.loc(actual, 0),
-                DiagKind::Annotation,
-            );
-            let operands = self.array_node(self.current_block, &[actual_term, expected_term]);
-            let node = self.op_node(
-                self.current_block,
-                P::Operator::from(lichen_lowlevel::LowOperator::Unify),
-                Some(operands),
-            );
-            self.state[e].term = Some(node);
-            self.state[e].val = None;
-            self.state[e].ty = self.state[actual].ty;
-            return node;
-        }
-        // A template against an undecided actual: a **direct unify** of the
-        // two exprs, deferred as a graph statement.
+        // A template against an undecided actual: the template is the cell's
+        // **requirement** — a link, never a write.
         if self.is_function_type(expected_ty) && !self.actual_value_is_decided(actual_value) {
             self.check_unify(
                 actual_ty,
@@ -70,24 +47,18 @@ where
                 self.loc(actual, 0),
                 DiagKind::Annotation,
             );
-            let operands = self.array_node(self.current_block, &[actual_term, expected_term]);
-            let node = self.op_node(
-                self.current_block,
-                P::Operator::from(lichen_lowlevel::LowOperator::Unify),
-                Some(operands),
-            );
-            self.state[e].term = Some(node);
-            self.state[e].val = None;
-            self.state[e].ty = self.state[actual].ty;
-            // The actual's own state, so a later read of it sees the constraint.
-            self.state[actual].term = Some(node);
-            self.state[actual].val = None;
-            // The parameter's later uses read this term.
-            if matches!(self.ir[actual].kind, ExprKind::Parameter) {
-                self.update_binding_term(actual, node);
+            if let Some(function) = self.module.function_apply_function(expected_term) {
+                self.module.requirements.insert(actual_value, function);
+                if let Some(value) = self.module.expr_value_half(actual_term) {
+                    self.module.requirements.entry(value).or_insert(function);
+                }
             }
-            return node;
+            self.state[e].term = Some(actual_term);
+            self.state[e].val = self.state[actual].val;
+            self.state[e].ty = self.state[actual].ty;
+            return actual_term;
         }
+
         self.compute_operands(actual_term, expected_term);
         // A known function is unified through its expr, so the constraint
         // compares two signatures.

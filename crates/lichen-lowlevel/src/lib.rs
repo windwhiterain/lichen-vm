@@ -1051,6 +1051,22 @@ pub struct Module<P: Program> {
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
+    /// The template that constrains each cell, keyed by the cell's value node.
+    ///
+    /// # Invariant
+    /// A requirement is a **link**, never a write: the cell's class stays undecided, so a
+    /// later unification can still put the actual function there, and a callee with no
+    /// value of its own resolves through this record.
+    pub requirements: HashMap<NodeId, AnyFunctionId>,
+    /// Each replay's recorded result expr, keyed by the replay node.
+    ///
+    /// # Invariant
+    /// A replay runs the instantiation it was built from, never a second one: the value
+    /// pass evaluates this expr, and the open clone cells it was linked to are that
+    /// instantiation's cells.
+    pub replay_applied: HashMap<NodeId, NodeId>,
+    /// Each replay's recorded parameter clone, keyed by the replay node.
+    pub replay_parameters: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant

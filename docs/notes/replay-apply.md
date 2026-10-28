@@ -40,7 +40,7 @@ it: the read resolves and the refusal becomes
 undecided class is not an Int`. The graph's shape is therefore decided at **check**
 time, by how the parameter binding unifies, not by the `Unify` operator's run.
 
-### Measured: the deferred branch is what keeps the template reachable
+### History: what deleting the deferred branch cost before the requirement record
 
 `check_unify_expr`'s function-template branch (the `Unify` statement) is still in
 place, and deleting it was measured on the one-node, one-entry apply:
@@ -190,20 +190,35 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
 
 ## Progress
 
-- **Landed**: the native gate (`function_materialized`; `$jit`/`$parallel`/
-  `$graph` answer undecided instead of refusing an unmaterialized parameter).
+- **Landed**: the native gate (`function_materialized`; `$jit`/`$parallel`/`$graph`
+  answer undecided instead of refusing an unmaterialized parameter).
 - **Landed**: `link_replay` — one replay node per apply, in the caller's block,
   `runned` stamped, each open clone cell unified with the replay instantiation's
   cell for the same template node.
-- **Landed**: one apply node per call, and one `Module::apply` entry behind
-  both passes ([apply-type-side-check](apply-type-side-check.md)).
-- **Open**: nothing evaluates the replay node. It is a node no reader names, so
-  the enclosing scope's clone resets its stamp but never runs it, and the linked
-  cells stay undecided. The next step is the trigger: the replay has to sit in
-  the class of the call's own result cell, so the runtime's
-  `evaluate_class_first` runs it before a reader takes the answer.
-- **Then**: delete `check_unify_expr`'s function-template branch once the replay
-  answers for it (measured cost of deleting it first, above).
+- **Landed**: the **trigger**. The call's own result cell joins the replay's class,
+  so the runtime's `evaluate_class_first` runs the replay before a reader takes the
+  answer. Until this, nothing named the replay node and it never ran.
+- **Landed**: the replay runs **its own instantiation** — `replay_applied` /
+  `replay_parameters` — instead of instantiating the callee a second time, so the
+  cells the open clone cells joined are exactly the cells the run fills.
+- **Landed**: the deferred `Unify` is gone from every producer. The function
+  template (`f = (i <: I => _)`), the struct-layout term and a struct instance's
+  field-read argument now record a **requirement** (`Module::requirements`: cell →
+  template) and emit no node; a callee with no value of its own resolves through
+  that record (`function_apply_function`'s `recorded_requirement`). The link is
+  never a write, so a later unification can still put the actual function in the
+  cell — which is what the replay then applies. `LowOperator::Unify` has no
+  producer left; its evaluator arm stays so a cached v25 artifact still decodes.
+- **Measured**, `lichen-lowlevel` / `lichen-language` / `lichen-compute`:
+
+  | shape | lowlevel | language | compute |
+  |---|---|---|---|
+  | deferred `Unify` (before) | 164/1 | 275 | 77/163 |
+  | requirement + replay trigger | 164/1 | 275 | 78/162 |
+
+- **Open**: compute's dominant refusal is unchanged — 78
+  `read's buffer argument is not an input buffer of the parallel parameter`, the
+  compile-time provenance gap measured above (`Index(Apply, 0)` chains).
 
 ## Implementation points
 
