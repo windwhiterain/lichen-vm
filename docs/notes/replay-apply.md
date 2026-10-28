@@ -40,6 +40,28 @@ it: the read resolves and the refusal becomes
 undecided class is not an Int`. The graph's shape is therefore decided at **check**
 time, by how the parameter binding unifies, not by the `Unify` operator's run.
 
+### Measured: the deferred branch is what keeps the template reachable
+
+`check_unify_expr`'s function-template branch (the `Unify` statement) is still in
+place, and deleting it was measured on the one-node, one-entry apply:
+
+| shape | lowlevel | language | compute |
+|---|---|---|---|
+| deferred `Unify` (current) | 164/1 | 275 | 77/163 |
+| branch deleted | 164/1 | 274/1 | 66/174 |
+
+- The language loss is `frozen_function_type`'s second case —
+  `apply := x = (x : Int => _: Int) => x 1; apply (y : Int => y + y)` answers
+  `none` instead of `2`. Nothing else links an undecided actual to the template:
+  the replay's callee is the actual's own cell, which stays empty.
+- Compute moves to the shape the replay targets: 171 of the failures become
+  `no output of this parallel index function carries a decided scalar class` (was
+  78 read-position refusals), the class the replay is meant to fill.
+
+So the deferral is the current home of "the template is this value's
+requirement", and the replay does not yet replace it. The branch can go once the
+replay's answer reaches the linked cells at the enclosing scope's clone.
+
 ### Measured: the read's chain ends at a constructor application
 
 `param_path` walks `Index` nodes from the read up to the parameter value and
