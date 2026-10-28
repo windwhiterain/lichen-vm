@@ -134,6 +134,31 @@ is gone. The table is part of the artifact's format version 23: a v22 artifact
 has no way to represent that ownership, so it is rebuilt rather than loaded with
 a different answer. See [artifact-cache](artifact-cache.md).
 
+### Constructor fields keep their source
+
+`field_sources` complements constructor ownership with directed provenance: a
+required field's exact value node names the actual field supplied for it. The
+link never unifies the two nodes and never uses an equality-class representative
+as its key.
+
+Struct instantiation records the link while filling each field. A template
+refinement whose actual is the current function parameter instead records a
+constant projection of that parameter on the constructor's own template return
+fields; a concrete actual is never written back into a shared template. Dynamic
+and frozen clone remaps carry these links. When an `Index(Apply, 0)` view is
+cloned, its source also reaches that apply, and `record_applied_expr` transfers
+it to the corresponding returned value. After the parameter check,
+`bind_field_sources` resolves constant parameter projections against the same
+slots of the actual argument, so the source leaves the formal parameter and
+names the supplied field.
+
+Parallel input placement follows these links after its direct path and class
+checks, with a bounded walk. Physical struct-slot paths are normalized against
+the actual parameter values rather than compared directly with logical field
+paths. The frozen table is artifact format 27;
+[compute-replay-handoff](compute-replay-handoff.md) records the failed
+alternatives and the measurements.
+
 ## The compute layer
 
 The compute package's own source follows the same model. A kernel struct is a

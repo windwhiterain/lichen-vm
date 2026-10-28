@@ -290,6 +290,16 @@ impl<P: Program> StaticModule<P> {
                     Some((node_map.get(value).copied()?, node_map.get(apply).copied()?))
                 })
                 .collect(),
+            field_sources: module
+                .field_sources
+                .iter()
+                .filter_map(|(required, supplied)| {
+                    Some((
+                        node_map.get(required).copied()?,
+                        node_map.get(supplied).copied()?,
+                    ))
+                })
+                .collect(),
             arena,
             attribute_layouts: module.attribute_layouts.clone(),
             default_attributes: module
@@ -512,10 +522,11 @@ fn rewrite_value<P: Program>(
 ///
 /// # Invariant
 ///
-/// Closed under five edge kinds: a value's items/entries; a node's `operation.operand`
+/// Closed under six edge kinds: a value's items/entries; a node's `operation.operand`
 /// (which `freeze_set` stores, so the walk cannot skip it); the class of an undecided
-/// node, taken whole; the whole function template; and the **default attribute array**,
-/// whose items are roots. `ReadOnly` follows an operand only from a residual node.
+/// node, taken whole; the whole function template; a constructor field's supplied source;
+/// and the **default attribute array**, whose items are roots. `ReadOnly` follows an
+/// operand only from a residual node.
 ///
 /// # Safety
 ///
@@ -563,6 +574,9 @@ fn closure<P: Program>(
             && let Some(operand) = entry.operation.and_then(|operation| operation.operand)
         {
             work.push(operand);
+        }
+        if let Some(supplied) = module.field_sources.get(&node) {
+            work.push(*supplied);
         }
         let Some(value) = entry.value else { continue };
         let mut traced = Vec::new();

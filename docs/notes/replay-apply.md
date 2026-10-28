@@ -302,7 +302,8 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   that record (`function_apply_function`'s `recorded_requirement`). The link is
   never a write, so a later unification can still put the actual function in the
   cell — which is what the replay then applies. `LowOperator::Unify` has no
-  producer left; its evaluator arm stays so a cached v25 artifact still decodes.
+  producer left; its evaluator arm remains for graphs built before that
+  migration.
 - **Measured**, `lichen-lowlevel` / `lichen-language` / `lichen-compute`:
 
   | shape | lowlevel | language | compute |
@@ -310,16 +311,24 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   | deferred `Unify` (before) | 164/1 | 275 | 77/163 |
   | requirement + replay trigger | 164/1 | 275 | 78/162 |
 
-- **Open**: compute's dominant refusal is unchanged — 78
-  `read's buffer argument is not an input buffer of the parallel parameter`, the
-  compile-time provenance gap measured above (`Index(Apply, 0)` chains).
+- **Landed**: constructor field sources preserve the actual supplied field
+  through struct population, template refinement, apply cloning, argument
+  binding and freezing. Parallel input placement follows those links. The
+  design is in [value-templates](value-templates.md#constructor-fields-keep-their-source);
+  compute is **115 passed / 125 failed**, with lowlevel and language green.
+- **Open**: the remaining failures include graph return/value-table errors,
+  empty body nodes, definition cycles, and root materialization issues. They
+  are not one replay or provenance failure family.
 
 ## Implementation points
 
 - `crates/lichen-lowlevel/src/function.rs`: `instantiate_stamped` (the replay
   node and the cell correspondence), `node_apply` (the clone's `runned` reset).
 - `crates/lichen-lowlevel/src/apply.rs`: `record_applied_expr` /
-  `wire_apply_result` own the apply-result edges.
+  `wire_apply_result` own the apply-result edges; `bind_field_sources` resolves
+  parameter projections against the actual argument.
+- `crates/lichen-lowlevel/src/lib.rs`: `field_sources` holds exact-node
+  constructor field provenance, propagated through dynamic and frozen clones.
 - `crates/lichen-compute/src/compute.rs`: `function_materialized`, the
   `Jit`/`Parallel`/`Graph` arms, and `parallel_buffer_pos`'s equality-class
   fallback for the read's input position.

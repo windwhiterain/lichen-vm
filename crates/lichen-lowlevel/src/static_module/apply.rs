@@ -96,6 +96,8 @@ impl<P: Program> Module<P> {
             ) {
                 break 'frame None;
             }
+            let instantiated: Vec<NodeId> = ctx.remap.values().copied().collect();
+            self.bind_field_sources(parameter_image, argument, &instantiated);
             let result = self.evaluate_node(Dyn(applied), Some(block));
             // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
@@ -436,6 +438,11 @@ impl<P: Program> Module<P> {
             // class stays external.
             rule.set_outer_instance(local, clone);
         }
+        if let Some(supplied) = module.field_sources.get(&local).copied() {
+            let supplied =
+                self.clone_static_signature_node(module, supplied, block, remap, source, rule);
+            self.field_sources.insert(clone, supplied);
+        }
         // A frozen operation is copied with it: a value-only copy loses what it computes.
         let operation = module.nodes[local.index].operation;
         let Some(value) = module.read(local) else {
@@ -625,6 +632,28 @@ impl<P: Program> Module<P> {
         if let Some(owner) = ctx.module.apply_result_owners.get(&local).copied() {
             let owner = self.static_node_apply(owner, ctx);
             self.apply_result_owners.insert(clone, owner);
+        }
+        if let Some(source) = ctx.module.field_sources.get(&local).copied() {
+            let source = self.static_node_apply(source, ctx);
+            self.field_sources.insert(clone, source);
+            if let Some(operation) = template_operation
+                && matches!(
+                    AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                    Some(crate::LowOperator::Index)
+                )
+                && let Some(operand) = operation.operand
+                && let Some(LowValue::Array(operands)) =
+                    ctx.module.read(operand).and_then(|value| value.as_enum())
+            {
+                let operands = unsafe { operands.items() };
+                if self.read_position(operands[1].node) == Some(0)
+                    && let AnyNodeId::Static(target) = operands[0].node
+                    && target.module == ctx.module.key
+                {
+                    let target = self.static_node_apply(target.index, ctx);
+                    self.field_sources.insert(target, source);
+                }
+            }
         }
         clone
     }

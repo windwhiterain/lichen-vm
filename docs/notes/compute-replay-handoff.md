@@ -1,12 +1,14 @@
 # Compute replay handoff
 
-> Status: **ready to resume.** `dev` and the `compute-provenance` branch are at
-> `554560d2`. The worktree is clean. The launch replay fix is landed; the
-> parallel read-provenance problem is still open.
+> Status: **field provenance is implemented and measured.** The launch replay
+> fix is landed; the parallel read source chain now uses explicit per-instance
+> field links. Lowlevel and language are green, and compute is **115 passed / 125
+> failed**. Root materialization, graph values, and definition-cycle failures
+> remain open.
 >
-> Read [replay-apply](replay-apply.md) for the design and measurements, and
-> [value-templates](value-templates.md) for the constructor-template migration
-> and the original class-wide regression.
+> Read [value-templates](value-templates.md#constructor-fields-keep-their-source)
+> for the field-source contract, [replay-apply](replay-apply.md) for replay, and
+> the measurements below for rejected alternatives.
 
 ## 1. Objective and current readings
 
@@ -160,7 +162,7 @@ An independent review suggested the payload fast path, but the subsequent
 "the payload was shared before recursion" as a hypothesis unless a new trace
 proves the exact early return.
 
-## 6. Recommended next measurement
+## 6. Measurements that located the source gap
 
 Start from `554560d2`, not from any experiment above.
 
@@ -191,7 +193,86 @@ cargo test -p lichen-compute --test lichen_compute \
   lichen_compute::compute::parallel_read_input_buffer -- --exact
 ```
 
-## 7. Workspace and workflow
+## 7. Follow-up measurements: where the source is lost
+
+A smaller probe now reuses the scalar (`a := read …; a + a`), which makes the
+failure deterministic; the earlier single-use spelling can happen to compile.
+The probe is still compile-only and is not a committed test.
+
+The measured chain is no longer just "node 1283 was never replayed":
+
+- The final buffer is a materialized fresh `Buf(p)` result. Its
+  `apply_result_owners` entry correctly recovers the constructor apply, but the
+  apply's argument is itself a materialized `BufParam` with only `type` and
+  `length`; it carries no input `.native` identity. Neither the result nor that
+  argument has a `param_path`.
+- The return containing this result is already decided, so `link_replay`'s
+  early decided-return guard creates no replay. Removing that guard causes
+  `expected Struct, found Struct` while importing `compute.lichen`; using
+  `ParameterCheck::Value` for the new case does not remove the conflict. This
+  experiment is rejected, not a new replay rule.
+- `p <: Buf` still constructs a fresh `Buf`. `p : (Buf _)` hits a Struct/Struct
+  type conflict. Neither is the source-preserving spelling.
+- An experimental `Read := p => {.from p, …}` does preserve the source equality
+  class. A class member then has physical slot path `[3, 2]`; following the two
+  actual struct values turns it into logical input path `[1, 0]` (two struct
+  headers). A class-member path fallback plus this wrapper makes the smaller
+  `a + a` probe compile.
+- That is not a landable combined fix. The wrapper plus fallback moves
+  `parallel_read_input_buffer` past the refusal but leaves its root undecided,
+  and makes `silu` produce a kernel whose root item is static. The full compute
+  suite falls to **109 passed / 131 failed**. Moving buffer validation into
+  `read`/`write` does not change those two outcomes. The class-member fallback
+  alone, with the original wrapper, is suite-neutral at **113/127**.
+
+The important boundary for the next step is therefore the difference between
+the early return shell Lower reaches and the static apply's actually evaluated
+return. In one trace, Lower reads `4390 -> 3766 -> apply 1041`, while the static
+apply records evaluated return `4101`, value `4102`. Do not add another source
+map until that actual return's payload and provenance have been compared with
+the shell. A fresh constructor result and an input field still must not be
+unified.
+
+## 8. Landed field-provenance slice
+
+The maintainer selected **keep the wrappers and record provenance** over changing
+`Read`/`Write` into source-preserving wrappers. The implementation has four
+parts:
+
+1. Struct population records required field value → actual supplied field.
+2. A parameter refinement records constant parameter projections on the
+   constructor's own template return fields. Concrete user values are never
+   back-propagated into a shared template.
+3. Clone remaps carry the links. A cloned `Index(Apply, 0)` also links its apply;
+   `record_applied_expr` links the corresponding returned value. After the
+   parameter check, `bind_field_sources` resolves the projection against the
+   actual argument's same slots.
+4. Parallel input placement follows the links with a depth bound and normalizes
+   physical struct-slot paths against the actual parameter values.
+
+The map is keyed by exact nodes, never equality-class roots, and creates no
+unification. It is preserved by GC, static freezing, and artifact format 27.
+The code contract is in `Module::field_sources`,
+`record_template_field_sources`, `bind_field_sources`, and
+`parallel_buffer_pos_inner`; the prose summary is in
+[value-templates](value-templates.md#constructor-fields-keep-their-source).
+
+Measured after cleanup:
+
+- the reduced `a + a` parallel probe compiles;
+- lowlevel: **164 passed, 1 ignored**;
+- language: **275 passed**;
+- compute: **115 passed, 125 failed, 1 ignored**, up from 113/127;
+- `parallel_read_input_buffer` now gets past the input-position refusal but its
+  root is undecided;
+- `silu` now compiles a kernel but the test's root item is static.
+
+The last two are follow-on root/materialization failures, not evidence that the
+field link is missing. Do not reintroduce the direct-wrapper or shared
+callee-template experiments: the former regressed the suite, and the latter
+lets unrelated fields overwrite one another's source.
+
+## 9. Workspace and workflow
 
 - Worktree: `C:/resource/lichen-vm/.worktrees/compute-provenance`
 - Feature branch: `compute-provenance`

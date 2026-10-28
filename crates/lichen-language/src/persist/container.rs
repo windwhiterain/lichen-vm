@@ -151,6 +151,13 @@ where
         w.u64(value.index as u64);
         w.u64(apply.index as u64);
     }
+    let mut sources: Vec<_> = module.field_sources.iter().collect();
+    sources.sort_unstable_by_key(|(required, _)| required.index);
+    w.u64(sources.len() as u64);
+    for (required, supplied) in sources {
+        w.u64(required.index as u64);
+        w.u64(supplied.index as u64);
+    }
     // The registry, in id order: a layout id indexes it, so a reordering
     // would re-read every frozen array's attributes.
     w.u64(module.attribute_layouts.len() as u64);
@@ -569,6 +576,15 @@ where
     }
     let apply_result_owners = apply_result_owners.into_iter().collect();
 
+    let source_count = r.u64()? as usize;
+    let mut field_sources = reserve(&r, source_count, "constructor field sources")?;
+    for _ in 0..source_count {
+        let required = read_node_id(&mut r, node_count, "constructor field requirement")?;
+        let supplied = read_node_id(&mut r, node_count, "supplied field source")?;
+        field_sources.push((required, supplied));
+    }
+    let field_sources = field_sources.into_iter().collect();
+
     let layout_count = r.u64()? as usize;
     let mut attribute_layouts = reserve(&r, layout_count, "attribute layouts")?;
     for _ in 0..layout_count {
@@ -594,6 +610,7 @@ where
         nodes,
         functions,
         apply_result_owners,
+        field_sources,
         arena,
         attribute_layouts,
         default_attributes,

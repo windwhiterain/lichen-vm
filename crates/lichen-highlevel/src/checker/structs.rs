@@ -613,6 +613,72 @@ where
         ))
     }
 
+    /// Record a template parameter's field sources in `<:`.
+    ///
+    /// # Invariant
+    /// Only the desugared `actual <: template` shape with a parameter actual enters. Sources
+    /// are constant projections of that parameter, written on the constructor's own template
+    /// return fields; an instantiated return or an arbitrary unify creates no provenance.
+    pub(super) fn record_template_field_sources(
+        &mut self,
+        expected: ExprId,
+        actual: ExprId,
+        actual_value: NodeId,
+    ) {
+        if !matches!(self.ir[actual].kind, ExprKind::Parameter) {
+            return;
+        }
+        let ExprKind::Apply {
+            function, argument, ..
+        } = self.ir[expected].kind
+        else {
+            return;
+        };
+        if !matches!(self.ir[argument].kind, ExprKind::Placeholder) {
+            return;
+        }
+        let Some(constructor) = self.state[function].term else {
+            return;
+        };
+        let Some(AnyFunctionId::Dynamic(function)) =
+            self.module.function_apply_function(constructor)
+        else {
+            return;
+        };
+        let returned = self.module.functions[function].r#return;
+        let Some(value) = self.module.expr_value_half(returned) else {
+            return;
+        };
+        let root = self.module.class_root(value);
+        let Some(required) = shape::value_items(&self.module, AnyNodeId::Dynamic(root)) else {
+            return;
+        };
+        for (position, required) in required[shape::STRUCT_VALUE_FIELD_BASE..]
+            .iter()
+            .enumerate()
+        {
+            let Some(required) = required.node.dynamic() else {
+                continue;
+            };
+            let required = self.module.expr_value_half(required).unwrap_or(required);
+            let selector = self.usize_node(shape::STRUCT_VALUE_FIELD_BASE + position);
+            let operand = self.array_node(self.current_block, &[actual_value, selector]);
+            let field = self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(operand),
+            );
+            let zero = self.zero();
+            let operand = self.array_node(self.current_block, &[field, zero]);
+            let supplied = self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(operand),
+            );
+            self.module.field_sources.insert(required, supplied);
+        }
+    }
+
     /// A struct instance `S{…}`: apply the constructor to `_`, then fill its fields.
     ///
     /// # Invariant
@@ -742,7 +808,10 @@ where
                 let field = *field;
                 let argument_expr = elements[*argument];
                 let actual_value = self.value_of(argument_expr);
-                let _ = actual_value;
+                let required_value = self.module.expr_value_half(field).unwrap_or(field);
+                self.module
+                    .field_sources
+                    .insert(required_value, actual_value);
                 // A field read unifies like any other argument: no deferred node.
                 self.check_unify(
                     vals[*argument],

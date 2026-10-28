@@ -38,6 +38,7 @@ where
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);
+        self.record_template_field_sources(expected, actual, actual_value);
         // A template against an undecided actual: the template is the cell's
         // **requirement** — a link, never a write.
         if self.is_function_type(expected_ty) && !self.actual_value_is_decided(actual_value) {

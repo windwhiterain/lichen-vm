@@ -558,6 +558,8 @@ impl<P: Program> Module<P> {
             if failed {
                 return None;
             }
+            let instantiated: Vec<NodeId> = remap.values().copied().collect();
+            self.bind_field_sources(parameter_image, argument, &instantiated);
         }
         // A clone's open cells reach the value of the call that made them through the
         // replay, not through the template.
@@ -947,6 +949,22 @@ impl<P: Program> Module<P> {
         if let Some(owner) = self.apply_result_owners.get(&node).copied() {
             let owner = self.node_apply(owner, ctx);
             self.apply_result_owners.insert(clone, owner);
+        }
+        if let Some(source) = self.field_sources.get(&node).copied() {
+            let source = self.node_apply(source, ctx);
+            self.field_sources.insert(clone, source);
+            if let Some(operation) = self.nodes[node].operation
+                && matches!(
+                    AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
+                    Some(crate::LowOperator::Index)
+                )
+                && let Some(operand) = operation.operand
+                && let Ok(operands) = self.operand_expr(operand, "Index")
+                && self.usize_value(operands[1]) == Some(0)
+            {
+                let target = self.node_apply(operands[0], ctx);
+                self.field_sources.insert(target, source);
+            }
         }
         // A clone is a singleton class here, so the slot write *is* the class write.
         self.nodes[clone].low_shape = low_shape;

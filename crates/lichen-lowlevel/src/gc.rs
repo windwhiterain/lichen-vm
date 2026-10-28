@@ -61,6 +61,9 @@ impl<P: Program> Module<P> {
         self.replay_parameters.retain(|node, parameter| {
             self.nodes.contains_key(*node) && self.nodes.contains_key(*parameter)
         });
+        self.field_sources.retain(|required, supplied| {
+            self.nodes.contains_key(*required) && self.nodes.contains_key(*supplied)
+        });
         value
     }
 
@@ -169,6 +172,9 @@ impl<P: Program> Module<P> {
             && let Some(operand) = operation.and_then(|operation| operation.operand)
         {
             self.garbage_collect_node(operand, source, target);
+        }
+        if let Some(supplied) = self.field_sources.get(&node).copied() {
+            self.garbage_collect_node(supplied, source, target);
         }
         let value = current.map(|value| match value.as_enum() {
             Some(LowValue::Array(array)) if matches!(*array, AnyHandle::Static(_)) => {

@@ -316,6 +316,11 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `27` added constructor field sources. Each entry maps a required field's exact
+  value node to the actual supplied field, including the parameter projections
+  used by template definitions. A v26 artifact cannot preserve this provenance
+  across apply and kernel lowering, so it is rebuilt rather than accepted with
+  reads that lose their input or output position.
 - `25` added every frozen node's owner and every frozen function's lexical parent.
   A load validates those function links and rebuilds the frozen scope tree and class
   summaries from them. A v24 artifact has no such metadata, so it cannot reproduce the

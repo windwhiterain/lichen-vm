@@ -1,8 +1,10 @@
 //! The apply tail `function.rs` and `static_module.rs` share, so the two paths cannot drift.
 
+use std::collections::HashMap;
+
 use crate::{
-    AnyFunctionId, AnyNodeId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId,
-    Program,
+    AnyFunctionId, AnyNodeId, ApplyError, BlockId, BudgetExhausted, LowOperator, LowValue, Module,
+    NodeId, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -155,11 +157,91 @@ impl<P: Program> Module<P> {
         false
     }
 
+    /// Rebind this apply's field-source projections to the supplied argument's fields.
+    ///
+    /// # Invariant
+    /// Only constant `Index` chains rooted at the cloned parameter are resolved, and only
+    /// against the same slots of the actual argument; no node is unified to create provenance.
+    pub(crate) fn bind_field_sources(
+        &mut self,
+        parameter_image: NodeId,
+        argument: AnyNodeId,
+        instantiated: &[NodeId],
+    ) {
+        let parameter_value = self
+            .expr_value_half(parameter_image)
+            .unwrap_or(parameter_image);
+        let mut replacements = HashMap::new();
+        for &candidate in instantiated {
+            let mut current = candidate;
+            let mut path = Vec::new();
+            for _ in 0..8 {
+                if current == parameter_image || current == parameter_value {
+                    break;
+                }
+                let Some(operation) = self.node_operation(current) else {
+                    break;
+                };
+                if !matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Index)
+                ) {
+                    break;
+                }
+                let Some(operand) = operation.operand else {
+                    break;
+                };
+                let Ok(operands) = self.operand_expr(operand, "Index") else {
+                    break;
+                };
+                let Some(position) = self.usize_value(operands[1]) else {
+                    break;
+                };
+                path.push(position);
+                current = operands[0];
+            }
+            if (current != parameter_image && current != parameter_value) || path.is_empty() {
+                continue;
+            }
+            path.reverse();
+            let mut supplied = argument;
+            let mut resolved = true;
+            for position in &path {
+                let Some(items) = (unsafe { self.array_items_of(supplied) }) else {
+                    resolved = false;
+                    break;
+                };
+                let Some(item) = items.get(*position) else {
+                    resolved = false;
+                    break;
+                };
+                supplied = item.node;
+            }
+            if resolved
+                && supplied != argument
+                && let Some(supplied) = supplied.dynamic()
+            {
+                replacements.insert(candidate, supplied);
+            }
+        }
+        for &required in instantiated {
+            let Some(supplied) = self.field_sources.get(&required).copied() else {
+                continue;
+            };
+            if let Some(actual) = replacements.get(&supplied).copied() {
+                self.field_sources.insert(required, actual);
+            }
+        }
+    }
+
     /// Record an apply's returned expression and its value's owner.
     pub(super) fn record_applied_expr(&mut self, node: NodeId, applied: NodeId) {
         self.applied_exprs.insert(node, applied);
         let value = self.expr_value_half(applied).unwrap_or(applied);
         self.apply_result_owners.insert(value, node);
+        if let Some(supplied) = self.field_sources.get(&node).copied() {
+            self.field_sources.insert(value, supplied);
+        }
     }
 
     /// Wire the apply result: cache the return expr, unify it with the cloned return

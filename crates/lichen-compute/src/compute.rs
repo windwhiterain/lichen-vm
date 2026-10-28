@@ -4903,12 +4903,26 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    parallel_buffer_pos_inner(module, params, node.into(), 0)
+}
+
+fn parallel_buffer_pos_inner<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: AnyNodeId,
+    source_depth: u8,
+) -> Result<Option<usize>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
     let Some(slot) = params.first() else {
         return Ok(None);
     };
     // A position is a read of the parameter, the caller's own node: a frozen node
     // names no position.
-    let Some(node) = node.into().dynamic() else {
+    let Some(node) = node.dynamic() else {
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
@@ -4920,6 +4934,11 @@ where
                 return Ok(Some(position));
             }
             if let Some(position) = roles.input_pos(&path) {
+                return Ok(Some(position));
+            }
+            if let Some(logical) = physical_param_path::<P>(module, slot.expr, &path)
+                && let Some(position) = roles.input_pos(&logical)
+            {
                 return Ok(Some(position));
             }
         }
@@ -4935,6 +4954,16 @@ where
                     return Ok(Some(position));
                 }
             }
+        }
+        if source_depth < 8
+            && let Some(source) = module.field_sources.get(&node).copied()
+        {
+            return parallel_buffer_pos_inner(
+                module,
+                params,
+                AnyNodeId::Dynamic(source),
+                source_depth + 1,
+            );
         }
         return Ok(None);
     }
@@ -5286,6 +5315,36 @@ where
         })
         .collect();
     resolve_steps(module, param_expr, &kept)
+}
+
+/// Convert a materialized read's physical slots into a parameter role path.
+///
+/// # Invariant
+/// A struct's name table and nominal id are not fields: each physical struct step skips those
+/// two slots, while a tuple or slot-value step keeps its position unchanged.
+fn physical_param_path<P>(
+    module: &Module<P>,
+    param_expr: NodeId,
+    path: &[usize],
+) -> Option<Vec<usize>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut current = AnyNodeId::Dynamic(expr_value(module, param_expr)?);
+    let mut logical = Vec::with_capacity(path.len());
+    for &position in path {
+        let field = if is_struct_value(module, current) {
+            logical.push(position.checked_sub(shape::STRUCT_VALUE_FIELD_BASE)?);
+            items_of(module, current)?.get(position)?.node
+        } else {
+            logical.push(position);
+            items_of(module, current)?.get(position)?.node
+        };
+        current = slot_value_of(module, field).unwrap_or(field);
+    }
+    Some(logical)
 }
 
 /// Resolve a read's collected steps against the parameter's value, outermost

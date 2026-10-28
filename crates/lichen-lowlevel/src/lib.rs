@@ -1047,6 +1047,12 @@ pub struct Module<P: Program> {
     pub applied_exprs: HashMap<NodeId, NodeId>,
     /// The apply that produced each returned value, for constructor recovery.
     pub apply_result_owners: HashMap<NodeId, NodeId>,
+    /// The actual field supplied for each constructor field requirement.
+    ///
+    /// # Invariant
+    /// Keys and values are exact value nodes, never equality-class roots; this directed link
+    /// records provenance without unifying the required and supplied fields.
+    pub field_sources: HashMap<NodeId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
@@ -1324,6 +1330,8 @@ pub struct StaticModule<P: Program> {
     pub functions: Vec<StaticFunction>,
     /// The apply that produced each returned value, preserved for constructor recovery.
     pub apply_result_owners: HashMap<LocalNodeId, LocalNodeId>,
+    /// The actual field supplied for each constructor field requirement, keyed by exact node.
+    pub field_sources: HashMap<LocalNodeId, LocalNodeId>,
     /// The flattened payload arena: array item slices and ext-value bytes, deduped by `(ptr, len)`.
     pub arena: Vec<u8>,
     /// The frozen module's **attribute-layout registry**, copied verbatim from the source.

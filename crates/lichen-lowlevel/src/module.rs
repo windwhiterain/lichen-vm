@@ -68,6 +68,7 @@ impl<P: Program> Module<P> {
             element_types: HashMap::new(),
             applied_exprs: HashMap::new(),
             apply_result_owners: HashMap::new(),
+            field_sources: HashMap::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),
             requirements: HashMap::new(),
