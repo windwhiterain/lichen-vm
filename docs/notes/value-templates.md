@@ -175,6 +175,57 @@ model now:
   cells are regrouped on the value and signature sides, and a cached `Index`
   answer reconciles its wildcard payload as the actual binds.
 
+### Measured: the class-wide scope verdict is the compute regression
+
+The suite fell from 112 passing to 67 at one commit, not across the migration.
+Measured on `lichen-compute --test lichen_compute`, first failing run per commit,
+the same tree each time:
+
+| commit | passed | failed |
+|---|---|---|
+| `ea08077b` | 111 | 129 |
+| `b71b81dd` | 112 | 128 |
+| `14285cd8` — the class-wide scope verdict | **67** | **173** |
+| `c1955675` — the replay and the materialized-parameter gate | 77 | 163 |
+| `c730f83f`, `b602e5fa` | 77 | 163 |
+| `e34e986e` (the compute branch's base) | 78 | 162 |
+
+The reproduction is four lines and needs nothing compute-specific but the
+prelude:
+
+```lichen
+---
+  compute = import "compute.lichen"
+---
+a := 42
+k := compute.jit (x => x + a)
+compute.launch k 1
+```
+
+`43: Int` at `b71b81dd`; `none: Int` from `14285cd8` on, and the same with a
+bound argument (`b := 1`) instead of the literal, so the argument's owner is
+not the trigger. The program's own value is not the only loss: `probe`-level
+instrumentation of the `$launch` operator shows its operand array as
+`[kernel, empty cell]` — the second element has no value, no class and an
+`Index` operation.
+
+**Measured, not proposed**: forcing the dynamic verdict's answer to "cloned"
+(`node_class_inside_scope` never refuses, behind an environment flag, then
+reverted) answers `43` again. So the verdict is what turns the body's read into
+a *reference*.
+
+The mechanism, as far as it is measured. `compute.launch k 1` applies a
+**static** prelude function to `k`, which *mints* a dynamic closure for the
+frozen inner lambda and the program then applies that minted closure to `1`.
+The parameter check of that last apply binds the argument into the parameter
+**image** (measured: the image's value half reads `USize(1)`), while the body's
+read of the same parameter is `Index(parameter_slot, 0)` and was *referenced in
+place* instead of cloned — its class was judged outside the walk's scope. The
+two are not one class, so the bind and the read land on different cells and
+`$launch` sees an empty argument. Which class member supplies the external
+summary is not yet measured; the unowned-owner case of a **baked** clone with
+open content was tried as the cause and changed nothing (reverted).
+
 ## Dependent lengths
 
 A decidable array length is built directly. A length that depends on an
