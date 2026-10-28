@@ -242,13 +242,33 @@ class is not. The dynamic path does not split here (`launch := k <: K => a =>
 {a}` applied directly answers `3`), because every clone it makes is owned by
 the call.
 
-Two candidate repairs, neither taken: (a) judge ownership as well as the class
-summary — a frozen node whose own function is inside the source scope stays
-owned even when its class reaches out, accepting that the class is then only
-partly instantiated; (b) keep the class verdict and make the parameter follow
-it, so the argument binds the shared cell the body reads, accepting one
-parameter cell per kernel call. The unowned-owner case of a **baked** clone with
-open content was tried as the cause and changed nothing (reverted).
+The frozen side says the same thing from the other end. Printed on every
+`outside` verdict of the frozen rule, the two classes that matter are
+`{1714(owner 14), 1555(owner 13), 1743(**owner none**), 1644(owner 14)}` and
+`{1739(14), 1741(**none**), 1654(14), 1639(14), 1645(14), 1715(14), 1556(13)}`:
+one **unowned** frozen cell per class makes the whole class external, and 13/14
+are `launch`'s and its inner lambda's own functions. So the class is neither a
+capture nor the source's own code — it is the source's own cells joined to a
+top-level cell.
+
+The verdict is class-wide, but the **outer instance is per cell** by design
+(`FrozenClassRule::outer`: "the members of a class keep their own operator and
+their own answer; the class topology is rebuilt by the walk's own regroup"), and
+the regroup unifies only **plain cells** (`clone_is_a_plain_cell`). A class whose
+members carry values is therefore not re-unified, and two members' outer
+instances stay two classes. At the dynamic apply of the minted closure both are
+unowned, so both are referenced and nobody clones them; the parameter check had
+already bound the parameter's *own* instance.
+
+Three candidate repairs, none taken. (a) Judge ownership as well as the class
+summary — tried and measured: the unowned member stays unowned, so the
+`inside` OR changes nothing on this program and was reverted. (b) Key the outer
+instance by class instead of by cell, so one external class is one instance —
+needs the regroup to carry value-carrying members too, which is where the
+union-by-size rule decides the class's answer. (c) Make the parameter follow the
+class verdict, so the argument binds the shared cell the body reads, accepting
+one parameter cell per kernel call. A **baked** clone's unowned owner was tried
+as the cause earlier and changed nothing (reverted).
 
 ## Dependent lengths
 
