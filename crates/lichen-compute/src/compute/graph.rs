@@ -16,7 +16,7 @@ use lichen_graph_ir::{
     ValueId,
 };
 use lichen_kernel_ir::{KernelFragment, ParallelBackend, ResidentId, ScalarClass, ScalarLeaf};
-use lichen_lowlevel::LowValue;
+use lichen_lowlevel::{AnyNodeId, LowValue, StaticNodeId};
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -41,6 +41,33 @@ fn graphs() -> &'static Mutex<HashMap<GraphId, Graph>> {
 fn digests() -> &'static Mutex<HashMap<u64, GraphId>> {
     static DIGESTS: OnceLock<Mutex<HashMap<u64, GraphId>>> = OnceLock::new();
     DIGESTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn buffer_declarations() -> &'static Mutex<HashMap<GraphId, (StaticNodeId, StaticNodeId)>> {
+    static DECLARATIONS: OnceLock<Mutex<HashMap<GraphId, (StaticNodeId, StaticNodeId)>>> =
+        OnceLock::new();
+    DECLARATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Preserve the frozen Buf header a graph's recording used.
+pub fn register_buffer_declaration(id: GraphId, declaration: Option<(StaticNodeId, StaticNodeId)>) {
+    if let Some(declaration) = declaration {
+        buffer_declarations()
+            .lock()
+            .unwrap()
+            .entry(id)
+            .or_insert(declaration);
+    }
+}
+
+/// Read the frozen Buf header a graph's recording used.
+pub fn buffer_declaration(id: GraphId) -> Option<(AnyNodeId, AnyNodeId)> {
+    buffer_declarations()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .copied()
+        .map(|(names, id)| (AnyNodeId::Static(names), AnyNodeId::Static(id)))
 }
 
 /// A content digest of a graph's shape, which is what makes two builds one id.
@@ -124,6 +151,8 @@ struct Recording {
     /// and an empty list is the real answer for a unit.
     returns: Option<Vec<Edge>>,
     backend: Option<Backend>,
+    /// The frozen Buf declaration shared by recorded buffer outputs.
+    buffer_declaration: Option<(StaticNodeId, StaticNodeId)>,
     /// What refused while this recording was open, in the order it refused.
     ///
     /// # Invariant
@@ -198,6 +227,15 @@ pub fn is_recording() -> bool {
     RECORDINGS.with(|recordings| !recordings.borrow().is_empty())
 }
 
+/// Keep a recorded output's frozen Buf declaration for its graph run.
+pub fn record_buffer_declaration(names: StaticNodeId, id: StaticNodeId) {
+    RECORDINGS.with(|recordings| {
+        if let Some(recording) = recordings.borrow_mut().last_mut() {
+            recording.buffer_declaration.get_or_insert((names, id));
+        }
+    });
+}
+
 /// The ceiling a parameter that is not the named struct has its argument tuple built at.
 ///
 /// # Invariant
@@ -215,6 +253,7 @@ pub fn begin() {
             inputs: Vec::new(),
             returns: None,
             backend: None,
+            buffer_declaration: None,
             refusals: Vec::new(),
         })
     });
@@ -255,7 +294,7 @@ pub fn abandon() -> Vec<String> {
 /// The backend comes out of the recording rather than the registry, because a recording is the
 /// only place the agreement is knowable: the check that every dispatch named the same backend runs
 /// here.
-pub fn finish() -> Result<(Graph, Backend), String> {
+pub fn finish() -> Result<(Graph, Backend, Option<(StaticNodeId, StaticNodeId)>), String> {
     RECORDINGS.with(|recordings| {
         let mut recordings = recordings.borrow_mut();
         let recording = recordings
@@ -316,7 +355,7 @@ pub fn finish() -> Result<(Graph, Backend), String> {
                     format!("this graph's return could not be recorded: {refusal}")
                 })?;
         }
-        Ok((graph, backend))
+        Ok((graph, backend, recording.buffer_declaration))
     })
 }
 

@@ -156,8 +156,13 @@ Once a call is **one** apply node with a check pass and a value pass
 ([apply-type-side-check](apply-type-side-check.md)), the replay runs for every
 instantiation; its one condition is the template's own:
 
-1. **A decided return has nothing to replay.** A plain open return uses the
-   original correspondence. An internal operation runs normally; an **external**
+1. **A fully decided return has nothing to replay.** A structural shell with an
+   open immediate element is not such a return: the maintainer approved treating
+   it as replay-requiring after the produced-buffer trace showed that its
+   producer otherwise never runs. The graph recording path applies the same
+   predicate locally before replaying an Apply; the lowlevel decided-return
+   guard is unchanged. A plain open return uses the original
+   correspondence. An internal operation runs normally; an **external**
    operation return triggers even when no plain cell is open. Its replay
    instance performs the parameter check and supplies the result directly.
 

@@ -324,7 +324,34 @@ the former regressed the suite, and the latter lets unrelated fields overwrite
 one another's source. Post-return rebinding, GC-root retention, and making
 `buf_payload` follow sources were also measured as irrelevant to this failure.
 
-## 9. Workspace and workflow
+## 10. Produced-buffer recording and graph-run results
+
+The two-kernel produced-buffer chain exposed two separate defects:
+
+- A recording can meet an Apply whose returned shell still has an empty or
+  wildcard immediate element. `evaluate_recording_dependencies` now replays
+  that Apply locally and follows its actual returned expression, instead of
+  changing the lowlevel decided-return guard. `recorded_applied_projection`
+  replays the constant field path against that return; named fields use its own
+  name table. `field_sources` links the original Apply to its replay, not the
+  clone to the template, so no equality or provenance is manufactured.
+- `run_graph` returned raw buffers although the recorder returned `Buf`
+  wrappers. It now wraps buffer results with the same frozen names/nominal-id
+  header used by the recording. The header, not a dynamic names table, is kept
+  with the `GraphId`; scalar results remain raw, and multi-result slots use the
+  same construction. This avoids both the raw-buffer/Struct conflict and the
+  frozen/dynamic table-identity conflict.
+
+Measured after cleanup: `graph_jit::a_graph_recorded_for_one_backend_runs_on_another`
+passes, including the CPU refusal and the two GPU dispatches. The two graph
+scalar recording tests, `jit_cross_kernel_wrapper`, and
+`parallel_read_input_buffer` also pass. The separate
+`a_graph_dispatches_exactly_what_the_program_dispatches` comparison still has a
+plain direct-launch failure: its extent is empty before the backend is called.
+Do not use block-wide `reopen_stalled` for that case; it reopens old recording
+operations and collides distinct `GraphValue` answers.
+
+## 11. Workspace and workflow
 
 - Worktree: `C:/resource/lichen-vm/.worktrees/compute-provenance`
 - Feature branch: `compute-provenance`

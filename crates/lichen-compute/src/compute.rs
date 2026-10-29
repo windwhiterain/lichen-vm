@@ -1152,6 +1152,129 @@ impl OperatorCodec for ComputeOperator {
     }
 }
 
+/// Evaluate a recording operand's computation graph in dependency order.
+///
+/// # Invariant
+/// Operation operands precede the operator, and an apply's actual returned expression follows it.
+/// Each node is visited once; the walk is local to recording and changes no global deep-walk rule.
+fn evaluate_recording_dependencies<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    node: AnyNodeId,
+    seen: &mut HashSet<AnyNodeId>,
+    depth: usize,
+) where
+    P: Program,
+    P::Value: ValueType,
+    P::Operator: AsEnum<ComputeOperator>,
+{
+    if depth > 16 || !seen.insert(node) {
+        return;
+    }
+    if let Some(operation) = node.dynamic().and_then(|node| module.node_operation(node)) {
+        let operands = node
+            .dynamic()
+            .and_then(|node| module.operands_of(node).ok())
+            .unwrap_or_default();
+        for operand in operands {
+            evaluate_recording_dependencies(
+                module,
+                block,
+                AnyNodeId::Dynamic(operand),
+                seen,
+                depth + 1,
+            );
+        }
+        let mut result = module.evaluate_node(node, Some(block));
+        let open = result.is_none_or(|value| match value.as_enum() {
+            Some(LowValue::Any) => true,
+            Some(LowValue::Array(array)) => unsafe { array.items() }.iter().any(|item| {
+                module
+                    .node_value(item.node)
+                    .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
+            }),
+            _ => false,
+        });
+        if open
+            && matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Apply)
+            )
+        {
+            let replay = module.add_node(block, Some(operation), None);
+            if let Some(original) = node.dynamic() {
+                module.field_sources.entry(original).or_insert(replay);
+            }
+            result = module.evaluate_node(AnyNodeId::Dynamic(replay), Some(block));
+            if let Some(applied) = module.applied_exprs.get(&replay).copied() {
+                evaluate_recording_dependencies(
+                    module,
+                    block,
+                    AnyNodeId::Dynamic(applied),
+                    seen,
+                    depth + 1,
+                );
+            }
+        }
+        if result.is_none()
+            && let Some(owner) = node
+                .dynamic()
+                .and_then(|node| module.apply_result_owners.get(&node).copied())
+        {
+            evaluate_recording_dependencies(
+                module,
+                block,
+                AnyNodeId::Dynamic(owner),
+                seen,
+                depth + 1,
+            );
+        } else if result.is_none()
+            && let Some(origin) = node.dynamic().and_then(|node| module.node_origin(node))
+        {
+            evaluate_recording_dependencies(
+                module,
+                block,
+                AnyNodeId::Dynamic(origin),
+                seen,
+                depth + 1,
+            );
+        }
+        if let Some(applied) = node
+            .dynamic()
+            .and_then(|node| module.applied_exprs.get(&node).copied())
+        {
+            evaluate_recording_dependencies(
+                module,
+                block,
+                AnyNodeId::Dynamic(applied),
+                seen,
+                depth + 1,
+            );
+        }
+    } else {
+        if module.node_value(node).is_none()
+            && let Some(owner) = node
+                .dynamic()
+                .and_then(|node| module.apply_result_owners.get(&node).copied())
+        {
+            evaluate_recording_dependencies(
+                module,
+                block,
+                AnyNodeId::Dynamic(owner),
+                seen,
+                depth + 1,
+            );
+        }
+        let value = module.node_value(node);
+        if let Some(LowValue::Array(array)) = value.and_then(|value| value.as_enum()) {
+            for item in unsafe { array.items() } {
+                evaluate_recording_dependencies(module, block, item.node, seen, depth + 1);
+            }
+        }
+        module.evaluate_node(node, Some(block));
+    }
+}
+
 // --- OperatorExt::run (the VM dispatch for the injected operators) ---------
 
 impl<P> OperatorExt<P> for ComputeOperator
@@ -1188,7 +1311,18 @@ where
             let Some(node) = operand else {
                 return self.run(P::Value::from(LowValue::Error), block, module);
             };
-            let value = module.evaluate_node_deep(node, Some(block))?;
+            if matches!(self, ComputeOperator::ParLaunch) && graph::is_recording() {
+                let mut seen = HashSet::new();
+                evaluate_recording_dependencies::<P>(
+                    module,
+                    block,
+                    AnyNodeId::Dynamic(node),
+                    &mut seen,
+                    0,
+                );
+            }
+            let value = module.evaluate_node_deep(node, Some(block));
+            let value = value?;
             // SAFETY: `node` is the operand the VM just evaluated, and no block is dropped
             // in this walk.
             for item in unsafe { module.array_items(node) }.unwrap_or_default() {
@@ -4226,6 +4360,31 @@ where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
+    let header = match declared {
+        Some(declared) => {
+            let items = shape::value_items(module, declared)?;
+            Some((
+                items.get(shape::STRUCT_VALUE_NAMES_SLOT)?.node,
+                items.get(shape::STRUCT_VALUE_ID_SLOT)?.node,
+            ))
+        }
+        None => None,
+    };
+    current_buf_value_with_header::<P>(module, block, payload, class, header)
+}
+
+/// Build a `Buf` value while preserving the supplied header's identity.
+fn current_buf_value_with_header<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    payload: AnyNodeId,
+    class: ScalarClass,
+    header: Option<(AnyNodeId, AnyNodeId)>,
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
     let length = match module.node_value(payload).and_then(|value| value.as_enum()) {
         Some(ComputeValue::Buffer(payload, class)) => {
             buffer_items(&payload).map(|bytes| element_count(class, bytes.len()))
@@ -4243,16 +4402,11 @@ where
         None,
         Some(<P::Value as From<TypeValue>>::from(element_type(class))),
     );
-    let (names, id) = match declared {
-        Some(declared) => {
-            let items = shape::value_items(module, declared)?;
-            let names = items.get(shape::STRUCT_VALUE_NAMES_SLOT)?.node;
-            let id = items.get(shape::STRUCT_VALUE_ID_SLOT)?.node;
-            (
-                module.as_dynamic(names, block),
-                module.as_dynamic(id, block),
-            )
-        }
+    let (names, id) = match header {
+        Some((names, id)) => (
+            module.as_dynamic(names, block),
+            module.as_dynamic(id, block),
+        ),
         None => (
             struct_names_node::<P>(module, block, &[BUF_NATIVE_FIELD, "type", "length"]),
             module.add_node(
@@ -6180,16 +6334,118 @@ where
     node
 }
 
+/// Resolve an empty buffer projection against a replay's actual returned expression.
+///
+/// # Invariant
+/// Only constant `Index` steps are replayed. The source apply may name its replay through
+/// `field_sources`; named fields use the actual return's name table, never an origin's value.
+fn recorded_applied_projection<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    node: AnyNodeId,
+) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut current = node;
+    let mut path = Vec::new();
+    let mut applied = None;
+    for _ in 0..8 {
+        if current.dynamic().is_some_and(|node| {
+            module.node_operation(node).is_some_and(|operation| {
+                matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Apply)
+                )
+            })
+        }) {
+            let original = current.dynamic()?;
+            let replay = module
+                .field_sources
+                .get(&original)
+                .copied()
+                .unwrap_or(original);
+            applied = module.applied_exprs.get(&replay).copied();
+            break;
+        }
+        let operation = module.node_operation(current.dynamic()?)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let (target, selector) = operand_expr(module, operation.operand).ok()?;
+        let step = if let Some(position) = usize_value(module, selector) {
+            IndexStep::Position(position)
+        } else if let Some(name) = field_name(module, selector).ok().flatten() {
+            IndexStep::Named(name)
+        } else {
+            let operation = module.node_operation(selector.dynamic()?)?;
+            if !matches!(
+                AsEnum::<TypeOperator>::as_enum(&operation.operator),
+                Some(TypeOperator::Add)
+            ) {
+                return None;
+            }
+            let (name_selector, header) = operand_expr(module, operation.operand).ok()?;
+            if usize_value(module, header)? != shape::STRUCT_VALUE_FIELD_BASE {
+                return None;
+            }
+            IndexStep::Named(field_name(module, name_selector).ok().flatten()?)
+        };
+        path.push(step);
+        current = target;
+    }
+    if path.is_empty() {
+        return None;
+    }
+    let mut resolved = AnyNodeId::Dynamic(applied?);
+    for step in path.into_iter().rev() {
+        module.evaluate_node_deep_ref(resolved, Some(block));
+        let position = match step {
+            IndexStep::Position(position) => position,
+            IndexStep::Named(name) => {
+                resolved = slot_value_of(module, resolved).unwrap_or(resolved);
+                module.evaluate_node_deep_ref(resolved, Some(block));
+                let names = struct_field_names(module, resolved)?;
+                names
+                    .iter()
+                    .position(|candidate| *candidate == Some(name))?
+                    + shape::STRUCT_VALUE_FIELD_BASE
+            }
+        };
+        resolved = unsafe { module.array_items_of(resolved) }?
+            .get(position)?
+            .node;
+    }
+    module.evaluate_node_deep_ref(resolved, Some(block));
+    Some(resolved)
+}
+
 /// Resolve a recorded buffer's payload through its wrapper's parameter source.
 ///
 /// # Invariant
 /// A decided payload is returned directly. Only an empty or wildcard payload follows a source,
 /// either from the payload itself or from its `Buf` wrapper, with at most eight links.
-fn recorded_buffer_payload<P>(module: &mut Module<P>, mut buffer: AnyNodeId) -> Option<AnyNodeId>
+fn recorded_buffer_payload<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    mut buffer: AnyNodeId,
+) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    let open = module
+        .node_value(buffer)
+        .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+    if open {
+        buffer = recorded_applied_projection::<P>(module, block, buffer).unwrap_or(buffer);
+    }
     let mut payload = buf_payload::<P>(module, buffer)?;
     for _ in 0..8 {
         let open = module
@@ -6493,8 +6749,9 @@ where
     for (position, path) in roles.inputs.iter().enumerate() {
         // An input path names the `Buf` the caller passes; the placeholder rides in
         // its payload.
-        let Some(node) = value_at_path::<P>(module, cfg, path)
-            .and_then(|buffer| recorded_buffer_payload::<P>(module, buffer))
+        let found = value_at_path::<P>(module, cfg, path);
+        let Some(node) =
+            found.and_then(|buffer| recorded_buffer_payload::<P>(module, block, buffer))
         else {
             refuse(
                 module,
@@ -6572,6 +6829,17 @@ where
                 declared_at_path::<P>(module, DeclaredGroup { value, ty: None }, path)
             })
             .map(|declared| declared.value);
+        if let Some((AnyNodeId::Static(names), AnyNodeId::Static(id))) =
+            declared_buffer.and_then(|declared| {
+                let items = shape::value_items(module, declared)?;
+                Some((
+                    items.get(shape::STRUCT_VALUE_NAMES_SLOT)?.node,
+                    items.get(shape::STRUCT_VALUE_ID_SLOT)?.node,
+                ))
+            })
+        {
+            graph::record_buffer_declaration(names, id);
+        }
         let Some(buf) = current_buf_value::<P>(
             module,
             block,
@@ -6876,8 +7144,9 @@ where
         return None;
     }
     let value = match graph::finish() {
-        Ok((graph, backend)) => {
+        Ok((graph, backend, buffer_declaration)) => {
             let id = graph::intern(graph);
+            graph::register_buffer_declaration(id, buffer_declaration);
             <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id, backend))
         }
         Err(reason) => {
@@ -7324,21 +7593,46 @@ where
         }
     };
     let produced = values;
+    let buffer_declaration = graph::buffer_declaration(id);
+    let result_node = |module: &mut Module<P>, result: &RunResult| -> Option<NodeId> {
+        let (value, buffer) = match result {
+            RunResult::Buffer { class, data } => (
+                <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
+                    module.alloc_payload(data, block),
+                    *class,
+                )),
+                Some(*class),
+            ),
+            RunResult::Resident(resident) => (
+                <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident)),
+                Some(resident.class),
+            ),
+            RunResult::Count(count) => (
+                <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
+                None,
+            ),
+            RunResult::Float(number) => (
+                <P::Value as From<LowValue>>::from(LowValue::Float(*number)),
+                None,
+            ),
+        };
+        let node = module.add_node(block, None, Some(value));
+        match buffer {
+            Some(class) => current_buf_value_with_header::<P>(
+                module,
+                block,
+                AnyNodeId::Dynamic(node),
+                class,
+                buffer_declaration,
+            ),
+            None => Some(node),
+        }
+    };
     // Left where they are: a device result stays resident until the language asks
     // for host data.
     let value = if produced.len() == 1 {
-        match &produced[0] {
-            RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
-                ComputeValue::Buffer(module.alloc_payload(data, block), *class),
-            ),
-            RunResult::Resident(resident) => {
-                <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
-            }
-            RunResult::Count(count) => <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
-            RunResult::Float(number) => {
-                <P::Value as From<LowValue>>::from(LowValue::Float(*number))
-            }
-        }
+        let node = result_node(module, &produced[0])?;
+        module.node_value(AnyNodeId::Dynamic(node))?
     } else {
         // **Every compound element is a complete slot**
         // (`docs/notes/compound-element-slots.md`).
@@ -7346,21 +7640,7 @@ where
         let items: Vec<ArrayItem> = produced
             .iter()
             .map(|result| {
-                let value = match result {
-                    RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
-                        ComputeValue::Buffer(module.alloc_payload(data, block), *class),
-                    ),
-                    RunResult::Resident(resident) => <P::Value as From<ComputeValue>>::from(
-                        ComputeValue::DeviceBuffer(*resident),
-                    ),
-                    RunResult::Count(count) => {
-                        <P::Value as From<LowValue>>::from(LowValue::USize(*count))
-                    }
-                    RunResult::Float(number) => {
-                        <P::Value as From<LowValue>>::from(LowValue::Float(*number))
-                    }
-                };
-                let value = module.add_node(block, None, Some(value));
+                let value = result_node(module, result)?;
                 let r#type = module.add_node(block, None, Some(width));
                 let slot: Vec<ArrayItem> = std::iter::once(value)
                     .chain(std::iter::once(r#type))
@@ -7379,9 +7659,9 @@ where
                         lichen_lowlevel::ArrayValue::with_layout(handle, layout),
                     ))),
                 );
-                ArrayItem::new(AnyNodeId::Dynamic(node))
+                Some(ArrayItem::new(AnyNodeId::Dynamic(node)))
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
         let handle = module.alloc_array(&items, block);
         <P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))
     };
