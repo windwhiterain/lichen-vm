@@ -296,6 +296,7 @@ impl<P: Program> Module<P> {
         let node = self.nodes.insert(Node {
             value,
             runned: false,
+            specialize_after_clone: false,
             operation,
             low_shape: None,
             function: None,

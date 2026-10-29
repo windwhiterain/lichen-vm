@@ -917,6 +917,12 @@ pub struct Node<P: Program> {
     /// The node's run stamp: `false` means its operator never ran — a produced answer
     /// versus an asserted one.
     runned: bool,
+    /// Whether this class stays unspecialized in the current graph but opens in a clone.
+    ///
+    /// # Invariant
+    /// The flag is read from the class representative. It blocks specialization here; a clone
+    /// starts without it, so the corresponding instance may bind normally.
+    specialize_after_clone: bool,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     ///
     /// # Invariant
@@ -997,6 +1003,8 @@ pub struct StaticNode<P: Program> {
     /// Whether the source node's operator had run: an artifact carries no run clock, so this
     /// mirror is its zero test.
     pub runned: bool,
+    /// Whether this class is opaque in the current graph and becomes bindable in a clone.
+    pub specialize_after_clone: bool,
     /// The source node's deep-pass verdict. See [`Node::evaluated_deep`].
     pub evaluated_deep: Option<EvaluatedDeep>,
 }

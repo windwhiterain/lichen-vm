@@ -92,6 +92,8 @@ impl<P: Program> Module<P> {
         let root_b = disjoint::find(&mut self.nodes, b);
         let left = self.nodes[root_a].low_shape.as_deref().cloned();
         let right = self.nodes[root_b].low_shape.as_deref().cloned();
+        let specialize_after_clone =
+            self.nodes[root_a].specialize_after_clone || self.nodes[root_b].specialize_after_clone;
         let left_value = self.nodes[a].value;
         let right_value = self.nodes[b].value;
         // A class that holds a value has no holes: the valueless side fills before the union.
@@ -101,6 +103,7 @@ impl<P: Program> Module<P> {
             _ => {}
         }
         let representative = disjoint::union(&mut self.nodes, root_a, root_b);
+        self.nodes[representative].specialize_after_clone = specialize_after_clone;
         // The merged class's scope summary is the nearest common ancestor of the
         // two classes' summaries.
         self.merge_class_summaries(root_a, root_b, representative);
@@ -155,6 +158,21 @@ impl<P: Program> Module<P> {
     /// nothing answers [`None`]. See docs/notes/lowlevel-vm.md.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.nodes.get(self.class_root(node))?.value
+    }
+
+    /// Whether this class is opaque here and becomes bindable only in a clone.
+    pub(crate) fn class_specialize_after_clone(&self, node: NodeId) -> bool {
+        self.nodes
+            .get(self.class_root(node))
+            .is_some_and(|node| node.specialize_after_clone)
+    }
+
+    /// Keep an empty class unspecialized in this graph; its clone starts without the flag.
+    fn mark_specialize_after_clone(&mut self, node: NodeId) {
+        let root = self.class_root(node);
+        if let Some(node) = self.nodes.get_mut(root) {
+            node.specialize_after_clone = true;
+        }
     }
 
     /// The class's recursive low type, cut by a path guard. See docs/notes/lowlevel-low-types.md.
@@ -1030,8 +1048,23 @@ impl<P: Program> Module<P> {
         let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
-        // The wildcard writes nothing back, so a class holding `Any` is never bound.
+        let opaque = a
+            .node
+            .is_some_and(|node| self.class_specialize_after_clone(node))
+            || b.node
+                .is_some_and(|node| self.class_specialize_after_clone(node));
+        // `@any` marks an empty counterpart as opaque in this graph; its clone re-opens.
         if is_wildcard(va) || is_wildcard(vb) {
+            for side in [a, b] {
+                if side.value.is_none()
+                    && let Some(node) = side.node
+                {
+                    self.mark_specialize_after_clone(node);
+                }
+            }
+            return true;
+        }
+        if opaque {
             return true;
         }
         let (Some(ra), Some(rb)) = (a.node, b.node) else {

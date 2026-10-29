@@ -133,9 +133,18 @@ Unify is directed, extend to subtype.
 ```
 
 ### Any
-Subtype extension in lowlevel, `Any` is a lowlevel value which is super type of all others.
 
-Literal `@any` is an any expression that its attribute array node has value `Any`.
+`@any` is an **instantiation-deferred undecided** requirement, not a value result.
+When it meets an empty class, the class is marked `specialize_after_clone` without
+propagating the internal `Any` value. A marked class cannot be specialized by
+unification in the current graph, and a value read remains undecided.
+
+A clone clears the marker while preserving the template's remap and class
+topology, so the new instance can be specialized by its actual argument. This is
+what lets a template avoid a replay solely for a value that cannot be specialized
+until an instance exists. `_` differs: it is an ordinary free cell and may bind in
+the current graph. The class marker and the internal `Any` value are separate;
+the latter keeps its wildcard read/unify behavior.
 
 ```sytax
 `@any` := `@raw Any`

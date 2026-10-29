@@ -179,6 +179,40 @@ class representatives do not depend on a map's order.
 The language layer is green with the replay in place. External operation cells
 are now covered; the remaining compile-time provenance gap is separate work.
 
+### `@any`: specialize after clone, without a replay
+
+`@any` now has an instantiation-deferred use beside its existing wildcard value
+behavior. When it meets an empty class, unification marks that class
+`specialize_after_clone` instead of propagating `Any`. The class does not merge
+or specialize in the current graph. A normal clone drops the mark but preserves
+the remap, so parameter/return aliases still share one instance and the actual
+argument can specialize it. A direct `@any` literal keeps its previous carriage;
+the new bit belongs to the marked class, not to the literal's value.
+
+`link_replay` treats a marked template return like an answered one and returns
+without allocating a replay. This is not a global replay suppression: an
+unmarked open return keeps every existing path, and an external operation return
+keeps the landed repair above. Frozen nodes carry the bit, and the artifact
+format moves to 28.
+
+The minimal probe is:
+
+```lichen
+id := (x : Int) => {
+  x = @any : Int
+  x
+}
+(id 1, id 2)
+```
+
+It answers `(1, 2): Tuple`. Before the marker, its two calls created two replay
+instances. After it, every visit to `link_replay` for `id` reads
+`specialize_after_clone=true` and the replay table stays empty. The last three
+checks of the same probe entered with 63/81/92 nodes, against 1919/2083/2154
+before the change. Lowlevel is 164 passed / 1 ignored, language is 275 passed,
+its lib is 69 passed, and compute is 127 passed / 113 failed / 1 ignored, the
+same compute reading as before this marker.
+
 ### Measured: an external computation cell cuts off the operand walk
 
 The compute reproduction exposes a gap in the open-return condition above. In

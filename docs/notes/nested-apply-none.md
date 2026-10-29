@@ -1340,6 +1340,15 @@ twenty-two are correct, **zero** of the other four hundred and seven answers mov
 whose type is still undecided are `b7`, `g2`, `g3`, `h5` (an undecided expr) and `w5` (an undecided
 scalar).
 
+**Capture/run-stamp follow-up.** An independent probe of `mk := f => { g := y => f 1; g 1 }`
+verified the exact boundary rather than only the returned value. The enclosing capture's node
+chain kept `runned=false` and was never cloned; the body's `f 1` went from template node 51 to
+255/455 and then 280/480 on successive calls, each a fresh Apply evaluated with its own argument.
+Calls with doubling and squaring functions answered `2` and `1`. The target shape created no
+replay; return-the-capture variants did enter replay, whose instantiation still referenced the
+same capture and created no clone of it. Thus the ordinary and replay paths both preserve the
+capture's identity and run stamp while re-running the new `f 1` operation.
+
 **Both ends of what was left are repaired, and the acceptance is the corpus.** `w5` failed because its
 root apply has a **static** callee: element 3 carried the type and it resolved to a function, but of the
 `AnyFunctionId::Static` variant, which the dynamic path's guard refuses, so the type side was skipped and

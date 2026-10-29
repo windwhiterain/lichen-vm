@@ -35,6 +35,11 @@ constant that removes that burden:
   merges the classes nor writes a value* (`Module::unify_inner`, checked before
   the undecided/decided write arms). The wildcard node therefore stays reusable,
   and nothing is ever bound by it.
+- **Instantiation-deferred use.** Meeting `@any` also marks an empty counterpart
+  `specialize_after_clone`, without putting `Any` in that counterpart. The marked
+  class does not specialize in the current graph; its clone drops the mark and
+  binds through the ordinary remap. This class metadata is separate from the
+  wildcard value's own carriage, so the rules above stay unchanged.
 - **A value reader** treats it as **undecided**: evaluation answers no value
   (`evaluate_node_body`), it states no low type, a table key that is `Any` is not
   key content (`table.rs`), and both printers spell it `@any`.

@@ -590,7 +590,9 @@ impl<P: Program> Module<P> {
         let Some(return_value) = self.expr_value_half(self.functions[function].r#return) else {
             return;
         };
-        if self.class_value(return_value).is_some() {
+        if self.class_specialize_after_clone(return_value)
+            || self.class_value(return_value).is_some()
+        {
             return;
         }
         let external_operation = self.nodes[return_value].operation.is_some()
