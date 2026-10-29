@@ -263,14 +263,21 @@ Measured after cleanup:
 - the reduced `a + a` parallel probe compiles;
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
-- compute: **124 passed, 116 failed, 1 ignored**, up from 113/127;
+- compute: **124 passed, 116 failed, 1 ignored**, up from 113/127 (the last
+  full-suite reading; the inline follow-up below is a targeted reading);
 - `parallel_read_input_buffer` passes: the second launch reads the first buffer
   and the final host read answers `22: Int`;
 - `silu` passes after its test reads the kernel wrapper's `.native` field rather
   than the struct's name-table header;
 - both kernel rendering tests pass: an opaque type no longer hides a decided
   native value behind a class variable, and their expectations now follow the
-  constructor-signature model rather than the retired direct-`Int` wrapper.
+  constructor-signature model rather than the retired direct-`Int` wrapper;
+- `jit_inline_lichen_function` and `jit_inline_nested_function` pass: a cloned
+  scalar literal can still hold an expr-shaped value, so `scalar_literal` now
+  checks up to eight clone origins after its value-first read. The follow-up
+  also kept direct arithmetic, closure constants, cross-kernel calls, tuple
+  codomains, and the two scalar-class conversion cases green. No unification or
+  replay rule changed.
 
 The complete two-kernel reproduction initially answered
 `raw none: Struct` because `check_instantiate` unified an undecided actual field

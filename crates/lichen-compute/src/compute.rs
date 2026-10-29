@@ -4795,14 +4795,26 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    let node = node.into();
     let value = resolve_literal_node(module, node);
-    match module
+    if let Some(held @ (LowValue::USize(_) | LowValue::Float(_))) = module
         .node_value(value)
-        .and_then(|held| AsEnum::<LowValue>::as_enum(&held))?
+        .and_then(|held| AsEnum::<LowValue>::as_enum(&held))
     {
-        held @ (LowValue::USize(_) | LowValue::Float(_)) => Some(held),
-        _ => None,
+        return Some(held);
     }
+    let mut origin = node.dynamic().and_then(|node| module.node_origin(node));
+    for _ in 0..8 {
+        let node = origin?;
+        if let Some(held @ (LowValue::USize(_) | LowValue::Float(_))) = module
+            .node_value(AnyNodeId::Dynamic(node))
+            .and_then(|held| AsEnum::<LowValue>::as_enum(&held))
+        {
+            return Some(held);
+        }
+        origin = module.node_origin(node);
+    }
+    None
 }
 
 /// The kernel-safe reading of a highlevel binary operator, if there is one.
