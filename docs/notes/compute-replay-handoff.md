@@ -348,8 +348,16 @@ scalar recording tests, `jit_cross_kernel_wrapper`, and
 `parallel_read_input_buffer` also pass. The separate
 `a_graph_dispatches_exactly_what_the_program_dispatches` comparison still has a
 plain direct-launch failure: its extent is empty before the backend is called.
-Do not use block-wide `reopen_stalled` for that case; it reopens old recording
-operations and collides distinct `GraphValue` answers.
+The argument's `.n=3` is present and the parameter check binds a clone, but the
+body reads a shared three-`Index` projection whose class reaches outside the
+body's scope; that projection has no `field_sources` and is not the clone the
+check bound. One member of the parameter class is unowned, but assigning owners
+to wildcard clones did not repair the launch, so the member is not by itself a
+sufficient repair. Cloning the parameter slot, its projection chain, or the
+parameter expression did not change it either; those proposals targeted the
+wrong node and are rejected. Dynamic `reconcile_cached_answer` also did not
+trigger for this shape. Do not use block-wide `reopen_stalled` for that case; it
+reopens old recording operations and collides distinct `GraphValue` answers.
 
 ## 11. Workspace and workflow
 
