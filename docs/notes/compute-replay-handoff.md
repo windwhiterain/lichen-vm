@@ -2,7 +2,7 @@
 
 > Status: **field provenance is implemented and measured.** The launch replay
 > fix is landed; the parallel read source chain now uses explicit per-instance
-> field links. Lowlevel and language are green, and compute is **124 passed / 116
+> field links. Lowlevel and language are green, and compute is **129 passed / 111
 > failed**. Root materialization, graph values, and definition-cycle failures
 > remain open. Undecided actual field values are preserved instead of being
 > displaced by decided requirements. `@any` can now mark a class as
@@ -265,9 +265,8 @@ Measured after cleanup:
 - the reduced `a + a` parallel probe compiles;
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
-- compute: **124 passed, 116 failed, 1 ignored**, up from 113/127 (the last
-  full-suite reading; the inline and cross-kernel follow-ups below are targeted
-  readings);
+- compute: **129 passed, 111 failed, 1 ignored**, up from 113/127 (current
+  full-suite reading; earlier follow-ups below were targeted readings);
 - `parallel_read_input_buffer` passes: the second launch reads the first buffer
   and the final host read answers `22: Int`;
 - `silu` passes after its test reads the kernel wrapper's `.native` field rather
@@ -294,6 +293,13 @@ Measured after cleanup:
   ordinary clone, so no alias or provenance edge is needed. See
   [replay-apply](replay-apply.md#any-specialize-after-clone-without-a-replay)
   for the node-count comparison and suite readings.
+- `jit_cross_kernel_wrapper` and its tuple-argument form pass. `compute.launch`
+  is curried: the inner apply creates the closure containing `$launch`, while the
+  outer apply supplies that closure's argument. Following the inner origin made
+  the argument read the closure-creating apply again and formed a definition
+  cycle. `routed_call_argument` now reads `apply_result_owners` to reach the
+  outer apply and uses its actual argument. The wrapper passed three consecutive
+  runs and the tuple form two, followed by the 129/111 full-suite reading.
 
 The complete two-kernel reproduction initially answered
 `raw none: Struct` because `check_instantiate` unified an undecided actual field

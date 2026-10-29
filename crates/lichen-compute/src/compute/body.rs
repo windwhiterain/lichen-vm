@@ -1076,7 +1076,8 @@ where
                         operands.len()
                     ));
                 };
-                self.cross_kernel_call(*kernel, *arg)
+                let arg = self.routed_call_argument(node, *arg);
+                self.cross_kernel_call(*kernel, arg)
             }
             // The loop index of the current parallel invocation, after the cfg params.
             ComputeOperator::Range => self.parameter(domain_arity(self.params)),
@@ -2286,6 +2287,36 @@ where
             }
         };
         Ok(self.emit(instruction, vec![operand], class))
+    }
+
+    /// A cloned wrapper's argument comes from the apply that owns the native result.
+    fn routed_call_argument(&self, node: NodeId, arg: AnyNodeId) -> AnyNodeId {
+        let apply = self
+            .module
+            .apply_result_owners
+            .get(&node)
+            .copied()
+            .unwrap_or(node);
+        if apply == node {
+            return arg;
+        }
+        let Some(operation) = self.module.node_operation(apply) else {
+            return arg;
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Apply)
+        ) {
+            return arg;
+        }
+        let Some(operand) = operation.operand else {
+            return arg;
+        };
+        self.module
+            .operand_items(operand)
+            .ok()
+            .and_then(|operands| operands.get(1).map(|item| item.node))
+            .unwrap_or(arg)
     }
 
     /// A cross-kernel call: `compute.launch k x` / `compute.call k x`.
