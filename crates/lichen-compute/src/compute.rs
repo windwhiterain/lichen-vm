@@ -6152,6 +6152,69 @@ where
     unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
+/// Resolve an open recording leaf through the parameter projection that produced it.
+///
+/// # Invariant
+/// Only an empty or wildcard leaf follows `field_sources`; a decided value stays authoritative,
+/// and at most eight links are followed.
+fn recorded_leaf<P>(module: &Module<P>, mut node: AnyNodeId) -> AnyNodeId
+where
+    P: Program,
+    P::Value: AsEnum<LowValue>,
+{
+    for _ in 0..8 {
+        let open = module
+            .node_value(node)
+            .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+        if !open {
+            break;
+        }
+        let Some(source) = node
+            .dynamic()
+            .and_then(|node| module.field_sources.get(&node).copied())
+        else {
+            break;
+        };
+        node = AnyNodeId::Dynamic(source);
+    }
+    node
+}
+
+/// Resolve a recorded buffer's payload through its wrapper's parameter source.
+///
+/// # Invariant
+/// A decided payload is returned directly. Only an empty or wildcard payload follows a source,
+/// either from the payload itself or from its `Buf` wrapper, with at most eight links.
+fn recorded_buffer_payload<P>(module: &mut Module<P>, mut buffer: AnyNodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let mut payload = buf_payload::<P>(module, buffer)?;
+    for _ in 0..8 {
+        let open = module
+            .node_value(payload)
+            .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+        if !open {
+            return Some(payload);
+        }
+        if let Some(source) = payload
+            .dynamic()
+            .and_then(|node| module.field_sources.get(&node).copied())
+        {
+            payload = AnyNodeId::Dynamic(source);
+            continue;
+        }
+        buffer = AnyNodeId::Dynamic(
+            buffer
+                .dynamic()
+                .and_then(|node| module.field_sources.get(&node).copied())?,
+        );
+        payload = buf_payload::<P>(module, buffer)?;
+    }
+    Some(payload)
+}
+
 /// One runtime scalar a recorded dispatch fixes beside its extent, read at `path`.
 ///
 /// # Invariant
@@ -6193,6 +6256,7 @@ where
             return None;
         }
     };
+    let node = recorded_leaf::<P>(module, node);
     // The class the parameter field declared, so the number crosses at the leaf's width.
     let class = fragment
         .param_shape
@@ -6371,6 +6435,7 @@ where
         .scalars
         .first()
         .and_then(|path| value_at_path::<P>(module, cfg, path))
+        .map(|node| recorded_leaf::<P>(module, node))
     {
         Some(node) => {
             let literal = module
@@ -6428,8 +6493,8 @@ where
     for (position, path) in roles.inputs.iter().enumerate() {
         // An input path names the `Buf` the caller passes; the placeholder rides in
         // its payload.
-        let Some(node) =
-            value_at_path::<P>(module, cfg, path).and_then(|buf| buf_payload::<P>(module, buf))
+        let Some(node) = value_at_path::<P>(module, cfg, path)
+            .and_then(|buffer| recorded_buffer_payload::<P>(module, buffer))
         else {
             refuse(
                 module,
@@ -6528,6 +6593,39 @@ where
     ) {
         Some(root) => module.node_value(AnyNodeId::Dynamic(root)),
         None => None,
+    }
+}
+
+/// Record the actual placeholder each constant projection of a graph function's parameter reads.
+///
+/// # Invariant
+/// Sources are added before the recording apply, so its clone and replay carry the same directed
+/// projection; existing constructor provenance is preserved, and no equality is created.
+fn record_graph_parameter_sources<P>(
+    module: &mut Module<P>,
+    function: AnyFunctionId,
+    placeholders: NodeId,
+) where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let AnyFunctionId::Dynamic(function) = function else {
+        return;
+    };
+    let parameter = module.functions[function].parameter;
+    let candidates = module.functions[function].nodes.clone();
+    for candidate in candidates {
+        let Ok(Some(path)) = param_path(module, parameter, candidate) else {
+            continue;
+        };
+        let path = physical_param_path::<P>(module, parameter, &path).unwrap_or(path);
+        let Some(source) =
+            value_at_path::<P>(module, placeholders, &path).and_then(|node| node.dynamic())
+        else {
+            continue;
+        };
+        module.field_sources.entry(candidate).or_insert(source);
     }
 }
 
@@ -6711,6 +6809,7 @@ where
     // The argument is an expr: the value side is the placeholder tuple, the type
     // side left undecided.
     let undecided = module.add_node(block, None, None);
+    record_graph_parameter_sources::<P>(module, function, placeholders);
     let argument = array_node::<P>(
         module,
         block,
@@ -7022,15 +7121,18 @@ where
         // SAFETY: `array` is a value of the apply's own result, so its home
         // block is alive for this walk.
         let items = unsafe { array.items() };
+        if items.is_empty() {
+            return Some(Vec::new());
+        }
         let mut placed = Vec::new();
         for item in items {
-            // An element is a complete slot: the value position is its value
-            // (`docs/notes/compound-element-slots.md`).
-            placed.extend(place_of(
-                module.element_value_node(item.node).unwrap_or(item.node),
-            )?);
+            // A slot's value is its first position; struct headers name no edge.
+            let node = module.element_value_node(item.node).unwrap_or(item.node);
+            if let Some(found) = place_of(node) {
+                placed.extend(found);
+            }
         }
-        Some(placed)
+        (!placed.is_empty()).then_some(placed)
     };
     // A body that is **not** a block is already the returned value.
     let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value) else {

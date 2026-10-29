@@ -77,7 +77,7 @@ fn control_kernel(name: &str, body: &str) -> String {
 fn recording() -> String {
     format!(
         "{HEAD}\nstrip := compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" (Out _)\n\
-         GA := _x => {{.n Int, .cols Int, .in In _}}\nstep := (s <: GA) => {{\n  \
+         GA := _x => {{.n @any : Int, .cols @any : Int, .in In _}}\nstep := (s <: GA) => {{\n  \
          compute.plrun strip ((Arg){{.n s.n, .cols s.cols, .I In{{.a s.in.a}}}}) : Struct\n}}\n\
          built := compute.graph step\nbuilt\n"
     )
@@ -335,13 +335,13 @@ neither_raw := (k <: Par2) => {
 fn a_second_runtime_scalar_is_carried_beside_the_extent() {
     let source = format!(
         "{HEAD}\nPar3 := _x => {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In _}}\n\
-         Arg3 := _x => {{.n Int, .cols Int, .rows Int, .I In _}}\n\
+         Arg3 := _x => {{.n @any : Int, .cols @any : Int, .rows @any : Int, .I In _}}\n\
          three_raw := (k <: Par3) => {{\n  i := compute.range k.n\n  \
          v := (compute.read (compute.Read{{.from k.in.a, .at (i / k.cols)}}) : Int)\n  \
          b := compute.buf (compute.BufParam{{.type Int, .length k.n}})\n  \
          ((Out){{.b (compute.write (compute.Write{{.to b, .at i, .value ((v + k.rows) ~ \"element\")}}))}})\n}}\n\
          three := compute.parallel (three_raw ~ \"claim:Elementwise(element)\") \"gpu\" (Out _)\n\
-         GA := _x => {{.n Int, .cols Int, .rows Int, .in In _}}\nstep := (s <: GA) => {{\n  \
+         GA := _x => {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In _}}\nstep := (s <: GA) => {{\n  \
          compute.plrun three ((Arg3){{.n s.n, .cols s.cols, .rows s.rows, .I In{{.a s.in.a}}}}) : Struct\n}}\n\
          built := compute.graph step\nbuilt\n"
     );

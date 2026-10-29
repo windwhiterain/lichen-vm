@@ -300,6 +300,17 @@ Measured after cleanup:
   cycle. `routed_call_argument` now reads `apply_result_owners` to reach the
   outer apply and uses its actual argument. The wrapper passed three consecutive
   runs and the tuple form two, followed by the 129/111 full-suite reading.
+- Graph scalar recording now preserves parameter projections through
+  `field_sources`. `build_graph` records them before the apply, normalizes
+  physical struct slots to logical role paths, and only empty/wildcard leaves
+  follow the links. Buffer payloads re-read the sourced `Buf` wrapper instead of
+  unifying it with the template. `returned_value_ids` also skips non-value
+  entries such as struct headers rather than aborting before a later
+  `GraphValue`. The two-extent recording and three-runtime-scalar tests pass.
+  Their `GA`/`Arg3` declarations now use `@any : Int` for runtime values; the old
+  spellings literally supplied the type `Int`. The remaining direct-launch and
+  produced-buffer failures are separate, and no newer full-suite count has been
+  measured.
 
 The complete two-kernel reproduction initially answered
 `raw none: Struct` because `check_instantiate` unified an undecided actual field
