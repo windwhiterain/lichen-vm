@@ -264,7 +264,8 @@ Measured after cleanup:
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
 - compute: **124 passed, 116 failed, 1 ignored**, up from 113/127 (the last
-  full-suite reading; the inline follow-up below is a targeted reading);
+  full-suite reading; the inline and cross-kernel follow-ups below are targeted
+  readings);
 - `parallel_read_input_buffer` passes: the second launch reads the first buffer
   and the final host read answers `22: Int`;
 - `silu` passes after its test reads the kernel wrapper's `.native` field rather
@@ -278,6 +279,14 @@ Measured after cleanup:
   also kept direct arithmetic, closure constants, cross-kernel calls, tuple
   codomains, and the two scalar-class conversion cases green. No unification or
   replay rule changed.
+- `jit_cross_kernel_subexpr` passes: routed arithmetic now uses
+  `operand_nodes_of`, whose existing contract preserves an Apply slot, so an
+  unevaluated `k0(x)` result lowers as `CallKernel` instead of its empty result
+  cell. Ordinary **dynamic** lichen calls lower their cloned return; static
+  wrappers and cross-kernel callees cannot enter that fallback, and self/cyclic
+  returns are excluded. The final targeted run had ten greens, including the
+  two inline cases, direct and cross-kernel arithmetic, tuple codomains,
+  `parallel_read_input_buffer`, and `silu`.
 
 The complete two-kernel reproduction initially answered
 `raw none: Struct` because `check_instantiate` unified an undecided actual field

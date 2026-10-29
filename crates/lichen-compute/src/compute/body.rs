@@ -1502,9 +1502,12 @@ where
                 return Ok(None);
             };
             let value = self.module.expr_value_half(argument).unwrap_or(argument);
-            let elements =
-                super::value_leaves_of(self.module, value, shape::expr_type(self.module, argument))
-                    .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
+            let elements = super::operand_nodes_of(
+                self.module,
+                value,
+                shape::expr_type(self.module, argument),
+            )
+            .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
             let (Some(lhs), Some(rhs)) = (elements.first().copied(), elements.get(1).copied())
             else {
                 return Err(format!("{ty_op:?} is missing an operand"));
@@ -1612,6 +1615,20 @@ where
                 ));
             };
             return self.cross_kernel_call(AnyNodeId::Dynamic(callee), arg);
+        }
+        // An ordinary dynamic lichen call lowers the return cloned by this apply.
+        let type_slot = operands.get(3).map(|item| item.node);
+        if self.static_callee(callee, type_slot).is_none()
+            && matches!(
+                self.dynamic_callee(callee, type_slot),
+                Some(AnyFunctionId::Dynamic(_))
+            )
+            && let Some(applied) = self.module.applied_exprs.get(&node).copied()
+        {
+            let returned = self.module.expr_value_half(applied).unwrap_or(applied);
+            if returned != node && !self.lowered_path.contains(&returned) {
+                return self.value(returned);
+            }
         }
         // **Style 1, an ordinary lichen-function call, is refused by name**.
         let _ = node;
