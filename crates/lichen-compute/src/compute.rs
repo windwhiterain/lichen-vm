@@ -1620,9 +1620,18 @@ where
                             Some(path) => value_at_path::<P>(module, cfg_node, path),
                             None => cfg_items.get(position).map(|item| item.node),
                         };
-                        let value = node
+                        let mut value = node
                             .and_then(|node| module.node_value(node))
                             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+                        if value.is_none_or(|value| matches!(value, LowValue::Any))
+                            && let Some(resolved) = node
+                                .and_then(|node| node.dynamic())
+                                .and_then(|node| module.parameter_projection(cfg_node, node, block))
+                        {
+                            value = module
+                                .node_value(AnyNodeId::Dynamic(resolved))
+                                .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+                        }
                         // A decided wrong-class leaf is refused by name; an undecided
                         // one stays lazy.
                         let word = match (class, value) {
@@ -1665,8 +1674,23 @@ where
                     let mut inputs: Vec<RunInput> = Vec::new();
                     if named_form {
                         for (position, path) in facts.roles.inputs.iter().enumerate() {
-                            let Some(node) = value_at_path::<P>(module, cfg_node, path)
-                                .and_then(|buf| buf_payload::<P>(module, buf))
+                            let mut resolved = value_at_path::<P>(module, cfg_node, path);
+                            if let Some(field) = resolved
+                                && module.node_value(field).is_none()
+                            {
+                                let mut actual = field.dynamic().and_then(|field| {
+                                    module
+                                        .parameter_projection(cfg_node, field, block)
+                                        .map(AnyNodeId::Dynamic)
+                                });
+                                if actual.is_none() {
+                                    actual = recorded_applied_projection::<P>(module, block, field);
+                                }
+                                if let Some(actual) = actual {
+                                    resolved = Some(actual);
+                                }
+                            }
+                            let Some(node) = resolved.and_then(|buf| buf_payload::<P>(module, buf))
                             else {
                                 return None;
                             };
@@ -4229,10 +4253,9 @@ where
 /// The node a role path names in a cfg value: each step is a field index.
 ///
 /// # Invariant
-/// A role path counts **fields**, so a struct value's own header is skipped:
-/// the name table and the nominal id hold the two slots before the first field
-/// (`docs/notes/value-templates.md`). A value that is not a struct value — the
-/// retired tuple `cfg` — keeps its own positions.
+/// A role path counts fields: a struct's name-table and nominal-id headers are skipped, while a
+/// non-struct cfg keeps its positions. The launch `compute.A` mirrors the kernel parameter
+/// field-for-field, so one path addresses the same role in both.
 fn value_at_path<P>(module: &Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
 where
     P: Program,
@@ -6362,12 +6385,10 @@ where
             })
         }) {
             let original = current.dynamic()?;
-            let replay = module
-                .field_sources
-                .get(&original)
-                .copied()
-                .unwrap_or(original);
-            applied = module.applied_exprs.get(&replay).copied();
+            applied = module.applied_exprs.get(&original).copied().or_else(|| {
+                let replay = module.field_sources.get(&original).copied()?;
+                module.applied_exprs.get(&replay).copied()
+            });
             break;
         }
         let operation = module.node_operation(current.dynamic()?)?;

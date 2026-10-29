@@ -1065,6 +1065,25 @@ pub struct Module<P: Program> {
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
+    /// The call identity a clone carries, as `(formal parameter, actual image)`.
+    ///
+    /// # Invariant
+    /// One entry per clone made while a call's return or parameter is instantiated: it names
+    /// that call's own image, so a shared projection resolves no later than the check binds.
+    pub clone_parameters: HashMap<NodeId, (NodeId, NodeId)>,
+    /// The latest actual image recorded for each formal parameter.
+    ///
+    /// # Invariant
+    /// One image per formal, written with [`Self::clone_parameters`]: the most recent call's
+    /// image is the innermost one a shared projection may resolve against.
+    pub parameter_images: HashMap<NodeId, NodeId>,
+    /// Operations waiting for an actual image of a formal parameter.
+    ///
+    /// # Invariant
+    /// Each operation is registered once per formal while its projection is open, and the
+    /// parameter check removes the list before retrying it: only these operations are re-run
+    /// when a real argument binds, never another operation in the block.
+    pub pending_projections: HashMap<NodeId, Vec<NodeId>>,
     /// The template that constrains each cell, keyed by the cell's value node.
     ///
     /// # Invariant

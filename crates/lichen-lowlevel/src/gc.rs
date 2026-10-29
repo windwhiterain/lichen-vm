@@ -64,6 +64,18 @@ impl<P: Program> Module<P> {
         self.field_sources.retain(|required, supplied| {
             self.nodes.contains_key(*required) && self.nodes.contains_key(*supplied)
         });
+        self.pending_projections.retain(|formal, operations| {
+            operations.retain(|operation| self.nodes.contains_key(*operation));
+            self.nodes.contains_key(*formal) && !operations.is_empty()
+        });
+        self.clone_parameters.retain(|clone, (parameter, image)| {
+            self.nodes.contains_key(*clone)
+                && self.nodes.contains_key(*parameter)
+                && self.nodes.contains_key(*image)
+        });
+        self.parameter_images.retain(|formal, image| {
+            self.nodes.contains_key(*formal) && self.nodes.contains_key(*image)
+        });
         value
     }
 

@@ -99,6 +99,13 @@ struct ApplyCtx<'a> {
     parameter: NodeId,
     /// The parameter expr's value slot: re-minted per call, and never carried into.
     parameter_slot: Option<NodeId>,
+    /// This call's parameter image, once the parameter walk has made it.
+    ///
+    /// # Invariant
+    /// Every clone made while the return is instantiated records it in
+    /// [`Module::clone_parameters`], so a shared formal projection can resolve against the
+    /// call that owns the clone after the body returns.
+    parameter_image: Option<NodeId>,
     /// Whether this walk is instantiating the parameter; wildcard cells become holes only here.
     in_parameter: bool,
     /// Template keys a minted walk inserted; the enclosing pass drops them with the
@@ -493,6 +500,7 @@ impl<P: Program> Module<P> {
             applied: function,
             parameter,
             parameter_slot,
+            parameter_image: None,
             in_parameter: false,
             minted_keys: None,
             tag: self.nodes[node].function,
@@ -506,6 +514,11 @@ impl<P: Program> Module<P> {
         // The parameter's image: the clone, or the template's own cell.
         let parameter_image = self.node_apply(parameter, &mut ctx);
         ctx.in_parameter = false;
+        ctx.parameter_image = Some(parameter_image);
+        let parameter_clones: Vec<NodeId> = ctx.remap.values().copied().collect();
+        for clone in parameter_clones {
+            self.record_clone_parameter(clone, parameter, parameter_image);
+        }
         let applied = self.node_apply(r#return, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
@@ -560,6 +573,7 @@ impl<P: Program> Module<P> {
             }
             let instantiated: Vec<NodeId> = remap.values().copied().collect();
             self.bind_field_sources(parameter_image, argument, &instantiated);
+            self.replay_pending_projections(parameter, block);
         }
         // A clone's open cells reach the value of the call that made them through the
         // replay, not through the template.
@@ -896,6 +910,9 @@ impl<P: Program> Module<P> {
             None => ctx.tag,
         };
         self.set_node_owner(clone, owner);
+        if let Some(parameter_image) = ctx.parameter_image {
+            self.record_clone_parameter(clone, ctx.parameter, parameter_image);
+        }
         ctx.remap.insert(node, clone);
         if let Some(keys) = ctx.minted_keys.as_deref_mut() {
             keys.push(node);
@@ -1117,6 +1134,7 @@ impl<P: Program> Module<P> {
                     applied: function,
                     parameter,
                     parameter_slot,
+                    parameter_image: None,
                     in_parameter: false,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),

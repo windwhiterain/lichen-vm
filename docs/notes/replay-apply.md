@@ -355,7 +355,14 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   binding and freezing. Parallel input placement follows those links. The
   design is in [value-templates](value-templates.md#constructor-fields-keep-their-source);
   undecided actual field values are no longer displaced by decided requirements.
-  Compute is **124 passed / 116 failed**, with lowlevel and language green.
+- **Landed**: a clone records its call's `(formal parameter, actual image)` and
+  the latest image per formal (`clone_parameters`, `parameter_images`).
+  `Module::parameter_projection` follows constant `Index` steps against that
+  image; when no image decides, only the running operation is registered and the
+  parameter check retries it. This is how a direct `plrun` reads a shared `s.n`
+  after the body has returned. No shared projection receives a source and no
+  clone/template unification is added. Compute is **136 passed / 104 failed /
+  1 ignored**, with lowlevel and language green.
 - **Open**: the remaining failures include graph return/value-table errors,
   empty body nodes, definition cycles, and root materialization issues. They
   are not one replay or provenance failure family.
@@ -366,9 +373,12 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   node and the cell correspondence), `node_apply` (the clone's `runned` reset).
 - `crates/lichen-lowlevel/src/apply.rs`: `record_applied_expr` /
   `wire_apply_result` own the apply-result edges; `bind_field_sources` resolves
-  parameter projections against the actual argument.
+  parameter projections against the actual argument. `parameter_projection` and
+  `replay_pending_projections` resolve and retry a shared projection against the
+  bound call image.
 - `crates/lichen-lowlevel/src/lib.rs`: `field_sources` holds exact-node
-  constructor field provenance, propagated through dynamic and frozen clones.
+  constructor field provenance, propagated through dynamic and frozen clones;
+  `clone_parameters` / `parameter_images` hold each clone's call image.
 - `crates/lichen-compute/src/compute.rs`: `function_materialized`, the
   `Jit`/`Parallel`/`Graph` arms, and `parallel_buffer_pos`'s equality-class
   fallback for the read's input position.

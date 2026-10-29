@@ -234,6 +234,154 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Record this call's identity on a clone.
+    ///
+    /// # Invariant
+    /// One current call identity per clone: a later call of the same clone replaces it, so a
+    /// recursive chain neither grows without bound nor resolves against an outer call.
+    pub(super) fn record_clone_parameter(&mut self, clone: NodeId, formal: NodeId, image: NodeId) {
+        self.clone_parameters.insert(clone, (formal, image));
+        self.parameter_images.insert(formal, image);
+    }
+
+    /// Resolve a shared constant `Index` projection against the call its container belongs to.
+    ///
+    /// # Invariant
+    /// Only constant `Index` steps are followed. A step is answered only when every image of
+    /// the formal with a decided leaf agrees; otherwise the operation stays open and is retried
+    /// when a parameter check binds an image. No node is unified and no shared projection
+    /// receives a source.
+    pub fn parameter_projection(
+        &mut self,
+        container: NodeId,
+        leaf: NodeId,
+        block: BlockId,
+    ) -> Option<NodeId> {
+        let mut root = leaf;
+        let mut path = Vec::new();
+        for _ in 0..8 {
+            let Some(operation) = self.node_operation(root) else {
+                break;
+            };
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                break;
+            }
+            let Some(operand) = operation.operand else {
+                return None;
+            };
+            let operands = self.operand_expr(operand, "Index").ok()?;
+            let target = *operands.first()?;
+            let selector = *operands.get(1)?;
+            self.evaluate_node(AnyNodeId::Dynamic(selector), Some(block));
+            path.push(self.usize_value(selector)?);
+            root = target;
+        }
+        if path.is_empty() {
+            return None;
+        }
+        let mut images = Vec::new();
+        let mut current = container;
+        for _ in 0..8 {
+            if let Some(&(parameter, image)) = self.clone_parameters.get(&current)
+                && parameter == root
+                && !images.contains(&image)
+            {
+                images.push(image);
+            }
+            let Some(origin) = self.node_origin(current) else {
+                break;
+            };
+            current = origin;
+        }
+        if let Some(&image) = self.parameter_images.get(&root)
+            && !images.contains(&image)
+        {
+            images.push(image);
+        }
+        let mut decided: Option<(NodeId, LowValue)> = None;
+        for image in images {
+            let Some(resolved) = self.projection_at(image, &path, block) else {
+                continue;
+            };
+            let Some(value) = self
+                .node_value(AnyNodeId::Dynamic(resolved))
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            else {
+                continue;
+            };
+            if matches!(value, LowValue::Any) {
+                continue;
+            }
+            if let Some((_, previous)) = decided {
+                if previous != value {
+                    self.defer_current_operation(root);
+                    return None;
+                }
+            } else {
+                decided = Some((resolved, value));
+            }
+        }
+        if let Some((resolved, _)) = decided {
+            return Some(resolved);
+        }
+        self.defer_current_operation(root);
+        None
+    }
+
+    /// Follow one constant `Index` path from an actual parameter image.
+    fn projection_at(&mut self, image: NodeId, path: &[usize], block: BlockId) -> Option<NodeId> {
+        let mut current = AnyNodeId::Dynamic(image);
+        for &position in path.iter().rev() {
+            self.evaluate_node(current, Some(block));
+            // SAFETY: `current` is a live node of this module, and this walk releases no block.
+            current = unsafe { self.array_items_of(current) }?.get(position)?.node;
+        }
+        self.evaluate_node(current, Some(block));
+        current.dynamic()
+    }
+
+    /// Register the current operation until a call of `formal` binds an actual image.
+    ///
+    /// # Invariant
+    /// Only the operation the evaluator is running is touched, once per formal, and only while
+    /// its value slot is empty; the parameter check owns the retry.
+    fn defer_current_operation(&mut self, formal: NodeId) {
+        let Some(node) = self.operator_for_diagnostics else {
+            return;
+        };
+        if self.nodes[node].value.is_some() {
+            return;
+        }
+        self.nodes[node].evaluated_deep = None;
+        self.stamp_node_ran_if(node, false);
+        let operations = self.pending_projections.entry(formal).or_default();
+        if !operations.contains(&node) {
+            operations.push(node);
+        }
+    }
+
+    /// Retry the operations waiting for this formal once its actual image is bound.
+    ///
+    /// # Invariant
+    /// The list is removed before any operation runs, so one retry cannot re-enter its own
+    /// pair; an operation that answered meanwhile is left alone.
+    pub(super) fn replay_pending_projections(&mut self, formal: NodeId, block: BlockId) {
+        let Some(operations) = self.pending_projections.remove(&formal) else {
+            return;
+        };
+        for node in operations {
+            if self.nodes[node].value.is_some() {
+                continue;
+            }
+            self.nodes[node].evaluated_deep = None;
+            self.stamp_node_ran_if(node, false);
+            self.evaluate_node(AnyNodeId::Dynamic(node), Some(block));
+        }
+    }
+
     /// Record an apply's returned expression and its value's owner.
     pub(super) fn record_applied_expr(&mut self, node: NodeId, applied: NodeId) {
         self.applied_exprs.insert(node, applied);
@@ -260,6 +408,9 @@ impl<P: Program> Module<P> {
         block: BlockId,
     ) -> Option<P::Value> {
         self.record_applied_expr(node, applied);
+        if let Some(&(parameter, image)) = self.clone_parameters.get(&applied) {
+            self.record_clone_parameter(node, parameter, image);
+        }
         // The wildcard is not an answer to hand on: an apply that produced it is
         // undecided, exactly as a read of it is.
         if matches!(

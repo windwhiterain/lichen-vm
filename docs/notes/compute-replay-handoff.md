@@ -2,12 +2,13 @@
 
 > Status: **field provenance is implemented and measured.** The launch replay
 > fix is landed; the parallel read source chain now uses explicit per-instance
-> field links. Lowlevel and language are green, and compute is **129 passed / 111
-> failed**. Root materialization, graph values, and definition-cycle failures
-> remain open. Undecided actual field values are preserved instead of being
-> displaced by decided requirements. `@any` can now mark a class as
-> specialize-after-clone, suppressing an unnecessary replay without changing
-> clone/template unification.
+> field links. Direct `plrun` resolves shared parameter projections through the
+> bound call image. Lowlevel and language are green, and compute is **136 passed
+> / 104 failed / 1 ignored**. Root materialization, graph values, and
+> definition-cycle failures remain open. Undecided actual field values are
+> preserved instead of being displaced by decided requirements. `@any` can now
+> mark a class as specialize-after-clone, suppressing an unnecessary replay
+> without changing clone/template unification.
 >
 > Read [value-templates](value-templates.md#constructor-fields-keep-their-source)
 > for the field-source contract, [replay-apply](replay-apply.md) for replay, and
@@ -265,8 +266,8 @@ Measured after cleanup:
 - the reduced `a + a` parallel probe compiles;
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
-- compute: **129 passed, 111 failed, 1 ignored**, up from 113/127 (current
-  full-suite reading; earlier follow-ups below were targeted readings);
+- compute: **129 passed, 111 failed, 1 ignored**, up from 113/127 (the reading at
+  this slice; the current reading is in §10);
 - `parallel_read_input_buffer` passes: the second launch reads the first buffer
   and the final host read answers `22: Int`;
 - `silu` passes after its test reads the kernel wrapper's `.native` field rather
@@ -299,7 +300,7 @@ Measured after cleanup:
   the argument read the closure-creating apply again and formed a definition
   cycle. `routed_call_argument` now reads `apply_result_owners` to reach the
   outer apply and uses its actual argument. The wrapper passed three consecutive
-  runs and the tuple form two, followed by the 129/111 full-suite reading.
+  runs and the tuple form two, followed by the then-current 129/111 reading.
 - Graph scalar recording now preserves parameter projections through
   `field_sources`. `build_graph` records them before the apply, normalizes
   physical struct slots to logical role paths, and only empty/wildcard leaves
@@ -345,19 +346,45 @@ The two-kernel produced-buffer chain exposed two separate defects:
 Measured after cleanup: `graph_jit::a_graph_recorded_for_one_backend_runs_on_another`
 passes, including the CPU refusal and the two GPU dispatches. The two graph
 scalar recording tests, `jit_cross_kernel_wrapper`, and
-`parallel_read_input_buffer` also pass. The separate
-`a_graph_dispatches_exactly_what_the_program_dispatches` comparison still has a
-plain direct-launch failure: its extent is empty before the backend is called.
-The argument's `.n=3` is present and the parameter check binds a clone, but the
-body reads a shared three-`Index` projection whose class reaches outside the
-body's scope; that projection has no `field_sources` and is not the clone the
-check bound. One member of the parameter class is unowned, but assigning owners
-to wildcard clones did not repair the launch, so the member is not by itself a
-sufficient repair. Cloning the parameter slot, its projection chain, or the
-parameter expression did not change it either; those proposals targeted the
-wrong node and are rejected. Dynamic `reconcile_cached_answer` also did not
-trigger for this shape. Do not use block-wide `reopen_stalled` for that case; it
-reopens old recording operations and collides distinct `GraphValue` answers.
+`parallel_read_input_buffer` also pass.
+
+The separate `a_graph_dispatches_exactly_what_the_program_dispatches` direct-launch
+comparison is repaired. A shared three-`Index` projection of `s.n` reaches
+`ParLaunch` after the body has returned, so a body-evaluation frame cannot carry
+the call. Lowlevel now records each clone's current `(formal parameter, actual
+image)` in `clone_parameters`, with the latest image per formal in
+`parameter_images`; both are GC-retained. `Module::parameter_projection` follows
+only constant `Index` steps, tries the container's own image and the formal's
+latest image, and answers only when decided leaves agree. When no image decides,
+it reopens only the running operation and registers it under that formal;
+`apply_parameter_check` retries exactly that list after the argument binds. This
+is not block-wide `reopen_stalled`, and it neither writes a source onto the
+shared projection nor unifies clone with template.
+
+The direct `ParLaunch` arm resolves an open scalar leaf through
+`parameter_projection`. An open input field first tries that projection, then
+`recorded_applied_projection`: the failing input is the lazy named-field read of
+the earlier `plrun` result (`Index(apply, 0)`), not a parameter projection, so it
+resolves through the apply's actual returned expression. That helper now reads
+`applied_exprs` at the apply itself before following a replay `field_sources`
+link, because the replay hop can otherwise hide the direct entry. `value_at_path`
+still returns the correct `.b` value node; its role-path invariant now records
+that `compute.A` mirrors the kernel parameter field-for-field.
+
+Measured on the branch after this repair:
+
+- `a_graph_dispatches_exactly_what_the_program_dispatches`: **1 passed**; plain
+  and recorded runs both dispatch twice, in the same order with the same input.
+- compute: **136 passed / 104 failed / 1 ignored**, up from `dev`'s **135/105**;
+  the only failure-set change is this test moving to passed.
+- lowlevel: **164 passed / 1 ignored**.
+- language: **275 passed**; language lib: **69 passed**.
+
+Cloning the parameter slot, its projection chain, or the parameter expression
+was measured and is not the repair. The earlier owner-only and dynamic
+`reconcile_cached_answer` experiments also left this launch unchanged. Do not
+reintroduce block-wide `reopen_stalled`: it reopens old recording operations and
+collides distinct `GraphValue` answers.
 
 ## 11. Workspace and workflow
 
