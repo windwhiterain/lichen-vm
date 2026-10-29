@@ -2,7 +2,7 @@
 
 > Status: **field provenance is implemented and measured.** The launch replay
 > fix is landed; the parallel read source chain now uses explicit per-instance
-> field links. Lowlevel and language are green, and compute is **121 passed / 119
+> field links. Lowlevel and language are green, and compute is **124 passed / 116
 > failed**. Root materialization, graph values, and definition-cycle failures
 > remain open. Undecided actual field values are preserved instead of being
 > displaced by decided requirements.
@@ -263,13 +263,16 @@ Measured after cleanup:
 - the reduced `a + a` parallel probe compiles;
 - lowlevel: **164 passed, 1 ignored**;
 - language: **275 passed**;
-- compute: **121 passed, 119 failed, 1 ignored**, up from 113/127;
+- compute: **124 passed, 116 failed, 1 ignored**, up from 113/127;
 - `parallel_read_input_buffer` passes: the second launch reads the first buffer
   and the final host read answers `22: Int`;
-- `silu` now compiles a kernel but the test's root item is static.
+- `silu` passes after its test reads the kernel wrapper's `.native` field rather
+  than the struct's name-table header;
+- both kernel rendering tests pass: an opaque type no longer hides a decided
+  native value behind a class variable, and their expectations now follow the
+  constructor-signature model rather than the retired direct-`Int` wrapper.
 
-The last one is a follow-on root/materialization failure, not evidence that the
-field link is missing. The complete two-kernel reproduction initially answered
+The complete two-kernel reproduction initially answered
 `raw none: Struct` because `check_instantiate` unified an undecided actual field
 with a decided compound requirement, displacing the actual before runtime. Its
 field's type and attributes are still checked, but the undecided value position

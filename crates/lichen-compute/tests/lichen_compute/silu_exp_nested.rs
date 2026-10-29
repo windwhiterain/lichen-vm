@@ -7,6 +7,7 @@ use lichen_compute::fusion_claim::{fragment_of, kernel_id, marked_value};
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_fusion::{BinaryOp, Expr, UnaryOp, Variable, normalize};
 use lichen_fusion_bridge::{ReadRoles, projection};
+use lichen_highlevel::shape;
 use lichen_kernel_ir::KernelFragment;
 use lichen_lowlevel::{AnyNodeId, LowValue, Module};
 
@@ -47,15 +48,17 @@ silu
 /// The producer's own fragment, the one the dispatcher registered.
 ///
 /// # Invariant
-/// The program's root **is** the kernel, so one root item names it, and the registry holds the
-/// *expanded* fragment — `exp_body`'s instructions already inlined into it, which is the body
+/// The program's root **is** the kernel wrapper struct, so its first field is
+/// the native artifact, and the registry holds the *expanded* fragment — the body
 /// both readers match against.
 fn producer_fragment(module: &Module<LangProgram>, value: &LangValue) -> KernelFragment {
     let LangValue::LowValue(LowValue::Array(array)) = value else {
         panic!("the program's root is a tuple");
     };
     let items: &[lichen_lowlevel::ArrayItem] = unsafe { array.items() };
-    let item = items.first().expect("the root holds the kernel");
+    let item = items
+        .get(shape::STRUCT_VALUE_FIELD_BASE)
+        .expect("the root kernel struct holds its native field");
     let AnyNodeId::Dynamic(node) = item.node else {
         panic!("a kernel comes from a frozen artifact");
     };

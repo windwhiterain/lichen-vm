@@ -97,12 +97,18 @@ where
             None => {}
         }
         let Some(type_value) = self.module.node_value(ty) else {
-            // One hole, not a disagreement: the cell's class name is the value's
-            // own spelling and the type print reuses it.
-            return match ty {
-                AnyNodeId::Dynamic(node) => self.printer.class_name(node),
-                AnyNodeId::Static(sref) => self.printer.static_class_name(sref),
-            };
+            // An unknown type does not erase a decided value's own spelling; only an open
+            // value is named by its class.
+            if matches!(
+                value.as_enum(),
+                Some(LowValue::Any | LowValue::None | LowValue::Error)
+            ) {
+                return match ty {
+                    AnyNodeId::Dynamic(node) => self.printer.class_name(node),
+                    AnyNodeId::Static(sref) => self.printer.static_class_name(sref),
+                };
+            }
+            return self.raw(value);
         };
         let Some(LowValue::Array(ty_array)) = type_value.as_enum() else {
             return self.raw(value);

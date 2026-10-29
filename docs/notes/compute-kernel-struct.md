@@ -130,6 +130,14 @@ undecided cell costs a host read is
 
 ## Consequences
 
+**Constructor-template update:** the direct `.I = Int` / `.O = Int` examples
+below are pre-migration expectations, not the current acceptance shape. The
+constructor now leaves `.I` as a function signature and `.O` as the result of
+`f (I _)`, which may remain open. Current tests assert a decided native artifact
+(`raw Kernel`) plus that signature/result shape. A renderer with an opaque type
+must not hide the decided native value behind a class variable. See
+[value-templates](value-templates.md#the-direct-signature).
+
 - `tests/lichen_compute/compute.rs` renders a **generic** kernel struct as
   `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}` — the frozen wrapper's
   fields are undecided cells, so each carries the raw mark — and `launch` results resolve

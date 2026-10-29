@@ -535,8 +535,7 @@ compute.launch k 5
 
 #[test]
 fn a_kernel_value_and_type_render_by_name() {
-    // The signature fields hold *type values*: each field's type is `Type` and its
-    // value is the type itself.
+    // The native artifact is decided; signature and result keep their own shapes.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -545,7 +544,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(raw Kernel, Int, Int): {.native raw[?a, ?b], .I Type _, .O Type _}",
+        out, "(raw Kernel, ?a => ?b, none): Struct",
         "kernel value/type: {out:?}"
     );
 }
@@ -658,7 +657,8 @@ compute.launch k1 (5, 3)
 
 #[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
-    // A tuple-domain kernel's signature is `[((Int, Int), Int)]`, carried in `.I`.
+    // A tuple-domain constructor still renders as a function signature; its result
+    // is not a precomputed `Int` value.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -667,7 +667,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(raw Kernel, (Int, Int), Int): {.native raw[?a, ?b], .I TypeTuple _, .O Type _}",
+        out, "(raw Kernel, ?a => ?b, none): Struct",
         "tuple-domain kernel value/type: {out:?}"
     );
 }
