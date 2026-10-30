@@ -375,6 +375,8 @@ pub fn finish() -> Result<(Graph, Backend, Option<(StaticNodeId, StaticNodeId)>)
                     format!("this graph's return could not be recorded: {refusal}")
                 })?;
         }
+        // The run is lazy, so a dispatch no returned value reads is not part of it.
+        graph.prune_to_returns();
         Ok((graph, backend, recording.buffer_declaration))
     })
 }

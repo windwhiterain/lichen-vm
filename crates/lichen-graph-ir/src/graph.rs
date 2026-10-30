@@ -174,6 +174,108 @@ impl Graph {
     }
 }
 
+impl Graph {
+    /// Drop the nodes no returned value depends on.
+    ///
+    /// # Invariant
+    /// A graph is a transcript of the lazy run: a node no returned value depends on
+    /// belongs in neither. Kept nodes keep their order, and every edge (an input, a
+    /// count, a runtime scalar) is renumbered onto the kept value table. A graph with
+    /// no recorded return takes every node, as it takes every value.
+    pub fn prune_to_returns(&mut self) {
+        let Some(returns) = self.returns.clone() else {
+            return;
+        };
+        // Each node's first output value, and the node that produces a value.
+        let mut starts = Vec::with_capacity(self.nodes.len());
+        let mut producer = vec![usize::MAX; self.values];
+        let mut value = self.inputs;
+        for (index, node) in self.nodes.iter().enumerate() {
+            starts.push(value);
+            for at in 0..node.outputs() {
+                producer[value + at] = index;
+            }
+            value += node.outputs();
+        }
+        let mut needed = vec![false; self.nodes.len()];
+        let mut stack: Vec<ValueId> = returns.clone();
+        while let Some(value) = stack.pop() {
+            if value < self.inputs {
+                continue;
+            }
+            let index = producer[value];
+            if index == usize::MAX || needed[index] {
+                continue;
+            }
+            needed[index] = true;
+            let Node::Kernel(kernel) = &self.nodes[index] else {
+                continue;
+            };
+            stack.extend_from_slice(&kernel.inputs);
+            for scalar in &kernel.scalars {
+                if let Scalar::Value(value) = scalar {
+                    stack.push(*value);
+                }
+            }
+            match &kernel.count {
+                Count::Value(value) => stack.push(*value),
+                Count::Device { value, .. } => stack.push(*value),
+                Count::Constant(_) => {}
+            }
+        }
+        if needed.iter().all(|needed| *needed) {
+            return;
+        }
+        let mut new_starts = vec![0; self.nodes.len()];
+        let mut kept_values = self.inputs;
+        for (index, node) in self.nodes.iter().enumerate() {
+            if needed[index] {
+                new_starts[index] = kept_values;
+                kept_values += node.outputs();
+            }
+        }
+        let mut remap = vec![usize::MAX; self.values];
+        for value in 0..self.inputs {
+            remap[value] = value;
+        }
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !needed[index] {
+                continue;
+            }
+            for at in 0..node.outputs() {
+                remap[starts[index] + at] = new_starts[index] + at;
+            }
+        }
+        let remap_value =
+            |value: ValueId| -> ValueId { remap.get(value).copied().unwrap_or(usize::MAX) };
+        let mut kept = Vec::new();
+        for (index, mut node) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            if !needed[index] {
+                continue;
+            }
+            if let Node::Kernel(kernel) = &mut node {
+                for input in &mut kernel.inputs {
+                    *input = remap_value(*input);
+                }
+                for scalar in &mut kernel.scalars {
+                    if let Scalar::Value(value) = scalar {
+                        *value = remap_value(*value);
+                    }
+                }
+                match &mut kernel.count {
+                    Count::Value(value) => *value = remap_value(*value),
+                    Count::Device { value, .. } => *value = remap_value(*value),
+                    Count::Constant(_) => {}
+                }
+            }
+            kept.push(node);
+        }
+        self.nodes = kept;
+        self.values = kept_values;
+        self.returns = Some(returns.iter().map(|value| remap_value(*value)).collect());
+    }
+}
+
 /// What one node of a graph is.
 ///
 /// # Invariant
