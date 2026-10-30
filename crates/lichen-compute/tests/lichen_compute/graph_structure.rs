@@ -12,7 +12,7 @@ use lichen_lowlevel::{
 };
 use lichen_utils::extend::AsEnum;
 
-use lichen_compute::ComputeOperator;
+use lichen_compute::{ComputeOperator, ComputeValue};
 
 /// Compile the way a host does — imports through a `PackageStore` — and return
 /// the **module**, not a rendered value.
@@ -209,11 +209,11 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
 
     let dispatch = the_dispatch(&module, function).expect("the body dispatches once");
 
-    // The operand array is [kernel, cfg], readable without evaluating it — which
-    // keeps a build from dispatching.
+    // The operand array is [kernel, cfg, codomain], readable without evaluating
+    // it — which keeps a build from dispatching.
     let operation = module.node_operation(dispatch).expect("a dispatch node");
     let operands = items(&module, operation.operand.expect("operands"));
-    assert_eq!(operands.len(), 2, "[kernel, cfg]");
+    assert_eq!(operands.len(), 3, "[kernel, cfg, codomain]");
 
     // A value-level read into the cfg gets **nowhere**: the slot is an
     // unevaluated node, so `array_items` finds nothing.
@@ -344,7 +344,7 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
 }
 
 #[test]
-fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() {
+fn the_kernel_slot_is_the_captured_artifact_and_the_cfg_an_index_chain() {
     let (mut module, root) = run(CHAIN);
     let function = function_of(&mut module, root);
     let dispatch = the_dispatch(&module, function).expect("the body dispatches");
@@ -353,30 +353,38 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // `k.native` — an `Index` into the captured kernel struct, and the slot
-    // itself holds no value until it is applied.
+    // The kernel operand is the **decided artifact** the `.native` read produced.
+    assert!(
+        matches!(
+            module
+                .node_value(AnyNodeId::Dynamic(operands[0]))
+                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value)),
+            Some(ComputeValue::ParKernel(..))
+        ),
+        "the kernel slot holds the artifact the body captured"
+    );
+
+    // The cfg operand is an `Index` chain; the slot holds no value until applied.
     assert_eq!(
         format!(
             "{:?}",
-            module.node_operation(operands[0]).map(|o| o.operator)
+            module.node_operation(operands[1]).map(|o| o.operator)
         ),
         "Some(LowOperator(Index))"
     );
     assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(operands[0])),
+        module.node_value(AnyNodeId::Dynamic(operands[1])),
         None,
-        "the slot is a node rather than a read value, so a lowering that wants the \
-         kernel handle has to reach it through the `Index`"
+        "the cfg slot is a node rather than a read value, so a lowering that wants          the count and the buffers has to reach them through the chain"
     );
 
     // The read reaches the captured struct's own node through the `Index`.
-    let target = through_index(&module, operands[0]);
+    let target = through_index(&module, operands[1]);
     assert_ne!(
-        target, operands[0],
+        target, operands[1],
         "the `Index` names the captured struct as its target"
     );
 }
-
 /// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
