@@ -323,11 +323,15 @@ that each know their own case.
 
 A body of three statements — dispatch, bind the result to a name nobody reads,
 dispatch again — records a **two-node** graph. That was first read as a missing
-dispatch. It is not: run the same body with no graph anywhere in the program and
-**the backend receives two dispatches**. There is no expression-level CSE in this
-compiler to explain the absence, so **the elimination is laziness, and it is the
-program doing it, not the recording** — a `let` inside a block is lazy and nothing
-read the name.
+dispatch and then as laziness: the plain run received two dispatches, so a `let`
+inside a block read by nobody was taken for lazy. **Measured again at the trace
+test's own body: the plain run now receives three dispatches**, so the block's
+statements are evaluated eagerly; the recording records the dead one too, and the
+why the graph ends with two is **not** laziness but the replay reuse: the two
+`k2` calls are one source node (`node_origin` is the same for both), the recording
+appends the first, and the second reuses it. The trace test therefore compares a
+two-dispatch graph against a three-dispatch run — a *shorter* graph, which the
+equality cannot accept.
 
 So **a graph is a transcript of the run, not of the source**, and a dispatch whose
 result nothing reads belongs in neither. A walk that forced the rest would be a
