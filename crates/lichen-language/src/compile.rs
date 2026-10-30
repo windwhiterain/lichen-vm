@@ -575,8 +575,9 @@ impl Compiler {
                 let expected = self.compile_expr(expected);
                 self.alloc_unify(actual, expected, span)
             }
-            // `actual <: template`: apply the template constructor to `_`,
-            // then unify the actual with that fresh result.
+            // `actual <: template`: the plain unify of the actual with the
+            // template. A template that is a function must be applied
+            // explicitly: `actual = (template _)`.
             Expr::TemplateUnify {
                 actual,
                 template,
@@ -584,15 +585,7 @@ impl Compiler {
             } => {
                 let actual = self.compile_expr(actual);
                 let template = self.compile_expr(template);
-                let hole = self.alloc(ExprKind::Placeholder, span);
-                let expected = self.alloc(
-                    ExprKind::Apply {
-                        function: template,
-                        argument: hole,
-                    },
-                    span,
-                );
-                self.alloc_unify(actual, expected, span)
+                self.alloc_unify(actual, template, span)
             }
             // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
             Expr::StructInst {
@@ -600,17 +593,9 @@ impl Compiler {
                 fields,
                 span,
             } => {
-                // The constructor is applied once; its fresh struct value is
-                // the requirement the fields fill.
+                // The template value is the requirement the fields fill. A
+                // function constructor is applied explicitly at the call site.
                 let template = self.compile_expr(callee);
-                let hole = self.alloc(ExprKind::Placeholder, span);
-                let template = self.alloc(
-                    ExprKind::Apply {
-                        function: template,
-                        argument: hole,
-                    },
-                    span,
-                );
                 let field_ids: Vec<ExprId> =
                     fields.iter().map(|f| self.compile_expr(&f.value)).collect();
                 let names: Vec<Option<&'static str>> = fields
@@ -649,15 +634,9 @@ impl Compiler {
                 elements,
                 span,
             } => {
+                // The template value is the requirement the elements fill. A
+                // function constructor is applied explicitly at the call site.
                 let template = self.compile_expr(template);
-                let hole = self.alloc(ExprKind::Placeholder, span);
-                let template = self.alloc(
-                    ExprKind::Apply {
-                        function: template,
-                        argument: hole,
-                    },
-                    span,
-                );
                 let (ids, depths) = self.compile_elements(elements);
                 self.alloc_array_inst(template, &ids, &depths, span)
             }

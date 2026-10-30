@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use lichen_lowlevel::{AnyNodeId, NodeId};
+use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, NodeId};
+use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
@@ -15,6 +16,144 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
+    /// Whether a requirement's value carries an undecided slot an instance must
+    /// fill.
+    ///
+    /// # Invariant
+    /// Only value positions are inspected: `Any` and an empty value cell are the
+    /// slots a template leaves for its instance. A function's parameter and
+    /// return signatures are never descended.
+    fn requirement_is_open(&self, value: NodeId, depth: usize) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        let Some(held) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|value| value.as_enum())
+        else {
+            return true;
+        };
+        match held {
+            LowValue::Any => true,
+            LowValue::Array(array) => {
+                // SAFETY: the handle belongs to this module, which outlives the walk.
+                unsafe { array.items() }
+                    .iter()
+                    .any(|item| self.requirement_is_open_any(item.node, depth + 1))
+            }
+            _ => false,
+        }
+    }
+
+    fn requirement_is_open_any(&self, node: AnyNodeId, depth: usize) -> bool {
+        match node.dynamic() {
+            Some(value) => self.requirement_is_open(value, depth),
+            None => false,
+        }
+    }
+
+    /// A fresh copy of a requirement: its open value slots become empty cells,
+    /// while every type and attribute slot is shared.
+    ///
+    /// # Invariant
+    /// The copy keeps the template's nominal id and name table; only value
+    /// positions are fresh. An `Any` value becomes an empty cell, so the actual
+    /// fills it without touching the template.
+    fn instantiate_requirement(&mut self, expr: NodeId) -> NodeId {
+        let Some(items) = crate::shape::value_items(&self.module, AnyNodeId::Dynamic(expr)) else {
+            return expr;
+        };
+        let Some(value) = items.first().and_then(|item| item.node.dynamic()) else {
+            return expr;
+        };
+        let Some(ty) = items.get(1).and_then(|item| item.node.dynamic()) else {
+            return expr;
+        };
+        let value = self.instantiate_requirement_value(value, ty);
+        let mut items = items.to_vec();
+        items[0].node = AnyNodeId::Dynamic(value);
+        let layout = self
+            .module
+            .node_value(AnyNodeId::Dynamic(expr))
+            .and_then(|value| value.as_enum())
+            .and_then(|value| match value {
+                LowValue::Array(array) => Some(array.layout()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        self.array_value_node(self.current_block, items, layout)
+    }
+
+    fn instantiate_requirement_value(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+        let Some(held) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|value| value.as_enum())
+        else {
+            return self.fresh_cell();
+        };
+        let LowValue::Array(array) = held else {
+            return match held {
+                LowValue::Any => self.fresh_cell(),
+                _ => value,
+            };
+        };
+        // SAFETY: the handle belongs to this module, which outlives the copy.
+        let source: Vec<ArrayItem> = unsafe { array.items() }.to_vec();
+        let items: Vec<ArrayItem> = if self.is_struct_layout(ty) {
+            source
+                .iter()
+                .take(2)
+                .copied()
+                .chain(source.iter().skip(2).map(|item| ArrayItem {
+                    node: item
+                        .node
+                        .dynamic()
+                        .map(|field| AnyNodeId::Dynamic(self.instantiate_requirement(field)))
+                        .unwrap_or(item.node),
+                    ..*item
+                }))
+                .collect()
+        } else if crate::shape::is_array_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(ty),
+        ) {
+            source
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    if index == 0 {
+                        *item
+                    } else {
+                        ArrayItem {
+                            node: item
+                                .node
+                                .dynamic()
+                                .map(|hole| AnyNodeId::Dynamic(self.instantiate_requirement(hole)))
+                                .unwrap_or(item.node),
+                            ..*item
+                        }
+                    }
+                })
+                .collect()
+        } else {
+            source
+                .iter()
+                .map(|item| ArrayItem {
+                    node: item
+                        .node
+                        .dynamic()
+                        .map(|element| AnyNodeId::Dynamic(self.instantiate_requirement(element)))
+                        .unwrap_or(item.node),
+                    ..*item
+                })
+                .collect()
+        };
+        self.array_value_node(self.current_block, items, array.layout())
+    }
+
     /// `a = b` — the unify of the **actual** with the **expected**.
     ///
     /// # Invariant
@@ -35,6 +174,15 @@ where
         let expected_term = self.state[expected].term.expect("the expected is compiled");
         let actual_ty = self.state[actual].ty.expect("the actual has a type");
         let expected_ty = self.state[expected].ty.expect("the expected has a type");
+        // A direct value template is instantiated per use: its `Any` slots are
+        // requirements, and writing an actual into the template would specialize
+        // it for every later use.
+        let expected_term = self
+            .module
+            .expr_value_half(expected_term)
+            .filter(|value| self.requirement_is_open(*value, 0))
+            .map(|_| self.instantiate_requirement(expected_term))
+            .unwrap_or(expected_term);
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);
