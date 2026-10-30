@@ -319,17 +319,32 @@ After the direct-template migration on `dev@ffef59c8`:
   the remaining failures are the compute graph-lowering families plus direct
   templates whose nested requirement is shared across kernels. They are not
   evidence against the source model.
-- The dominant remaining family is `compute.graph`'s dispatch recording: 84 of
-  the 93 failures name "a dispatch's count is not a value at all". The count is
-  `s.n`, a read of the recorded function's parameter. In one recording the read
-  is a per-call clone whose `field_sources` entry names the `GraphInput`
-  placeholder; in the next the same read is referenced in place and the entry
-  lives on its class root instead. Following `field_sources` through the class
-  root resolves the count, but it also lets the recording proceed far enough to
-  issue the *second* `compute.parallel` refusal, so six refusal tests that
-  expect one diagnostic see two. The double evaluation (check pass and run) is
-  the thing to settle before that lookup is landed; it is not a property of the
-  read.
+- The dominant remaining family is `compute.graph`'s dispatch recording. Measured
+  this round, in order:
+  - The count (`s.n`) is a read of the recorded function's parameter. Its
+    `field_sources` entry is recorded on the candidate's class root, while
+    `recorded_leaf` looked only at the exact node. Following the source through
+    the class root resolves the count in every recording of the chain test and
+    moves its refusal to `argument 1 of this dispatch is not a buffer`; the
+    passed count stays 147, so the lookup is not landed on its own.
+  - That buffer's payload is open because its read is `Index(target,
+    name_table[name] + 2)` and the `TableGet` chain was stamped **undecided**
+    during the checker's own deep pass — the captured path is
+    `Checker::build_with` → `wire_apply_result` → `apply` → `evaluate_node_deep`
+    → `run_deferred` → `Index` → `TableGet` — before the producer's recorded
+    result existed. The read's class is the template's (an external verdict),
+    so no per-call clone or replay reaches it. The one-attempt stamp is what
+    keeps it empty after the result arrives.
+  - The SPEC states `s.<name> = s.value[s.value.name_table[name] + 2]`, so a
+    read's target must be evaluated before its subscript. Reordering the `Index`
+    evaluator that way keeps lowlevel 164, language 276, highlevel 136, serve 11
+    and compute 147 green, but it does not clear an existing stamp, so it does
+    not flip a test by itself and is held for the same slice.
+- The next handle is the general dynamic-apply ownership/replay: a recording's
+  body reads must not share the checker pass's template classes, or a lazy read
+  stamped before the recording binds its result must replay once it does. It is
+  the same handle `apply-clone-ownership` §6 names for a call inside another
+  function.
 - `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/tuple.lichen`
   prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
   shape. The README sync test passes.
