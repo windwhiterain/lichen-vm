@@ -25,8 +25,8 @@ use lichen_utils::extend::AsEnum;
 use super::{
     ComputeOperator, ComputeValue, ParamSlot, Positions, TypeOperator, const_bits, conv_of,
     float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class, node_class_in,
-    parallel_buffer_pos, peeled_argument, scalar_literal, unary_class, write_chain_output_pos,
-    write_node,
+    parallel_buffer_pos, peeled_argument, scalar_class_of, scalar_literal, unary_class,
+    write_chain_output_pos, write_node,
 };
 
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
@@ -127,6 +127,12 @@ pub struct Lower<'a, P: Program> {
     declarations: Vec<ValueId>,
     /// The `compute.buffer` node each declaration was lowered from, by ordinal.
     declared: HashMap<NodeId, usize>,
+    /// The element class each declaration states, by ordinal.
+    ///
+    /// # Invariant
+    /// A body-declared buffer's own `Buf T` states the class, so a write's store is
+    /// classed here when the parameter's roles do not read that type.
+    declared_classes: HashMap<usize, ScalarClass>,
 }
 
 /// One `@loop` nest being emitted: the conversion's roles and the state each
@@ -245,6 +251,7 @@ where
             loops: Vec::new(),
             declarations: Vec::new(),
             declared: HashMap::new(),
+            declared_classes: HashMap::new(),
         };
         let mut values = Vec::new();
         for node in lower.leaves_of(codomain, codomain_type)? {
@@ -301,6 +308,7 @@ where
             loops: Vec::new(),
             declarations: Vec::new(),
             declared: HashMap::new(),
+            declared_classes: HashMap::new(),
         };
         for output in outputs {
             // The value a write leaves is discarded on purpose: see the doc.
@@ -1133,6 +1141,16 @@ where
         // The length is read, not lowered: the template has no value for a runtime count.
         let ordinal = self.tally.output_extents.len();
         self.tally.output_extents.push(extent);
+        // The declaration's first operand is its element type, which states the class.
+        if let Some(element) = items
+            .first()
+            .and_then(|type_node| {
+                shape::low_type_of_slot(self.module, AnyNodeId::Dynamic(*type_node))
+            })
+            .map(|shape| scalar_class_of(&shape))
+        {
+            self.declared_classes.insert(ordinal, element);
+        }
         let identity = self.canonical(node);
         self.declared.insert(identity, ordinal);
         // The declaration's value is the version token; its node is the identity.
@@ -2702,13 +2720,15 @@ where
     /// The element class the parameter declares for write ordinal `ordinal`.
     ///
     /// # Invariant
-    /// A class the parameter's own `Buf T` states is the authority; a parameter that states
-    /// none falls back to the class of the value written.
+    /// A class a declaration states is the authority — the parameter's own `Buf T` first,
+    /// then the body's `compute.buf T` — and only a body that states neither falls back to
+    /// the class of the value written.
     fn declared_output_class(&self, ordinal: usize, value: NodeId) -> ScalarClass {
         self.params
             .first()
             .and_then(|slot| slot.roles.as_ref())
             .and_then(|roles| roles.output_classes.get(ordinal).copied().flatten())
+            .or_else(|| self.declared_classes.get(&ordinal).copied())
             .unwrap_or_else(|| node_class_in(self.module, self.params, value))
     }
 }
