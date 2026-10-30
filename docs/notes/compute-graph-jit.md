@@ -322,19 +322,20 @@ that each know their own case.
 ### A graph is a transcript of the run, and the run is lazy
 
 A body of three statements — dispatch, bind the result to a name nobody reads,
-dispatch again — records a **two-node** graph. That was first read as a missing
-dispatch and then as laziness: the plain run received two dispatches, so a `let`
-inside a block read by nobody was taken for lazy. **Measured again at the trace
-test's own body: the plain run now receives three dispatches**, so the block's
-statements are evaluated eagerly; the recording records the dead one too, and the
-why the graph ends with two is **not** laziness but the replay reuse: the two
-`k2` calls are one source node (`node_origin` is the same for both), the recording
-appends the first, and the second reuses it. The trace test therefore compares a
-two-dispatch graph against a three-dispatch run — a *shorter* graph, which the
-equality cannot accept.
+dispatch again — records a **two-node** graph. That was first read as laziness: the
+plain run once received two dispatches, so a `let` inside a block read by nobody was
+taken for lazy. **Both halves of that reading are now wrong, measured at the trace
+test's own body.** The plain run receives **three** dispatches: the block evaluates
+its statements eagerly (the SPEC's `let` order), so the dead binding is performed.
+The recording still holds **two**: the dead statement is never recorded at all — the
+walk follows the return's demand — and disabling the replay reuse does not change
+that (measured; the two-node result stands). The trace test therefore compares an
+**eager run against a lazy recording**, and the graph is shorter.
 
 So **a graph is a transcript of the run, not of the source**, and a dispatch whose
-result nothing reads belongs in neither. A walk that forced the rest would be a
+result nothing reads belongs in neither — **but the run performs it**, so the
+transcript needs it: the rule below (the lazy walk) is what the recording does
+today, and the trace test is the measurement that says it no longer matches. A walk that forced the rest would be a
 bug, not a completion: it would put a dispatch in the graph that the program never
 makes, and the graph would then answer with work its own author did not ask for.
 The measurable form of the correct invariant is
