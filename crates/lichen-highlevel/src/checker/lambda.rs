@@ -424,9 +424,31 @@ where
         // The type side's argument is the value side's expr: a return attribute
         // naming a parameter field resolves through it.
         let type_argument_expr = value_argument_expr;
-        // The result's type cell rides in the apply's operand; the runtime apply
-        // binds it to the return expr.
+        // A decided callee states the result type now; the runtime binds the same cell.
         let c = self.fresh_cell();
+        let declared_return = match callee {
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .materialize_static_signature_expr(sref, true, self.current_block)
+                .and_then(|returned| self.module.expr_type_item(returned))
+                .map(Some),
+            Some(AnyFunctionId::Dynamic(fid)) => {
+                let declared = self.module.functions[fid].return_type;
+                // Only a decided return type is a fact the call can state now; an
+                // open one belongs to the runtime apply.
+                let decided = self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(declared))
+                    .is_some()
+                    || self.module.class_low_type(declared).is_some();
+                decided.then_some(Some(AnyNodeId::Dynamic(declared)))
+            }
+            None => None,
+        }
+        .flatten();
+        if let Some(declared) = declared_return {
+            self.module.unify_ref(AnyNodeId::Dynamic(c), declared);
+        }
         // The callee's **expr** rides with the apply: the type side reads the
         // function from its value half (apply §7).
         let static_callee = match callee {

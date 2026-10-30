@@ -1272,7 +1272,7 @@ outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
     );
     let message = &messages[0];
     assert!(
-        message.contains("expected {") && message.contains("found Int"),
+        message.contains("expected Struct") && message.contains("found Int"),
         "the refusal must name the buffer the position must hold and what it holds: {message:?}"
     );
 }

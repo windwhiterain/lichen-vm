@@ -825,6 +825,26 @@ where
                     );
                 } else {
                     // Undecided values cannot mismatch; check only type and attributes.
+
+                    // A call's term is the apply node, so its type comes from the cell.
+                    if let Some(actual_ty) = self.state[argument_expr].ty
+                        && let Some(expected) =
+                            shape::value_item(&self.module, AnyNodeId::Dynamic(field), 1)
+                    {
+                        // The type cell holds an expression; its denotation is the
+                        // value a refusal can name.
+                        self.module
+                            .evaluate_node_deep(actual_ty, Some(self.current_block));
+                        self.module
+                            .evaluate_node_deep_ref(expected, Some(self.current_block));
+                        let expected = self.module.as_dynamic(expected, self.current_block);
+                        self.check_unify(
+                            actual_ty,
+                            expected,
+                            self.loc(argument_expr, 1),
+                            DiagKind::Annotation,
+                        );
+                    }
                     let width = shape::value_len(&self.module, AnyNodeId::Dynamic(field))
                         .into_iter()
                         .chain(shape::value_len(

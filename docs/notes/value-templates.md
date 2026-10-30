@@ -370,12 +370,12 @@ After the direct-template migration on `dev@ffef59c8`:
   through its name side, and a struct position step is physical. The serve
   schema probe passes; `examples/attention.lichen` now reaches the next
   refusal, an `Int`/`Float` mix in the attend body.
-- A codomain position holding a decided non-buffer is refused (`found 1`), but a
-  let-bound value in the same position is not (`tail=i` passes the check): the
-  actual's type cell is still empty at the instantiation check, so the undecided
-  branch's type compare writes the requirement instead of refusing it. The decided
-  branch compares values and catches the literal, which is why the test's `Int`
-  case reads as a missing refusal rather than a wrong one.
+- A codomain position holding a decided non-buffer is refused (`found 1`), and a
+  let-bound or call-valued one now is too (`expected Struct, found Int`): the
+  apply's result cell is bound to a decided callee's return type at check time,
+  and the instantiation's undecided branch reads the argument's **type cell**
+  (a call's term is the apply node, so its items were never the type). The
+  refusal was missing because the cell was empty, not because the rule was.
 - `examples/attention.lichen`'s `attend` kernel is classed `Int` at its output
   buffer: the write's buffer operand is an integer cell, so the wasm assembler
   refuses `BufferWriteCall(Int)` with a `Float` value (`mixed.rs`). The sibling
