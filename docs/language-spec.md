@@ -143,7 +143,7 @@ the latter keeps its wildcard read/unify behavior.
 ```  
 ## Subtype
 
-Unify is directed, extend to subtype.
+Unify is directed, extend to subtype, which made unify order, annotations matters.
 
 ```sytax
 `a = b` => `a <: b`
@@ -153,11 +153,32 @@ Unify is directed, extend to subtype.
 
 Attributes can resgister a custom function `is_subtype` to override its subtype behavior.
 
-## Undecide
+Subtype via post unify error suppression.
+
+### Any
+
+`Any` is an special value that a node has `Any` value is still undecided. 
+
+Useful to give an undecided node a guarantee that it will never be decided. 
+
+Subtype via lowlevel unify exception:
+- Always unify success.
+- Can recurise into lowlevel array, not lowlevel function, with everything `Any`.
+- Only merge if right side is undecided.
+
+```sytax
+`@any` := `@raw Any`
+`_ = @any` := `_`
+`{a := _; @any = a}` := `@any`
+`{ret = @raw [@raw None, @raw None]; @raw Any = ret; ret}` := @raw[@raw Any, @raw Any]`
+`{ret = @raw None => @raw None; @raw Any = ret; ret}` := `@raw None => @raw None`
+```  
+
+## Undecided
 
 Undeicde is a state of lowlevel node that has no value.
 
-Placeholder `_` is an undecide expression that its attribute array node is undecide.
+Placeholder `_` is an undecided expression that its attribute array node is undecided.
 
 ```sytax
 `_` := `@raw None`
@@ -171,7 +192,7 @@ Nodes inside same class can be classified by tag.
 
 ## Function
 
-Function is an expression with a specified undecide expression as parameter.
+Function is an expression with a specified undecided expression as parameter.
 
 Polymorphism at every application: @clone its expression, unify the argument with cloned parameter.
 
@@ -182,25 +203,25 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 ```
 
 > `@raw p => body`: lowlevel function.
-> `@clone f`: a cloned undecided node  will detached from its original class, only clone if its class is in function `f`' scope, otherwise create a reference.   
+> `@clone f`: see section `### Clone`.   
 
-## Any
+### Clone
 
-`@any` is an **instantiation-deferred undecided** requirement, not a value result.
-When it meets an empty class, the class is marked `specialize_after_clone` without
-propagating the internal `Any` value. A marked class cannot be specialized by
-unification in the current graph, and a value read remains undecided.
+For undecided node, only clone if its class is in function `f`' scope, otherwise create a reference.
 
-A clone clears the marker while preserving the template's remap and class
-topology, so the new instance can be specialized by its actual argument. This is
-what lets a template avoid a replay solely for a value that cannot be specialized
-until an instance exists. `_` differs: it is an ordinary free cell and may bind in
-the current graph. The class marker and the internal `Any` value are separate;
-the latter keeps its wildcard read/unify behavior.
+Clone an undecided node will detached from its original class for let-polymorphsim.
+
+Apply's body unify a side apply body that only enable evaluation the next time cloned with the function, so that if that clone made the function specialized, the side apply unify the specialized body apply to the original apply body.
+
+### Any
+
+Clone an node with `Any` value produce an undecide node with `None` value if its class's scope is equal to the apply function scope.
+
+Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
 
 ```sytax
-`@any` := `@raw Any`
-```  
+`x => {...; expr}` => `x => {...; return expr; @any = x;}`
+```
 
 ## Struct
 
