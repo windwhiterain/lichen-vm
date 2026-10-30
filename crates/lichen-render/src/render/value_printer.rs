@@ -199,9 +199,13 @@ where
         let Some(items) = self.compound_items(value) else {
             return self.raw(value);
         };
-        let elements = items
-            .get(shape::ARRAY_VALUE_ELEMENT_BASE..)
-            .unwrap_or_default();
+        // The template slot is internal and marked; a run-built list has none.
+        let elements = match items.first().is_some_and(|item| item.template) {
+            true => items
+                .get(shape::ARRAY_VALUE_ELEMENT_BASE..)
+                .unwrap_or_default(),
+            false => items,
+        };
         let mut out = Vec::with_capacity(elements.len());
         for item in elements {
             out.push(self.element_expr(item.node));

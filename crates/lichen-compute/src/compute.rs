@@ -1898,7 +1898,11 @@ where
                     };
                     // Each element becomes a fresh scalar node in a real array value,
                     // of the buffer's own class.
-                    let items: Vec<ArrayItem> = match results {
+                    let element_class = match results {
+                        ScalarData::Int(_) => ScalarClass::Int,
+                        ScalarData::Float(_) => ScalarClass::Float,
+                    };
+                    let elements: Vec<ArrayItem> = match results {
                         ScalarData::Int(values) => values
                             .into_iter()
                             .map(|value| {
@@ -1910,6 +1914,22 @@ where
                             .map(|value| scalar_item::<P>(module, block, LowValue::Float(value)))
                             .collect::<Option<Vec<_>>>()?,
                     };
+                    // Every element is typed by the declaration the buffer carries.
+                    let ty_expr = buf_element_type(module, operands[0].node)
+                        .or_else(|| buf_element_type(module, element))?;
+                    let mut items: Vec<ArrayItem> = Vec::with_capacity(elements.len());
+                    for item in elements {
+                        if let Some(value) = item.node.dynamic() {
+                            if let Some(value) = module.expr_value_half(value)
+                                && let Some(typed) =
+                                    typed_element_slot(module, block, value, ty_expr)
+                            {
+                                items.push(ArrayItem::new(AnyNodeId::Dynamic(typed)));
+                                continue;
+                            }
+                        }
+                        items.push(item);
+                    }
                     let handle = module.alloc_array(&items, block);
                     Some(<P::Value as From<LowValue>>::from(LowValue::Array(
                         handle.into(),
@@ -4085,6 +4105,23 @@ where
     slot_value_of(module, field).or(Some(field))
 }
 
+/// The element **type** the `Buf` wrapper states: its `.type` field's expression.
+///
+/// # Invariant
+/// The field is the type expression the declaration wrote (`docs/notes/kernel-buffer-declarations.md`),
+/// so a collected element is typed by the buffer's own declaration, not by a rebuilt constant.
+fn buf_element_type<P>(module: &Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    Some(
+        items_of(module, node)?
+            .get(shape::STRUCT_VALUE_FIELD_BASE + 1)?
+            .node,
+    )
+}
+
 /// The items of `node`'s array value, whichever side of the freeze the node sits on.
 ///
 /// # Invariant
@@ -4353,6 +4390,47 @@ where
     items.push(ArrayItem::new(AnyNodeId::Dynamic(
         module.add_node(block, None, None),
     )));
+    for _ in 0..attributes {
+        let any = module.add_node(
+            block,
+            None,
+            Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
+        );
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
+    }
+    let handle = module.alloc_array(&items, block);
+    Some(module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+            ArrayValue::with_layout(handle, layout),
+        ))),
+    ))
+}
+
+/// An element slot whose type item is `ty`, not a fresh cell.
+///
+/// # Invariant
+/// The slot is `[value, ty, attrs…]` at the module's full width, so a reader of the
+/// element's own type meets the type the caller states; the template and the
+/// elements of a collected array are built here.
+fn typed_element_slot<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    value: NodeId,
+    ty: AnyNodeId,
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    // SAFETY: the default attributes are a live array of this module.
+    let width = unsafe { module.default_attributes()?.items() }.len();
+    let attributes = width.checked_sub(2)?;
+    let indices: Vec<u32> = (0..attributes as u32).collect();
+    let layout = module.layout_with_indices(&indices)?;
+    let mut items = vec![ArrayItem::new(AnyNodeId::Dynamic(value))];
+    items.push(ArrayItem::new(ty));
     for _ in 0..attributes {
         let any = module.add_node(
             block,

@@ -760,7 +760,7 @@ where
             DiagKind::Guard,
         );
         // The arguments, in call order: the value is the tuple of arguments.
-        let Some((elements, mut vals)) = self.instantiation_arguments(value, template_ty) else {
+        let Some((elements, vals)) = self.instantiation_arguments(value, template_ty) else {
             return self.refused_expr(e);
         };
         // The constructor application supplies the fresh struct value; its
