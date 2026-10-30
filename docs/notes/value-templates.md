@@ -312,39 +312,44 @@ After the direct-template migration on `dev@ffef59c8`:
 - `cargo test -p lichen-highlevel --test highlevel`: 136 passed.
 - `cargo test -p lichen-language --test language`: 275 passed.
 - `cargo test -p lichen-lowlevel --test basic`: 164 passed, 1 ignored.
-- The full `lichen-compute` suite is **147 passed, 93 failed, 1 ignored**
-  after the field-position read fix (the direct-template baseline was
-  137 / 103 / 1, and the static-parameter-class fix was 136 / 104 / 1). The
-  language-server hovers, the render tests and the serve schema probe are green;
-  the remaining failures are the compute graph-lowering families plus direct
-  templates whose nested requirement is shared across kernels. They are not
-  evidence against the source model.
-- The dominant remaining family is `compute.graph`'s dispatch recording. Measured
-  this round, in order:
-  - The count (`s.n`) is a read of the recorded function's parameter. Its
+- The full `lichen-compute` suite is **156 passed, 84 failed, 1 ignored** after
+  the graph-argument fixes (the direct-template baseline was 137 / 103 / 1;
+  the field-position and hover fixes reached 147 / 93). The language-server
+  hovers, the render tests and the serve schema probe are green. The remaining
+  failures are the compute graph families, not evidence against the source
+  model.
+- Three defects were measured and fixed in the recording path this round:
+  - A graph-run argument that is a `Buf` wrapper flattened its `.native`,
+    `.type` and `.length` fields into three arguments, so a recorded graph that
+    took two values was run with three. A buffer is now one argument — its
+    payload (`flatten_leaves`). This flips nine tests and accounts for the
+    whole `RunArity` family.
+  - The extent (`s.n`) is a read of the recorded function's parameter; its
     `field_sources` entry is recorded on the candidate's class root, while
-    `recorded_leaf` looked only at the exact node. Following the source through
-    the class root resolves the count in every recording of the chain test and
-    moves its refusal to `argument 1 of this dispatch is not a buffer`; the
-    passed count stays 147, so the lookup is not landed on its own.
-  - That buffer's payload is open because its read is `Index(target,
-    name_table[name] + 2)` and the `TableGet` chain was stamped **undecided**
-    during the checker's own deep pass — the captured path is
-    `Checker::build_with` → `wire_apply_result` → `apply` → `evaluate_node_deep`
-    → `run_deferred` → `Index` → `TableGet` — before the producer's recorded
-    result existed. The read's class is the template's (an external verdict),
-    so no per-call clone or replay reaches it. The one-attempt stamp is what
-    keeps it empty after the result arrives.
-  - The SPEC states `s.<name> = s.value[s.value.name_table[name] + 2]`, so a
-    read's target must be evaluated before its subscript. Reordering the `Index`
-    evaluator that way keeps lowlevel 164, language 276, highlevel 136, serve 11
-    and compute 147 green, but it does not clear an existing stamp, so it does
-    not flip a test by itself and is held for the same slice.
-- The next handle is the general dynamic-apply ownership/replay: a recording's
-  body reads must not share the checker pass's template classes, or a lazy read
-  stamped before the recording binds its result must replay once it does. It is
-  the same handle `apply-clone-ownership` §6 names for a call inside another
-  function.
+    `recorded_leaf` looked only at the exact node. The reader now consults the
+    class's representative (`field_source_of`), which resolves the count in
+    every recording.
+  - The absorbed buffer's wrapper is decided while its payload is open: the
+    wrapper value is the field read's expr, and the applied projection names
+    the buffer the read means. `recorded_buffer_payload` now reads that
+    projection whenever either side is open. `argument 1 of this dispatch is
+    not a buffer` falls from 60 to 4.
+- The dominant remaining family is now the region derivation: "the recording
+  is one claimed region" (19), then the graph's return ("this function's
+  return is not a value a graph can hand back", 7), the remaining absorbed
+  buffers (4 + 3), and the buffer class mismatch (3). The captured path for a
+  body read still shows it stamped **undecided** during the checker's deep
+  pass (`Checker::build_with` → `wire_apply_result` → `apply` →
+  `evaluate_node_deep` → `run_deferred` → `Index` → `TableGet`) before the
+  producer's recorded result exists; the read's class is the template's (an
+  external verdict), so no per-call clone reaches it. The next handle is still
+  the general dynamic-apply ownership/replay (`apply-clone-ownership` §6).
+- The SPEC states `s.<name> = s.value[s.value.name_table[name] + 2]`, so a
+  read's target must be evaluated before its subscript. Reordering the `Index`
+  evaluator that way keeps lowlevel 164, language 276, highlevel 136 and
+  serve 11 green but does not flip a test by itself, so it is held for the
+  same slice.
+
 - `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/tuple.lichen`
   prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
   shape. The README sync test passes.

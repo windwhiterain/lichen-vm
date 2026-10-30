@@ -5145,7 +5145,7 @@ where
             }
         }
         if source_depth < 8
-            && let Some(source) = module.field_sources.get(&node).copied()
+            && let Some(source) = field_source_of(module, node)
         {
             return parallel_buffer_pos_inner(
                 module,
@@ -6430,6 +6430,19 @@ where
     unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
+/// The actual value recorded for a parameter-field projection.
+///
+/// # Invariant
+/// `field_sources` keys are exact value nodes, never equality-class roots; a read
+/// and its class's representative name one slot, so a source recorded for either
+/// is the same provenance. The link is directed and never unifies the two nodes.
+fn field_source_of<P: Program>(module: &Module<P>, node: NodeId) -> Option<NodeId> {
+    module
+        .field_sources
+        .get(&node)
+        .or_else(|| module.field_sources.get(&module.class_root(node)))
+        .copied()
+}
 /// Resolve an open recording leaf through the parameter projection that produced it.
 ///
 /// # Invariant
@@ -6449,7 +6462,7 @@ where
         }
         let Some(source) = node
             .dynamic()
-            .and_then(|node| module.field_sources.get(&node).copied())
+            .and_then(|node| field_source_of(module, node))
         else {
             break;
         };
@@ -6562,13 +6575,29 @@ where
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let open = module
+    let buffer_open = module
         .node_value(buffer)
         .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
-    if open {
-        buffer = recorded_applied_projection::<P>(module, block, buffer).unwrap_or(buffer);
+    let payload_open = |module: &Module<P>, payload: Option<AnyNodeId>| {
+        payload.is_none_or(|payload| {
+            module
+                .node_value(payload)
+                .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
+        })
+    };
+    let mut payload = buf_payload::<P>(module, buffer);
+    // **The wrapper can be decided while its payload is not**: a field read's own
+    // value is its expr, and the applied projection names the buffer the read means,
+    // so the projection is read whenever either side is still open.
+    if buffer_open || payload_open(module, payload) {
+        if let Some(projected) = recorded_applied_projection::<P>(module, block, buffer) {
+            if let Some(projected_payload) = buf_payload::<P>(module, projected) {
+                buffer = projected;
+                payload = Some(projected_payload);
+            }
+        }
     }
-    let mut payload = buf_payload::<P>(module, buffer)?;
+    let mut payload = payload?;
     for _ in 0..8 {
         let open = module
             .node_value(payload)
@@ -6578,7 +6607,7 @@ where
         }
         if let Some(source) = payload
             .dynamic()
-            .and_then(|node| module.field_sources.get(&node).copied())
+            .and_then(|node| field_source_of(module, node))
         {
             payload = AnyNodeId::Dynamic(source);
             continue;
@@ -6586,7 +6615,7 @@ where
         buffer = AnyNodeId::Dynamic(
             buffer
                 .dynamic()
-                .and_then(|node| module.field_sources.get(&node).copied())?,
+                .and_then(|node| field_source_of(module, node))?,
         );
         payload = buf_payload::<P>(module, buffer)?;
     }
@@ -7412,6 +7441,18 @@ fn flatten_leaves_at<P>(
             } else {
                 0
             };
+            // **A buffer wrapper is one argument, its payload**: the element type and
+            // the length are the wrapper's own metadata, not values a dispatch reads,
+            // and counting them would make one buffer look like several arguments.
+            if skip == shape::STRUCT_VALUE_FIELD_BASE {
+                let names = struct_field_names(module, node).unwrap_or_default();
+                if is_buf_shape(&names) {
+                    if let Some(native) = items.get(skip) {
+                        flatten_leaves_at::<P>(module, native.node, out, depth + 1);
+                    }
+                    return;
+                }
+            }
             items.iter().skip(skip).map(|item| item.node).collect()
         };
         for item in nodes {
