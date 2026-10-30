@@ -15,7 +15,7 @@ Buf := x = BufParam => {
 jit := f => {I := _x => _; f = (i = (I _) => _); O := f (I _); K{.native $jit(f), .I I, .O O}}
 launch := k = K => a => {a = (k.I _); a # _; r := $launch(k.native, a); r : type_of (k.O); r = k.O}
 call := k = K => a => {a = (k.I _); a # _; r := $call(k.native, a); r : type_of (k.O); r = k.O}
-parallel := f => b : string => o : _ => {I := _x => _; f = (i = (I _) => _); K{.native $parallel(f, b), .I I, .O o}}
+parallel := f => b : string => o : _ => {I := _x => _; f = (i = (I _) => _); K{.native $parallel(f, b, o), .I I, .O o}}
 plrun := k = K => a = (k.I _) => {r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O}
 range := x : Int => (($range(x) : Int) # 1)
 row := cfg => (($row(cfg) : Int) # 1)

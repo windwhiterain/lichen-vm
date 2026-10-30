@@ -1394,7 +1394,10 @@ where
                     if !function_materialized(module, function) {
                         return None;
                     }
-                    match compile_parallel_fragment(module, function) {
+                    // The codomain is an operand: the compile reads the declaration,
+                    // not the returned value's runtime buffers.
+                    let codomain = operands.get(2).map(|item| item.node);
+                    match compile_parallel_fragment(module, function, codomain) {
                         Ok(fragment) => {
                             // The claim is read **here**, where the kernel is compiled,
                             // and stored beside the fragment: the value carries none.
@@ -3150,6 +3153,7 @@ where
 pub fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
+    codomain: Option<AnyNodeId>,
 ) -> Result<KernelFragment, RoleUnread>
 where
     P: Program,
@@ -3187,9 +3191,12 @@ where
     let type_classes_ref = &type_classes;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value, expr_type(module, body));
-    // The codomain states the outputs; the parameter carries no `.out` group.
+    // The codomain states the outputs: the operation's declaration first, the
+    // returned value when it carried none.
     if roles.outputs.is_empty()
-        && let Ok(codomain) = codomain_roles(module, body)
+        && let Ok(codomain) = codomain
+            .map(|codomain| roles_from_value(module, codomain, RoleSource::Codomain))
+            .unwrap_or_else(|| codomain_roles(module, body))
     {
         roles.outputs = codomain.outputs;
         roles.output_classes = codomain.output_classes.clone();
@@ -8865,6 +8872,11 @@ where
 /// parameter's `.in` buffers. A tuple codomain of `Write`s is the multi-output form:
 /// a write's position becomes its output ordinal at emission, and the codomain's arity
 /// the launch's output count.
+/// `$parallel(f, b, o)` — a kernel over `f`'s body with `o` as its codomain.
+///
+/// # Invariant
+/// The compile reads the declared buffers from `o`, never from the returned value's
+/// runtime buffers: a runtime buffer states no element type, and the declaration does.
 pub struct ParallelOp;
 
 /// `$plrun(pk, cfg, codomain)` — run a parallel kernel over `[0, cfg.n)` and collect
@@ -8950,8 +8962,12 @@ where
     ) -> NativeApply {
         let f = &args[0];
         let backend = &args[1];
-        // The bare parallel kernel artifact, opaque: its type is the call's fresh cell.
-        let operands = ctx.array_node(&[f.value, backend.value]);
+        // The third argument is the codomain; an operation that carries none keeps
+        // the two-item form.
+        let operands = match args.get(2) {
+            Some(codomain) => ctx.array_node(&[f.value, backend.value, codomain.value]),
+            None => ctx.array_node(&[f.value, backend.value]),
+        };
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(operands));
         NativeApply {
             value: op,

@@ -85,6 +85,13 @@ return, measured — `docs/notes/kernel-buffer-declarations.md`).
 The signature is `A I -> O`, the codomain `O` holds the declared buffers, and
 the perspective is spelled at the declaration.
 
+- **The codomain is an operand of the operation.** `compute.parallel f b o` spells
+  `$parallel(f, b, o)`, and the kernel compile reads the declared buffers from `o`
+  instead of inferring them from the returned value's runtime buffers. A runtime
+  buffer's wrapper states no element type (its `.native` is a slice value), while the
+  declaration's wrapper does; reading the declaration makes the classes independent of
+  which kernel compiled first. Measured: compute 181/59 -> 206/34, no newly failing
+  test (`compile_order_class`, the graph/fusion families, `loop_write`).
 ## The ABI consequences
 
 - **The fragment's outputs are its body's declared buffers**, in declaration
