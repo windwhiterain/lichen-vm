@@ -312,9 +312,10 @@ After the direct-template migration on `dev@ffef59c8`:
 - `cargo test -p lichen-highlevel --test highlevel`: 136 passed.
 - `cargo test -p lichen-language --test language`: 275 passed.
 - `cargo test -p lichen-lowlevel --test basic`: 164 passed, 1 ignored.
-- The full `lichen-compute` suite is **156 passed, 84 failed, 1 ignored** after
-  the graph-argument fixes (the direct-template baseline was 137 / 103 / 1;
-  the field-position and hover fixes reached 147 / 93). The language-server
+- The full `lichen-compute` suite is **160 passed, 80 failed, 1 ignored** after
+  the graph-argument fixes and the recording-drive removal (the direct-template
+  baseline was 137 / 103 / 1; the field-position and hover fixes reached
+  147 / 93, and the buffer/argument fixes reached 156 / 84). The language-server
   hovers, the render tests and the serve schema probe are green. The remaining
   failures are the compute graph families, not evidence against the source
   model.
@@ -335,9 +336,12 @@ After the direct-template migration on `dev@ffef59c8`:
     projection whenever either side is open. `argument 1 of this dispatch is
     not a buffer` falls from 60 to 4.
 - The dominant remaining family is now the region derivation: "the recording
-  is one claimed region" (19), then the graph's return ("this function's
+  is one claimed region" (15), then the graph's return ("this function's
   return is not a value a graph can hand back", 7), the remaining absorbed
-  buffers (4 + 3), and the buffer class mismatch (3). The captured path for a
+  buffers (4 + 3), and the buffer class mismatch (3). A program with one
+  let-bound dispatch still records it twice: the op node is a clone that the
+  body's binding and the later read reach separately, so the region's node
+  count is one too high. The captured path for a
   body read still shows it stamped **undecided** during the checker's deep
   pass (`Checker::build_with` → `wire_apply_result` → `apply` →
   `evaluate_node_deep` → `run_deferred` → `Index` → `TableGet`) before the

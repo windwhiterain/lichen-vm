@@ -388,6 +388,25 @@ was measured and is not the repair. The earlier owner-only and dynamic
 reintroduce block-wide `reopen_stalled`: it reopens old recording operations and
 collides distinct `GraphValue` answers.
 
+### 10.1 The dependency walk was removed
+
+`evaluate_recording_dependencies` was later deleted. It replayed every open
+Apply in a `ParLaunch` operand to make a produced buffer's projection
+followable, and the replay instantiated the callee again: a two-dispatch
+chain recorded up to five nodes (one scale body four times), and the region
+derivation saw four regions where the test expects one.
+
+`recorded_buffer_payload` now reads the applied projection whenever the
+wrapper **or** its payload is open (`field_source_of` reads a class's
+representative too), which resolves the same produced buffers without
+re-driving the Apply. Measured: removing the walk flips
+`fan_out_merge::a_fan_out_derives_a_region_a_pack_can_name`,
+`fan_out_merge::a_pack_naming_the_fan_out_merges_all_three_nodes_into_one`,
+`fan_out_merge::without_a_pack_the_floor_proves_the_fan_out` and
+`fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`,
+with no newly failing test; the compute suite moves 156 / 84 to 160 / 80.
+`jit_cross_kernel_wrapper`, the graph scalar tests and the refusal tests
+read the same before and after.
 ## 11. Workspace and workflow
 
 - Worktree: `C:/resource/lichen-vm/.worktrees/compute-provenance`
