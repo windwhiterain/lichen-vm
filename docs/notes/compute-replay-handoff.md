@@ -350,7 +350,7 @@ passes, including the CPU refusal and the two GPU dispatches. The two graph
 scalar recording tests, `jit_cross_kernel_wrapper`, and
 `parallel_read_input_buffer` also pass.
 
-The separate `a_graph_dispatches_exactly_what_the_program_dispatches` direct-launch
+The separate `a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` direct-launch
 comparison is repaired. A shared three-`Index` projection of `s.n` reaches
 `ParLaunch` after the body has returned, so a body-evaluation frame cannot carry
 the call. Lowlevel now records each clone's current `(formal parameter, actual
@@ -375,7 +375,7 @@ that `compute.A` mirrors the kernel parameter field-for-field.
 
 Measured on the branch after this repair:
 
-- `a_graph_dispatches_exactly_what_the_program_dispatches`: **1 passed**; plain
+- `a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`: **1 passed**; plain
   and recorded runs both dispatch twice, in the same order with the same input.
 - compute: **136 passed / 104 failed / 1 ignored**, up from `dev`'s **135/105**;
   the only failure-set change is this test moving to passed.

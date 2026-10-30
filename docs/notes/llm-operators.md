@@ -575,7 +575,7 @@ need a node-local producer for `r`.
 
   **Two failures are left, and neither is the annotation.** Measured on `dev@8b3cbfa9`, the suite is
   `219 passed / 2 failed / 2 ignored`:
-  - `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` compares the stub backend's log
+  - `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` compares the stub backend's log
     for a plain run of the step against the same step recorded by `compute.graph`. Its two readings are
     now `left = ["over [0, 3) with 0 input(s) of length 0", "over [0, 3) with 1 input(s) of length 3"]`
     and `right = []`: **the graph dispatches twice and the plain run dispatches not at all**. Annotating

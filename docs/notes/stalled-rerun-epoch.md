@@ -343,7 +343,7 @@ Base `dev@12425166`, a private target, `-j 1`, probe-free.
 |---|---|---|
 | `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | `consumer_guard.rs:256` — `left: ["combine","identity","element"]` against `right: ["combine","identity"]`, on the **producer's** claim | a recording failure: the extra round `reopen_stalled` drives forces operand edges the first pass never reached, so the producer's algebra name reads one role further than the rule expects |
 | `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | `graph_jit.rs:135` — `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` | the capture rule stops firing where it must: the program is accepted rather than refused, so the rule the test is about no longer fires |
-| `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | `graph_jit.rs:514` — `left` (the recorded graph's two dispatches) against `right: []` | **a premise mismatch, not a recording failure**: `right` is the *host* run's trace, and the plain gate makes the program itself perform no dispatch at all. Plain and recorded cannot agree however the recording is driven |
+| `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` | `graph_jit.rs:514` — `left` (the recorded graph's two dispatches) against `right: []` | **a premise mismatch, not a recording failure**: `right` is the *host* run's trace, and the plain gate makes the program itself perform no dispatch at all. Plain and recorded cannot agree however the recording is driven |
 
 The third is why this is no longer the `wrong-value` bucket §8.2 used to hold the decision:
 the retirement does not change a *checked* outcome. Fifty-seven programs stopped building

@@ -88,7 +88,7 @@ Two alternatives were considered and are worse:
   and its stamp discipline is pinned by the lowlevel's own tests.
 - The other two compute reds of this class are `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture`
   (later measured to have no capture behind it — see the last section) and
-  `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` (a test premise: under a plain run gate the
+  `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` (a test premise: under a plain run gate the
   host run performs no dispatch, so plain and recorded cannot agree).
 
 ## The re-drive's rounds, measured
@@ -122,7 +122,7 @@ succeeding, `nodes` is the recording's dispatch count at the end of the round.
 | `a_buffer_the_body_closed_over_is_refused_by_the_capture` | `r1 false/0` → `r2 true/2` |
 | `a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one` | `r1 false/0` → `r2 false/2` → `r3 false/2` → `r4 false/2` |
 | `a_function_that_dispatches_nothing_has_no_backend_to_run_on` | `r1 true/0` (no re-drive) |
-| `a_graph_dispatches_exactly_what_the_program_dispatches` | `r1 false/0` → `r2 true/2` |
+| `a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` | `r1 false/0` → `r2 true/2` |
 | `a_graph_recorded_for_one_backend_runs_on_another` | twice: `r1 false/0` → `r2 true/2` |
 | `a_graph_runs_at_whichever_extent_its_argument_names` | twice: `r1 false/0` → `r2 true/2` |
 | `a_recording_produces_the_same_numbers_as_running_the_dispatches` | `r1 false/0` → `r2 true/2` |
@@ -277,7 +277,7 @@ between then and now.
 a_buffer_the_body_closed_over_is_refused_by_the_capture          r1 false/0 | r2 true/2
 a_count_the_body_closed_over_is_refused_by_the_count_filter…     r1 false/0 | r2 false/2 | r3 false/2 | r4 false/2
 a_function_that_dispatches_nothing_has_no_backend_to_run_on      r1 true/0   (no re-drive)
-a_graph_dispatches_exactly_what_the_program_dispatches           r1 false/0 | r2 true/2
+a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed           r1 false/0 | r2 true/2
 a_graph_recorded_for_one_backend_runs_on_another                 twice: r1 false/0 | r2 true/2
 a_graph_runs_at_whichever_extent_its_argument_names              twice: r1 false/0 | r2 true/2
 a_recording_produces_the_same_numbers_as_running_the_dispatches  r1 false/0 | r2 true/2
@@ -288,7 +288,7 @@ what_a_recorded_body_may_not_reach_for_is_refused_by_name        three recording
 The failure-name set is the one measured on the same commit: `lichen-compute` **201 passed / 17 failed /
 2 ignored**, and of the nine programs above only two are among the seventeen —
 `a_buffer_the_body_closed_over_is_refused_by_the_capture` and
-`a_graph_dispatches_exactly_what_the_program_dispatches`. The other seven pass, which is the point the two-way
+`a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`. The other seven pass, which is the point the two-way
 clause makes: their refusal is expected and an unnamed return is it working.
 
 The six `(literal, messages containing it)` exprs are read from the source as the acceptance requires; the
@@ -591,7 +591,7 @@ next thing to measure before any rule can find a body's call by its function.
 
 ## The body walk dies at an undecided cell (round thirteen)
 
-Measured on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`
+Measured on `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`
 with temporary prints, since removed:
 
 - `compile_parallel_fragment` **is** entered for each kernel (two entries per check),

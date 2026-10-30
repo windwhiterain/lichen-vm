@@ -322,27 +322,27 @@ that each know their own case.
 ### A graph is a transcript of the run, and the run is lazy
 
 A body of three statements — dispatch, bind the result to a name nobody reads,
-dispatch again — records a **two-node** graph. That was first read as laziness: the
-plain run once received two dispatches, so a `let` inside a block read by nobody was
-taken for lazy. **Both halves of that reading are now wrong, measured at the trace
-test's own body.** The plain run receives **three** dispatches: the block evaluates
-its statements eagerly (the SPEC's `let` order), so the dead binding is performed.
-The recording still holds **two**: the dead statement is never recorded at all — the
-walk follows the return's demand — and disabling the replay reuse does not change
-that (measured; the two-node result stands). The trace test therefore compares an
-**eager run against a lazy recording**, and the graph is shorter.
+dispatch again — records a **two-node** graph. **Measured at the trace test's own
+body: the plain run receives three dispatches** (the block evaluates its statements
+in order, so the dead binding is performed), and the recording holds two: the dead
+statement and the final expression name **one source node**, the plain run
+re-evaluates it twice, and the graph records the call once. Disabling the replay
+reuse leaves the graph at two, so the difference is the demand walk, not the dedup.
 
-So **a graph is a transcript of the run, not of the source**, and a dispatch whose
-result nothing reads belongs in neither — **but the run performs it**, so the
-transcript needs it: the rule below (the lazy walk) is what the recording does
-today, and the trace test is the measurement that says it no longer matches. A walk that forced the rest would be a
-bug, not a completion: it would put a dispatch in the graph that the program never
-makes, and the graph would then answer with work its own author did not ask for.
-The measurable form of the correct invariant is
-`a_graph_dispatches_exactly_what_the_program_dispatches`: one body, run plainly
-and through a graph, with the two dispatch traces compared — a count would have
-been satisfied by a graph that dispatched the right things against the wrong
-buffers; a trace is not.
+**The maintainer's ruling: a graph is a transcript of the run's *values*.** The same
+kernel over the same values answers the same, so repeated identical dispatches
+collapse; the trace test — now
+`a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` — compares
+the run's trace with consecutive repeats collapsed against the graph's. Answer
+equality is the chain tests' measurement
+(`chain_merge::the_merged_chain_answers_the_un_passed_program_and_a_moved_bias_moves_it`):
+a graph's result carries the recording's cells, so a structural compare in the trace
+test would compare representations, not answers.
+
+So **a graph is a transcript of the run's values, not of the source's dispatches**,
+and a dispatch whose result nothing reads belongs in neither *when the run skips
+it*; here the run performs it, and the shorter graph is the dedup's answer to the
+same call, not lost work.
 
 **The closed gap, and what it cost to close.** The lazy walk reaches exactly what
 the program performs; the one walk that reaches further is operand forcing, and it

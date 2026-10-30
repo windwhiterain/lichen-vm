@@ -504,7 +504,7 @@ conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the expr s
 `infer_template_low_types` **first**, and seeds only a class the inference left shapeless; an
 undecided expr (`Tuple([None, None])`) states nothing. Measured **200/26** against the previous
 **201/25**, and the difference is exact: **five fixed** — including
-`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`, the test that asserted the
+`graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`, the test that asserted the
 class-shape invariant, plus the two tiling tests, one fusion test and a plain-leg probe (since deleted) — and
 **four broken**: `compute::jit_nested_tuple_domain`,
 `compute::jit_cross_kernel_passes_a_sub_tuple_through`,
@@ -589,7 +589,7 @@ buffer, i.e. the class channel, not the slot channel. The per-test list is
 **231 tests**: `test result: FAILED. 186 passed; 44 failed; 1 ignored` in **79.38 s**, from
 ~140 s before. The failure list is a *different set*, so the old counts are not comparable: the
 nested-tuple domain test and the class-shape test
-(`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`) now **pass**, while other
+(`graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`) now **pass**, while other
 device-backed tests that used to be reached by a run are now asserted on the record. The seed
 work recorded above is therefore **partly obsolete**: the two tests it was aimed at are green,
 and the remaining 44 are the new list.
@@ -634,7 +634,7 @@ was measured **neutral** (222) in both forms, because the walk reaches the same 
 **The accounting, measured: the seed fixes two tests and carries five.** Running the whole
 suite twice and diffing the failure lists: with the value seed **225 passed / 29 failed**,
 without it **222 / 32**. Removing the seed **fixes** two —
-`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` (the class-shape assertion)
+`graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` (the class-shape assertion)
 and a plain-leg probe (since deleted) — and **breaks five**, all nested shapes:
 `compute::jit_cross_kernel_passes_a_sub_tuple_through`, `compute::jit_nested_tuple_domain`,
 `mixed_group::a_mixed_group_answers_what_the_flat_control_answers`,
@@ -674,7 +674,7 @@ the "one shape" wording that is an Invariant, so it needs the superior's word, a
 measured neutral on its own).
 
 **The seed conflict is seed-vs-seed, and removing the value seed regresses three.** Tracing
-both write paths on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`: node
+both write paths on `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed`: node
 1414's class root 4246 receives **two seeds** (lines 502 and 578 of the trace, no observation),
 the second with the more specific shape; the conflict then moves to node 1684, again a
 seed-container whose later statement fills an open position. Letting two seeds **fill each
@@ -691,7 +691,7 @@ something still needs the shape the type slot already states.
 **The seed relaxation was asked again (round 93) and the superior's verdict is recorded
 verbatim in this note's head: a seed and an observation never coexist on one node.** The
 class-shape assertion fired on
-`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` with a seed
+`graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` with a seed
 `Tuple([.., Tuple([None, None]), ..])` and an observation
 `Tuple([.., Tuple([None, Some(USize)]), ..])`. The fill relaxation was measured at **+2**
 (compute 225 → 227) and is **not the fix**: per the verdict the conflict means some seeding

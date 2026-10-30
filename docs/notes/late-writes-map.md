@@ -997,7 +997,7 @@ lichen_compute::fused_region::the_floor_run_reports_both_stages_and_answers_the_
 lichen_compute::fused_region::the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fragment
 lichen_compute::graph_argument::a_step_whose_argument_names_two_buffers_records_three_inputs
 lichen_compute::graph_argument::the_two_buffer_chain_runs_on_the_device_and_answers_over_both
-lichen_compute::graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches
+lichen_compute::graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed
 lichen_compute::graph_jit::a_graph_runs_at_whichever_extent_its_argument_names
 lichen_compute::graph_jit::a_recording_produces_the_same_numbers_as_running_the_dispatches
 lichen_compute::mark_anchor::a_mark_inside_a_loop_still_names_its_whole_expression
@@ -1198,7 +1198,7 @@ remain are the 14 of `base-compute-names.txt` — which fail identically on a pr
 |---|---|
 | `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | the extra round reads one algebra name further than the first (`["combine","identity","element"]` against `["combine","identity"]`): re-driving a pass forces operand edges the first pass did not reach |
 | `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | the program is **accepted** (`expected this program to fail`) — of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves. The cause was measured later as *no capture in the program at all*: the lazy run records the closed-over launch, so the refusal's precondition never occurs (`graph-recording-rounds.md`, last section) |
-| `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | the **host** run is the broken half: under the plain gate the program itself performs no dispatch (`right: []`), so recording and running cannot agree however the recording is driven |
+| `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` | the **host** run is the broken half: under the plain gate the program itself performs no dispatch (`right: []`), so recording and running cannot agree however the recording is driven |
 
 The last one is not a recording failure at all — it is the plain gate breaking
 `lichen-compute` outside the recording.
@@ -1256,7 +1256,7 @@ in either direction — no name stops failing, and no name starts.
 |---|---|---|
 | `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | `consumer_guard.rs:256` — the **producer's** claim reads `left: ["combine","identity","element"]` against `right: ["combine","identity"]` | **the recording, reading one algebra name further.** §14.4's reading holds: re-driving a pass (`Module::reopen_stalled`) forces operand edges the first pass did not reach, so the role the producer is not supposed to claim is now in its claim |
 | `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | `graph_jit.rs:135` — `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` | **the program is accepted, with no capture behind it.** Of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves; the rule's precondition is a live buffer, and the lazy run forces the closed-over launch inside the recording window, so `held.z` arrives as an edge (`graph-recording-rounds.md`, last section) |
-| `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | `graph_jit.rs:514` — `left` is the recorded graph's two dispatch lines, `right` is `[]` | **a premise mismatch, not a recording failure.** `right` is the trace of the **host** run, and the plain gate makes the program itself perform no dispatch at all — so the premise "a graph is a transcript of the run" has nothing to be a transcript of. No way of driving the recording repairs this |
+| `graph_jit::a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed` | `graph_jit.rs:514` — `left` is the recorded graph's two dispatch lines, `right` is `[]` | **a premise mismatch, not a recording failure.** `right` is the trace of the **host** run, and the plain gate makes the program itself perform no dispatch at all — so the premise "a graph is a transcript of the run" has nothing to be a transcript of. No way of driving the recording repairs this |
 
 ### 15.3 What is no longer true of §13 and §14
 
