@@ -315,9 +315,21 @@ After the direct-template migration on `dev@ffef59c8`:
 - The full `lichen-compute` suite is **147 passed, 93 failed, 1 ignored**
   after the field-position read fix (the direct-template baseline was
   137 / 103 / 1, and the static-parameter-class fix was 136 / 104 / 1). The
-  remaining failures are the compute graph-lowering families plus direct
-  templates whose nested requirement is shared across kernels; they are not
+  language-server hovers, the render tests and the serve schema probe are green;
+  the remaining failures are the compute graph-lowering families plus direct
+  templates whose nested requirement is shared across kernels. They are not
   evidence against the source model.
+- The dominant remaining family is `compute.graph`'s dispatch recording: 84 of
+  the 93 failures name "a dispatch's count is not a value at all". The count is
+  `s.n`, a read of the recorded function's parameter. In one recording the read
+  is a per-call clone whose `field_sources` entry names the `GraphInput`
+  placeholder; in the next the same read is referenced in place and the entry
+  lives on its class root instead. Following `field_sources` through the class
+  root resolves the count, but it also lets the recording proceed far enough to
+  issue the *second* `compute.parallel` refusal, so six refusal tests that
+  expect one diagnostic see two. The double evaluation (check pass and run) is
+  the thing to settle before that lookup is landed; it is not a property of the
+  read.
 - `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/tuple.lichen`
   prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
   shape. The README sync test passes.
