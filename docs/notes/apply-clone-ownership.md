@@ -421,3 +421,31 @@ generation rule, not a checker constraint that follows it.
   `Meta::new` is the one way to build a `Meta` whose links did not come from this
   module: freezing a solved module remaps a live node's links onto local indices,
   and the artifact decoder reads them back.
+
+## 7. The repeated-call rework (open)
+
+The top-level clone bypass was reverted: SPEC §Clone forbids cloning a node
+whose class is outside the function's scope, so the repair must make the class
+internal instead.
+
+Measured on `f := x => x + 1; (f 1, f 2)`:
+
+- The check-stage refusal comes from the checker's **root-term evaluation in the
+  definition pass**. Skipping that one evaluation lets the program check, but
+  the run still answers `(2, 2)`; the second call reuses the first argument.
+- The run's external classes contain the callee's result type cell
+  (`[value, type]` arrays) merged with untagged frozen cells from the static
+  `add` materialization, and the f-owned parameter expression merged with an
+  untagged frozen parameter image.
+- Copying the static codomain's value into the result cell instead of unifying
+  its class removes the result class from the external set; the parameter image
+  remains external.
+- Treating every open frozen cell as per-call (`per_call` in
+  `static_module/apply.rs`) and tagging it with the caller did **not** remove
+  the remaining classes: the merge happens through the type-side static apply,
+  whose apply node is untagged at that point.
+
+The next handle is the static **type-side** apply: its result cell and parameter
+image must be attributed to the calling function before they are bound, and the
+definition pass's root evaluation must not seed the run's classes. The pinned
+test now asserts `(2, 3)` and is red.
