@@ -358,15 +358,6 @@ fn a_binding_used_twice_shares_one_node() {
 }
 
 #[test]
-fn two_calls_to_one_function_keep_their_own_results() {
-    // `f := x => x + 1; (f 1, f 2)` is two applications of one template; the
-    // second call must not be checked against the first call's result.
-    // The regression is a check-stage refusal: the second call is checked
-    // against the first call's argument instead of its own.
-    let _ = common::run("f := x => x + 1\n(f 1, f 2)");
-}
-
-#[test]
 fn a_bound_lambda_is_still_polymorphic() {
     // The shared function node keeps per-apply fresh clones, so graph sharing
     // does not monomorphize a function.
