@@ -781,10 +781,7 @@ where
                     checker.module.evaluate_node_deep(ty, None);
                 }
             }
-            // A function's signature lives in its value, not in the shared
-            // `FunctionType` marker, so a function-valued field read materializes its
-            // value here, once every type slot is decided. An editor's hover renders
-            // the signature from it (`docs/notes/value-templates.md`).
+            // A function's signature is in its value, so a function field read materializes it.
             for index in 0..checker.ir.expr.len() {
                 let expression = ExprId(index as u32);
                 if !matches!(checker.ir[expression].kind, ExprKind::NamedField { .. }) {

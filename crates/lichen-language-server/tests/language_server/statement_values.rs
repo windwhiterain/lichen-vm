@@ -164,10 +164,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         !hover.contains("raw[Function"),
         "the function is not raw: {hover}"
     );
-    // The wrapper takes a function and answers the kernel struct: its parameter's
-    // type is the shared function marker, and its result is the layout. The marker
-    // is a decided type, not an open cell, so the relation is domain to codomain
-    // rather than two named variables.
+    // The wrapper's function type is decided: domain the marker, codomain the struct.
     let signature = hover
         .rsplit_once(" — `")
         .map(|(_, rendered)| rendered.trim_end_matches('`'))
@@ -205,8 +202,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         "the kernel parameter is a struct: {hover}"
     );
     assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
-    // The codomain is the kernel's own output type: the shared function marker,
-    // decided and with no signature cell of its own at this hover.
+    // The codomain is the kernel's own function type, with no open cell here.
     let signature = hover
         .rsplit_once(" — `")
         .map(|(_, rendered)| rendered.trim_end_matches('`'))

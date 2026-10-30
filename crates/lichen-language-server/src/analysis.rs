@@ -3065,8 +3065,7 @@ mod tests {
             !msg.contains("unresolved") && !msg.contains("field of imported module"),
             "field access hover msg = {msg}"
         );
-        // The field renders its value and the shared marker as its type; the
-        // signature is the value's own, so the marker is stripped here.
+        // The marker is the type; the signature is the value's own, so strip it.
         let rendered = msg
             .rsplit_once(" — `")
             .map(|(_, rendered)| rendered.trim_end_matches('`'))
