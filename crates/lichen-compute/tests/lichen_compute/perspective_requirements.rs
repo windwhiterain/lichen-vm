@@ -97,7 +97,7 @@ fn an_imported_requirement_judges_like_an_inline_one() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Gauge := {.v Int # 32}\nstrict := (g = Gauge) => g.v\nstrict (Gauge{.v (5 # 1)})\n",
+        "Gauge := {.v @any : Int # 32}\nstrict := (g = Gauge) => g.v\nstrict (Gauge{.v (5 # 1)})\n",
     );
     let imported = compile_at(
         "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.strict (gauge.Gauge{.v (5 # 1)})\n",
@@ -144,7 +144,7 @@ fn an_imported_open_requirement_is_bound_at_the_call() {
         .join("fixtures");
     let base = directory.join("gauge.lichen");
     let inline = compile(
-        "Choose := _p => {.v Int # _p}\npick := (g = (Choose _)) => g.v\npick ((Choose 32){.v (5 # 1)})\n",
+        "Choose := _p => {.v @any : Int # _p}\npick := (g = (Choose _)) => g.v\npick ((Choose 32){.v (5 # 1)})\n",
     );
     let imported = compile_at(
         "---\n  gauge = import \"gauge.lichen\"\n---\ngauge.pick ((gauge.Choose 32){.v (5 # 1)})\n",
