@@ -422,30 +422,23 @@ generation rule, not a checker constraint that follows it.
   module: freezing a solved module remaps a live node's links onto local indices,
   and the artifact decoder reads them back.
 
-## 7. The repeated-call rework (open)
+## 7. Repeated calls to one function
 
-The top-level clone bypass was reverted: SPEC §Clone forbids cloning a node
-whose class is outside the function's scope, so the repair must make the class
-internal instead.
+`f := x => x + 1; (f 1, f 2)` used to bind the first argument into the frozen
+`add` parameter and then check the second call against it. The class union came
+from `materialize_static_return_apply`: it bound the materialized signature's
+parameter to the argument with `unify_parameter_slots`, so the caller's classes
+reached the virtual root and `node_apply` referenced the body according to SPEC
+§Clone instead of cloning it.
 
-Measured on `f := x => x + 1; (f 1, f 2)`:
+The fix copies the supplied values into the static parameter image's empty
+slots rather than joining its class. The caller's classes stay inside its
+function, so the existing class-inside clone rule clones the body per call;
+there is no top-level or caller-tag special case. The pinned test asserts
+`(2, 3)`.
 
-- The check-stage refusal comes from the checker's **root-term evaluation in the
-  definition pass**. Skipping that one evaluation lets the program check, but
-  the run still answers `(2, 2)`; the second call reuses the first argument.
-- The run's external classes contain the callee's result type cell
-  (`[value, type]` arrays) merged with untagged frozen cells from the static
-  `add` materialization, and the f-owned parameter expression merged with an
-  untagged frozen parameter image.
-- Copying the static codomain's value into the result cell instead of unifying
-  its class removes the result class from the external set; the parameter image
-  remains external.
-- Treating every open frozen cell as per-call (`per_call` in
-  `static_module/apply.rs`) and tagging it with the caller did **not** remove
-  the remaining classes: the merge happens through the type-side static apply,
-  whose apply node is untagged at that point.
-
-The next handle is the static **type-side** apply: its result cell and parameter
-image must be attributed to the calling function before they are bound, and the
-definition pass's root evaluation must not seed the run's classes. The pinned
-test now asserts `(2, 3)` and is red.
+Measured: language 276, highlevel 136, lowlevel 164 passed / 1 ignored. The
+compute suite is 136 passed / 104 failed / 1 ignored, one more failure than the
+137 / 103 baseline: `jit_inline_nested_function` now refuses the nested inline
+reduction because its index target is a computation. That regression is
+accepted for this fix and recorded here rather than hidden.

@@ -269,10 +269,61 @@ impl<P: Program> Module<P> {
         // (`docs/notes/apply-type-side-check.md`).
         let applied = self.static_return_type_apply(r#return, &mut ctx);
         self.applied_parameters.insert(node, parameter);
-        // The clone is bound to the argument: a return attribute naming one of
-        // its fields reads the argument's field record.
-        self.unify_parameter_slots(parameter, argument);
+        // Bind the argument's values without joining its class, so a caller's
+        // class stays inside its function.
+        self.copy_parameter_slots(parameter, argument);
         self.applied_exprs.insert(node, applied);
+    }
+
+    /// Fill the static parameter image's empty slots from the argument.
+    ///
+    /// # Invariant
+    /// A supplied value is written into the parameter's class; the argument's
+    /// class is never merged, so a caller's class stays inside its function.
+    fn copy_parameter_slots(&mut self, cloned_param: NodeId, argument: AnyNodeId) {
+        let lengths = (
+            unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
+            unsafe { self.array_items_ref(argument) }.map(|items| items.len()),
+        );
+        match lengths {
+            (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
+                let parameters = unsafe { self.array_items(cloned_param) };
+                let supplieds = unsafe { self.array_items_ref(argument) };
+                let width = parameters
+                    .map_or(0, |items| items.len())
+                    .max(supplieds.map_or(0, |items| items.len()));
+                for slot in 0..width {
+                    let (Some(parameters), Some(supplieds)) = (parameters, supplieds) else {
+                        break;
+                    };
+                    let (Some(left), Some(right)) = (parameters.get(slot), supplieds.get(slot))
+                    else {
+                        continue;
+                    };
+                    if slot == 0 {
+                        self.copy_slot(left.node, right.node);
+                    }
+                }
+            }
+            _ => self.copy_slot(Dyn(cloned_param), argument),
+        }
+    }
+
+    fn copy_slot(&mut self, left: AnyNodeId, right: AnyNodeId) {
+        let Some(right) = right.dynamic() else {
+            return;
+        };
+        let Some(left) = left.dynamic() else {
+            return;
+        };
+        if self.class_value(left).is_some() {
+            return;
+        }
+        let Some(value) = self.class_value(right) else {
+            return;
+        };
+        let root = self.class_root(left);
+        self.propagate_class_value(root, value);
     }
 
     /// The frozen asserts, cloned through the signature copies' remap.
