@@ -319,7 +319,7 @@ The arms all failed the same way, so a boundary drawn in three arms would not be
 a boundary; the rule is one sentence, which is worth more than three correct arms
 that each know their own case.
 
-### A graph is a transcript of the run, and the run is lazy
+### A graph is a transcript of the run's values
 
 A body of three statements — dispatch, bind the result to a name nobody reads,
 dispatch again — records a **two-node** graph. **Measured at the trace test's own
@@ -352,12 +352,12 @@ operand forcing was pure cost with no reader — so the lazy walk is the only de
 walk. A future change that repaired the return slot without noticing this would
 reintroduce the bug the old count was protecting against.
 
-**The graph is pruned to its return.** The walk still reaches a dispatch the lazy
-run would skip (a closed-over constant buffer, measured by the dead-binding trace
-test), so `finish` drops every node no returned value depends on and renumbers the
-kept edges onto the kept value table (`Graph::prune_to_returns`). The trace test's
-extra line is not a node the graph keeps: it is the *recording* reaching the
-backend, which pruning cannot undo.
+**The graph is pruned to its return.** A walk that records more than the returned
+value needs (an over-eager replay or a re-drive round) would leave a node in the
+graph that no run performs, so `finish` drops every node no returned value depends
+on and renumbers the kept edges onto the kept value table
+(`Graph::prune_to_returns`). The trace test is not its measurement: the dead
+statement never reaches the recording there.
 
 **A statement nobody reads is not demanded, and so cannot be refused.** A block's
 value is the tuple of its statements' values, and a statement whose value nobody
@@ -773,9 +773,9 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   rather than coerced.** The tempting repair for a number in a buffer position —
   treat it as a one-element host vector — is a run that succeeds on a kernel nobody
   wrote. The two roles are separate functions.
-- **A graph is a transcript of the run, and the run is lazy** (see above). A graph
-  that dispatched *more* than its program would be running work nobody asked for,
-  and no refusal would catch it.
+- **A graph is a transcript of the run's values** (see above): repeated identical
+  dispatches collapse, and a graph that dispatched *more* than its program would be
+  running work nobody asked for, with no refusal to catch it.
 - **A graph that captures anything is a use-after-free waiting for a
   `drop_block`.** Nothing in the type says so, because `Graph` is plain data and a
   capture is what the *builder* would have done. The refusal is the only thing
