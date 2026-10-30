@@ -573,6 +573,41 @@ where
         .map(|item| item.node)
 }
 
+/// Whether a kernel's parameter is a **positional tuple** whose value is its domain.
+///
+/// # Invariant
+/// A declared tuple's type is the shared `Tuple` marker, which carries no
+/// elements, so this reads the type expression's **marker** and nothing else: a
+/// kinded type (a struct's or a kernel's declared domain) is not positional.
+pub fn positional_parameter<P: Program>(
+    module: &Module<P>,
+    function: lichen_lowlevel::AnyFunctionId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    let lichen_lowlevel::AnyFunctionId::Dynamic(function) = function else {
+        return false;
+    };
+    let Some(expr) = module
+        .functions
+        .get(function)
+        .map(|function| function.parameter)
+    else {
+        return false;
+    };
+    let Some(type_slot) = module.expr_type_item(expr) else {
+        return false;
+    };
+    // SAFETY: `type_slot` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, type_slot) }) else {
+        return false;
+    };
+    items.first().and_then(|item| node_value(module, item.node))
+        == Some(P::Value::tuple_type_marker())
+}
+
 /// The **field-type list** of a value type — its term's shape: a struct's
 /// fields and a tuple's elements share the slot.
 pub fn field_list<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>

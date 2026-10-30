@@ -7062,9 +7062,12 @@ where
                 ));
                 return None;
             }
-            // A type that states no domain is a polymorphic template: refuse it.
+            // A domainless type is a polymorphic template: refuse it. A positional
+            // tuple is the exception: its value is its domain.
             Err(RoleUnread::Undecided) => {
-                if shape::kernel_parameter_domain(module, function).is_none() {
+                if shape::kernel_parameter_domain(module, function).is_none()
+                    && !shape::positional_parameter(module, function)
+                {
                     let at = match function_node {
                         AnyNodeId::Dynamic(node) => Some(node),
                         AnyNodeId::Static(_) => None,
