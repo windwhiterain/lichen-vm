@@ -347,6 +347,13 @@ operand forcing was pure cost with no reader — so the lazy walk is the only de
 walk. A future change that repaired the return slot without noticing this would
 reintroduce the bug the old count was protecting against.
 
+**The graph is pruned to its return.** The walk still reaches a dispatch the lazy
+run would skip (a closed-over constant buffer, measured by the dead-binding trace
+test), so `finish` drops every node no returned value depends on and renumbers the
+kept edges onto the kept value table (`Graph::prune_to_returns`). The trace test's
+extra line is not a node the graph keeps: it is the *recording* reaching the
+backend, which pruning cannot undo.
+
 **A statement nobody reads is not demanded, and so cannot be refused.** A block's
 value is the tuple of its statements' values, and a statement whose value nobody
 reads is never forced: an unused `collect` is not reached at all, so no refusal
