@@ -822,7 +822,7 @@ impl KernelShape {
 /// one parameter, and a list carrying a single class would read the `Float` at eight bytes. The
 /// payload is one word either way — the number for `Int`, the `f32`'s bits for `Float` — because
 /// that is what a buffer payload carries and a scalar must cross the boundary the same way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScalarLeaf {
     /// The class this leaf's parameter field declared.
     pub class: ScalarClass,

@@ -5386,9 +5386,7 @@ where
             (!deref && !(zero && odd)).then_some(step)
         })
         .collect();
-    // **A template-valued field carries its own value in place** (`k.in.x`): the
-    // chain then starts at the shared template, so the field's own step is the
-    // route from the parameter to that base and is prepended here.
+    // A template-valued base prepends the parameter's route to it (`k.in.x`).
     let parameter = param_value_of(module, param_expr)?;
     let mut full = Vec::with_capacity(kept.len() + 1);
     if module.class_root(current) != module.class_root(parameter) {
@@ -5515,9 +5513,7 @@ where
         let Some(value) = current else {
             break;
         };
-        // **A struct's physical steps include its header**: the spec states a field
-        // position as `name_table[name] + 2`, so a constant step is a physical slot
-        // while a tuple's is its own element (`docs/notes/compound-element-slots.md`).
+        // A struct's constant step is physical (`name_table[name] + 2`); a tuple's is not.
         let on_struct = is_struct_value(module, value);
         let at = match step {
             IndexStep::Position(position) => {
@@ -6453,9 +6449,7 @@ where
         })
     };
     let mut payload = buf_payload::<P>(module, buffer);
-    // **The wrapper can be decided while its payload is not**: a field read's own
-    // value is its expr, and the applied projection names the buffer the read means,
-    // so the projection is read whenever either side is still open.
+    // Read the applied projection while the wrapper or its payload is still open.
     if buffer_open || payload_open(module, payload) {
         if let Some(projected) = recorded_applied_projection::<P>(module, block, buffer) {
             if let Some(projected_payload) = buf_payload::<P>(module, projected) {
@@ -6795,7 +6789,13 @@ where
             }
         }
     }
-    let placed = match graph::record_dispatch(fragment, backend, extent, &scalars, &inputs) {
+    // A replay answers with its source call's node; a body call always appends one.
+    let operator = module.current_operator_node();
+    let origin = operator.and_then(|operator| module.node_origin(operator));
+    let replay = operator.is_some_and(|operator| module.node_owner(operator).is_none());
+    let placed = match graph::record_dispatch(
+        fragment, backend, extent, &scalars, &inputs, origin, replay,
+    ) {
         Ok(placed) => placed,
         Err(reason) => {
             refuse(module, reason);
@@ -7308,9 +7308,7 @@ fn flatten_leaves_at<P>(
             } else {
                 0
             };
-            // **A buffer wrapper is one argument, its payload**: the element type and
-            // the length are the wrapper's own metadata, not values a dispatch reads,
-            // and counting them would make one buffer look like several arguments.
+            // A buffer wrapper is one argument: its payload, not its metadata.
             if skip == shape::STRUCT_VALUE_FIELD_BASE {
                 let names = struct_field_names(module, node).unwrap_or_default();
                 if is_buf_shape(&names) {

@@ -626,6 +626,25 @@ impl<P: Program> Module<P> {
         self.set_node_owner(node, Some(function));
         self.functions[function].nodes.push(node);
     }
+    /// The operator whose run is in progress, or `None` outside one.
+    ///
+    /// # Invariant
+    /// Set only around an extension operator's call and restored after it, so a reader
+    /// that asks during a run names that operator and never a stale one.
+    pub fn current_operator_node(&self) -> Option<NodeId> {
+        self.operator_for_diagnostics
+    }
+
+    /// The function instance a node belongs to, or `None` for a top-level node.
+    ///
+    /// # Invariant
+    /// The owner is the scope the clone walk set, not a fact derived from the node: a
+    /// clone is owned by the instance that made it, while a replay's clones are unowned
+    /// because they sit in the replay's own block.
+    pub fn node_owner(&self, node: NodeId) -> Option<FunctionId> {
+        self.nodes.get(node).and_then(|node| node.function)
+    }
+
     /// Record a diagnostic a **layer above the lowlevel** produced. See
     /// [`ExtensionDiagnostic::fails_build`].
     ///

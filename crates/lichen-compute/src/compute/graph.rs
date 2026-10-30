@@ -16,7 +16,7 @@ use lichen_graph_ir::{
     ValueId,
 };
 use lichen_kernel_ir::{KernelFragment, ParallelBackend, ResidentId, ScalarClass, ScalarLeaf};
-use lichen_lowlevel::{AnyNodeId, LowValue, StaticNodeId};
+use lichen_lowlevel::{AnyNodeId, LowValue, NodeId, StaticNodeId};
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -161,6 +161,25 @@ struct Recording {
     /// symptom whenever one of these is present, so the reason has to travel here
     /// rather than stay a side effect at the dispatch that raised it.
     refusals: Vec<String>,
+    /// The dispatch each **replayed** source call already recorded, and its outputs.
+    ///
+    /// # Invariant
+    /// Only an unowned replay of a call that already recorded a node is here: a call the
+    /// body performs always appends its node, and the map is keyed by the clone's origin
+    /// plus every edge, extent and scalar, so two different calls never share an entry.
+    replayed: HashMap<Replayed, Vec<Placed>>,
+}
+
+/// The identity a replayed dispatch shares with the node it re-runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Replayed {
+    /// The source call the replay was cloned from.
+    source: NodeId,
+    /// The compiled body, which also pins the element classes a call fixed.
+    fragment: u64,
+    inputs: Vec<Edge>,
+    count: RecordedCount,
+    scalars: Vec<RecordedScalar>,
 }
 
 /// One recorded dispatch, with its edges in the recording's own numbering.
@@ -177,7 +196,7 @@ struct RecordedNode {
 /// The same two arms [`RecordedCount`] has, for the same reason: the recording numbers an
 /// edge only at [`finish`], and a scalar read from the parameter and one read from an
 /// earlier node's output land in different id spaces.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RecordedScalar {
     Constant(ScalarLeaf),
     Value(Edge),
@@ -190,7 +209,7 @@ enum RecordedScalar {
 /// node's output land in different id spaces at the end, so resolving either during the walk
 /// makes the later shift wrong and the walk cannot tell which it resolved. [`finish`] is the one
 /// place that turns either into a value number.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RecordedCount {
     Constant(usize),
     Value(Edge),
@@ -202,7 +221,7 @@ enum RecordedCount {
 /// Kept apart because the two get different numbers at the end: an input is whatever slot the
 /// body read, while a produced value is numbered from zero with the input count added in front. A
 /// single `usize` would have to guess which it is.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Edge {
     Input(usize),
     Produced(ValueId),
@@ -255,6 +274,7 @@ pub fn begin() {
             backend: None,
             buffer_declaration: None,
             refusals: Vec::new(),
+            replayed: HashMap::new(),
         })
     });
 }
@@ -360,7 +380,7 @@ pub fn finish() -> Result<(Graph, Backend, Option<(StaticNodeId, StaticNodeId)>)
 }
 
 /// A value the recording has to be able to place in the graph's value table.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Placed {
     /// The caller's `slot`-th argument: `ins(i)` is the `i`-th argument.
     Input(usize),
@@ -481,6 +501,8 @@ pub fn record_dispatch(
     extent: Extent,
     scalars: &[Scalar],
     inputs: &[Placed],
+    origin: Option<NodeId>,
+    replay: bool,
 ) -> Result<Vec<Placed>, String> {
     RECORDINGS.with(|recordings| {
         let mut recordings = recordings.borrow_mut();
@@ -542,15 +564,37 @@ pub fn record_dispatch(
                 Scalar::Value(placed) => RecordedScalar::Value(edge(recording, placed)),
             })
             .collect();
+        // A replay is not a dispatch the body performed: it answers with the node
+        // the body's call recorded.
+        let replayed = origin.map(|source| Replayed {
+            source,
+            fragment: lichen_kernel_ir::fragment_digest(&fragment),
+            inputs: edges.clone(),
+            count,
+            scalars: scalars.clone(),
+        });
+        if replay
+            && let Some(key) = replayed.as_ref()
+            && let Some(placed) = recording.replayed.get(key)
+        {
+            return Ok(placed.clone());
+        }
         recording.nodes.push(RecordedNode {
             fragment,
             inputs: edges,
             count,
             scalars,
         });
-        Ok((0..outputs)
+        let placed: Vec<Placed> = (0..outputs)
             .map(|offset| Placed::Value(first + offset))
-            .collect())
+            .collect();
+        if let Some(key) = replayed {
+            recording
+                .replayed
+                .entry(key)
+                .or_insert_with(|| placed.clone());
+        }
+        Ok(placed)
     })
 }
 
