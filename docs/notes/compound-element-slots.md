@@ -31,15 +31,16 @@ later use reads that value — which is why the alternative was a type lambda
 (`type = _x => struct<_:Int>; (type _)`) instantiated per use. `Any` is the
 constant that removes that burden:
 
-- **Unification.** A class holding `Any` unifies with anything, and *neither
-  merges the classes nor writes a value* (`Module::unify_inner`, checked before
-  the undecided/decided write arms). The wildcard node therefore stays reusable,
-  and nothing is ever bound by it.
-- **Instantiation-deferred use.** Meeting `@any` also marks an empty counterpart
-  `specialize_after_clone`, without putting `Any` in that counterpart. The marked
-  class does not specialize in the current graph; its clone drops the mark and
-  binds through the ordinary remap. This class metadata is separate from the
-  wildcard value's own carriage, so the rules above stay unchanged.
+- **Directional unification.** `Any` unifies with anything. Only a **left** `Any`
+  meeting an undecided right class merges into it; a right `Any` leaves the left
+  class unchanged (`Module::unify_inner`, before the ordinary write arms). Thus
+  `_ = @any` keeps the placeholder open, while `@any = a` gives `a` the wildcard.
+- **Function and instance boundary.** After checking an unasserted identity body,
+  the checker writes `Any` directly into the parameter value class only when that
+  class is wholly inside the function's scope. It does not write the type slot and
+  does not unify an auxiliary `Any` node into the class, so scope and function
+  specialization remain intact. An Apply replaces `Any` with a fresh empty cell;
+  replay is needed only if an open instance cell still lacks the call's value.
 - **A value reader** treats it as **undecided**: evaluation answers no value
   (`evaluate_node_body`), it states no low type, a table key that is `Any` is not
   key content (`table.rs`), and both printers spell it `@any`.

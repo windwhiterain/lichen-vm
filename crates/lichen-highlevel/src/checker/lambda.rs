@@ -148,6 +148,23 @@ where
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
+        // Complete only an unasserted identity return whose class is inside this function's scope.
+        let scope = self.module.function_scope(function);
+        let identity_return = self.module.expr_value_half(ret) == Some(value_cell);
+        for cell in [value_cell] {
+            let inside = scope
+                .as_ref()
+                .is_some_and(|scope| self.module.class_inside_scope(cell, scope));
+            if inside
+                && identity_return
+                && parameter_attribute.is_none()
+                && self.module.functions[function].asserts.is_empty()
+                && self.module.class_value(cell).is_none()
+            {
+                self.module
+                    .write_node_value(cell, Some(P::Value::from(LowValue::Any)));
+            }
+        }
         self.current_parameters.pop();
         self.scopes.pop();
         self.current_block = saved;

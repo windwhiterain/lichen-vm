@@ -162,6 +162,10 @@ impl<P: Program> Module<P> {
             if matches!(value.as_enum(), Some(LowValue::Any)) {
                 return None;
             }
+            // A recorded failure is decided and cached: never re-run the operation to repeat it.
+            if matches!(value.as_enum(), Some(LowValue::Error)) {
+                return Some(value);
+            }
             // A value a unification wrote is not the operator's answer: the run gate's `runned` term
             // tests this operator.
             if self.has_no_result_yet(node) && !self.nodes[node].visiting {
@@ -671,9 +675,9 @@ impl<P: Program> Module<P> {
         // A scope root read ends the scope here: the read is the trigger, so the
         // verdict cache must not answer for it.
         let scope_read = self.is_scope_root_read(node, current);
-        // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
-        // again (late-writes-map.md §11).
+        // A pending operator's seeded value must not bypass its run; an undecided verdict retries.
         if !scope_read
+            && !self.has_no_result_yet(node)
             && let Some(deep) = self.nodes[node].evaluated_deep
             && !deep.undecided
             && let Some(value) = self.nodes[node].value

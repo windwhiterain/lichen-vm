@@ -86,11 +86,10 @@ pub enum LowValue {
     /// **The wildcard**: it unifies with any value and constrains nothing.
     ///
     /// # Invariant
-    /// Unification against a class holding `Any` neither merges nor writes, so the
-    /// wildcard never propagates and its node stays reusable. A value reader treats it
-    /// as **undecided** — no value, no low type — so it never leaks into a computed
-    /// result; the **concreteness verdict** alone takes it as decided, which is what
-    /// lets a written type be proven concrete and reused in place.
+    /// Unification is directional: a left `Any` joins an undecided right class; every other
+    /// wildcard comparison succeeds without merging or writing. Readers treat `Any` as
+    /// **undecided**; only the concreteness verdict takes it as decided, so a written type
+    /// remains reusable while an apply clone replaces `Any` with an open instance cell.
     Any,
 }
 
@@ -917,12 +916,6 @@ pub struct Node<P: Program> {
     /// The node's run stamp: `false` means its operator never ran — a produced answer
     /// versus an asserted one.
     runned: bool,
-    /// Whether this class stays unspecialized in the current graph but opens in a clone.
-    ///
-    /// # Invariant
-    /// The flag is read from the class representative. It blocks specialization here; a clone
-    /// starts without it, so the corresponding instance may bind normally.
-    specialize_after_clone: bool,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     ///
     /// # Invariant
@@ -1003,8 +996,6 @@ pub struct StaticNode<P: Program> {
     /// Whether the source node's operator had run: an artifact carries no run clock, so this
     /// mirror is its zero test.
     pub runned: bool,
-    /// Whether this class is opaque in the current graph and becomes bindable in a clone.
-    pub specialize_after_clone: bool,
     /// The source node's deep-pass verdict. See [`Node::evaluated_deep`].
     pub evaluated_deep: Option<EvaluatedDeep>,
 }

@@ -184,23 +184,25 @@ class representatives do not depend on a map's order.
 The language layer is green with the replay in place. External operation cells
 are now covered; the remaining compile-time provenance gap is separate work.
 
-### `@any`: specialize after clone, without a replay
+### `Any`: replay only for an open instance
 
-`@any` now has an instantiation-deferred use beside its existing wildcard value
-behavior. When it meets an empty class, unification marks that class
-`specialize_after_clone` instead of propagating `Any`. The class does not merge
-or specialize in the current graph. A normal clone drops the mark but preserves
-the remap, so parameter/return aliases still share one instance and the actual
-argument can specialize it. A direct `@any` literal keeps its previous carriage;
-the new bit belongs to the marked class, not to the literal's value.
+`Any` unification is directional. A left `Any` joins an undecided right class;
+a right `Any` leaves the left class unchanged. After checking an unasserted
+identity body, the checker writes `Any` directly into a parameter value class
+that is wholly inside the function's scope. It does not write the type slot or
+unify an auxiliary `Any` node into the class, so no extra scope member is added.
 
-`link_replay` treats a marked template return like an answered one and returns
-without allocating a replay. This is not a global replay suppression: an
-unmarked open return keeps every existing path, and an external operation return
-keeps the landed repair above. Frozen nodes carry the bit, and the artifact
-format moves to 28.
+The instance is not answered by that template value. Both dynamic and frozen
+clone walks replace `Any` with a fresh empty cell, and `link_replay` likewise
+treats it as undecided. A replay is created only when an open plain instance
+cell still needs the call's value; a fully bound instance or an internal
+operation return allocates no bypass Apply. Constructor binding still runs
+before signature comparison stops at `Any`, so the actual function can specialize.
+This replaces the rejected `specialize_after_clone` class metadata: there is no
+mark to merge, freeze, or persist, and no clone/template unification. The
+artifact format moves to 29 because the old per-node mark is removed.
 
-The minimal probe is:
+The minimal probe remains:
 
 ```lichen
 id := (x : Int) => {
@@ -210,13 +212,11 @@ id := (x : Int) => {
 (id 1, id 2)
 ```
 
-It answers `(1, 2): Tuple`. Before the marker, its two calls created two replay
-instances. After it, every visit to `link_replay` for `id` reads
-`specialize_after_clone=true` and the replay table stays empty. The last three
-checks of the same probe entered with 63/81/92 nodes, against 1919/2083/2154
-before the change. Lowlevel is 164 passed / 1 ignored, language is 275 passed,
-its lib is 69 passed, and compute is 127 passed / 113 failed / 1 ignored, the
-same compute reading as before this marker.
+It answers `(1, 2): Tuple`. Measured on that program, `replay_applied` is empty
+and the graph has 176 nodes. Lowlevel is 164 passed / 1 ignored, highlevel is
+136 passed, and language is 275 passed. Replay suppression follows from having
+no open instance cells, not from a side flag; an open return that still carries
+the actual implementation keeps its replay path, as do external operation returns.
 
 ### Measured: an external computation cell cuts off the operand walk
 

@@ -65,6 +65,13 @@ fn array_element_ids(value: LangValue) -> Vec<NodeId> {
         .collect()
 }
 
+/// Evaluate an array and extract its element ids while its arena is still alive.
+fn evaluated_array_element_ids(source: &str) -> Vec<NodeId> {
+    let (mut module, root) = run(source);
+    let value = module.evaluate_node_deep(root, None).unwrap();
+    array_element_ids(value)
+}
+
 /// The node ids of a **struct value's fields**: the first two slots hold the
 /// name table and the nominal id.
 fn struct_field_ids(value: LangValue) -> Vec<NodeId> {
@@ -202,7 +209,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
 #[test]
 fn an_array_literal_checks_against_its_array_type() {
     assert_eq!(
-        array_element_ids(evaluate("A := _x => [@any : Int, 3]\n(A[1, 2, 3] : Array)")).len(),
+        evaluated_array_element_ids("A := _x => [@any : Int, 3]\n(A[1, 2, 3] : Array)").len(),
         3
     );
 }
@@ -215,11 +222,11 @@ fn a_homogeneous_array_of_lambdas_checks() {
     // `?a → ?a` and `?b → ?b` unify, so the binder name is not part of the
     // shape.
     assert_eq!(
-        array_element_ids(evaluate("A := _x => [@any, 2]\nA[x => x, x => x]")).len(),
+        evaluated_array_element_ids("A := _x => [@any, 2]\nA[x => x, x => x]").len(),
         2
     );
     assert_eq!(
-        array_element_ids(evaluate("A := _x => [@any, 2]\nA[y => y, x => x]")).len(),
+        evaluated_array_element_ids("A := _x => [@any, 2]\nA[y => y, x => x]").len(),
         2
     );
 }
@@ -1810,9 +1817,9 @@ fn a_dependent_array_length_pins_the_parameter() {
     // The check resolves the length read to a pure reference of `n`'s cell and
     // pins it, so the parameter is monomorphized.
     assert_eq!(
-        array_element_ids(evaluate(
+        evaluated_array_element_ids(
             "(((n => {A := _x => [@any : Int, n]; A[1, 2, 3]}) 3) : Array)"
-        ))
+        )
         .len(),
         3
     );

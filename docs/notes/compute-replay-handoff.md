@@ -6,9 +6,9 @@
 > bound call image. Lowlevel and language are green, and compute is **136 passed
 > / 104 failed / 1 ignored**. Root materialization, graph values, and
 > definition-cycle failures remain open. Undecided actual field values are
-> preserved instead of being displaced by decided requirements. `@any` can now
-> mark a class as specialize-after-clone, suppressing an unnecessary replay
-> without changing clone/template unification.
+> preserved instead of being displaced by decided requirements. Directional
+> `Any` plus function-parameter completion suppresses unnecessary replay without
+> class metadata or clone/template unification.
 >
 > Read [value-templates](value-templates.md#constructor-fields-keep-their-source)
 > for the field-source contract, [replay-apply](replay-apply.md) for replay, and
@@ -290,10 +290,10 @@ Measured after cleanup:
   two inline cases, direct and cross-kernel arithmetic, tuple codomains,
   `parallel_read_input_buffer`, and `silu`.
 - The `x = @any : Int` identity probe answers `(1, 2)` with no replay instance.
-  Its class carries `specialize_after_clone` in the template and drops it in the
-  ordinary clone, so no alias or provenance edge is needed. See
-  [replay-apply](replay-apply.md#any-specialize-after-clone-without-a-replay)
-  for the node-count comparison and suite readings.
+  Function completion leaves `Any` in the template's open parameter/return class;
+  the ordinary clone remap carries an empty instance cell instead. See
+  [replay-apply](replay-apply.md#any-replay-only-for-an-open-instance)
+  for the mechanism and verification.
 - `jit_cross_kernel_wrapper` and its tuple-argument form pass. `compute.launch`
   is curried: the inner apply creates the closure containing `$launch`, while the
   outer apply supplies that closure's argument. Following the inner origin made

@@ -97,9 +97,9 @@ the actual's value fills it.
   the instance and not two: two tables are never one handle, so a copied one
   would conflict with the original.
 - **The wildcard is decided but never carried.** `LowValue::Any` is a value, not
-  an open hole; the instance's cell replaces it, so the caller's value can fill
-  it — a class holding the wildcard neither merges nor writes, so sharing the
-  template's wildcard cell would lose the value.
+  an open hole in the template; the instance replaces it with a fresh empty cell,
+  so the caller's value can fill it. Sharing the template's wildcard cell would
+  instead keep every instance undecided to readers.
 - **A frozen cell is read in place when it is closed, and becomes the
   instance's own when it is open.** The closure test is the deep one, over the
   frozen module's own payload graph: a frozen cell that holds a decided array

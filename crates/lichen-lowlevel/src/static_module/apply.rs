@@ -26,7 +26,7 @@ impl<P: Program> Module<P> {
         }
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(node) + 1;
-        let result = 'frame: {
+        let result = {
             let static_module = self.static_module(function.module);
             let (r#return, parameter, assert_count) = {
                 let f = &static_module.functions[function.index.0];
@@ -47,14 +47,9 @@ impl<P: Program> Module<P> {
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
-                in_parameter: false,
-                reconcile_cached_answer: false,
             };
-            // Clone the parameter before the return so its fields share one instance.
-            ctx.in_parameter = true;
-            // The parameter's **image**: the clone, or the shared cell.
+            // The parameter image comes first, so return fields share its instance.
             let parameter_image = self.static_node_apply(parameter, &mut ctx);
-            ctx.in_parameter = false;
             let applied = self.static_node_apply(r#return, &mut ctx);
             // Each assert instantiates through the shared remap; a baked
             // condition is not re-registered.
@@ -86,16 +81,14 @@ impl<P: Program> Module<P> {
                 });
             }
             // The check runs against the image, never the template's cell.
-            if self.apply_parameter_check(
+            self.apply_parameter_check(
                 parameter_image,
                 argument,
                 block,
                 node,
                 AnyFunctionId::Static(function),
                 parameter_image,
-            ) {
-                break 'frame None;
-            }
+            );
             let instantiated: Vec<NodeId> = ctx.remap.values().copied().collect();
             self.bind_field_sources(parameter_image, argument, &instantiated);
             let result = self.evaluate_node(Dyn(applied), Some(block));
@@ -157,8 +150,6 @@ impl<P: Program> Module<P> {
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
-                in_parameter: false,
-                reconcile_cached_answer: false,
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.record_applied_expr(node, applied);
@@ -168,7 +159,7 @@ impl<P: Program> Module<P> {
         }
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
-            let failed = self.apply_parameter_check(
+            self.apply_parameter_check(
                 parameter,
                 argument,
                 block,
@@ -179,9 +170,6 @@ impl<P: Program> Module<P> {
             // The type side discards only the errors this check records.
             if check == ParameterCheck::Type {
                 self.unify_errors.truncate(recorded);
-            }
-            if failed {
-                return false;
             }
             // The asserts re-check on this call's copies (apply-type-side-check §6).
             self.register_static_type_asserts(function, block, node, remap, minted, rule);
@@ -276,8 +264,6 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted: HashMap::new(),
-            in_parameter: false,
-            reconcile_cached_answer: false,
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -317,8 +303,6 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted,
-            in_parameter: false,
-            reconcile_cached_answer: false,
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
@@ -422,6 +406,12 @@ impl<P: Program> Module<P> {
         source: StaticFunctionId,
         rule: &mut FrozenClassRule,
     ) -> NodeId {
+        if matches!(
+            module.read(local).and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
+            return self.add_node(block, None, None);
+        }
         if let Some(&clone) = remap.get(&local) {
             return clone;
         }
@@ -508,14 +498,11 @@ impl<P: Program> Module<P> {
     /// static recursion runs through here.
     #[stacksafe]
     fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
-        // The wildcard comes first, as in the dynamic walk: a parameter
-        // receives a fresh hole, never cached.
-        if (ctx.in_parameter || ctx.reconcile_cached_answer)
-            && matches!(
-                ctx.module.read(local).and_then(|value| value.as_enum()),
-                Some(LowValue::Any)
-            )
-        {
+        let wildcard = matches!(
+            ctx.module.read(local).and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        );
+        if wildcard {
             return self.add_node(ctx.target, None, None);
         }
         let node = &ctx.module.nodes[local.index];
@@ -561,16 +548,16 @@ impl<P: Program> Module<P> {
         if let Some(shape) = template_shape {
             self.seed_class_low_type(clone, shape);
         }
-        if undecided {
+        if undecided && inside {
             // A capture cloned for the enclosing call takes that call's tag, never the closure's.
-            if inside {
-                let owner = if ctx.rule.inside(&ctx.module, local, ctx.source) {
-                    ctx.tag
-                } else {
-                    ctx.enclosing_tag
-                };
-                self.set_node_owner(clone, owner);
-            }
+            let owner = if ctx.rule.inside(&ctx.module, local, ctx.source) {
+                ctx.tag
+            } else {
+                ctx.enclosing_tag
+            };
+            self.set_node_owner(clone, owner);
+        }
+        if undecided {
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
@@ -584,19 +571,11 @@ impl<P: Program> Module<P> {
             // The mapping runs only for a value that is kept: a dropped answer
             // must not clone a closure into the target block.
             let value = ctx.module.read(local);
-            let previous = ctx.reconcile_cached_answer;
-            ctx.reconcile_cached_answer |= template_operation.as_ref().is_some_and(|operation| {
-                matches!(
-                    AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
-                    Some(crate::LowOperator::Index)
-                )
-            }) && carried;
             let mapped = if carried {
                 value.map(|value| self.static_remap_value(value, ctx))
             } else {
                 None
             };
-            ctx.reconcile_cached_answer = previous;
             self.write_node_value(clone, mapped);
             // The claim follows `mapped`, not `carried`: an answer whose own
             // elements are open must not claim the run.
@@ -670,11 +649,11 @@ impl<P: Program> Module<P> {
         module: &StaticModule<P>,
     ) -> bool {
         crate::apply::answer_elements_are_undecided::<P>(value, |node| match node {
-            node @ Dyn(_) => self.node_value(node).is_none(),
+            node @ Dyn(_) => self.node_value(node),
             AnyNodeId::Static(sref) if sref.module == module.key => {
-                module.nodes[sref.index.index].value.is_none()
+                module.nodes[sref.index.index].value
             }
-            node @ AnyNodeId::Static(_) => self.node_value(node).is_none(),
+            node @ AnyNodeId::Static(_) => self.node_value(node),
         })
     }
 
@@ -713,20 +692,12 @@ impl<P: Program> Module<P> {
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
                             || ctx.module.nodes[sref.index.index].undecided()
-                            || (ctx.in_parameter
-                                && matches!(
-                                    ctx.module
-                                        .read(sref.index)
-                                        .and_then(|value| value.as_enum()),
-                                    Some(LowValue::Any)
-                                ))
-                            || (ctx.reconcile_cached_answer
-                                && matches!(
-                                    ctx.module
-                                        .read(sref.index)
-                                        .and_then(|value| value.as_enum()),
-                                    Some(LowValue::Any)
-                                ))) =>
+                            || matches!(
+                                ctx.module
+                                    .read(sref.index)
+                                    .and_then(|value| value.as_enum()),
+                                Some(LowValue::Any)
+                            )) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))
@@ -947,8 +918,6 @@ struct StaticApplyCtx<P: Program> {
     target: BlockId,
     module: Arc<StaticModule<P>>,
     remap: HashMap<LocalNodeId, NodeId>,
-    in_parameter: bool,
-    reconcile_cached_answer: bool,
     /// The applied function: its own value node is the recursion self-reference and
     /// must stay baked.
     applied: StaticFunctionId,

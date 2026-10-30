@@ -687,16 +687,15 @@ where
         }
         // The expr is **full width**: settled slots canonically, wildcards
         // elsewhere; a `_`'s positions are its own holes.
-        let any = self.any();
         let placeholder = matches!(self.ir[value].kind, ExprKind::Placeholder);
         let mut width: Vec<NodeId> = (0..P::Attr::ORDER.len())
             .map(|index| {
                 if !placeholder {
-                    return any;
+                    return self.any();
                 }
                 self.slot_attribute(AnyNodeId::Dynamic(value_term), index as u32)
                     .and_then(|node| node.dynamic())
-                    .unwrap_or(any)
+                    .unwrap_or_else(|| self.any())
             })
             .collect();
         for (slot, marker) in slots.iter().zip(tail.iter()) {

@@ -202,8 +202,7 @@ The file is `artifacts/<hash>.module`:
   a re-homed static closure knows its own scope;
 - a **node frame** is `value_flag u8, [value], op_flag u8, [op_tag, operand_flag,
   operand], equality (parent/next/tail: flag+u64, size u32), runned u8,
-  specialize_after_clone u8, evaluated_deep (flag u8, [undecided u8]), low_shape
-  u8 [shape]`. The deep
+  evaluated_deep (flag u8, [undecided u8]), low_shape u8 [shape]`. The deep
   verdict is a flag of its own because `None` ("the pass never ran") and
   `Some(undecided)` ("the pass ran and could not decide") are different facts,
   and the materialize pass's carry rule tests them apart.
@@ -317,6 +316,9 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `29` removed the retired `specialize_after_clone` bit. Directional `Any` and
+  function-parameter completion now decide the same replay boundary without class
+  metadata, so v28 artifacts are rebuilt rather than read with a shifted node frame.
 - `28` added each class's `specialize_after_clone` bit beside `runned`. A v27
   artifact loses the distinction between an ordinary open cell and one that must
   stay unspecialized until instantiation, so it could build a replay the source

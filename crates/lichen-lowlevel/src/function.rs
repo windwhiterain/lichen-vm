@@ -232,16 +232,14 @@ impl<P: Program> Module<P> {
             let instantiation = match replay {
                 Some((applied, parameter)) => {
                     let template_parameter = self.functions[function].parameter;
-                    if self.apply_parameter_check(
+                    self.apply_parameter_check(
                         parameter,
                         argument,
                         block,
                         node,
                         AnyFunctionId::Dynamic(function),
                         template_parameter,
-                    ) {
-                        return None;
-                    }
+                    );
                     Instantiation::recorded(applied)
                 }
                 None => {
@@ -314,12 +312,22 @@ impl<P: Program> Module<P> {
         self.record_applied_expr(node, applied);
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
-        // Only a clone whose expr is absent is evaluated; forcing one that answers costs an
-        // apply the deep budget counts.
-        if self.expr_type_item(applied).is_none() {
+        // A cloned `Any` codomain reads the template requirement without running the body.
+        let mut codomain = self.expr_type_item(applied);
+        if codomain.is_none() {
+            let template = self
+                .node_origin(applied)
+                .and_then(|origin| self.expr_type_item(origin));
+            if template.is_some_and(|node| {
+                self.node_value(node).and_then(|value| value.as_enum()) == Some(LowValue::Any)
+            }) {
+                codomain = template;
+            }
+        }
+        if codomain.is_none() {
             self.evaluate_node(Dyn(applied), Some(block));
         }
-        let Some(codomain) = self.expr_type_item(applied) else {
+        let Some(codomain) = codomain else {
             return false;
         };
         self.evaluate_node(codomain, Some(block));
@@ -428,7 +436,12 @@ impl<P: Program> Module<P> {
         if !self.nodes.contains_key(return_type) {
             return false;
         }
-        let open = |node| self.nodes[node].operation.is_none() && self.class_value(node).is_none();
+        let open = |node| {
+            self.nodes[node].operation.is_none()
+                && self
+                    .class_value(node)
+                    .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
+        };
         open(return_value)
             && open(return_type)
             && self.class_root(return_value) != self.class_root(parameter_value)
@@ -556,7 +569,7 @@ impl<P: Program> Module<P> {
         // A signature clone binds nothing; the other modes probe the parameter.
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
-            let failed = self.apply_parameter_check(
+            self.apply_parameter_check(
                 parameter_image,
                 argument,
                 block,
@@ -568,17 +581,27 @@ impl<P: Program> Module<P> {
             if check == ParameterCheck::Type {
                 self.unify_errors.truncate(recorded);
             }
-            if failed {
-                return None;
-            }
+            let replay = self.unify_errors.len() == recorded;
             let instantiated: Vec<NodeId> = remap.values().copied().collect();
             self.bind_field_sources(parameter_image, argument, &instantiated);
             self.replay_pending_projections(parameter, block);
+            if replay {
+                // A clone's open cells reach the value of the call that made them through the
+                // replay, not through the template.
+                self.link_replay(function, argument, block, node, &remap);
+            }
         }
-        // A clone's open cells reach the value of the call that made them through the
-        // replay, not through the template.
-        self.link_replay(function, argument, block, node, &remap);
         Some(Instantiation { applied, remap })
+    }
+
+    /// Whether a class has an answer that can suppress replay.
+    ///
+    /// # Invariant
+    /// `Any` is not an answer: it stays open and triggers replay only when an open instance
+    /// cell still needs the call's value; a fully bound instance creates no replay.
+    fn class_answer_is_decided(&self, node: NodeId) -> bool {
+        self.class_value(node)
+            .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)))
     }
 
     /// Link a clone's open cells to a replay of the apply that made them.
@@ -600,13 +623,11 @@ impl<P: Program> Module<P> {
         if self.replaying {
             return;
         }
-        // An answered return needs no replay; an internal operation runs normally.
+        // An answered return or an internal operation needs no replay.
         let Some(return_value) = self.expr_value_half(self.functions[function].r#return) else {
             return;
         };
-        if self.class_specialize_after_clone(return_value)
-            || self.class_value(return_value).is_some()
-        {
+        if self.class_answer_is_decided(return_value) {
             return;
         }
         let external_operation = self.nodes[return_value].operation.is_some()
@@ -619,7 +640,7 @@ impl<P: Program> Module<P> {
         let mut open: Vec<(NodeId, NodeId)> = remap
             .iter()
             .filter(|&(&template, &clone)| {
-                self.class_value(clone).is_none()
+                !self.class_answer_is_decided(clone)
                     && (self.nodes[clone].operation.is_none()
                         || self
                             .function_scope(function)
@@ -697,7 +718,7 @@ impl<P: Program> Module<P> {
             let Some(&cell) = instantiation.remap.get(&template) else {
                 continue;
             };
-            if cell == clone || self.class_value(cell).is_some() {
+            if cell == clone || self.class_answer_is_decided(cell) {
                 continue;
             }
             self.unify(clone, cell);
@@ -833,13 +854,10 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        // A wildcard is carried into ordinary values; a parameter template
-        // receives a fresh undecided cell instead.
-        if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
+        let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
+        if wildcard {
             let fresh = self.add_node(ctx.target, None, None);
-            if !ctx.in_parameter {
-                self.write_node_value(fresh, value);
-            }
+            self.nodes[fresh].origin = Some(node);
             return fresh;
         }
         // Only the parts whose value could differ per call get fresh clones — see
@@ -874,6 +892,7 @@ impl<P: Program> Module<P> {
         let depends_on_parameter = ctx.in_parameter
             || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
+            || wildcard
             || (!proven_concrete && !closed)
             || scoped
             || self.value_holds_foreign_function(value, ctx.anchor);
@@ -887,7 +906,7 @@ impl<P: Program> Module<P> {
             && operation.is_some()
             && (self.function_descends_from(function, ctx.anchor)
                 || self.functions[ctx.anchor].nodes.contains(&node));
-        if !class_inside && !replay_operation {
+        if !class_inside && !replay_operation && !wildcard {
             return node; // outside the scope — reference as-is
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
@@ -927,17 +946,12 @@ impl<P: Program> Module<P> {
         });
         // The deep pass makes an answer a fact every call shares; `runned` is another axis.
         let template_answer = evaluated_deep.is_some();
-        // A wildcard answer is never carried: the clone's own
-        // cell is its replacement.
-        let wildcard_answer = value.is_some_and(|value| value.as_enum() == Some(LowValue::Any));
         let carried = match &operation {
-            None => !wildcard_answer,
+            None => true,
             Some(_) => {
                 // An answer holding a foreign closure is no more carriable than a bare one: mapping
                 // cannot reach inside a function body.
-                template_answer
-                    && !wildcard_answer
-                    && !self.value_holds_foreign_function(value, ctx.applied)
+                template_answer && !self.value_holds_foreign_function(value, ctx.applied)
             }
         };
         // A mapping runs only for a kept value: a dropped answer must not clone a closure.
@@ -1266,9 +1280,7 @@ impl<P: Program> Module<P> {
     /// One level deep by design: a structure whose elements are decided is a fact a clone
     /// may answer with, however open its interior is.
     fn answer_elements_are_undecided(&self, value: P::Value) -> bool {
-        crate::apply::answer_elements_are_undecided::<P>(value, |node| {
-            self.node_value(node).is_none()
-        })
+        crate::apply::answer_elements_are_undecided::<P>(value, |node| self.node_value(node))
     }
 
     /// Whether `value`'s tree holds a closure foreign to `against`.

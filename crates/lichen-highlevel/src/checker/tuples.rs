@@ -63,21 +63,23 @@ where
     /// # Invariant
     /// The width is [`shape::slot_width`] whatever an element spells, so a
     /// written type's slots and a value's unify whatever either one writes; an
-    /// unconstrained position is the wildcard, which neither binds nor
-    /// propagates.
+    /// unconstrained position holds `Any`, replaced by an open cell in each apply clone.
     pub(super) fn element_slot(
         &mut self,
         value: Option<NodeId>,
         ty: Option<NodeId>,
         attrs: Option<Vec<NodeId>>,
     ) -> NodeId {
-        let any = self.any();
         let mut items: Vec<NodeId> = Vec::with_capacity(shape::slot_width::<P>());
-        items.push(value.unwrap_or(any));
+        items.push(value.unwrap_or_else(|| self.any()));
         items.push(ty.unwrap_or_else(|| self.fresh_cell()));
         match attrs {
             Some(attrs) => items.extend(attrs),
-            None => items.extend(std::iter::repeat_n(any, P::Attr::ORDER.len())),
+            None => {
+                for _ in 0..P::Attr::ORDER.len() {
+                    items.push(self.any());
+                }
+            }
         }
         let layout = self.full_width_layout();
         // The second position is the value's shape authority
@@ -99,8 +101,10 @@ where
     /// [`shape::attr_slot`]`(i)` of the term and belongs at its marker's
     /// `order_index`.
     pub(super) fn element_attr_slots(&mut self, el: ExprId) -> Vec<NodeId> {
-        let any = self.any();
-        let mut slots = vec![any; P::Attr::ORDER.len()];
+        let mut slots = Vec::with_capacity(P::Attr::ORDER.len());
+        for _ in 0..P::Attr::ORDER.len() {
+            slots.push(self.any());
+        }
         let tail = self.schema_tail(el).to_vec();
         if tail.is_empty() {
             return slots;

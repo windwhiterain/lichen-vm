@@ -92,8 +92,6 @@ impl<P: Program> Module<P> {
         let root_b = disjoint::find(&mut self.nodes, b);
         let left = self.nodes[root_a].low_shape.as_deref().cloned();
         let right = self.nodes[root_b].low_shape.as_deref().cloned();
-        let specialize_after_clone =
-            self.nodes[root_a].specialize_after_clone || self.nodes[root_b].specialize_after_clone;
         let left_value = self.nodes[a].value;
         let right_value = self.nodes[b].value;
         // A class that holds a value has no holes: the valueless side fills before the union.
@@ -103,7 +101,6 @@ impl<P: Program> Module<P> {
             _ => {}
         }
         let representative = disjoint::union(&mut self.nodes, root_a, root_b);
-        self.nodes[representative].specialize_after_clone = specialize_after_clone;
         // The merged class's scope summary is the nearest common ancestor of the
         // two classes' summaries.
         self.merge_class_summaries(root_a, root_b, representative);
@@ -158,21 +155,6 @@ impl<P: Program> Module<P> {
     /// nothing answers [`None`]. See docs/notes/lowlevel-vm.md.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.nodes.get(self.class_root(node))?.value
-    }
-
-    /// Whether this class is opaque here and becomes bindable only in a clone.
-    pub(crate) fn class_specialize_after_clone(&self, node: NodeId) -> bool {
-        self.nodes
-            .get(self.class_root(node))
-            .is_some_and(|node| node.specialize_after_clone)
-    }
-
-    /// Keep an empty class unspecialized in this graph; its clone starts without the flag.
-    fn mark_specialize_after_clone(&mut self, node: NodeId) {
-        let root = self.class_root(node);
-        if let Some(node) = self.nodes.get_mut(root) {
-            node.specialize_after_clone = true;
-        }
     }
 
     /// The class's recursive low type, cut by a path guard. See docs/notes/lowlevel-low-types.md.
@@ -1028,6 +1010,28 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether a function's signature carries `Any` in its parameter value or return type.
+    ///
+    /// # Invariant
+    /// `Any` recurses only into arrays: signature comparison stops before parameter/return
+    /// recursion. Constructor binding still runs, and Apply specializes with the actual argument.
+    fn function_has_wildcard(&self, function: AnyFunctionId) -> bool {
+        let Some((parameter, return_type)) = self.function_cells(function) else {
+            return false;
+        };
+        let parameter_value = unsafe { self.array_items_of(parameter) }
+            .and_then(|items| items.first().map(|item| item.node));
+        parameter_value
+            .into_iter()
+            .chain(std::iter::once(return_type))
+            .any(|node| {
+                matches!(
+                    self.node_value(node).and_then(|value| value.as_enum()),
+                    Some(LowValue::Any)
+                )
+            })
+    }
+
     /// Recursive core of [`Self::unify`]; `path` guards class exprs, `depth` the node-less ones.
     #[stacksafe]
     fn unify_inner(
@@ -1048,23 +1052,17 @@ impl<P: Program> Module<P> {
         let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
-        let opaque = a
-            .node
-            .is_some_and(|node| self.class_specialize_after_clone(node))
-            || b.node
-                .is_some_and(|node| self.class_specialize_after_clone(node));
-        // `@any` marks an empty counterpart as opaque in this graph; its clone re-opens.
+        // Directional wildcard: only a left `Any` may join an undecided right class.
         if is_wildcard(va) || is_wildcard(vb) {
-            for side in [a, b] {
-                if side.value.is_none()
-                    && let Some(node) = side.node
-                {
-                    self.mark_specialize_after_clone(node);
+            if is_wildcard(va) && vb.is_none() {
+                match (a.node, b.node) {
+                    (Some(ra), Some(rb)) => {
+                        self.add_equality(ra, rb);
+                    }
+                    (None, Some(node)) => self.write_node_value(node, va),
+                    _ => {}
                 }
             }
-            return true;
-        }
-        if opaque {
             return true;
         }
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
@@ -1227,6 +1225,9 @@ impl<P: Program> Module<P> {
         {
             self.record_value_error(root, None, None);
             return Some(false);
+        }
+        if self.function_has_wildcard(a) || self.function_has_wildcard(b) {
+            return Some(true);
         }
         let mut ok = true;
         for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]

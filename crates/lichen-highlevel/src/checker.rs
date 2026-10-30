@@ -932,7 +932,7 @@ where
         let root = self.current_block;
         // The kind markers, one shared node each, in registry order.
         for_each_kind_marker!(define_install_markers[self, root]);
-        // The wildcard: one node, because unification neither merges nor writes it.
+        // Default positions share this wildcard; source literals and function sugar are fresh.
         self.any_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::Any)));
         // `K = [Type, K]`: point its type slot at itself; the lowlevel deep
         // pass cuts the self-loop it reaches.
@@ -1038,9 +1038,13 @@ where
         self.one_value
     }
 
-    /// The shared wildcard value node — the `@any` spelling's value.
-    pub(super) fn any(&self) -> NodeId {
-        self.any_value
+    /// A fresh wildcard value node for one source or default position.
+    pub(super) fn any(&mut self) -> NodeId {
+        self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Any)),
+        )
     }
 
     /// A constant `USize` node — a subscript or table key a rule states rather
@@ -1286,11 +1290,9 @@ where
                 template: false,
             })
             .collect();
-        let any = self.any();
-        items.extend(std::iter::repeat_n(
-            ArrayItem::new(AnyNodeId::Dynamic(any)),
-            P::Attr::ORDER.len(),
-        ));
+        for _ in 0..P::Attr::ORDER.len() {
+            items.push(ArrayItem::new(AnyNodeId::Dynamic(self.any())));
+        }
         let layout = self.full_width_layout();
         let array = self.module.alloc_array(&items, block);
         let node = self.alloc_node(
@@ -1343,11 +1345,12 @@ where
     /// meaningful slots at [`crate::shape::EXPR_VALUE_SLOT`]/[`crate::shape::EXPR_TYPE_SLOT`] and
     /// every other slot is the wildcard an unstated attribute is.
     fn slot_expr(&mut self, block: BlockId, first: NodeId, second: NodeId) -> NodeId {
-        let any = self.any();
         let mut items = Vec::with_capacity(slot_width::<P>());
         items.push(first);
         items.push(second);
-        items.extend(std::iter::repeat_n(any, P::Attr::ORDER.len()));
+        for _ in 0..P::Attr::ORDER.len() {
+            items.push(self.any());
+        }
         let layout = self.full_width_layout();
         self.array_node_with_layout(block, &items, layout)
     }
@@ -1362,13 +1365,12 @@ where
         marker: &P::Attr,
         slot: NodeId,
     ) -> NodeId {
-        let any = self.any();
         let mut items = vec![value, ty];
         for index in 0..P::Attr::ORDER.len() {
             items.push(if index == marker.order_index() {
                 slot
             } else {
-                any
+                self.any()
             });
         }
         let layout = self.full_width_layout();

@@ -70,14 +70,11 @@ impl<P: Program> Module<P> {
         self.unify_errors.truncate(recorded);
     }
 
-    /// The post-clone parameter check shared by both apply paths; `true` when it failed.
+    /// The post-clone parameter check shared by both apply paths.
     ///
     /// # Invariant
-    /// On failure an [`ApplyError`] is recorded and the caller stops the apply without
-    /// evaluating the body.  `parameter_type_source` names the node whose type slot
-    /// holds the declared parameter type: the template parameter for a dynamic apply,
-    /// the instantiated clone for a static one, where the template parameter is not a
-    /// dynamic [`NodeId`].
+    /// Failures are recorded but the body still runs: subtype suppression and the checked set
+    /// must not be narrowed. Callers use the new error count only to decide whether to replay.
     pub(super) fn apply_parameter_check(
         &mut self,
         cloned_param: NodeId,
@@ -86,7 +83,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         function: AnyFunctionId,
         parameter_type_source: NodeId,
-    ) -> bool {
+    ) {
         // Evaluate the argument only to the depth the pattern references, so an
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
@@ -124,7 +121,7 @@ impl<P: Program> Module<P> {
             }
         };
         if self.unify_errors.len() == pre_unify_errors {
-            return false;
+            return;
         }
 
         // Record it and **continue**: a failed unify must not shrink the
@@ -154,7 +151,6 @@ impl<P: Program> Module<P> {
                 error_index: pre_unify_errors,
             });
         }
-        false
     }
 
     /// Rebind this apply's field-source projections to the supplied argument's fields.
@@ -463,18 +459,19 @@ pub(super) fn clone_is_a_plain_cell<P: Program>(module: &Module<P>, clone: NodeI
 ///
 /// # Invariant
 /// One level deep by design: a structure whose own elements are decided is a fact
-/// a clone may answer with, however open its interior is.
+/// a clone may answer with, however open its interior is. `Any` is undecided for this
+/// run policy even though the deep concreteness verdict accepts it.
 pub(super) fn answer_elements_are_undecided<P: Program>(
     value: P::Value,
-    mut slot_is_empty: impl FnMut(AnyNodeId) -> bool,
+    mut slot_value: impl FnMut(AnyNodeId) -> Option<P::Value>,
 ) -> bool {
     let Some(LowValue::Array(array)) = value.as_enum() else {
         return false;
     };
     // SAFETY: `array` is `value`'s payload, which the caller keeps reachable.
-    unsafe { array.items() }
-        .iter()
-        .any(|item| slot_is_empty(item.node))
+    unsafe { array.items() }.iter().any(|item| {
+        slot_value(item.node).is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
+    })
 }
 
 /// Group one apply pass's clones by template representative, sorted; the caller reads runs.

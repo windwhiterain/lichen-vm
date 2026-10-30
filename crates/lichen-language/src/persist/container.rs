@@ -102,7 +102,6 @@ where
         // Store the two axes rather than the collapsed `undecided` read: the
         // materialize pass's carry rule needs them apart.
         w.u8(node.runned as u8);
-        w.u8(node.specialize_after_clone as u8);
         match node.evaluated_deep {
             None => w.u8(0),
             Some(deep) => {
@@ -498,7 +497,6 @@ where
             _ => return Err("bad node owner tag".into()),
         };
         let runned = r.u8()? != 0;
-        let specialize_after_clone = r.u8()? != 0;
         let evaluated_deep = match r.u8()? {
             0 => None,
             1 => Some(EvaluatedDeep {
@@ -514,7 +512,6 @@ where
             equality: lichen_utils::disjoint::Meta::new(parent, next, tail, size),
             owner,
             runned,
-            specialize_after_clone,
             evaluated_deep,
         });
     }

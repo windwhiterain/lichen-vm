@@ -174,13 +174,23 @@ where
                         // SAFETY: `slot` is the payload of a value of `module`.
                         let first = unsafe { slot.items() }.first().map(|item| item.node);
                         match first {
-                            Some(AnyNodeId::Dynamic(node)) => module
-                                .node_value(AnyNodeId::Dynamic(node))
-                                .expect("an element slot has a value"),
+                            Some(AnyNodeId::Dynamic(node)) => {
+                                let value = module.node_value(AnyNodeId::Dynamic(node));
+                                if item.template && value.is_none() {
+                                    P::Value::from(LowValue::Any)
+                                } else {
+                                    value.expect("an element slot has a value")
+                                }
+                            }
                             // A frozen package's slot names the artifact's own node.
-                            Some(node @ AnyNodeId::Static(_)) => module
-                                .node_value(node)
-                                .expect("a frozen element slot has a value"),
+                            Some(node @ AnyNodeId::Static(_)) => {
+                                let value = module.node_value(node);
+                                if item.template && value.is_none() {
+                                    P::Value::from(LowValue::Any)
+                                } else {
+                                    value.expect("a frozen element slot has a value")
+                                }
+                            }
                             None => panic!("a slot without a value position"),
                         }
                     }

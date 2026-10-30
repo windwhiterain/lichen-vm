@@ -421,16 +421,18 @@ where
     /// definition pass.
     ///
     /// # Invariant
-    /// The type application is evaluated first, so the element's own type is
-    /// decided before the tail closes on it; an element that is not a call has
-    /// no application, and its own type is decided already.
+    /// An already decided inner type is used directly; the type application is evaluated
+    /// only while the inner type is open. An element that is not a call has no application,
+    /// and its own type is decided already.
     ///
     /// An entry that is still unresolved stays pending for the later pass: a
     /// position whose type is open keeps its own undecided cell.
     pub(super) fn resolve_shallow_types(&mut self) {
         let shallow_types = std::mem::take(&mut self.shallow_types);
         for (type_apply, tail, inner) in shallow_types {
-            if let Some(type_apply) = type_apply {
+            if self.module.node_value(AnyNodeId::Dynamic(inner)).is_none()
+                && let Some(type_apply) = type_apply
+            {
                 self.module.evaluate_node_deep(type_apply, None);
             }
             self.close_shallow_tail(tail, inner);
@@ -613,12 +615,54 @@ where
         .and_then(|node| node.dynamic())
     }
 
+    /// Whether a slot is `Any` or an empty clone whose origin reaches `Any`.
+    fn wildcard_slot(&self, slot: AnyNodeId) -> bool {
+        if matches!(
+            self.module
+                .node_value(slot)
+                .and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
+            return true;
+        }
+        if self.module.node_value(slot).is_some() {
+            return false;
+        }
+        let mut current = slot
+            .dynamic()
+            .and_then(|node| self.module.node_origin(node));
+        for _ in 0..8 {
+            let Some(node) = current else {
+                return false;
+            };
+            if matches!(
+                self.module
+                    .node_value(AnyNodeId::Dynamic(node))
+                    .and_then(|value| value.as_enum()),
+                Some(LowValue::Any)
+            ) {
+                return true;
+            }
+            current = self.module.node_origin(node);
+        }
+        false
+    }
+
+    /// Whether an element requirement is a wildcard, including an empty clone of one.
+    ///
+    /// # Invariant
+    /// Empty alone is not wildcard: the node's origin must reach `Any`, so an ordinary
+    /// undecided or computed pin still checks the whole expression.
+    fn wildcard_requirement(&self, requirement: NodeId) -> bool {
+        let Some(slot) = shape::value_item(&self.module, AnyNodeId::Dynamic(requirement), 0) else {
+            return false;
+        };
+        self.wildcard_slot(slot)
+    }
+
     /// Check one array element without merging a wildcard's expression root.
     fn check_array_element(&mut self, el: ExprId, element: NodeId, requirement: NodeId) {
-        let wildcard = shape::value_item(&self.module, AnyNodeId::Dynamic(requirement), 0)
-            .and_then(|node| self.module.node_value(node))
-            .and_then(|value| value.as_enum())
-            .is_some_and(|value| matches!(value, LowValue::Any));
+        let wildcard = self.wildcard_requirement(requirement);
         if !wildcard {
             self.check_unify(
                 element,
@@ -635,9 +679,14 @@ where
         else {
             return;
         };
-        for (actual, expected) in actual.iter().zip(expected.iter()).skip(1) {
+        for (index, (actual, expected)) in actual.iter().zip(expected.iter()).skip(1).enumerate() {
             if let (Some(actual), Some(expected)) = (actual.node.dynamic(), expected.node.dynamic())
             {
+                // A cloned wildcard attribute states no value requirement; an ordinary open
+                // attribute still runs its refinement check.
+                if index > 0 && self.wildcard_slot(AnyNodeId::Dynamic(expected)) {
+                    continue;
+                }
                 // Two open slots state no constraint yet; a decided element still pins the shared type.
                 if self
                     .module

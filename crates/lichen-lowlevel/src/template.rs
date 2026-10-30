@@ -558,7 +558,7 @@ impl<P: Program> Module<P> {
             .is_some_and(|deep| !deep.undecided)
             && mapped.is_some_and(|value| {
                 !crate::apply::answer_elements_are_undecided::<P>(value, |node| {
-                    self.node_value(node).is_none()
+                    self.node_value(node)
                 })
             });
         self.stamp_node_ran_if(clone, claimed);
@@ -757,7 +757,7 @@ impl<P: Program> Module<P> {
         let claimed = evaluated_deep.is_some_and(|deep| !deep.undecided)
             && mapped.is_some_and(|value| {
                 !crate::apply::answer_elements_are_undecided::<P>(value, |node| {
-                    self.node_value(node).is_none()
+                    self.node_value(node)
                 })
             });
         self.stamp_node_ran_if(clone, claimed);
