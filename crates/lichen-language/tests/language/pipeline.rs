@@ -359,11 +359,14 @@ fn a_binding_used_twice_shares_one_node() {
 
 #[test]
 fn two_calls_to_one_function_keep_their_own_results() {
-    // `f := x => x + 1; (f 1, f 2)` is two applications of one template; the
-    // second call must not be checked against the first call's result.
-    // The regression is a check-stage refusal: the second call is checked
-    // against the first call's argument instead of its own.
-    let _ = common::run("f := x => x + 1\n(f 1, f 2)");
+    // Two applications of one template must not share an argument.
+    let (module, value, _) = common::run(
+        "f := x => x + 1
+(f 1, f 2)",
+    );
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 2);
+    assert_eq!(common::usize_of(&elements[1]), 3);
 }
 
 #[test]
