@@ -169,13 +169,13 @@ This is where a **class contract** belongs: the function accepts any
 member of a set of types, and the set is the interface.
 
 A refinement written on a type survives wherever a type expression is
-consumed, so it can ride on one requirement of a compound's **constructor**:
+consumed, so it can ride on one requirement of a compound's **template**:
 
 ```lichen
 Num := set(Int, Float)
 in_num := t => t @in Num
-Pair := _x => (@any : (_ ! in_num), @any : (_ ! in_num))
-f := (p <: Pair) => p
+Pair := (@any : (_ ! in_num), @any : (_ ! in_num))
+f := (p = Pair) => p
 f (1, 2.5)
 ```
 
@@ -186,7 +186,7 @@ f (1, 2.5)
 The requirement `@any : (_ ! in_num)` asks for any value whose **type** is
 a member of `Num`, so the two positions accept an `Int` and a `Float`
 together. What the match compares is the shape — the requirement's own
-cells — so a constructor states a contract without becoming a second check
+cells — so a template states a contract without becoming a second check
 on every use; the class *refusal* is the prelude's operators' business, and
 it is shown below.
 
@@ -204,12 +204,12 @@ binds `add`, `sub`, `mul`, `div`, `less`, `greater`, `less_or_equal` and
 refined by the class:
 
 ```lichen
-let Pair := _x => (_ ! in_num, _ ! in_num)
-add := operands => { operands <: Pair; operands(0) + operands(1) }
+let Pair := (@any ! in_num, @any ! in_num)
+add := operands => { operands = Pair; operands(0) + operands(1) }
 ```
 
-`Pair` is a constructor, and `operands <: Pair` applies it once: the two
-positions it returns are the requirements the operands must meet.
+`Pair` is a template, and `operands = Pair` unifies the operands with it:
+the two positions it holds are the requirements the operands must meet.
 
 That one declaration is the whole contract, and it is checked three ways.
 
@@ -218,10 +218,10 @@ diagnostics the operator reports, the class refusal reads:
 
 ```text
 error: does not satisfy {Int, Float}
-  --> …/builtin/core.lichen:4:40
+  --> …/builtin/core.lichen:4:39
    |
- 4 | add := operands => { operands <: Pair; operands(0) + operands(1) }
-   |                                        ^
+ 4 | add := operands => { operands = Pair; operands(0) + operands(1) }
+   |                                       ^
 note: the failing use is here
   --> 1:5
    |
@@ -282,5 +282,5 @@ same way.
    while `20` does not.
 5. Write `add (1, 2)`, `add (1.5, 2.5)`, `add (1, 1.5)`, and
    `add (1, 2, 3)` and explain each answer.
-6. Refine one requirement of a two-element tuple constructor and check which
+6. Refine one requirement of a two-element tuple template and check which
    calls hold.

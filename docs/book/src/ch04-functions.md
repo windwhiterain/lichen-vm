@@ -95,11 +95,11 @@ is kept; only its signature is constrained. There is no separate
 function-type syntax, and no thin arrow: `->` is not a token in the
 language.
 
-Plain `=` is the spelling because `=` applies nothing. The match operator
-`<:` applies its right hand side exactly once, and a function template is
-not a constructor to apply: it states a signature, not a requirement to be
-produced. Chapter 7 and Chapter 12 show the constructor form for the other
-compound layouts.
+Plain `=` is the spelling because `=` applies nothing, and a function
+template is not a requirement to be produced: it states a signature, not a
+shape. A template that *is* a function is applied where it is used, so
+`actual = (F _)` is that application written out. Chapter 7 and Chapter 12
+show the template form for the other compound layouts.
 
 A function's parameter is instantiated fresh at every application. That
 is what lets one binding be used at two different types:
@@ -251,12 +251,12 @@ A read states its requirement from the type of its container, and `p`
 has none here: nothing in the program has said what its elements are,
 and a recursive function's type is the shared `FunctionType` marker, which
 names no function. A
-**constructor** states the shape — here a tuple constructor whose two
+**template** states the shape — here a tuple template whose two
 positions require an `Int` — and the result follows from it:
 
 ```lichen
-T := _x => (@any : Int, @any : Int)
-gcd := (p <: T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+T := (@any : Int, @any : Int)
+gcd := (p = T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
 ```
 
@@ -265,8 +265,8 @@ gcd (48, 18)
 ```
 
 The `@any : Int` is the *requirement* for one position: any `Int` will
-do. The `<:` applies the constructor exactly once and unifies the
-parameter with the requirement that comes back, so the argument is checked
+do. The `=` unifies the parameter with the template, and the template's
+open slots are instantiated fresh for every use, so the argument is checked
 against a fresh requirement each time.
 
 The annotation on a recursive function is a constraint on the function's
@@ -380,7 +380,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 - A closure keeps the names visible where it was written; partial
   application builds one.
 - Recursion is a self-call; a recursive function whose result stays open
-  states its signature with a constructor.
+  states its signature with a template.
 - `@loop` marks a recursion the compiler may compile as a loop; it changes
   no answer.
 - Functions are values: they can be arguments, results, and compound
@@ -393,7 +393,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 2. Write `compose3 = f => g => h => x => f (g (h x))` and use it.
 3. Explain why `fib 0` terminates, in terms of what the tuple's elements
    evaluate.
-4. Remove the constructor from the `gcd` above and compare the output.
+4. Remove the template from the `gcd` above and compare the output.
 5. Write `@loop` and unmarked versions of `fact` and confirm they agree.
 6. Write a function that returns a function of its own, and explain what
    the returned function captured.

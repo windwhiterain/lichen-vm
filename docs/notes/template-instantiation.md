@@ -4,14 +4,15 @@
 > The walk below is still in the tree — `Module::clone_template` and its
 > `TemplateBoundary` — but the parser no longer produces a clone expression
 > and the checker has no clone arm: there is no source-level `@clone` any
-> more. Freshness comes from **function application** instead, which
-> instantiates a function's parameter and body and shares the captured cells;
-> that is the model the [constructor note](value-templates.md) records. The
-> walk's own rules are kept here because the apply's walk shares them and
-> because the API is still the lowlevel's only general-purpose
-> instantiation.
+> more. Freshness comes from **function application** and from the checker's
+> **requirement instantiation** for direct compound templates; the latter
+> copies open value slots and shares every type and attribute. That is the
+> model the [direct template note](value-templates.md) records. The walk's own
+> rules are kept here because the apply's walk shares them and because the API
+> is still the lowlevel's only general-purpose instantiation.
 >
 > Points at: `crates/lichen-lowlevel/src/template.rs` (the walk),
+> `crates/lichen-highlevel/src/checker/templates.rs` (requirement instantiation),
 > `crates/lichen-lowlevel/src/apply.rs` (the regroup the class topology uses),
 > `crates/lichen-lowlevel/src/function.rs` (the apply's own clone walk, whose
 > rules this one reuses), and

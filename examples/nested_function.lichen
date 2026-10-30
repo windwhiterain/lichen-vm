@@ -2,7 +2,7 @@
   order = "2"
   output = "[1, 1]: Array"
 ---
-Any2 := _x => [@any, 2]
+Any2 := [@any, 2]
 f1 := x => {
     f2 := y => Any2[y, y]
     f2 x 

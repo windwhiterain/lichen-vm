@@ -718,6 +718,9 @@ where
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
+        // Each use copies the template's open slots; instances never share a
+        // required field node.
+        let template_value = self.instantiate_requirement_value(template_value, template_ty, 0);
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(

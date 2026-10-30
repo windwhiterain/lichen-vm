@@ -14,17 +14,17 @@ use lichen_compute::language::new_store;
 /// The sum of the first `lim` elements, `lim` being a buffer read.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .lim (compute.Buf (compute.BufParam{.type Int, .length _}))}
-POut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
-PPar := _x => {.n @any : Int, .least @any : Float, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .least @any : Float, .I PIn _}
-sum_raw := (c <: PPar) => {
+PIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .lim (compute.Buf (compute.BufParam{.type Int, .length _}))}
+POut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
+PPar := {.n @any : Int, .least @any : Float, .in PIn, .out POut}
+PArg := {.n @any : Int, .least @any : Float, .I PIn}
+sum_raw := (c = PPar) => {
   i := compute.range c.n
-  lim := (compute.read (compute.Read{.from c.in.lim, .at 0}) : Int)
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from c.in.x, .at (lim - s(0))}) : Float))) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (lim, c.least ~ "identity"))})
+  lim := (compute.read ((compute.Read _){.from c.in.lim, .at 0}) : Int)
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.x, .at (lim - s(0))}) : Float))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (lim, c.least ~ "identity"))})
 }
-sumk := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (POut _)
+sumk := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" POut
 x := (compute.buffer ([@any : Float, 6][1.0, 2.0, 4.0, 8.0, 16.0, 32.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
 "#;
 

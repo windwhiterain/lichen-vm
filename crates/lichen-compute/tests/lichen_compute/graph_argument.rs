@@ -27,36 +27,36 @@ fn head() -> String {
 ---
   compute = import "compute.lichen"
 ---
-Expr := _x => {{.a (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Side := _x => {{.p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-OutE := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-ParE := _x => {{.n @any : Int, .in In _}}
-scale_raw := (k <: ParE) => {{
+Expr := {{.a (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Side := {{.p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+In   := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutE := {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParE := {{.n @any : Int, .in In}}
+scale_raw := (k = ParE) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
+  ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
 }}
-scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" (OutE _)
-In2  := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Par2 := _x => {{.n @any : Int, .in In2 _}}
-offset_raw := (k <: Par2) => {{
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
+In2  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := {{.n @any : Int, .in In2}}
+offset_raw := (k = Par2) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  ((OutZ){{.z (compute.write (compute.Write{{.to y, .at i, .value (((compute.read (compute.Read{{.from k.in.d, .at i}}) : Float) + (compute.read (compute.Read{{.from k.in.p, .at i}}) : Float)) ~ "element")}}))}})
+  ((OutZ){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) + (compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float)) ~ "element")}}))}})
 }}
-offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" (OutZ _)
+offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 "#
     )
 }
 
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
 const ONE_BUFFER: &str = r#"
-GArg := _x => {.n @any : Int, .in In _}
-step := (s <: GArg) => {
-  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
-  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.d, .p first.e}})
+GArg := {.n @any : Int, .in In}
+step := (s = GArg) => {
+  first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
 built := compute.graph step
 built
@@ -64,10 +64,10 @@ built
 
 /// The same step over an argument naming **two** buffers, both read.
 const TWO_BUFFERS: &str = r#"
-GArg := _x => {.n @any : Int, .in Expr _}
-step := (s <: GArg) => {
-  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.a}}) : Struct)
-  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.b, .p first.e}})
+GArg := {.n @any : Int, .in Expr}
+step := (s = GArg) => {
+  first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.a}}) : Struct)
+  compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.b, .p first.e}})
 }
 built := compute.graph step
 built
@@ -75,10 +75,10 @@ built
 
 /// The same step over an argument whose second buffer sits **outside** `.in`, unread.
 const MISPLACED_BUFFER: &str = r#"
-GArg := _x => {.n @any : Int, .in In _, .q Side}
-step := (s <: GArg) => {
-  first := (compute.plrun scale (compute.A{.n s.n, .I In{.d s.in.d}}) : Struct)
-  compute.plrun offset (compute.A{.n s.n, .I In2{.d s.in.d, .p first.e}})
+GArg := {.n @any : Int, .in In, .q Side}
+step := (s = GArg) => {
+  first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
+  compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
 built := compute.graph step
 built
@@ -92,8 +92,8 @@ built
 /// rather than role paths.
 const UNANNOTATED: &str = r#"
 step := ins => {
-  first := (compute.plrun scale (compute.A{.n ins(0), .I In{.d ins(1)}}) : Struct)
-  compute.plrun offset (compute.A{.n ins(0), .I In2{.d ins(2), .p first.e}})
+  first := (compute.plrun scale ((compute.A _){.n ins(0), .I In{.d ins(1)}}) : Struct)
+  compute.plrun offset ((compute.A _){.n ins(0), .I In2{.d ins(2), .p first.e}})
 }
 built := compute.graph step
 built
@@ -120,19 +120,19 @@ fn running() -> String {
 fn filled() -> String {
     format!(
         r#"
-Fill := _x => {{.n @any : Int}}
-ones_raw := (c <: Fill) => {{
+Fill := {{.n @any : Int}}
+ones_raw := (c = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
-  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value {one}}}))}})
+  ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value {one}}}))}})
 }}
-tens_raw := (c <: Fill) => {{
+tens_raw := (c = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
-  ((OutE){{.e (compute.write (compute.Write{{.to y, .at i, .value {ten}}}))}})
+  ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value {ten}}}))}})
 }}
-ones_filler := compute.parallel ones_raw "cpu" (OutE _)
-tens_filler := compute.parallel tens_raw "cpu" (OutE _)
+ones_filler := compute.parallel ones_raw "cpu" OutE
+tens_filler := compute.parallel tens_raw "cpu" OutE
 "#,
         one = datum(1),
         ten = datum(10),

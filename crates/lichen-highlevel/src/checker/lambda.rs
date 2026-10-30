@@ -391,10 +391,10 @@ where
         // The positional unify compares slot to slot; attribute equality is
         // checked below, the clone resetting its own cells.
         let argument_value = self.value_of(argument);
+        let argument_type = self.state[argument].ty.unwrap();
         // A runtime failure naming the argument resolves to the argument's use.
         self.node_edges
             .insert(argument_value, self.loc(argument, 0));
-        let argument_type = self.state[argument].ty.unwrap();
         // The expr's attribute position is the argument's **provided** slot
         // (`docs/notes/array-attribute-view.md`).
         let caller_marker = match parameter_marker {

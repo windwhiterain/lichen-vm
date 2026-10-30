@@ -56,7 +56,7 @@ fn imports_and_applies_a_function_package() {
 #[test]
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
-    write(&dir, "s.lichen", "_x => {.f @any : Int}\n");
+    write(&dir, "s.lichen", "{.f @any : Int}\n");
     let main = "---s = import \"s.lichen\"---(s{.f 5}).f\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (_module, value, _) = common::run_at(main, Some(&dir), &mut store);
@@ -87,7 +87,7 @@ fn transitive_imports_apply_across_modules() {
 fn transitive_struct_types_flow_through_packages() {
     // The nominal id and the frozen type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
-    write(&dir, "inner.lichen", "_x => {.f @any : Int}\n");
+    write(&dir, "inner.lichen", "{.f @any : Int}\n");
     write(
         &dir,
         "middle.lichen",
@@ -164,7 +164,7 @@ fn a_package_whose_last_statement_fails_reports_the_package_own_failure() {
     // The package's last statement reads past its array, so the package's own
     // build refuses it.
     let dir = temp_dir("failing-export");
-    write(&dir, "access.lichen", "A := _x => [1, 2]\nA[9]\n");
+    write(&dir, "access.lichen", "A := [1, 2]\nA[9]\n");
     let main = "---x = import \"access.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();

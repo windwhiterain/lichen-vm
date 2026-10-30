@@ -62,7 +62,7 @@ blocks are elided:
 expr      := lambda
 lambda    := annotated ('=>' expr)?                  right
 annotated := unify (((':' | '#' | '!' | '?') unify) | ('~' string))*
-unify     := find (('=' | '<:') find)*                 left
+unify     := find ('=' find)*                         left
 find      := cmp ('<==' cmp)*                         table read
 cmp       := bits (('<'|'>'|'<='|'>='|'=='|'!='|'@in') bits)*
 bits      := bitxor ('|' bitxor)*
@@ -97,18 +97,19 @@ The compound forms, in one place:
 tuple value        := '(' (expr sep)+ ')'
 tuple requirement  := '(' requirement (sep requirement)+ ')'
 array requirement  := '[' requirement sep length ']'
-array instance     := constructor-glue '[' (expr sep)* ']'
+array instance     := template-glue '[' (expr sep)* ']'
 struct requirement := '{' ('.' name requirement sep)* '}'
-struct instance    := constructor-glue '{' ('.' name expr sep)* '}'
+struct instance    := template-glue '{' ('.' name expr sep)* '}'
 requirement        := '@any' [':' type] | value [':' type]
 ```
 
 The **layout types** `Tuple`, `Array` and `Struct` are values, not
 spellings of a type; the shape of a compound lives in its value, and a
-**constructor** is the function that returns a fresh requirement when it is
-applied (Chapter 7). The match operator `<:` applies its right hand side
-exactly once — `actual <: S` is `actual = S _` — and plain `=` applies
-nothing.
+**template** is a direct compound value whose open slots are `@any`
+(Chapter 7). The match operator `=` unifies an actual with the template,
+and a template that is a function is applied where it is used, as
+`(F _)`. The spelling `<:` is retired: it is sugar for `=` and lowers
+exactly like it.
 
 Where this differs from the spec, the spec is right.
 
@@ -140,10 +141,10 @@ ignored and prose inside it is the only prose a file can carry.
 | lambdas, application, recursion, function templates | 4 |
 | annotations, `_`, `raw`, the layout types | 5 |
 | laziness, `@shallow`, `@gc`, `none` | 6 |
-| tuples, arrays, requirements, `<:` | 7 |
+| tuples, arrays, requirements, templates | 7 |
 | structs, instances, records | 8 |
 | tables and sets, `@in` | 9 |
-| constructors, requirements, pinned lengths | 10 |
+| templates, requirements, pinned lengths | 10 |
 | refinements, classes | 11 |
 | recursive and dependent shapes | 12 |
 | `#`, `?`, `~` | 13 |

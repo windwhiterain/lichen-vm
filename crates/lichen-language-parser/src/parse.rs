@@ -950,7 +950,7 @@ fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
 enum UnifyOp {
     /// `=` — the plain unify of an actual and an expected value.
     Plain,
-    /// `<:` — apply the template constructor to `_` before the unify.
+    /// `<:` — the plain unify, kept as a spelling during the migration.
     Template,
 }
 

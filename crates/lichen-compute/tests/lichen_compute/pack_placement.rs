@@ -48,28 +48,28 @@ fn declared() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Par := _x => {{.n @any : Int, .in In _}}
-reduction := (k <: Par) => {{
+In  := {{.b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Out := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par := {{.n @any : Int, .in In}}
+reduction := (k = Par) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
-  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
 }}
-kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
-step := (s <: Par) => {{
-  compute.plrun kernel (compute.A{{.n s.n, .I In{{.b s.in.b}}}}) : Struct
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+step := (s = Par) => {{
+  compute.plrun kernel ((compute.A _){{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
-Data := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Fill := _x => {{.n @any : Int}}
-fill := (c <: Fill) => {{
+Data := {{.b (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Fill := {{.n @any : Int}}
+fill := (c = Fill) => {{
   i := compute.range c.n
   b := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
-  ((Data){{.b (compute.write (compute.Write{{.to b, .at i, .value (int2float i + 1.0)}}))}})
+  ((Data){{.b (compute.write ((compute.Write _){{.to b, .at i, .value (int2float i + 1.0)}}))}})
 }}
-filler := compute.parallel fill "cpu" (Data _)
+filler := compute.parallel fill "cpu" Data
 data := (compute.plrun filler ((Fill){{.n {COUNT}}}) : Struct)
 out := compute.collect (compute.graphrun built ({COUNT}, data.b))
 out

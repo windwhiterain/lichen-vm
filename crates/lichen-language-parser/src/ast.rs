@@ -136,7 +136,7 @@ pub enum Expr {
         expected: Box<Expr>,
         span: Span,
     },
-    /// `actual <: template` — apply `template` to `_`, then unify with its result.
+    /// `actual <: template` — the plain unify of the actual with the template.
     TemplateUnify {
         actual: Box<Expr>,
         template: Box<Expr>,

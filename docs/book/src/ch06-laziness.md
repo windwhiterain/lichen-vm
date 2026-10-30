@@ -96,7 +96,7 @@ therefore be unfolded forever. The marker `@shallow` says the element's
 value stays lazy in the checker's evaluation:
 
 ```lichen
-T := _x => [@any, 2]
+T := [@any, 2]
 nats := n => T[n, @shallow nats (n + 1)]
 ns := nats 0
 (ns[1][0], ns[1][1][0], ns[1][1][1][0], ns[1][1][1][1][0])
@@ -115,7 +115,7 @@ Without the marker the same definition does not check: the checker
 unfolds the element, and stops on its budget:
 
 ```lichen
-T := _x => [@any, 2]
+T := [@any, 2]
 nats := n => T[n, nats (n + 1)]
 ns := nats 0
 ns[1][0]
@@ -125,7 +125,7 @@ ns[1][0]
 error: the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The program may still terminate when run.
   --> 1:6
    |
- 1 | T := _x => [@any, 2]
+ 1 | T := [@any, 2]
    |      ^
 ```
 
@@ -138,7 +138,7 @@ the first `n` levels of the element's type spine. The depth is a bound of
 at least `1`; a depth of `0` marks no level, and is refused:
 
 ```lichen
-T := _x => [@any : Int, 2]
+T := [@any : Int, 2]
 T[@shallow(0) 5, 6]
 ```
 
@@ -227,7 +227,7 @@ add := x => y => x + y
 double := n => @gc { a := n + 1
                    b := add a a
                    b }
-T := _x => [@any : Int, 2]
+T := [@any : Int, 2]
 @gc T[double 3, double 7]
 ```
 

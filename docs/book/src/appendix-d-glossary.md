@@ -25,9 +25,10 @@ the fusion machinery. Chapter 17.
 **closure** — a function that kept the names visible where it was written.
 Chapter 4.
 
-**constructor** — a function that returns a fresh requirement when it is
-applied: `S := _x => {.a _, .b _}`. A constructor is what `<:` applies.
-Chapter 7.
+**constructor** — a *parameterized* constructor, the one form that stays a
+function: `F := I => {.in I}`. It is applied explicitly where it is used,
+as `(F _){…}` or `(F _)`. A zero-parameter constructor over a compound
+body is a **template**. Chapter 7.
 
 **currying** — writing a multi-argument function as nested one-argument
 lambdas; `x => y => …`. Chapter 4.
@@ -51,16 +52,16 @@ Chapter 4.
 type is; it names no function, so a signature is stated by a **function
 template** instead. Chapters 4 and 12.
 
-**generic (parametric) constructor** — a constructor built by a function,
+**generic (parametric) template** — a template built by a function,
 such as `Box Int`. Chapter 10.
 
 **hole** — the `_` placeholder in value position: a place the context
 supplies, printing `none` if nothing does. Chapter 5.
 
-**identity (nominal)** — a struct constructor's identity is its own name
-table, so two constructors written apart never unify. Chapter 8.
+**identity (nominal)** — a struct template's identity is its own name
+table, so two templates written apart never unify. Chapter 8.
 
-**instance** — a compound built from a constructor: `T[x, y]` for an array,
+**instance** — a compound built from a template: `T[x, y]` for an array,
 `S{.x v}` for a struct. Chapter 7.
 
 **kernel** — a function written in the compute language that runs once per
@@ -93,7 +94,7 @@ book's first fact. Chapter 5.
 Chapter 13.
 
 **pin** — a requirement that states a value, `5 : Int`; the pin rides in
-the requirement the constructor returns and is checked against the value
+the requirement the template holds and is checked against the value
 that fills the position. Chapter 10.
 
 **placeholder** — `_`. Chapter 5.
@@ -119,12 +120,13 @@ attributes. Chapter 10.
 
 **struct** — a compound with named fields; a struct's requirement is
 `{.name requirement, …}` and its instance is `S{.name value}`, where `S`
-is a constructor. Chapter 8.
+is a template. Chapter 8.
 
 **table** — a constant key→value mapping with its own read. Chapter 9.
 
-**template** — the requirement a constructor returns; `<:` applies the
-constructor once and unifies the actual with the result. Chapter 7.
+**template** — a direct compound value whose open slots are `@any`:
+`S := {.a @any, .b @any}`. `=` unifies an actual with it, and the open
+slots are instantiated afresh for every use. Chapter 7.
 
 **type** — a value; the second half of every expr. Chapter 5.
 

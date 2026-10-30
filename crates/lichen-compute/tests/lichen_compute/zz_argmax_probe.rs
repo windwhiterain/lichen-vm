@@ -13,69 +13,69 @@ use lichen_compute::language::new_store;
 /// The three kernels: a `Float` max fold, a conditional mark, an `Int` min fold.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-MIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
-MOut := _x => {.m (compute.Buf (compute.BufParam{.type Float, .length _}))}
-MPar := _x => {.n @any : Int, .w @any : Int, .least @any : Float, .in MIn _, .out MOut}
-MArg := _x => {.n @any : Int, .w @any : Int, .least @any : Float, .I MIn _}
-peak_raw := (c <: MPar) => {
+MIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
+MOut := {.m (compute.Buf (compute.BufParam{.type Float, .length _}))}
+MPar := {.n @any : Int, .w @any : Int, .least @any : Float, .in MIn, .out MOut}
+MArg := {.n @any : Int, .w @any : Int, .least @any : Float, .I MIn}
+peak_raw := (c = MPar) => {
   lane := compute.range c.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read (compute.Read{.from c.in.x, .at (lane * c.w + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.m, .at lane, .value (fold (c.w, c.least ~ "identity"))})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from c.in.x, .at (lane * c.w + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.m, .at lane, .value (fold (c.w, c.least ~ "identity"))})
 }
-peak := compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (MOut _)
-HIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (compute.Buf (compute.BufParam{.type Float, .length _}))}
-HOut := _x => {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
-HPar := _x => {.n @any : Int, .big @any : Int, .in HIn _, .out HOut}
-HArg := _x => {.n @any : Int, .big @any : Int, .I HIn _}
-mark_raw := (c <: HPar) => {
+peak := compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" MOut
+HIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (compute.Buf (compute.BufParam{.type Float, .length _}))}
+HOut := {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
+HPar := {.n @any : Int, .big @any : Int, .in HIn, .out HOut}
+HArg := {.n @any : Int, .big @any : Int, .I HIn}
+mark_raw := (c = HPar) => {
   i := compute.range c.n
-  v := (compute.read (compute.Read{.from c.in.x, .at i}) : Float)
-  m := (compute.read (compute.Read{.from c.in.m, .at 0}) : Float)
+  v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
+  m := (compute.read ((compute.Read _){.from c.in.m, .at 0}) : Float)
   hit := if v == m then i else c.big
-  compute.write (compute.Write{.to c.out.h, .at i, .value hit})
+  compute.write ((compute.Write _){.to c.out.h, .at i, .value hit})
 }
-mark := compute.parallel mark_raw "gpu" (HOut _)
-FIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (compute.Buf (compute.BufParam{.type Float, .length _}))}
-FOut := _x => {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
-FPar := _x => {.n @any : Int, .big @any : Float, .in FIn _, .out FOut}
-FArg := _x => {.n @any : Int, .big @any : Float, .I FIn _}
-markf_raw := (c <: FPar) => {
+mark := compute.parallel mark_raw "gpu" HOut
+FIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (compute.Buf (compute.BufParam{.type Float, .length _}))}
+FOut := {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
+FPar := {.n @any : Int, .big @any : Float, .in FIn, .out FOut}
+FArg := {.n @any : Int, .big @any : Float, .I FIn}
+markf_raw := (c = FPar) => {
   i := compute.range c.n
-  v := (compute.read (compute.Read{.from c.in.x, .at i}) : Float)
-  m := (compute.read (compute.Read{.from c.in.m, .at 0}) : Float)
+  v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
+  m := (compute.read ((compute.Read _){.from c.in.m, .at 0}) : Float)
   hit := if v == m then int2float i else c.big
-  compute.write (compute.Write{.to c.out.h, .at i, .value hit})
+  compute.write ((compute.Write _){.to c.out.h, .at i, .value hit})
 }
-markf := compute.parallel markf_raw "gpu" (FOut _)
-TIn  := _x => {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
-TOut := _x => {.t (compute.Buf (compute.BufParam{.type Int, .length _}))}
-TPar := _x => {.n @any : Int, .w @any : Int, .big @any : Int, .in TIn _, .out TOut}
-TArg := _x => {.n @any : Int, .w @any : Int, .big @any : Int, .I TIn _}
-pick_raw := (c <: TPar) => {
+markf := compute.parallel markf_raw "gpu" FOut
+TIn  := {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
+TOut := {.t (compute.Buf (compute.BufParam{.type Int, .length _}))}
+TPar := {.n @any : Int, .w @any : Int, .big @any : Int, .in TIn, .out TOut}
+TArg := {.n @any : Int, .w @any : Int, .big @any : Int, .I TIn}
+pick_raw := (c = TPar) => {
   lane := compute.range c.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read (compute.Read{.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
-pick := compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (TOut _)
-UIn  := _x => {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
-UOut := _x => {.t (compute.Buf (compute.BufParam{.type Float, .length _}))}
-UPar := _x => {.n @any : Int, .w @any : Int, .big @any : Float, .in UIn _, .out UOut}
-UArg := _x => {.n @any : Int, .w @any : Int, .big @any : Float, .I UIn _}
-pickf_raw := (c <: UPar) => {
+pick := compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
+UIn  := {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
+UOut := {.t (compute.Buf (compute.BufParam{.type Float, .length _}))}
+UPar := {.n @any : Int, .w @any : Int, .big @any : Float, .in UIn, .out UOut}
+UArg := {.n @any : Int, .w @any : Int, .big @any : Float, .I UIn}
+pickf_raw := (c = UPar) => {
   lane := compute.range c.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read (compute.Read{.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
-pickf := compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (UOut _)
-ZIn  := _x => {.a @any : Int}
-ZOut := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length _}))}
-ZPar := _x => {.n @any : Int, .in ZIn _, .out ZOut}
-ZArg := _x => {.n @any : Int, .I ZIn _}
-idx_raw := (c <: ZPar) => {
+pickf := compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" UOut
+ZIn  := {.a @any : Int}
+ZOut := {.z (compute.Buf (compute.BufParam{.type Int, .length _}))}
+ZPar := {.n @any : Int, .in ZIn, .out ZOut}
+ZArg := {.n @any : Int, .I ZIn}
+idx_raw := (c = ZPar) => {
   i := compute.range c.n
-  compute.write (compute.Write{.to c.out.z, .at i, .value (i + 10)})
+  compute.write ((compute.Write _){.to c.out.z, .at i, .value (i + 10)})
 }
-idx := compute.parallel idx_raw "gpu" (ZOut _)
+idx := compute.parallel idx_raw "gpu" ZOut
 x := (compute.buffer ([@any : Float, 8][1.0, 3.0, 2.0, 7.0, 0.5, 9.0, 4.0, 2.5] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
 "#;
 

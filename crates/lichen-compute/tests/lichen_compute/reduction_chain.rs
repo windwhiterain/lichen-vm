@@ -102,16 +102,16 @@ fn source() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {{.b (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
-Out := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
-Par := _x => {{.n @any : Int, .in In _}}
-reduction := (k <: Par) => {{
+In  := {{.b (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
+Out := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {PADDED_COUNT}}}))}}
+Par := {{.n @any : Int, .in In}}
+reduction := (k = Par) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
-  ((Out){{.z (compute.write (compute.Write{{.to z, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
+k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k
 "#
     )

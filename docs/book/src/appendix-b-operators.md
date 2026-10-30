@@ -47,7 +47,7 @@ check-time refusal, never a runtime dispatch (Chapter 7's table).
 | form | slot | checked how |
 |---|---|---|
 | `e : T` | type | unification |
-| `a <: c` | constructor | `a` unified with the requirement `c _` returns; `c` is applied once |
+| `a = b` | template | `a` unified with the template `b`; a template that is a function is applied as `(b _)` |
 | `e # p` | perspective | divisibility of the requirement against the provider (Chapter 13) |
 | `e ! p` | refinement | the predicate must answer `1` (Chapter 11) |
 | `e ? d` | doc | never constrains; a later doc overrides |
@@ -56,8 +56,8 @@ check-time refusal, never a runtime dispatch (Chapter 7's table).
 A **requirement** states what one position of a compound must be: a tuple of
 requirements, `[requirement, length]`, or `{.name requirement, …}`. The
 requirement `@any : T` asks for any value of type `T`, and `v : T` pins
-the value as well (Chapter 10). A **constructor** is the function that
-returns a fresh requirement when it is applied, and `<:` applies it once.
+the value as well (Chapter 10). A **template** is a direct compound value
+whose open slots are `@any`, and `=` unifies an actual with it.
 
 ## The `$` form
 

@@ -13,22 +13,22 @@ use lichen_compute::language::new_store;
 /// `crates/lichen-compute/tests/inplace_write_refusal.lichen`.
 const IN_PLACE_WRITE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.k (compute.Buf (compute.BufParam{.type Float, .length 1}))}
-Out := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
-Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In _}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.k (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+Out := {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 1})
-  ((In){.k (compute.write (compute.Write{.to d, .at i, .value 1.0}))})
+  ((In){.k (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
 }
-filler := compute.parallel fill "cpu" (In _)
-raw := (lane <: Par) => {
+filler := compute.parallel fill "cpu" In
+raw := (lane = Par) => {
   i := compute.range lane.n
-  ((Out){.e (compute.write (compute.Write{.to lane.in.k, .at i, .value (99.0 : Float)}))})
+  ((Out){.e (compute.write ((compute.Write _){.to lane.in.k, .at i, .value (99.0 : Float)}))})
 }
-k := compute.parallel raw "cpu" (Out _)
+k := compute.parallel raw "cpu" Out
 kbuf := (compute.plrun filler ((Fill){.n 1}) : Struct)
 out := (compute.plrun k ((Arg){.n 1, .I In{.k kbuf.k}}) : Struct)
 compute.collect kbuf.k

@@ -14,16 +14,16 @@ use lichen_compute::language::new_store;
 /// The gather: one read's address is another read's value.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _})), .tbl (compute.Buf (compute.BufParam{.type Int, .length _}))}
-POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
-PPar := _x => {.n @any : Int, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .I PIn _}
-gather_raw := (k <: PPar) => {
+PIn  := {.x (compute.Buf (compute.BufParam{.type Int, .length _})), .tbl (compute.Buf (compute.BufParam{.type Int, .length _}))}
+POut := {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
+PPar := {.n @any : Int, .in PIn, .out POut}
+PArg := {.n @any : Int, .I PIn}
+gather_raw := (k = PPar) => {
   i := compute.range k.n
-  j := (compute.read (compute.Read{.from k.in.tbl, .at i}) : Int)
-  compute.write (compute.Write{.to k.out.y, .at i, .value ((compute.read (compute.Read{.from k.in.x, .at j}) : Int))})
+  j := (compute.read ((compute.Read _){.from k.in.tbl, .at i}) : Int)
+  compute.write ((compute.Write _){.to k.out.y, .at i, .value ((compute.read ((compute.Read _){.from k.in.x, .at j}) : Int))})
 }
-gather := compute.parallel gather_raw "gpu" (POut _)
+gather := compute.parallel gather_raw "gpu" POut
 x   := (compute.buffer ([@any : Int, 6][10, 20, 30, 40, 50, 60] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
 tbl := (compute.buffer ([@any : Int, 6][5, 0, 4, 1, 3, 2] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
 "#;

@@ -96,12 +96,11 @@ A **requirement** is the other half of the story: a slot that states what
 one position of a compound must hold. A tuple's requirements are written
 as a tuple of them, `(@any : Int, @any : Int)`; an array's is a requirement
 and a length, `[requirement, length]`; a struct's is
-`{.name requirement, …}`. A **constructor** is a function that returns a
-fresh requirement when it is applied — `T := _x => (@any : Int, @any : Int)`
-— and the match operator `<:` applies it exactly once and unifies the
-actual with what comes back: `actual <: T` is `actual = T _`. Each
-application therefore yields fresh holes, and the constructor keeps its own.
-Chapter 7 is about the three forms.
+`{.name requirement, …}`. A **template** is a direct compound value whose
+open slots are `@any` — `T := (@any : Int, @any : Int)` — and the match
+operator `=` unifies the actual with it: `actual = T`. Each use
+instantiates the template's open slots afresh, and the template keeps its
+own. Chapter 7 is about the three forms.
 
 ## Unification is how the type is found
 
@@ -320,9 +319,9 @@ expr.
   `Array`, `Struct` — and the *value* owns the layout: the elements, the
   array's requirement, the struct's field names.
 - A **requirement** states what one position of a compound must be, and a
-  **constructor** is a function that returns a fresh requirement when
-  applied; `<:` applies the constructor once and unifies the actual with the
-  result, while plain `=` applies nothing.
+  **template** is a direct compound value whose open slots are `@any`;
+  `=` unifies the actual with the template and instantiates its open slots
+  afresh.
 - An expression's type is found by unification, not declared and checked.
 - An undecided type is an open cell named `?a`; the same name means one
   cell. `_` is a placeholder. An answer whose type stays open prints that

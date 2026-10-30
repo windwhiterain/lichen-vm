@@ -13,18 +13,18 @@ use super::common;
 
 /// The kernels and the input buffer the three cases below share.
 const KERNEL: &str = r#"
-XIn  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
-XOut := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
-XPar := _x => {.n @any : Int, .alpha @any : Float, .in XIn _, .out XOut}
-XArg := _x => {.n @any : Int, .alpha @any : Float, .I XIn _}
-ring_raw := (c <: XPar) => {
+XIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
+XOut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
+XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
+XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
+ring_raw := (c = XPar) => {
   i := compute.range c.n
-  centre := (compute.read (compute.Read{.from c.in.x, .at i}) : Float)
-  left := if i == 0 then ((compute.read (compute.Read{.from c.in.x, .at (c.n - 1)}) : Float)) else ((compute.read (compute.Read{.from c.in.x, .at (i - 1)}) : Float))
-  right := if i == (c.n - 1) then ((compute.read (compute.Read{.from c.in.x, .at 0}) : Float)) else ((compute.read (compute.Read{.from c.in.x, .at (i + 1)}) : Float))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
+  centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
+  left := if i == 0 then ((compute.read ((compute.Read _){.from c.in.x, .at (c.n - 1)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float))
+  right := if i == (c.n - 1) then ((compute.read ((compute.Read _){.from c.in.x, .at 0}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i + 1)}) : Float))
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
 }
-ring := compute.parallel ring_raw "cpu" (XOut _)
+ring := compute.parallel ring_raw "cpu" XOut
 x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
 "#;
 
@@ -55,7 +55,7 @@ out := run (2, seed)
 /// The same fold with the **recursive function** annotated, which is the rule the type system states.
 const LOOP_RECURSION_ANNOTATED: &str = r#"
 seed := (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct).y : Array)
-@loop run := ((s <: (_x => (@any : Int, @any : Array))) => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array)))
+@loop run := ((s = ((_x => (@any : Int, @any : Array)) _)) => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array)))
 out := run (2, seed)
 out
 "#;

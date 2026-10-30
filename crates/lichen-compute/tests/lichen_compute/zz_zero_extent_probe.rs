@@ -67,7 +67,6 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let out0 = w.statement(w.struct_value("Out0", &[(out0, Some("z"))]));
 
     let kt = bundled(w, imports.expr, "KT");
-    let kt = w.app("KT_of_element", kt, w.hole("kt_element"));
     let kt = w.instantiate(
         "KT_of_fields",
         kt,
@@ -77,14 +76,8 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     let par0 = w.statement(w.app("Par0", bundled(w, imports.expr, "P"), kt));
 
     let k = w.param("k");
-    // A compound constraint is a template match: the actual is unified with
-    // the template constructor applied once.
-    let par0_ctor = w.lam("par0_ctor", w.param("par0_x"), par0);
-    let constraint = w.unify(
-        "k_matches_par0",
-        k,
-        w.app("par0_applied", par0_ctor, w.hole("par0_arg")),
-    );
+    // A compound constraint unifies the actual with the direct template.
+    let constraint = w.unify("k_matches_par0", k, par0);
     let i = w.app(
         "i",
         bundled(w, imports.expr, "range"),
@@ -92,14 +85,9 @@ fn write_kernel(w: &Writer<LangAttr, HighProgramLiteral>, imports: &Imports) -> 
     );
     // The kernel's own buffer: the parameter template carries no output
     // group, so the body allocates it.
-    let bufparam_type = w.app(
-        "BufParam_of_element",
-        bundled(w, imports.expr, "BufParam"),
-        w.hole("bufparam_element"),
-    );
     let bufparam = w.instantiate(
         "bufparam",
-        bufparam_type,
+        bundled(w, imports.expr, "BufParam"),
         fields(w, "bufparam_fields", &[int, w.named_field("k_n", k, "n")]),
         &[Some("type"), Some("length")],
     );
@@ -204,12 +192,7 @@ fn write_recorded(
 
     let s = w.param("s");
     // The step's parameter is constrained the same way the kernel's is.
-    let garg_ctor = w.lam("garg_ctor", w.param("garg_x"), garg);
-    let constraint = w.unify(
-        "s_matches_garg",
-        s,
-        w.app("garg_applied", garg_ctor, w.hole("garg_arg")),
-    );
+    let constraint = w.unify("s_matches_garg", s, garg);
     let out = dispatch(w, imports, kernel, w.named_field("s_n", s, "n"));
     let body = w.field(
         "step_last",

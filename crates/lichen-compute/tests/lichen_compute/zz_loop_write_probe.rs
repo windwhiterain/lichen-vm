@@ -21,11 +21,11 @@ use super::common;
 /// The program, with the backend and the body substituted.
 const TEMPLATE: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.unused (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-Out := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-Par := _x => {.n @any : Int, .taps @any : Int, .in In _, .out Out}
-Arg := _x => {.n @any : Int, .taps @any : Int, .I In _}
-raw := (c <: Par) => {
+In  := {.unused (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+Out := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+Par := {.n @any : Int, .taps @any : Int, .in In, .out Out}
+Arg := {.n @any : Int, .taps @any : Int, .I In}
+raw := (c = Par) => {
   i := compute.range c.n
 @BODY@
 }
@@ -36,10 +36,10 @@ compute.collect out.y : Array
 "#;
 
 /// One plain write: the control the loop is compared against.
-const CONTROL: &str = r#"  compute.write (compute.Write{.to c.out.y, .at i, .value 2.0})"#;
+const CONTROL: &str = r#"  compute.write ((compute.Write _){.to c.out.y, .at i, .value 2.0})"#;
 
 /// A fold whose step writes the countdown into the buffer it carries.
-const LOOP: &str = r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+const LOOP: &str = r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.out.y)"#;
 
 /// What a run answered, or how it refused.
@@ -132,23 +132,23 @@ fn probe_the_state_slot_the_walk_stops_at() {
     for (label, body) in [
         (
             "buffer",
-            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.out.y)"#,
         ),
         (
             "literal",
-            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, 0.0)"#,
         ),
         (
             "scalar",
-            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.n)"#,
         ),
         (
             "write_outside",
             r#"  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, s(1))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (c.taps, 0.0))})"#,
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0))})"#,
         ),
     ] {
         println!("[{label}] {}", run(body, "cpu"));

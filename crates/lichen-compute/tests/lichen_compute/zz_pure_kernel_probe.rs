@@ -13,26 +13,26 @@ use super::common;
 /// The program: one kernel builds its input, another declares its output.
 const PROGRAM: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.unused (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-Fill := _x => {.n @any : Int}
-FillArg := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.unused (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+Fill := {.n @any : Int}
+FillArg := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value 1.0}))})
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value 1.0}))})
 }
-fk := compute.parallel fill "cpu" (Out _)
+fk := compute.parallel fill "cpu" Out
 filled := (compute.plrun fk ((FillArg){.n 2}) : Struct)
-Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In _}
-raw := (c <: Par) => {
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+raw := (c = Par) => {
   i := compute.range c.n
-  x := (compute.read (compute.Read{.from c.in.unused, .at i}) : Float)
+  x := (compute.read ((compute.Read _){.from c.in.unused, .at i}) : Float)
   y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value x}))})
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value x}))})
 }
-k := compute.parallel raw "cpu" (Out _)
+k := compute.parallel raw "cpu" Out
 out := (compute.plrun k ((Arg){.n 2, .I In{.unused filled.y}}) : Struct)
 compute.collect out.y : Array
 "#;
@@ -61,14 +61,14 @@ fn probe_a_kernel_that_declares_its_output() {
 /// reachable from the return and does not survive the freeze.
 const LENGTH: &str = r#"
 --- compute = import "compute.lichen" ---
-OutThree := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+OutThree := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length 3})
-  ((OutThree){.y (compute.write (compute.Write{.to y, .at i, .value (int2float i + 1.0)}))})
+  ((OutThree){.y (compute.write ((compute.Write _){.to y, .at i, .value (int2float i + 1.0)}))})
 }
-fk := compute.parallel fill "cpu" (OutThree _)
+fk := compute.parallel fill "cpu" OutThree
 data := (compute.plrun fk ((Fill){.n 3}) : Struct)
 compute.collect data.y : Array
 "#;
@@ -97,15 +97,15 @@ fn probe_a_declared_length_is_the_allocation() {
 /// step (`docs/notes/kernel-buffer-declarations.md`).
 const LOOPED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-LPar := _x => {.n @any : Int, .taps @any : Int}
-fill := (c <: LPar) => {
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+LPar := {.n @any : Int, .taps @any : Int}
+fill := (c = LPar) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write (compute.Write{.to s(1), .at i, .value (int2float s(0))})))
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   ((Out){.y (fold (c.taps, y))})
 }
-k := compute.parallel fill "cpu" (Out _)
+k := compute.parallel fill "cpu" Out
 data := (compute.plrun k ((LPar){.n 2, .taps 3}) : Struct)
 compute.collect data.y : Array
 "#;
@@ -134,14 +134,14 @@ fn probe_the_codomain_may_hold_a_loops_result() {
 /// compiles (`docs/notes/kernel-buffer-declarations.md`).
 const SELECTED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length 3})
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value (if i == 0 then 1.0 else 2.0)}))})
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value (if i == 0 then 1.0 else 2.0)}))})
 }
-k := compute.parallel fill "cpu" (Out _)
+k := compute.parallel fill "cpu" Out
 data := (compute.plrun k ((Fill){.n 3}) : Struct)
 compute.collect data.y : Array
 "#;
@@ -169,14 +169,14 @@ fn probe_a_literal_selected_by_the_index() {
 /// (`docs/notes/kernel-buffer-declarations.md`).
 const NESTED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length 3})
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value (if i == 0 then 1.0 else (if i == 1 then 2.0 else 3.0))}))})
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value (if i == 0 then 1.0 else (if i == 1 then 2.0 else 3.0))}))})
 }
-k := compute.parallel fill "cpu" (Out _)
+k := compute.parallel fill "cpu" Out
 data := (compute.plrun k ((Fill){.n 3}) : Struct)
 compute.collect data.y : Array
 "#;
@@ -204,15 +204,15 @@ fn probe_a_nested_chain_in_the_body() {
 /// whether `collect` reaches the second field (`docs/notes/kernel-buffer-declarations.md`).
 const TWO: &str = r#"
 --- compute = import "compute.lichen" ---
-Out := _x => {.c (compute.Buf (compute.BufParam{.type Int, .length 2})), .s (compute.Buf (compute.BufParam{.type Int, .length 2}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+Out := {.c (compute.Buf (compute.BufParam{.type Int, .length 2})), .s (compute.Buf (compute.BufParam{.type Int, .length 2}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   a := compute.buf (compute.BufParam{.type Int, .length c.n})
   b := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((Out){.c (compute.write (compute.Write{.to a, .at i, .value i})), .s (compute.write (compute.Write{.to b, .at i, .value i}))})
+  ((Out){.c (compute.write ((compute.Write _){.to a, .at i, .value i})), .s (compute.write ((compute.Write _){.to b, .at i, .value i}))})
 }
-k := compute.parallel fill "cpu" (Out _)
+k := compute.parallel fill "cpu" Out
 out := (compute.plrun k ((Fill){.n 2}) : Struct)
 compute.collect out.c : Array
 "#;
@@ -243,9 +243,9 @@ fn probe_two_outputs() {
 /// from that value's fields?
 const SPELLING: &str = r#"
 --- compute = import "compute.lichen" ---
-Param := _x => {.type _, .length _}
-BufT := x : (Param _) => {.native Int, .type x.type, .length x.length}
-buf := (x <: Param) => (BufT x){.native 0, .type @any, .length @any}
+Param := {.type @any, .length @any}
+BufT := x : Param => {.native Int, .type x.type, .length x.length}
+buf := (x = Param) => (BufT x){.native 0, .type @any, .length @any}
 e := buf (Param{.type Float, .length 192})
 e
 "#;
@@ -273,25 +273,25 @@ fn probe_the_settled_spelling() {
 /// value unchanged; the reading is whether the lowering agrees.
 const ALIAS: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.d (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
-  ((In){.d (compute.write (compute.Write{.to d, .at i, .value 1.0}))})
+  ((In){.d (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
 }
-filler := compute.parallel fill "cpu" (In _)
+filler := compute.parallel fill "cpu" In
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
-Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In _}
-alias_raw := (k <: Par) => {
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+alias_raw := (k = Par) => {
   i := compute.range k.n
-  low := (compute.read (compute.Read{.from k.in.d, .at i}) : Float)
+  low := (compute.read ((compute.Read _){.from k.in.d, .at i}) : Float)
   y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value (low * 2.0)}))})
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value (low * 2.0)}))})
 }
-alias := compute.parallel alias_raw "cpu" (Out _)
+alias := compute.parallel alias_raw "cpu" Out
 out := (compute.plrun alias ((Arg){.n 3, .I In{.d data.d}}) : Struct)
 compute.collect out.y : Array
 "#;
@@ -318,25 +318,25 @@ fn probe_a_let_alias_of_a_read() {
 /// the walk meets first and whether the other is reachable.
 const COND_READ: &str = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.d (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
-  ((In){.d (compute.write (compute.Write{.to d, .at i, .value 1.0}))})
+  ((In){.d (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
 }
-filler := compute.parallel fill "cpu" (In _)
+filler := compute.parallel fill "cpu" In
 data := (compute.plrun filler ((Fill){.n 3}) : Struct)
-Par := _x => {.n @any : Int, .in In _}
-Arg := _x => {.n @any : Int, .I In _}
-then_raw := (k <: Par) => {
+Par := {.n @any : Int, .in In}
+Arg := {.n @any : Int, .I In}
+then_raw := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  v := if i == 0 then (compute.read (compute.Read{.from k.in.d, .at i}) : Float) else 0.0
-  ((Out){.y (compute.write (compute.Write{.to y, .at i, .value v}))})
+  v := if i == 0 then (compute.read ((compute.Read _){.from k.in.d, .at i}) : Float) else 0.0
+  ((Out){.y (compute.write ((compute.Write _){.to y, .at i, .value v}))})
 }
-then_k := compute.parallel then_raw "cpu" (Out _)
+then_k := compute.parallel then_raw "cpu" Out
 out := (compute.plrun then_k ((Arg){.n 3, .I In{.d data.d}}) : Struct)
 compute.collect out.y : Array
 "#;

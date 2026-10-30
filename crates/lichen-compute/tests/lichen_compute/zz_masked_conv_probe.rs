@@ -14,19 +14,19 @@ use lichen_compute::language::new_store;
 /// The 2D convolution with the horizontal axis masked.
 const CONVOLVE_MASKED: &str = r#"
 --- compute = import "compute.lichen" ---
-CIn  := _x => {.x (compute.Buf (compute.BufParam{{.type Float, .length _}})), .w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-COut := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-CPar := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn _, .out COut}
-CArg := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn _}
-convolve_raw := (c <: CPar) => {
+CIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}})), .w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+COut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+CPar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn, .out COut}
+CArg := {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn}
+convolve_raw := (c = CPar) => {
   i := compute.range c.n
   row := compute.row c
   col := compute.col c
   base := ((row - 1) * c.cols + (col - 1))
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from c.in.w, .at (s(0) - 1)}) : Float) * (if col + (s(0) - 1) % 3 - 1 < 0 then 0.0 else ((compute.read (compute.Read{.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3)}) : Float))))) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (if col + (s(0) - 1) % 3 - 1 < 0 then 0.0 else ((compute.read ((compute.Read _){.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3)}) : Float))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
-convolve := compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (COut _)
+convolve := compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "gpu" COut
 x := (compute.buffer ([@any : Float, 25][0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 w := (compute.buffer ([@any : Float, 9][0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 out := (compute.plrun convolve ((CArg){.n 25, .cols 5, .taps 9, .I CIn{.x x, .w w}}) : Struct)
@@ -36,19 +36,19 @@ compute.collect out.y : Array
 /// The same convolution with no mask, so the wrap reading is the control.
 const CONVOLVE_UNMASKED: &str = r#"
 --- compute = import "compute.lichen" ---
-CIn  := _x => {.x (compute.Buf (compute.BufParam{{.type Float, .length _}})), .w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-COut := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-CPar := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn _, .out COut}
-CArg := _x => {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn _}
-convolve_raw := (c <: CPar) => {
+CIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}})), .w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+COut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+CPar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in CIn, .out COut}
+CArg := {.n @any : Int, .cols @any : Int, .taps @any : Int, .I CIn}
+convolve_raw := (c = CPar) => {
   i := compute.range c.n
   row := compute.row c
   col := compute.col c
   base := ((row - 1) * c.cols + (col - 1))
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read (compute.Read{.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3)}) : Float))) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3)}) : Float))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
-convolve := compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (COut _)
+convolve := compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "gpu" COut
 x := (compute.buffer ([@any : Float, 25][0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 w := (compute.buffer ([@any : Float, 9][0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 out := (compute.plrun convolve ((CArg){.n 25, .cols 5, .taps 9, .I CIn{.x x, .w w}}) : Struct)
@@ -58,16 +58,16 @@ compute.collect out.y : Array
 /// The smallest question: a fold whose arm is only a `Float`-armed `if`, with no read inside it.
 const IF_IN_FOLD: &str = r#"
 --- compute = import "compute.lichen" ---
-TIn  := _x => {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-TOut := _x => {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-TPar := _x => {.n @any : Int, .taps @any : Int, .in TIn _, .out TOut}
-TArg := _x => {.n @any : Int, .taps @any : Int, .I TIn _}
-tiny_raw := (c <: TPar) => {
+TIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+TOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
+TPar := {.n @any : Int, .taps @any : Int, .in TIn, .out TOut}
+TArg := {.n @any : Int, .taps @any : Int, .I TIn}
+tiny_raw := (c = TPar) => {
   i := compute.range c.n
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if s(0) > 1 then 1.0 else 0.0)) ~ "combine" ~ "element"))
-  compute.write (compute.Write{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
+  compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
-tiny := compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (TOut _)
+tiny := compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
 x := (compute.buffer ([@any : Float, 2][1.0, 1.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 out := (compute.plrun tiny ((TArg){.n 2, .taps 3, .I TIn{.x x}}) : Struct)
 compute.collect out.y : Array

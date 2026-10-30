@@ -20,22 +20,22 @@ the result back:
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Out := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-Par := _x => {.n @any : Int, .in In}
-double_raw := (k <: Par) => {
+In  := {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
+Par := {.n @any : Int, .in In}
+double_raw := (k = Par) => {
   i := compute.range k.n
-  x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
+  x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
   y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Out{.y (compute.write (compute.Write{.to y, .at i, .value (x * 2.0 ~ "element")}))})
+  (Out{.y (compute.write ((compute.Write _){.to y, .at i, .value (x * 2.0 ~ "element")}))})
 }
 double := compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu" Out
-Fill := _x => {.n @any : Int}
-fill_raw := (c <: Fill) => {
+Fill := {.n @any : Int}
+fill_raw := (c = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := 1.0 + int2float i
-  (In{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
+  (In{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
 fill := compute.parallel fill_raw "cpu" In
 b := (compute.plrun fill (Fill{.n 3}) : Struct).x
@@ -45,18 +45,18 @@ compute.collect out.y : Array
 
 There is a lot in that program, so let us take it apart.
 
-**The data is buffers, and the shape is a struct constructor.** A buffer's
+**The data is buffers, and the shape is a struct template.** A buffer's
 type states its element type and its length —
 `compute.Buf (compute.BufParam{.type Float, .length 3})` is a buffer
-of three floats. The kernel's input and output are struct **constructors**
-— `In`, `Out` — and a kernel's parameter is a constructor the kernel is
-matched against, `Par := _x => {.n @any : Int, .in In}`. There is no output
+of three floats. The kernel's input and output are struct **templates**
+— `In`, `Out` — and a kernel's parameter is a template the kernel is
+matched against, `Par := {.n @any : Int, .in In}`. There is no output
 group in the parameter: a kernel's **result** is its codomain, `Out`, and
 the body hands that result back (below).
 
-**The body runs once per lane.** `(k <: Par)` is the kernel's parameter,
-matched against the constructor: the match applies `Par` once and unifies
-the parameter with the requirement it returns. The first line, `i :=
+**The body runs once per lane.** `(k = Par)` is the kernel's parameter,
+matched against the template: the match unifies the parameter with the
+template's requirements. The first line, `i :=
 compute.range k.n`, is the lane's own index — the kernel is launched over
 `n` lanes, and `compute.range` answers which one this invocation is. The
 rest of the body reads its input at `i`, computes, and writes its output
@@ -70,7 +70,7 @@ type is a value in the buffer's struct and the read's result is the type
 the caller states, not one read off the buffer's value (Chapter 4's rule:
 a value whose declared type is the element class does not carry a type for
 the read to take). `compute.write` takes a `Write` built with
-`{.to buf, .at i, .value v}`. The `_` placeholders are the constructors'
+`{.to buf, .at i, .value v}`. The `_` placeholders are the templates'
 own type parameters (Chapter 5's `_`), which the checker decides.
 
 **A kernel declares the buffers it writes.** The body names the buffer it
@@ -106,7 +106,7 @@ value leaves the compute layer — and the annotation is what decides the
 resulting array's type.
 
 **The backend is a string.** `compute.parallel … "cpu" Out` binds the
-kernel to the CPU path and names its output struct constructor. The output
+kernel to the CPU path and names its output struct template. The output
 type is passed rather than read off the kernel's fields: those fields hold
 type values, and a read takes its type from a value that has one (Chapter
 4's rule), so the caller states it. The other backend is `"gpu"`; the same
@@ -118,24 +118,24 @@ suite is device-independent; the device legs are measured separately
 ### The parallel path is under repair
 
 **This program does not run today.** The compute layer is mid-migration: the
-constructor form above is the shape the language states, but the compute
+template form above is the shape the language states, but the compute
 package's own surface has not caught up with it. The kernel body reads
-`k.in.x`, and `k.in` is the constructor `In`, not an instance of it, so the
+`k.in.x`, and `k.in` is the template `In`, not an instance of it, so the
 field read has no struct to read:
 
 ```text
 error: expected Struct, found ?a => Struct
-  --> 9:42
+  --> 9:46
    |
- 9 |   x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
-   |                                          ^
+ 9 |   x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
+   |                                              ^
 ```
 
-The same refusal reaches every read through a constructor-valued field, and
+The same refusal reaches every read through a template-valued field, and
 the launch's argument then reports `no field named n` and `no field named I`
 on `Struct`. The repository's buffer-valued operator examples are at different
 stages of the same migration; the measured failures are recorded in
-[the constructor note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/value-templates.md).
+[the template note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/value-templates.md).
 
 What the program *means* is nevertheless stated by its own text, and it
 is the shape every kernel in the repository has: the fill kernel writes
@@ -245,8 +245,8 @@ was measured and what is next.
   no file.
 - A kernel is a body of one lane, launched over an extent, reading and
   writing buffers at its lane's index.
-- A kernel's parameter is matched against a struct **constructor** —
-  `Par := _x => {.n @any : Int, .in In}` — and `compute.Buf` is a buffer
+- A kernel's parameter is matched against a struct **template** —
+  `Par := {.n @any : Int, .in In}` — and `compute.Buf` is a buffer
   whose type states its element type and its length; `compute.range` is the
   lane
   index; `compute.read`/`compute.write` are the buffer reads and writes,
@@ -255,7 +255,7 @@ was measured and what is next.
   runs it; `compute.collect` reads a buffer back as an array, and it is the
   only way out.
 - **The parallel path is under repair**: a kernel body reads `k.in.x`, but
-  `k.in` is the constructor `In` rather than an instance, so the compiler
+  `k.in` is the template `In` rather than an instance, so the compiler
   refuses it with `expected Struct, found ?a => Struct`; the launch then loses
   its field names. The book's programs state their semantics; they do not print
   answers.

@@ -53,21 +53,21 @@ fn scaled(kind: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In1  := _x => {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
-Out1 := _x => {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
-Par  := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1 _}}
-Arg  := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1 _}}
-GA   := _x => {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1 _}}
-scale_raw := (k <: Par) => {{
+In1  := {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
+Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
+Par  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
+Arg  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1}}
+GA   := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
+scale_raw := (k = Par) => {{
   i := compute.range k.n
   r := i / k.cols
   c := i % k.cols
-  v := (compute.read (compute.Read{{.from k.in.a, .at (r + c)}}) : Float)
+  v := (compute.read ((compute.Read _){{.from k.in.a, .at (r + c)}}) : Float)
   y := compute.buf (compute.BufParam{{.type {kind}, .length {rows}}})
-  ((Out1){{.z (compute.write (compute.Write{{.to y, .at i, .value (v * k.scale ~ "element")}}))}})
+  ((Out1){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (v * k.scale ~ "element")}}))}})
 }}
-scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" (Out1 _)
-step := (s <: GA) => {{
+scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Out1
+step := (s = GA) => {{
   compute.plrun scale ((Arg){{.n s.n, .cols s.cols, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
@@ -91,18 +91,18 @@ fn mismatched(leaf: &str, kind: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In1  := _x => {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
-Out1 := _x => {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
-Par  := _x => {{.n @any : Int, .scale {leaf}, .in In1 _}}
-Arg  := _x => {{.n @any : Int, .scale {leaf}, .I In1 _}}
-GA   := _x => {{.n @any : Int, .scale {leaf}, .in In1 _}}
-mismatch_raw := (k <: Par) => {{
+In1  := {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
+Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
+Par  := {{.n @any : Int, .scale {leaf}, .in In1}}
+Arg  := {{.n @any : Int, .scale {leaf}, .I In1}}
+GA   := {{.n @any : Int, .scale {leaf}, .in In1}}
+mismatch_raw := (k = Par) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type {kind}, .length {rows}}})
-  ((Out1){{.z (compute.write (compute.Write{{.to y, .at i, .value (k.scale ~ "element")}}))}})
+  ((Out1){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (k.scale ~ "element")}}))}})
 }}
-mismatch := compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" (Out1 _)
-step := (s <: GA) => {{
+mismatch := compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" Out1
+step := (s = GA) => {{
   compute.plrun mismatch ((Arg){{.n s.n, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
@@ -144,14 +144,14 @@ fn datum(kind: &str) -> &'static str {
 fn filled(element: &str, data_at_i: &str) -> String {
     format!(
         r#"
-FillOut := _x => {{.z (compute.Buf (compute.BufParam{{.type {element}, .length {elements}}}))}}
-Fill  := _x => {{.n @any : Int}}
-fill_raw := (c <: Fill) => {{
+FillOut := {{.z (compute.Buf (compute.BufParam{{.type {element}, .length {elements}}}))}}
+Fill  := {{.n @any : Int}}
+fill_raw := (c = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type {element}, .length {elements}}})
-  ((FillOut){{.z (compute.write (compute.Write{{.to y, .at i, .value ({data_at_i} ~ "element")}}))}})
+  ((FillOut){{.z (compute.write ((compute.Write _){{.to y, .at i, .value ({data_at_i} ~ "element")}}))}})
 }}
-filler := compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" (FillOut _)
+filler := compute.parallel (fill_raw ~ "claim:Elementwise(element)") "cpu" FillOut
 a := (compute.plrun filler ((Fill){{.n {elements}}}) : Struct)
 "#,
         elements = ELEMENTS,

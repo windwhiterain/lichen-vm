@@ -316,6 +316,8 @@ version check and recompile; there is no compatibility path.
   persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
   as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
   readable arm at all before this, so the version had to move with the arm.
+- `30` records the direct @any template model: a template is a value, not a
+  constructor function, so an artifact written by the constructor model is rebuilt.
 - `29` removed the retired `specialize_after_clone` bit. Directional `Any` and
   function-parameter completion now decide the same replay boundary without class
   metadata, so v28 artifacts are rebuilt rather than read with a shifted node frame.

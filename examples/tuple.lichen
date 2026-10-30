@@ -2,4 +2,4 @@
   order = "0"
   output = "(1, Int): Tuple"
 ---
-(1, Int) <: (_x => (@any : Int, @any : Type))
+(1, Int) = (@any : Int, @any : Type)

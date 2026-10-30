@@ -3,10 +3,12 @@
 > Status: **field provenance is implemented and measured.** The launch replay
 > fix is landed; the parallel read source chain now uses explicit per-instance
 > field links. Direct `plrun` resolves shared parameter projections through the
-> bound call image. Lowlevel and language are green, and compute is **136 passed
-> / 104 failed / 1 ignored**. Root materialization, graph values, and
-> definition-cycle failures remain open. Undecided actual field values are
-> preserved instead of being displaced by decided requirements. Directional
+> bound call image. Lowlevel and language are green, and compute is **137 passed
+> / 103 failed / 1 ignored** after the direct @any template migration (the
+> constructor baseline was 136 / 104 / 1). Root materialization, graph values,
+> and definition-cycle failures remain open; a direct template shared by two
+> kernels can still produce a definition cycle. Undecided actual field values
+> are preserved instead of being displaced by decided requirements. Directional
 > `Any` plus function-parameter completion suppresses unnecessary replay without
 > class metadata or clone/template unification.
 >

@@ -31,17 +31,17 @@ compute.launch k 5
 "#;
     let parallel = r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 69}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 69}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value float2int (int2float i + 0.5)}))})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value float2int (int2float i + 0.5)}))})
 }
-k := compute.parallel f "BACKEND" (Out _)
-out := (compute.plrun k (compute.A{.n 69, .I In{.a 0}}) : Struct)
-((compute.read (compute.Read{.from out.z, .at 0}) : Int), (compute.read (compute.Read{.from out.z, .at 1}) : Int), (compute.read (compute.Read{.from out.z, .at 68}) : Int), compute.collect out.z)
+k := compute.parallel f "BACKEND" Out
+out := (compute.plrun k ((compute.A _){.n 69, .I In{.a 0}}) : Struct)
+((compute.read ((compute.Read _){.from out.z, .at 0}) : Int), (compute.read ((compute.Read _){.from out.z, .at 1}) : Int), (compute.read ((compute.Read _){.from out.z, .at 68}) : Int), compute.collect out.z)
 "#;
     mark("first program start");
     let (first_module, first_value, _first_ty) = common::run(source);

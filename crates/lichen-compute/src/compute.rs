@@ -3687,11 +3687,11 @@ where
 /// is the author's statement.
 const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when the kernel is \
 compiled: a kernel is lowered for one class, so the function must state it — annotate the \
-parameter (for example `p <: (_x => (@any : Int, @any : Int))` for a tuple domain, or `y : Int` for a scalar one)";
+parameter (for example `p = (@any : Int, @any : Int)` for a tuple domain, or `y : Int` for a scalar one)";
 
 /// Why a **polymorphic template** cannot be jitted:
-/// a template's parameter has no domain before an apply binds it.
-const POLYMORPHIC_TEMPLATE: &str = "a polymorphic template cannot be jitted: the kernel parameter's domain is not decided when the kernel is compiled, and a template's parameter has no domain before an apply binds it — annotate the parameter (for example `k : Par` for a named struct, or `p <: (_x => (@any : Int, @any : Int))` for a tuple)";
+/// a template's parameter has no domain before an instance binds it.
+const POLYMORPHIC_TEMPLATE: &str = "a polymorphic template cannot be jitted: the kernel parameter's domain is not decided when the kernel is compiled, and a template's parameter has no domain before an instance binds it — annotate the parameter (for example `k : Par` for a named struct, or `p = (@any : Int, @any : Int)` for a tuple)";
 
 /// The other facts [`UNDECIDED_DOMAIN`] used to cover.
 ///

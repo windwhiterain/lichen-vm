@@ -30,30 +30,30 @@ fn natural() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   := _x => {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-OutR := _x => {{.r (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Par  := _x => {{.n @any : Int, .in In _}}
-producer_raw := (k <: Par) => {{
+In   := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutR := {{.r (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par  := {{.n @any : Int, .in In}}
+producer_raw := (k = Par) => {{
   i := compute.range k.n
   r := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read (compute.Read{{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
-  ((OutR){{.r (compute.write (compute.Write{{.to r, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
+  ((OutR){{.r (compute.write ((compute.Write _){{.to r, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" (OutR _)
-In2  := _x => {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-OutZ := _x => {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Par2 := _x => {{.n @any : Int, .in In2 _}}
-consumer_raw := (k <: Par2) => {{
+producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
+In2  := {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Par2 := {{.n @any : Int, .in In2}}
+consumer_raw := (k = Par2) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{{.from k.in.e, .at s(0) - 1}}) : Float) ~ "element")) ~ "combine"))
-  ((OutZ){{.z (compute.write (compute.Write{{.to z, .at i, .value ((fold (k.n, 0.0 ~ "identity")) + 1.0)}}))}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.e, .at s(0) - 1}}) : Float) ~ "element")) ~ "combine"))
+  ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value ((fold (k.n, 0.0 ~ "identity")) + 1.0)}}))}})
 }}
-consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (OutZ _)
-GArg := _x => {{.n @any : Int, .in In _}}
-step := (s <: GArg) => {{
-  first := (compute.plrun producer (compute.A{{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
-  compute.plrun consumer (compute.A{{.n s.n, .I In2{{.e first.r}}}})
+consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
+GArg := {{.n @any : Int, .in In}}
+step := (s = GArg) => {{
+  first := (compute.plrun producer ((compute.A _){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
+  compute.plrun consumer ((compute.A _){{.n s.n, .I In2{{.e first.r}}}})
 }}
 built := compute.graph step
 (producer, consumer, built)

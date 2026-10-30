@@ -16,12 +16,12 @@ itself needs one — Chapter 5's `Type : Type` closes a chain in a cycle —
 and so does every recursive shape.
 
 The immediate consequence is that *recursive shapes need no declaration
-form*. A constructor can refer to another constructor, and two constructors
+form*. A template can refer to another template, and two templates
 can refer to each other, and the result is an ordinary cyclic value:
 
 ```lichen
-A := _x => {.v @any : Int, .next @any : Struct}
-B := _x => {.v @any : Type, .next @any : Struct}
+A := {.v @any : Int, .next @any : Struct}
+B := {.v @any : Type, .next @any : Struct}
 a := A{.v 1, .next b}
 b := B{.v Int, .next a}
 a
@@ -33,14 +33,14 @@ a
 
 `a` holds a `b`, which holds an `a`; the *value* `a` holds `b`, which
 holds `a`. The graph has a cycle, and the printer says so rather than
-unfolding forever. The two constructors are written apart and each is its
+unfolding forever. The two templates are written apart and each is its
 own nominal type (Chapter 8); the cycle is in the values, which is where
 the compiler reads a struct's shape from.
 
 A single binding cannot refer to itself as a value, so a directly
-self-referential constructor is refused (Chapter 3's rule). A recursive
+self-referential template is refused (Chapter 3's rule). A recursive
 shape is written as a cycle between bindings — two is enough, as above —
-and a constructor that applies itself is cut by the checker's
+and a template that applies itself is cut by the checker's
 apply-depth budget (Chapter 4). The mutual form is the one that works.
 
 ## The printer cuts a cycle
@@ -69,8 +69,8 @@ A recursive function's result is as decided as its signature. When the
 signature is stated, the recursive calls read it and the result follows:
 
 ```lichen
-T := _x => (@any : Int, @any : Int)
-gcd := (p <: T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+T := (@any : Int, @any : Int)
+gcd := (p = T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
 ```
 
@@ -78,9 +78,9 @@ gcd (48, 18)
 6: Int
 ```
 
-Without the constructor the function's own cells stay open, and Chapter 4's
+Without the template the function's own cells stay open, and Chapter 4's
 refusal is what the checker answers: a read states its requirement from
-the type of its container, and `p` has none. The constructor is not a
+the type of its container, and `p` has none. The template is not a
 separate check; it is the function's parameter and return cells, stated by
 hand.
 
@@ -140,7 +140,7 @@ inputs.
 - Unification has no occurs check: cyclic shapes are legal, and the
   universe itself is a cycle at `Type`.
 - Recursive shapes are written as cycles between bindings; a single
-  binding cannot name itself, and a self-applying constructor is cut by
+  binding cannot name itself, and a self-applying template is cut by
   the apply-depth budget.
 - The printer cuts a cycle with `…`: a finite notation for an infinite
   value, never a truncation.
@@ -154,11 +154,11 @@ inputs.
 
 ## Exercises
 
-1. Write two struct constructors that refer to each other, and a value that
+1. Write two struct templates that refer to each other, and a value that
    cycles through them. Read a field and explain where the printer cut.
-2. Explain why a constructor that names itself is refused while the `A`/`B`
+2. Explain why a template that names itself is refused while the `A`/`B`
    pair is not.
-3. Write `gcd` with and without its constructor and compare the two outputs.
+3. Write `gcd` with and without its template and compare the two outputs.
 4. Write `a := x => (1, "a", Int)(x)` and call it at each of the three
    indices. What type does each call have?
 5. Explain what `?a => ?b: ?a => ?b` says about the function `a`, and why

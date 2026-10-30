@@ -26,36 +26,36 @@ fn recorded(body: &str) -> String {
 /// Three kernels over the three input structs the cases below need, and the data they read.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-Inc    := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Two    := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length _})), .z (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Single := _x => {.q (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Out    := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length _}))}
-ParD := _x => compute.P compute.KT{.I Inc _, .O Out _}
-ParT := _x => compute.P compute.KT{.I Two _, .O Out _}
-ParQ := _x => compute.P compute.KT{.I Single _, .O Out _}
-dblD_raw := (k <: ParD) => {
+Inc    := {.d (compute.Buf (compute.BufParam{.type Float, .length _}))}
+Two    := {.d (compute.Buf (compute.BufParam{.type Float, .length _})), .z (compute.Buf (compute.BufParam{.type Float, .length _}))}
+Single := {.q (compute.Buf (compute.BufParam{.type Float, .length _}))}
+Out    := {.e (compute.Buf (compute.BufParam{.type Float, .length _}))}
+ParD := _x => compute.P compute.KT{.I Inc, .O Out}
+ParT := _x => compute.P compute.KT{.I Two, .O Out}
+ParQ := _x => compute.P compute.KT{.I Single, .O Out}
+dblD_raw := (k = (ParD _)) => {
   i := compute.range k.n
-  compute.write (compute.Write{.to k.out.e, .at i, .value ((compute.read (compute.Read{.from k.in.d, .at i}) : Float) * 2.0)})
+  compute.write ((compute.Write _){.to k.out.e, .at i, .value ((compute.read ((compute.Read _){.from k.in.d, .at i}) : Float) * 2.0)})
 }
-dblD := compute.parallel dblD_raw "gpu" (Out _)
-dblT_raw := (k <: ParT) => {
+dblD := compute.parallel dblD_raw "gpu" Out
+dblT_raw := (k = (ParT _)) => {
   i := compute.range k.n
-  compute.write (compute.Write{.to k.out.e, .at i, .value ((compute.read (compute.Read{.from k.in.d, .at i}) : Float) * 2.0)})
+  compute.write ((compute.Write _){.to k.out.e, .at i, .value ((compute.read ((compute.Read _){.from k.in.d, .at i}) : Float) * 2.0)})
 }
-dblT := compute.parallel dblT_raw "gpu" (Out _)
-dblQ_raw := (k <: ParQ) => {
+dblT := compute.parallel dblT_raw "gpu" Out
+dblQ_raw := (k = (ParQ _)) => {
   i := compute.range k.n
-  compute.write (compute.Write{.to k.out.e, .at i, .value ((compute.read (compute.Read{.from k.in.q, .at i}) : Float) * 2.0)})
+  compute.write ((compute.Write _){.to k.out.e, .at i, .value ((compute.read ((compute.Read _){.from k.in.q, .at i}) : Float) * 2.0)})
 }
-dblQ := compute.parallel dblQ_raw "gpu" (Out _)
+dblQ := compute.parallel dblQ_raw "gpu" Out
 data := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
 "#;
 
 /// One buffer under `.in`, and the body **reads its own extent argument**.
 const SAME_ONE: &str = r#"
-GArg := _x => {.n @any : Int, .in Inc _, .out Out}
-step := (s <: GArg) => {
-  compute.plrun dblD (compute.A{.n s.n, .I Inc{.d s.in.d}})
+GArg := {.n @any : Int, .in Inc, .out Out}
+step := (s = GArg) => {
+  compute.plrun dblD ((compute.A _){.n s.n, .I Inc{.d s.in.d}})
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (3, data)) : Array
@@ -63,9 +63,9 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// Two buffers under `.in`, and the dispatch's argument is that same struct.
 const SAME_TWO: &str = r#"
-GArg := _x => {.n @any : Int, .in Two _}
-step := (s <: GArg) => {
-  compute.plrun dblT (compute.A{.n s.n, .I Two{.d s.in.d, .z s.in.z}})
+GArg := {.n @any : Int, .in Two}
+step := (s = GArg) => {
+  compute.plrun dblT ((compute.A _){.n s.n, .I Two{.d s.in.d, .z s.in.z}})
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (3, data, data)) : Array
@@ -73,9 +73,9 @@ compute.collect (compute.graphrun built (3, data, data)) : Array
 
 /// Two buffers under `.in`, and the dispatch's argument is a **different** struct.
 const OTHER_TWO: &str = r#"
-GArg := _x => {.n @any : Int, .in Two _}
-step := (s <: GArg) => {
-  compute.plrun dblQ (compute.A{.n 3, .I Single{.q s.in.d}})
+GArg := {.n @any : Int, .in Two}
+step := (s = GArg) => {
+  compute.plrun dblQ ((compute.A _){.n 3, .I Single{.q s.in.d}})
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (3, data)) : Array
@@ -83,9 +83,9 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// One buffer under `.in`, and the dispatch's argument is a **different** struct.
 const OTHER_ONE: &str = r#"
-GArg := _x => {.n @any : Int, .in Inc _}
-step := (s <: GArg) => {
-  compute.plrun dblQ (compute.A{.n 3, .I Single{.q s.in.d}})
+GArg := {.n @any : Int, .in Inc}
+step := (s = GArg) => {
+  compute.plrun dblQ ((compute.A _){.n 3, .I Single{.q s.in.d}})
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (3, data)) : Array
@@ -93,10 +93,10 @@ compute.collect (compute.graphrun built (3, data)) : Array
 
 /// Two dispatches, the second reading the first's answer — the one axis still uncrossed.
 const TWO_NODES: &str = r#"
-GArg := _x => {.n @any : Int, .in Inc _}
-step := (s <: GArg) => {
-  a := (compute.plrun dblD (compute.A{.n s.n, .I Inc{.d s.in.d}}) : Struct)
-  compute.plrun dblD (compute.A{.n 3, .I Inc{.d a.e}})
+GArg := {.n @any : Int, .in Inc}
+step := (s = GArg) => {
+  a := (compute.plrun dblD ((compute.A _){.n s.n, .I Inc{.d s.in.d}}) : Struct)
+  compute.plrun dblD ((compute.A _){.n 3, .I Inc{.d a.e}})
 }
 built := compute.graph step
 compute.collect (compute.graphrun built (3, data)) : Array

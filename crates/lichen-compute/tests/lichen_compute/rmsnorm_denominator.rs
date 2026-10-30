@@ -16,7 +16,7 @@ use lichen_utils::extend::AsEnum;
 const COUNT: usize = 8;
 
 /// The producer's value, read as RMSNorm's consumer reads it.
-const SUM: &str = "(compute.read (compute.Read{.from k.in.s, .at 0}) : Float)";
+const SUM: &str = "(compute.read ((compute.Read _){.from k.in.s, .at 0}) : Float)";
 
 /// The RMSNorm expr with `denominator` written into the consumer's `element`.
 ///
@@ -31,33 +31,33 @@ fn program(denominator: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-Row  := _x => {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-Sums := _x => {{.s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-ParS := _x => {{.n @any : Int, .in Row _}}
-sumsq_raw := (k <: ParS) => {{
+Row  := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+Sums := {{.s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParS := {{.n @any : Int, .in Row}}
+sumsq_raw := (k = ParS) => {{
   i := compute.range k.n
   sums := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read (compute.Read{{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read (compute.Read{{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
-  ((Sums){{.s (compute.write (compute.Write{{.to sums, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
+  ((Sums){{.s (compute.write ((compute.Write _){{.to sums, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
-sumsq := compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" (Sums _)
-Scale := _x => {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-OutY  := _x => {{.y (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-ParY  := _x => {{.n @any : Int, .in Scale _}}
-rescale_raw := (k <: ParY) => {{
+sumsq := compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sums
+Scale := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+OutY  := {{.y (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+ParY  := {{.n @any : Int, .in Scale}}
+rescale_raw := (k = ParY) => {{
   i := compute.range k.n
-  x := (compute.read (compute.Read{{.from k.in.x, .at i}}) : Float)
-  w := (compute.read (compute.Read{{.from k.in.w, .at i}}) : Float)
+  x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
+  w := (compute.read ((compute.Read _){{.from k.in.w, .at i}}) : Float)
   d := {denominator}
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  ((OutY){{.y (compute.write (compute.Write{{.to y, .at i, .value (((x / d) * w) ~ "element")}}))}})
+  ((OutY){{.y (compute.write ((compute.Write _){{.to y, .at i, .value (((x / d) * w) ~ "element")}}))}})
 }}
-rescale := compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" (OutY _)
-GArg := _x => {{.n @any : Int, .in All _}}
-All  := _x => {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-step := (s <: GArg) => {{
-  first := (compute.plrun sumsq (compute.A{{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
-  compute.plrun rescale (compute.A{{.n s.n, .I Scale{{.x s.in.x, .w s.in.w, .s first.s}}}})
+rescale := compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" OutY
+GArg := {{.n @any : Int, .in All}}
+All  := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
+step := (s = GArg) => {{
+  first := (compute.plrun sumsq ((compute.A _){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
+  compute.plrun rescale ((compute.A _){{.n s.n, .I Scale{{.x s.in.x, .w s.in.w, .s first.s}}}})
 }}
 built := compute.graph step
 (sumsq, rescale, built)

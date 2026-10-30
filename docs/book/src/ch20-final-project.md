@@ -5,7 +5,7 @@ of floats, subtract the row's mean from every element. It is two operator
 kernels — a reduction that sums the row, and an elementwise kernel that
 subtracts the mean — and one host-side kernel that fills the row, because
 the surface has no array-to-buffer conversion. It is small enough to hold
-in one screen while touching buffers, struct constructors, claims, folds,
+in one screen while touching buffers, struct templates, claims, folds,
 launches, and the answer check.
 
 It is the shape of a real operator. `layernorm` (in
@@ -37,33 +37,33 @@ data in, not a shape the floor reads.
 ---
   compute = import "compute.lichen"
 ---
-Row  := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-Sums := _x => {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-ParS := _x => {.n @any : Int, .in Row}
-row_sum_raw := (k <: ParS) => {
+Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParS := {.n @any : Int, .in Row}
+row_sum_raw := (k = ParS) => {
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read (compute.Read{.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
+  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
   b_s := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Sums{.s (compute.write (compute.Write{.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity"))}))})
+  (Sums{.s (compute.write ((compute.Write _){.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity"))}))})
 }
 row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
-Moments := _x => {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-Centred := _x => {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-ParC := _x => {.n @any : Int, .in Moments}
-centre_raw := (k <: ParC) => {
+Moments := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Centred := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+ParC := {.n @any : Int, .in Moments}
+centre_raw := (k = ParC) => {
   i := compute.range k.n
-  m := (compute.read (compute.Read{.from k.in.s, .at 0}) : Float) / int2float k.n
-  x := (compute.read (compute.Read{.from k.in.x, .at i}) : Float)
+  m := (compute.read ((compute.Read _){.from k.in.s, .at 0}) : Float) / int2float k.n
+  x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
   b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Centred{.y (compute.write (compute.Write{.to b_y, .at i, .value ((x - m) ~ "element")}))})
+  (Centred{.y (compute.write ((compute.Write _){.to b_y, .at i, .value ((x - m) ~ "element")}))})
 }
 centre := compute.parallel (centre_raw ~ "claim:Reduction(element)") "cpu" Centred
-Fill := _x => {.n @any : Int}
-fill_raw := (c <: Fill) => {
+Fill := {.n @any : Int}
+fill_raw := (c = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := 1.0 + int2float i
-  (Row{.x (compute.write (compute.Write{.to d, .at i, .value v}))})
+  (Row{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
 fill := compute.parallel fill_raw "cpu" Row
 x := (compute.plrun fill (Fill{.n 4}) : Struct).x
@@ -73,7 +73,7 @@ compute.collect out.y : Array
 ```
 
 **This program does not run today**, for the reason Chapter 17 states: the
-compute surface has not caught up with the constructor model, so the kernel's
+compute surface has not caught up with the template model, so the kernel's
 read of `k.in.x` is refused with `expected Struct, found ?a => Struct` before
 the parallel lowering can place it. The arithmetic it is written to do is
 exact: the row is `1, 2, 3, 4`, whose mean is `2.5`, so the values it
@@ -84,9 +84,9 @@ because the program does not produce one yet.
 ## Walking through it
 
 **The types.** `Row`, `Sums`, `Moments` and `Centred` are ordinary struct
-constructors (Chapter 8), and each carries its buffers — a buffer's type
+templates (Chapter 8), and each carries its buffers — a buffer's type
 states its element type and its length. The kernel's parameter is a
-constructor the kernel is matched against, `ParS := _x => {.n @any : Int,
+template the kernel is matched against, `ParS := {.n @any : Int,
 .in Row}`: the launch's extent and the input struct. There is no output
 group in the parameter: a kernel's **result** is its codomain, and the
 body declares the buffer it writes and hands it back, so `Sums` is the
@@ -140,7 +140,7 @@ The next step is the operator this one is half of. To go from centering to
    second kernel writing a second one-element buffer).
 2. In the elementwise kernel, compute `var = Σx²/n - mean²` from the two
    buffers, take `sqrt (var + eps)`, and divide.
-3. Read `eps` as a scalar leaf of the parameter's constructor, as the
+3. Read `eps` as a scalar leaf of the parameter's template, as the
    layernorm example does: a scalar argument goes after the extent leaf, and
    `examples/matmul.lichen` records what happens when a leaf is put in the
    wrong place.
@@ -202,12 +202,12 @@ right — and the fix belongs in both, in the same commit.
 - The host builds its input with a fill kernel, runs with `compute.plrun`,
   and reads back with `compute.collect`; the collect's annotation decides
   the array's type.
-- The program's parameters and results are struct **constructors**, and the
-  kernels are matched against them with `<:`, which applies the constructor
-  once.
+- The program's parameters and results are struct **templates**, and the
+  kernels are matched against them with `=`, which unifies the parameter
+  with the template's requirements.
 - A layer norm is this project plus a second reduction and a square root.
 - While the parallel path is under repair, the book states what a kernel
   program means rather than printing an answer it does not produce; the first
-  refusal is the field read on a constructor-valued parameter.
+  refusal is the field read on a template-valued parameter.
 - Publishing a program is the program, its `output` promise, and the tool
   that keeps them equal.

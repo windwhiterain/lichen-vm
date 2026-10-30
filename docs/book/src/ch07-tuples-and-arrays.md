@@ -81,47 +81,46 @@ A **requirement** states what one position of a compound must hold, and
 (@any, @any): Tuple
 ```
 
-Requirements are matched with `<:`, the match operator. Its right hand
-side is a **constructor** — a function that returns a fresh requirement when
-it is applied — and `<:` applies that constructor exactly once:
+Requirements are matched with `=`, the match operator. Its right hand
+side is a **template** — a direct compound value whose open slots are
+`@any` — and `=` unifies the actual with it:
 
 ```lichen
-T := _x => (@any : Int, @any : Int)
-v := (1, 2) <: T
+T := (@any : Int, @any : Int)
+v := (1, 2) = T
 (T, v)
 ```
 
 ```text
-(?a => Tuple, (1, 2)): Tuple
+((@any, @any), (1, 2)): Tuple
 ```
 
-`actual <: T` is the same as `actual = T _`: the constructor is applied to a
-placeholder, and the actual is unified with the requirement that comes back.
-The constructor keeps its own holes and every match gets fresh ones; the
-answer's first element is the constructor itself, printed as the function it
-is.
+`actual = T` is the plain unify: the actual is unified with the template,
+and the template's open slots are instantiated fresh for that use, so the
+template itself is never specialized. The answer's first element is the
+template, printed as the tuple of requirements it is.
 
 A requirement that the actual does not meet is refused where the match is
 written:
 
 ```lichen
-(1, 2) <: (_x => (@any : Int, @any : Type))
+(1, 2) = (@any : Int, @any : Type)
 ```
 
 ```text
 error: expected Type, found Int
   --> 1:1
    |
- 1 | (1, 2) <: (_x => (@any : Int, @any : Type))
+ 1 | (1, 2) = (@any : Int, @any : Type)
    | ^
 ```
 
-A requirement is how a function says what it accepts, and the `<:` in a
+A requirement is how a function says what it accepts, and the `=` in a
 parameter is the same rule applied to the parameter:
 
 ```lichen
-T := _x => (@any : Int, @any : Int)
-addpair := (p <: T) => p(0) + p(1)
+T := (@any : Int, @any : Int)
+addpair := (p = T) => p(0) + p(1)
 addpair (1, 2)
 ```
 
@@ -152,11 +151,11 @@ The template is `[requirement, length]`:
 
 The template is itself an array value: three open slots waiting for
 elements, with the element requirement kept beside them. The instance
-writes the elements after it, and it applies its constructor once — the
-same rule the tuple match uses:
+writes the elements after it, and it fills the template's element
+requirement — the same rule the tuple match uses:
 
 ```lichen
-T := _x => [@any : Int, 3]
+T := [@any : Int, 3]
 T[10, 20, 30]
 ```
 
@@ -165,8 +164,8 @@ T[10, 20, 30]
 ```
 
 Every element is unified with the **one** element requirement the
-constructor returned, so the array is homogeneous by construction, and the
-returned length is checked against the instance's element count.
+template holds, so the array is homogeneous by construction, and the
+template's length is checked against the instance's element count.
 
 There is no empty array: an array template's length is at least one, and
 `[]` is a parse error.
@@ -189,7 +188,7 @@ a := [@any : Int, 3]
 The elements read here are the template's own holes: no instance has filled
 them, so the reads are the requirement's.
 
-`a[i]` reads; `a[i, j]` and `a[i,]` instantiate the constructor `a` is
+`a[i]` reads; `a[i, j]` and `a[i,]` instantiate the template `a` is
 written on. The array **layout** is required, so a tuple or a struct is
 refused by the same rule that refuses an array at a tuple read:
 
@@ -331,12 +330,11 @@ shape is in the value, and the value is what the elements are read from.
 - A tuple's element is read by position, `t(k)`, and the read requires the
   tuple layout.
 - A **requirement** states what one position must be — `@any : T` being
-  "any `T` will do" — and a **constructor** is a function that returns a
-  fresh requirement when applied. `<:` applies the constructor once and
-  unifies the actual with the result; plain `=` applies nothing.
+  "any `T` will do" — and a **template** is a direct compound value whose
+  open slots are `@any`. `=` unifies the actual with the template and
+  instantiates its open slots afresh.
 - An array template is `[requirement, length]`, and an array instance
-  applies its constructor once and fills the returned element requirement.
-  An array's type is `Array`.
+  fills the template's element requirement. An array's type is `Array`.
 - An array's element is read by position, `a[i]`, with a comma-free
   index; the read requires the array layout.
 - The read form is chosen by the container's layout; a wrong layout is a
@@ -352,5 +350,5 @@ shape is in the value, and the value is what the elements are read from.
 3. Write `sum3 = t => t(0) + t(1) + t(2)` and apply it to `(1, 2, 3)`.
    What does the type of `t` need to be for the answer to be decided?
 4. Write an array of arrays and read an element from the second row.
-5. Write a tuple constructor, match two different values against it, and
-   check that the constructor still reads the same afterwards.
+5. Write a tuple template, match two different values against it, and
+   check that the template still reads the same afterwards.

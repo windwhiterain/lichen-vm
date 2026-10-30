@@ -188,7 +188,7 @@ fn std_sort_sorts_a_usize_array() {
 ---
   std = import "std.lichen"
 ---
-A := _x => [@any : Int, 3]
+A := [@any : Int, 3]
 std.sort A[3, 1, 2]
 "#);
     assert_eq!(
@@ -206,8 +206,8 @@ fn std_sort_is_reusable_and_length_preserving() {
 ---
   std = import "std.lichen"
 ---
-A4 := _x => [@any, 4]
-A2 := _x => [@any, 2]
+A4 := [@any, 4]
+A2 := [@any, 2]
 (std.sort A4[4, 1, 3, 2], std.sort A2[9, 7])
 "#);
     let expr = array_values(&module, &value);
@@ -248,7 +248,7 @@ fn std_sort_rejects_a_non_int_array() {
 ---
   std = import "std.lichen"
 ---
-A := _x => [@any, 2]
+A := [@any, 2]
 std.sort A["a", "b"]
 "#,
     );

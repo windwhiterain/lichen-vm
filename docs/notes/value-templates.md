@@ -1,107 +1,99 @@
-# Constructor templates
+# Direct @any templates
 
 > Status: **current for the source language; the compute migration is
 > incomplete.**
-> Points at: `crates/lichen-language-parser` (the template syntax),
-> `crates/lichen-language/src/compile.rs` (the two applications),
-> `crates/lichen-highlevel/src/checker` (value construction and reads),
-> `crates/lichen-lowlevel/src/apply.rs`, `function.rs`, and
-> `static_module/apply.rs` (the apply's scope and its frozen mirror),
-> `crates/lichen-lowlevel/src/equality.rs` (a materialized result's owner), and
-> `crates/lichen-compute/src/compute.rs` / `compute/body.rs` (the compute
+> Points at: `crates/lichen-language/src/compile.rs` (no implicit template
+> application), `crates/lichen-highlevel/src/checker/templates.rs` (requirement
+> instantiation), `crates/lichen-highlevel/src/checker` (value construction and
+> reads), `crates/lichen-lowlevel/src/apply.rs`, `function.rs`, and
+> `static_module/apply.rs` (the function apply's scope and its frozen mirror),
+> and `crates/lichen-compute/src/compute.rs` / `compute/body.rs` (the compute
 > surface).
 
 Compound layout lives in a value, not in a shape-bearing type. `Tuple`, `Array`,
-and `Struct` are the shared layout types; a template is a function whose
-application produces a fresh requirement. The source of truth is [the language
+and `Struct` are the shared layout types; a **template is a direct compound value**
+whose open slots are `@any`. The source of truth is [the language
 spec](../language-spec.md); this note records the migration decisions, the
 reasons for them, and the measurements that now hold.
 
 ## Confirmed rulings
 
-- A template is a **constructor**: a function that, applied once, returns a
-  fresh requirement. `S := _x => {.a _, .b _}` is a struct constructor, and
-  `I := _x => _` is a constructor that returns a bare hole.
-- Ordinary `:` annotation is unchanged. It is not a template constructor.
-- The match operator applies the constructor exactly once:
-
-  ```text
-  actual <: S  =>  actual = S _
-  ```
-
-  `actual <: S _` is a **double application** — the `_` is written twice — and
-  is not the match.
-- Plain `=` performs **no application**. It is the unify for an already
-  evaluated requirement, for a call-result template, and for a direct function
-  signature.
-- A parameter uses the same rule by desugaring into its body:
-
-  ```text
-  x <: T => body  =>  x => { x = T _; body }
-  ```
-
-- There is no source-level `@clone`. Freshness comes from function
-  application, whose existing parameter scope instantiates the body and
-  shares captured cells. Cloning every reachable node would be wrong: an outer
-  `x` must not be cloned into an unrelated class when a struct is
-  instantiated. Function scope, closed-cell sharing, and the per-application
-  remap are the ownership model; graph reachability is not.
-- A struct's constructor is a function, for example
-  `S := _x => {.x @any : Int}`. `S{.x 1}` applies `S` to `_` once and fills the
-  fresh struct value it returns. There is no second application. Writing
-  `(S _){...}` applies the returned struct value again and is not the
-  constructor form.
-- An array instance also applies its constructor once. `T[x, y]` evaluates
-  `T _`, checks the returned length, and unifies every element with the same
-  returned element requirement. A comma-free `a[i]` is still an array read;
-  `T[x,]` is the one-element instance and `T[]` the zero-element instance.
+- A direct template is a value, for example `S := {.a @any, .b @any}`,
+  `T := [@any : Int, 3]`, or `P := (@any : Int, @any : Int)`. It is not a
+  function and is never applied.
+- `=` is the only template match. `<:` is retired in source; the compiler
+  lowers it as a plain unify and the migration rewrites it to `=`.
+- A direct template is instantiated **per use**: its open value slots become
+  fresh empty cells, while its types, attributes, name table and nominal id are
+  shared. The actual fills the fresh slots, so the template itself is never
+  specialized.
+- A parameterized constructor remains a function: `F := I => {.in I}`. It is
+  applied explicitly everywhere it is used: `x = (F I)`, `(F _){.in 1}`,
+  `(F _)[…]`. A zero-parameter constructor is direct unless its body is a bare
+  hole, a function, or another non-compound.
+- Ordinary `:` annotation is unchanged. It is not a template match.
+- There is no source-level `@clone`. Freshness for a function comes from its
+  application; freshness for a direct template comes from requirement
+  instantiation. Function scope, closed-cell sharing, and the per-application
+  remap remain the ownership model; graph reachability is not.
+- A struct instance `S{.x 1}` uses the template value `S` directly and builds
+  the result from the supplied field values. An array instance `T[x, y]` uses
+  `T` directly, checks its length, and unifies every element with the same
+  element requirement. A comma-free `a[i]` is still an array read; `T[x,]` is
+  the one-element instance and `T[]` the zero-element instance.
 - Scalar wildcard fields use `@any : Int` or `@any : I`; bare `I` stores a type
   value, not an arbitrary value of type `I`.
 - **A binary operator's operands stay the tuple ABI.** The operand group is
   `operator (left, right)`, not the array form `[left, right]`: the array
   requirement's `[requirement, length]` is a different two-slot shape, and a
   binary operator that borrowed its spelling would be ambiguous with it. The
-  spec's binary sugar is corrected to `operator (left, right)`.
-- The thin arrow `->` is removed. A function constraint can use plain `=` with
-  a signature, or `<:` with a constructor that returns a signature.
-  Unification compares the signature and preserves the actual callable body;
-  it never replaces that body with the constructor's body.
-- A call-result template is used with plain `=`, not `<:`. For example, a
-  native wrapper states `r : type_of (k.O); r = k.O`. `<:` would apply `k.O`
-  again, which is valid only when `k.O` is itself a constructor function.
+  spec's binary sugar is `operator (left, right)`.
+- The thin arrow `->` is removed. A function constraint uses plain `=` with a
+  signature; a function template is applied explicitly. Unification compares the
+  signature and preserves the actual callable body; it never replaces that body
+  with the template's body.
+- A call-result template is used with plain `=`. For example, a native wrapper
+  states `r : type_of (k.O); r = k.O`.
 
 ## The direct signature
 
-A signature is stated with plain `=`, which performs no application, and the
-unification keeps the actual's own body:
+A signature is stated with plain `=`, and the unification keeps the actual's own
+body:
 
 ```text
 I := _x => _
-f = (i <: I => _)
+f = (i = (I _) => _)
 O := f (I _)
 r = O
 ```
 
-`f = (i <: I => _)` says that `f`'s parameter takes the requirement `I`
-returns, applied once, and that `f`'s result is a hole. `O := f (I _)` applies
-`f` to the same requirement, so `O` is the result the signature describes.
-The result is then reused with plain `=`: `r = O` for a local result and
-`r = k.O` for a result that came out of a kernel struct.
+`f = (i = (I _) => _)` says that `f`'s parameter takes the requirement
+applied from `I`, and that `f`'s result is a hole. `O := f (I _)` applies `f` to
+the same requirement, so `O` is the result the signature describes. The result
+is then reused with plain `=`: `r = O` for a local result and `r = k.O` for a
+result that came out of a kernel struct.
 
 ## Implementation
 
-The source-to-IR step performs the application the syntax names: `<:` inserts
-`T _` before unification, and an instance inserts the constructor application
-before filling the returned fields or element requirement. The apply's own
-scope supplies freshness. `ApplyCtx` clones the callee's template, shares the
-cells the template captured, mints a fresh closure per call, and rebuilds the
-class topology with `apply::regroup_clones` / `unify_clone_groups`. `Node::origin`
-records where a clone came from; it is not a keep-alive edge, and no pass infers
-ownership from it. `LowOperator::Unify` evaluates the actual value once before it
-evaluates the requirement, so a deferred unify compares the value and not an
-unevaluated apply.
+The source-to-IR step performs no implicit application: `<:` lowers exactly like
+`=`, and an instance uses its callee value directly. A template that is a
+function is applied at the call site with the ordinary apply syntax.
 
-The constructor result is an ordinary value: `[name table, nominal id, fields…]`
+`check_unify_expr` asks whether the expected value has an open value slot. If it
+does, `instantiate_requirement` copies the value graph, replacing every open
+value slot with a fresh cell and sharing every type, attribute, name table and
+nominal id. The actual is then unified with that fresh copy. This is what keeps
+one written template reusable across instances without a function wrapper.
+
+A function's application still uses the apply's own clone. `ApplyCtx` clones the
+callee's template, shares the cells the template captured, mints a fresh closure
+per call, and rebuilds the class topology with `apply::regroup_clones` /
+`unify_clone_groups`. `Node::origin` records where a clone came from; it is not a
+keep-alive edge, and no pass infers ownership from it. `LowOperator::Unify`
+evaluates the actual value once before it evaluates the requirement, so a
+deferred unify compares the value and not an unevaluated apply.
+
+The template result is an ordinary value: `[name table, nominal id, fields…]`
 for a struct, `[element template, elements…]` for an array, and `[elements…]`
 for a tuple. The shared layout type is `Struct`, `Array`, or `Tuple`
 respectively.
@@ -169,19 +161,20 @@ alternatives and the measurements.
 ## The compute layer
 
 The compute package's own source follows the same model. A kernel struct is a
-constructor, `K := _x => {.native _, .I _, .O _}`, and a kernel is matched
-against it with `<:` — `launch := k <: K => …` — which applies `K` once.
+direct template, `K := {.native @any, .I @any, .O @any}`, and a kernel is
+matched against it with plain `=` — `launch := k = K => …`.
 
 A computed struct call **returns a value**; it is not an instantiation.
 `Buf x` returns the buffer struct, and the buffer is initialised by assigning
 into it:
 
 ```text
-buf := x <: BufParam => { b := Buf x; b.native = $buf(x.type, x.length); b }
+buf := x = BufParam => { b := Buf x; b.native = $buf(x.type, x.length); b }
 ```
 
 `(Buf x){…}` is not a supported second instantiation: the call has already
-returned a value, and the instantiation form applies a *constructor* once.
+returned a value. A parameterized constructor such as `Buf` is a function and
+must be applied explicitly where its result is used.
 
 `type_of (k.O)` needs the space. `type_of (k.O)` is the application of
 `type_of` to the field read; `type_of(k.O)` is a parenthesized read — the
@@ -314,28 +307,30 @@ is a **runtime** error, not a check-time one. A top-level `_` remains guarded;
 
 ## Measured status
 
-At `ea08077b`, after the function-template and computed-ownership squash
-(`bd360fac`):
+After the direct-template migration on `dev@ffef59c8`:
 
 - `cargo test -p lichen-highlevel --test highlevel`: 136 passed.
 - `cargo test -p lichen-language --test language`: 275 passed.
 - `cargo test -p lichen-lowlevel --test basic`: 164 passed, 1 ignored.
-- The grammar-consistency check: 2 passed.
-- `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/gcd.lichen`
-  prints `6: Int`, and `examples/compute_jit.lichen` prints `6: Int`.
-- The array instance path is measured: `A := _x => [@any : Int, 2]; A[1, 2] :
-  Array` reads `[1, 2]`. The previous note's `expected Array, found Array`
-  refusal no longer reproduces.
-- The full `lichen-compute` suite is 111 passed, 129 failed, 1 ignored (it was
-  88 passed, 152 failed before the migration). The compute failures are the
-  remaining work, not evidence for the source model.
+- The full `lichen-compute` suite is **137 passed, 103 failed, 1 ignored**
+  (the constructor model's baseline was 136 / 104 / 1). The remaining failures
+  are the same compute graph-lowering families plus direct templates whose
+  nested requirement is shared across kernels; they are not evidence against
+  the source model.
+- `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/tuple.lichen`
+  prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
+  shape. The README sync test passes.
+- The array instance path is measured: `A := [@any : Int, 2]; A[1, 2] : Array`
+  reads `[1, 2]`. `A[f 1, f 2]` with a calling element is still a known gap:
+  the element template's value is specialized by the first call.
 
 ## Known remaining gaps
 
-- A kernel body that reads a field through a constructor-valued parameter —
-  `k.in.x`, where `k.in` is the constructor `In` rather than an instance — is
-  refused with `expected Struct, found ?a => Struct`. The book's compute
-  programs show this first refusal.
+- A direct array template whose element is a call still specializes the
+  element template: `A := [@any, 2]; A[f 1, f 2]` reports an element conflict.
+- A kernel body that reads a field through a template-valued parameter —
+  `k.in.x`, where `k.in` is a template rather than an instance — can still be
+  refused; the book's compute programs show the first refusal.
 - `examples/rmsnorm.lichen` fails in parallel lowering: a kernel body reaches a
   node with neither a value nor an operation, and a read's buffer argument is
   not an input buffer.
@@ -355,11 +350,11 @@ At `ea08077b`, after the function-template and computed-ownership squash
 
 ## Verification boundary
 
-The source model is measured when `<:` applies exactly once, plain `=` applies
-never, every compound instance applies its constructor once without cloning an
-outer capture, and the grammar and language suite no longer accept the retired
-`tuple{…}`, `array{…}`, `struct{…}`, or source `@clone` spellings. The remaining
-consumer is the compute layer's parallel lowering: its scalar `compute.jit` path
-is measured at `6: Int`, while the buffer-valued kernels listed above still
-fail. The one source file that still requires a retired compound spelling is
-`reduction_interface.rs`, named above.
+The source model is measured when plain `=` performs no application, `<:` is
+retired in source, every compound instance uses its template value directly
+without cloning an outer capture, and the grammar and language suite no longer
+accept the retired `tuple{…}`, `array{…}`, `struct{…}`, or source `@clone`
+spellings. The remaining consumer is the compute layer's parallel lowering: its
+scalar `compute.jit` path is measured at `6: Int`, while the buffer-valued
+kernels listed above still fail. The one source file that still requires a
+retired compound spelling is `reduction_interface.rs`, named above.

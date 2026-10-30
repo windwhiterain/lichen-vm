@@ -1,7 +1,7 @@
 # Types and Requirements as Values
 
 Chapter 5 established that a type is a value. This chapter takes that
-seriously: types are bound and passed, **constructors** are built by
+seriously: types are bound and passed, **templates** are built by
 functions, and a requirement may pin a value. Everything here follows from
 the same fact — a type is an ordinary node in the program's graph.
 
@@ -10,7 +10,7 @@ the same fact — a type is an ordinary node in the program's graph.
 A type value can be bound, passed, stored in a compound, and returned:
 
 ```lichen
-S := _x => {.a _, .b _}
+S := {.a @any, .b @any}
 s := S{.a Int, .b Float}
 (s.a, s.b)
 ```
@@ -23,39 +23,39 @@ The compound's fields are type values, and reading a field reads a type
 back out. An array of types has type `Array`, and a table can use a type
 as a key (Chapter 9).
 
-## Constructors are built by functions
+## Templates are built by functions
 
-A **constructor** is a function that returns a fresh requirement when it is
-applied, and a constructor is an ordinary function. Here is a two-field
-tuple constructor and a one-field box constructor:
+A **template** is a direct compound value whose open slots are `@any`, and
+a template built by a function is an ordinary function. Here is a two-field
+tuple template and a one-field box template:
 
 ```lichen
-Expr := T => U => _x => (@any : T, @any : U)
+Expr := T => U => (@any : T, @any : U)
 Expr Int string
 ```
 
 ```text
-?a => Tuple: ?b => Tuple
+(@any, @any): Tuple
 ```
 
 `Expr` is an ordinary lambda whose parameters are type values, and its body
-is a constructor: applied once, it returns the tuple of requirements. The
-same function builds a different constructor when applied to different
+is the template itself: the tuple of requirements. The
+same function builds a different template when applied to different
 arguments:
 
 ```lichen
-Box := T => _x => [@any : T, 3]
+Box := T => [@any : T, 3]
 Box Int
 ```
 
 ```text
-?a => Array: ?b => Array
+[?a, ?b, ?c]: Array
 ```
 
-and a struct constructor is the same shape with named fields:
+and a struct template is the same shape with named fields:
 
 ```lichen
-Pair := A => B => _x => {.a @any : A, .b @any : B}
+Pair := A => B => {.a @any : A, .b @any : B}
 p := Pair Int string
 p{.a 1, .b "s"}
 ```
@@ -65,13 +65,13 @@ p{.a 1, .b "s"}
 ```
 
 This is why lichen does not need a separate type-constructor syntax: a
-parametric constructor is a function, written and applied with the same
+parametric template is a function, written and applied with the same
 forms as any other function, and a partial application of one is a
-constructor with one parameter already supplied.
+template with one parameter already supplied.
 
-## A constructor is not read apart
+## A template is not read apart
 
-A constructor's result can be printed, compared, passed and returned, but a
+A template can be printed, compared, passed and returned, but a
 requirement's **components are not readable by a runtime access**: there is
 no `X{n}` for a tuple requirement's component and no `X::a` for a struct
 requirement's field. The rule is the language's own: a read reads a
@@ -86,13 +86,13 @@ function:
   requirement's field type;
 - when the shape arrives in a **value slot** and one of its components is
   needed, the program is higher-order: pass the shape's *parameters* and
-  build the shape at the call site with a constructor, so the parameter is
+  build the shape at the call site with a template, so the parameter is
   an ordinary value (a struct instance, a tuple) whose elements are
   readable.
 
 ```lichen
 type_of := x => {t := _; x: t; t}
-S := _x => {.a @any : Int}
+S := {.a @any : Int}
 s := S{.a 1}
 type_of s.a
 ```
@@ -102,7 +102,7 @@ Int: Type
 ```
 
 A struct instance's field type is read from the **value**, never from the
-constructor.
+template.
 
 ## Requirements, and pinning a value
 
@@ -113,11 +113,11 @@ slot's value position is left open, and its type position says `Int`.
 
 A slot may state a value as well as a type, and then the value is
 **pinned**: `(5 : Int)` is the requirement "exactly the value `5`, of type
-`Int`". The constructor returns the requirement, so the match is written
-against the constructor:
+`Int`". A template holds the requirement, so the match is written
+against the template:
 
 ```lichen
-(5, 2) <: (_x => (5 : Int, @any : Int))
+(5, 2) = (5 : Int, @any : Int)
 ```
 
 ```text
@@ -128,23 +128,23 @@ The pin is checked against the value that fills the position, and a
 different value is refused at the position:
 
 ```lichen
-(6, 2) <: (_x => (5 : Int, @any : Int))
+(6, 2) = (5 : Int, @any : Int)
 ```
 
 ```text
 error: expected 5, found 6
   --> 1:1
    |
- 1 | (6, 2) <: (_x => (5 : Int, @any : Int))
+ 1 | (6, 2) = (5 : Int, @any : Int)
    | ^
 ```
 
-Because the pin rides in the requirement, a bound constructor keeps it
+Because the pin rides in the requirement, a bound template keeps it
 holding:
 
 ```lichen
-T := _x => (5 : Int, @any : Int)
-(5, 2) <: T
+T := (5 : Int, @any : Int)
+(5, 2) = T
 ```
 
 ```text
@@ -172,7 +172,7 @@ The length of an array requirement `[requirement, length]` is an expression,
 not a numeral, so it may be a binding or a parameter:
 
 ```lichen
-f := n => _x => [@any : Int, n]
+f := n => [@any : Int, n]
 ```
 
 The instance's own element count pins the length cell, and the pin is
@@ -181,7 +181,7 @@ count the length cannot meet is refused at the application, because the
 parameter now carries a length its argument cannot meet.
 
 ```lichen
-f := n => _x => [@any : Int, n]
+f := n => [@any : Int, n]
 ```
 
 This is the language's dependent-type mechanism — via laziness and
@@ -203,12 +203,12 @@ of a kind type is a function's: its type is the shared `FunctionType` marker
 
 - Types are values: they can be bound, passed, stored, and returned, and an
   array of types has type `Array`.
-- A **constructor** is a function that returns a fresh requirement when it
-  is applied, and it is an ordinary function; `Box Int` and
+- A **template** is a direct compound value whose open slots are `@any`, and
+  a template built by a function is an ordinary function; `Box Int` and
   `Expr Int string` are applications.
 - A requirement is not read apart: read a value's element and take its
   type (`type_of s.a`), or pass a shape's parameters and build the shape at
-  the call site with a constructor.
+  the call site with a template.
 - A requirement's positions are slots; `5 : Int` pins a slot's value, and a
   value that disagrees is refused.
 - An array requirement's length may be an expression; the instance's count
@@ -218,13 +218,13 @@ of a kind type is a function's: its type is the shared `FunctionType` marker
 
 ## Exercises
 
-1. Write `Expr := T => U => _x => (@any : T, @any : U)` and print
+1. Write `Expr := T => U => (@any : T, @any : U)` and print
    `Expr Int string` and `Expr Type Int`.
-2. Write a constructor `Pair := A => B => _x => {.a @any : A, .b @any : B}`,
+2. Write a template `Pair := A => B => {.a @any : A, .b @any : B}`,
    apply it at the call site, and explain why a generic function takes the
    element type rather than reading it out of a requirement.
-3. Write a requirement `T := _x => (5 : Int, @any : Int)` and check that
-   `(5, 2) <: T` holds while `(6, 2) <: T` does not.
+3. Write a template `T := (5 : Int, @any : Int)` and check that
+   `(5, 2) = T` holds while `(6, 2) = T` does not.
 4. Write a function that takes a length `n` and returns the requirement
    `[@any : Int, n]`, then apply it and read the result's length from the
    printed value.

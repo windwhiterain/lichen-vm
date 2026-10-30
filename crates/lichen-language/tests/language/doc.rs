@@ -6,9 +6,9 @@ use super::common;
 use lichen_language::compile;
 use lichen_language::run::evaluate;
 
-/// `Doc := _x => {.name @any : string, .description @any : string}` — a
+/// `Doc := {.name @any : string, .description @any : string}` — a
 /// user-made 2-field struct.
-const DOC: &str = "Doc := _x => {.name @any : string, .description @any : string}\n";
+const DOC: &str = "Doc := {.name @any : string, .description @any : string}\n";
 
 /// The doc rides the expression's attribute slot, not its value.
 #[test]
@@ -53,7 +53,7 @@ fn a_doc_annotation_overrides_a_prior_one() {
 #[test]
 fn a_doc_rides_a_struct_definition() {
     let src = format!(
-        "{DOC}Point := _x => {{.x @any : Int, .y @any : Int}} ? Doc{{.name \"Point\", .description \"a point\"}}\n(Point, Point{{.x 1, .y 2}})"
+        "{DOC}Point := {{.x @any : Int, .y @any : Int}} ? Doc{{.name \"Point\", .description \"a point\"}}\n(Point, Point{{.x 1, .y 2}})"
     );
     assert!(
         compile(&src).ok(),
@@ -65,7 +65,7 @@ fn a_doc_rides_a_struct_definition() {
 #[test]
 fn two_differing_docs_in_one_array_do_not_conflict() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}A := _x => [@any, 2]\nA[1 ? Doc{{.name \"x\", .description \"a\"}}, 2 ? Doc{{.name \"y\", .description \"b\"}}][0]"
+        "{DOC}A := [@any, 2]\nA[1 ? Doc{{.name \"x\", .description \"a\"}}, 2 ? Doc{{.name \"y\", .description \"b\"}}][0]"
     ));
     assert_eq!(common::usize_of(&value), 1);
 }

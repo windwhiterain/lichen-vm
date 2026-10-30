@@ -575,9 +575,8 @@ impl Compiler {
                 let expected = self.compile_expr(expected);
                 self.alloc_unify(actual, expected, span)
             }
-            // `actual <: template`: the plain unify of the actual with the
-            // template. A template that is a function must be applied
-            // explicitly: `actual = (template _)`.
+            // `actual <: template`: plain unify. A function template is applied
+            // explicitly.
             Expr::TemplateUnify {
                 actual,
                 template,
@@ -634,8 +633,8 @@ impl Compiler {
                 elements,
                 span,
             } => {
-                // The template value is the requirement the elements fill. A
-                // function constructor is applied explicitly at the call site.
+                // The template value is the requirement; a function constructor
+                // is already applied.
                 let template = self.compile_expr(template);
                 let (ids, depths) = self.compile_elements(elements);
                 self.alloc_array_inst(template, &ids, &depths, span)

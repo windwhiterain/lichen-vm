@@ -16,27 +16,26 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
-    /// Whether a requirement's value carries an undecided slot an instance must
-    /// fill.
+    /// Whether a requirement's value carries an open slot an instance must fill.
     ///
     /// # Invariant
-    /// Only value positions are inspected: `Any` and an empty value cell are the
-    /// slots a template leaves for its instance. A function's parameter and
-    /// return signatures are never descended.
-    fn requirement_is_open(&self, value: NodeId, depth: usize) -> bool {
+    /// Only a compound type's value positions are inspected. A type constant such
+    /// as `Type` or `Float` is a value whose own interior is not a template, and a
+    /// decided instance's fields are actual values even when one of them is a type.
+    pub(super) fn requirement_is_open(&mut self, value: NodeId, ty: NodeId, depth: usize) -> bool {
         if depth > 64 {
             return false;
         }
         let Some(held) = self
             .module
-            .node_value(AnyNodeId::Dynamic(value))
+            .class_value(value)
             .and_then(|value| value.as_enum())
         else {
             return true;
         };
         match held {
             LowValue::Any => true,
-            LowValue::Array(array) => {
+            LowValue::Array(array) if self.is_compound_type(ty) => {
                 // SAFETY: the handle belongs to this module, which outlives the walk.
                 unsafe { array.items() }
                     .iter()
@@ -46,21 +45,47 @@ where
         }
     }
 
-    fn requirement_is_open_any(&self, node: AnyNodeId, depth: usize) -> bool {
-        match node.dynamic() {
-            Some(value) => self.requirement_is_open(value, depth),
-            None => false,
+    pub(super) fn is_compound_type(&mut self, ty: NodeId) -> bool {
+        self.is_struct_layout(ty)
+            || crate::shape::is_array_type_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(ty),
+            )
+            || crate::shape::is_tuple_type_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(ty),
+            )
+    }
+
+    fn requirement_is_open_any(&mut self, node: AnyNodeId, depth: usize) -> bool {
+        let Some(expr) = node.dynamic() else {
+            return false;
+        };
+        let Some(items) = crate::shape::value_items(&self.module, node) else {
+            return false;
+        };
+        let Some(value) = items.first().and_then(|item| item.node.dynamic()) else {
+            return false;
+        };
+        let ty = items.get(1).and_then(|item| item.node.dynamic());
+        let _ = expr;
+        match ty {
+            Some(ty) => self.requirement_is_open(value, ty, depth),
+            None => true,
         }
     }
 
-    /// A fresh copy of a requirement: its open value slots become empty cells,
-    /// while every type and attribute slot is shared.
+    /// A requirement copy with its open value slots emptied.
     ///
     /// # Invariant
-    /// The copy keeps the template's nominal id and name table; only value
-    /// positions are fresh. An `Any` value becomes an empty cell, so the actual
-    /// fills it without touching the template.
-    fn instantiate_requirement(&mut self, expr: NodeId) -> NodeId {
+    /// Only value positions are fresh; types, attributes, name table and
+    /// nominal id are shared.
+    fn instantiate_requirement(&mut self, expr: NodeId, depth: usize) -> NodeId {
+        if depth > 64 {
+            return expr;
+        }
         let Some(items) = crate::shape::value_items(&self.module, AnyNodeId::Dynamic(expr)) else {
             return expr;
         };
@@ -70,7 +95,7 @@ where
         let Some(ty) = items.get(1).and_then(|item| item.node.dynamic()) else {
             return expr;
         };
-        let value = self.instantiate_requirement_value(value, ty);
+        let value = self.instantiate_requirement_value(value, ty, depth + 1);
         let mut items = items.to_vec();
         items[0].node = AnyNodeId::Dynamic(value);
         let layout = self
@@ -85,12 +110,27 @@ where
         self.array_value_node(self.current_block, items, layout)
     }
 
-    fn instantiate_requirement_value(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+    pub(super) fn instantiate_requirement_value(
+        &mut self,
+        value: NodeId,
+        ty: NodeId,
+        depth: usize,
+    ) -> NodeId {
+        if depth > 64 {
+            return value;
+        }
+        // A value read through `Index` has no class value until it runs.
+        self.module.evaluate_node(AnyNodeId::Dynamic(value), None);
         let Some(held) = self
             .module
-            .node_value(AnyNodeId::Dynamic(value))
+            .class_value(value)
             .and_then(|value| value.as_enum())
         else {
+            // An unrun operation still states its shape: keep it. Only a
+            // genuinely empty slot is fresh.
+            if self.module.node_operation(value).is_some() {
+                return value;
+            }
             return self.fresh_cell();
         };
         let LowValue::Array(array) = held else {
@@ -106,13 +146,17 @@ where
                 .iter()
                 .take(2)
                 .copied()
-                .chain(source.iter().skip(2).map(|item| ArrayItem {
-                    node: item
-                        .node
-                        .dynamic()
-                        .map(|field| AnyNodeId::Dynamic(self.instantiate_requirement(field)))
-                        .unwrap_or(item.node),
-                    ..*item
+                .chain(source.iter().skip(2).map(|item| {
+                    ArrayItem {
+                        node: item
+                            .node
+                            .dynamic()
+                            .map(|field| {
+                                AnyNodeId::Dynamic(self.instantiate_requirement(field, depth + 1))
+                            })
+                            .unwrap_or(item.node),
+                        ..*item
+                    }
                 }))
                 .collect()
         } else if crate::shape::is_array_type_any(
@@ -131,25 +175,39 @@ where
                             node: item
                                 .node
                                 .dynamic()
-                                .map(|hole| AnyNodeId::Dynamic(self.instantiate_requirement(hole)))
+                                .map(|hole| {
+                                    AnyNodeId::Dynamic(
+                                        self.instantiate_requirement(hole, depth + 1),
+                                    )
+                                })
                                 .unwrap_or(item.node),
                             ..*item
                         }
                     }
                 })
                 .collect()
-        } else {
+        } else if crate::shape::is_tuple_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(ty),
+        ) {
             source
                 .iter()
                 .map(|item| ArrayItem {
                     node: item
                         .node
                         .dynamic()
-                        .map(|element| AnyNodeId::Dynamic(self.instantiate_requirement(element)))
+                        .map(|element| {
+                            AnyNodeId::Dynamic(self.instantiate_requirement(element, depth + 1))
+                        })
                         .unwrap_or(item.node),
                     ..*item
                 })
                 .collect()
+        } else {
+            // A plain array value such as `Type` is not a template: its interior
+            // belongs to the value and must not be copied.
+            return value;
         };
         self.array_value_node(self.current_block, items, array.layout())
     }
@@ -174,15 +232,18 @@ where
         let expected_term = self.state[expected].term.expect("the expected is compiled");
         let actual_ty = self.state[actual].ty.expect("the actual has a type");
         let expected_ty = self.state[expected].ty.expect("the expected has a type");
-        // A direct value template is instantiated per use: its `Any` slots are
-        // requirements, and writing an actual into the template would specialize
-        // it for every later use.
-        let expected_term = self
-            .module
-            .expr_value_half(expected_term)
-            .filter(|value| self.requirement_is_open(*value, 0))
-            .map(|_| self.instantiate_requirement(expected_term))
-            .unwrap_or(expected_term);
+        // A direct template is copied per use; an explicit constructor
+        // application is already fresh.
+        let expected_term = if matches!(self.ir[expected].kind, ExprKind::Apply { .. }) {
+            // An explicit constructor application is already fresh.
+            expected_term
+        } else {
+            self.module
+                .expr_value_half(expected_term)
+                .filter(|value| self.requirement_is_open(*value, expected_ty, 0))
+                .map(|_| self.instantiate_requirement(expected_term, 0))
+                .unwrap_or(expected_term)
+        };
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);

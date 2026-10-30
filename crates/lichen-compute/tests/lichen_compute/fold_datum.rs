@@ -30,33 +30,33 @@ fn fold_over(combine: &str, identity: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
-Par := _x => {.n @any : Int, .in In _}
-reduction := (k <: Par) => {
+In  := {.b (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
+Out := {.z (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
+Par := {.n @any : Int, .in In}
+reduction := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Float, .length k.n})
   @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity")}))})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity")}))})
 }
-kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" (Out _)
-step := (s <: Par) => {
-  compute.plrun kernel (compute.A{.n s.n, .I In{.b s.in.b}}) : Struct
+kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
+step := (s = Par) => {
+  compute.plrun kernel ((compute.A _){.n s.n, .I In{.b s.in.b}}) : Struct
 }
 built := compute.graph step
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length COUNT})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value (int2float i + 1.0)}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value (int2float i + 1.0)}))})
 }
-filler := compute.parallel fill "cpu" (Out _)
+filler := compute.parallel fill "cpu" Out
 data := (compute.plrun filler ((Fill){.n COUNT}) : Struct)
 out := compute.collect (compute.graphrun built (COUNT, data.z))
 out
 "#,
     );
-    let read = "(compute.read (compute.Read{.from k.in.b, .at s(0) - 1}) : Float)";
+    let read = "(compute.read ((compute.Read _){.from k.in.b, .at s(0) - 1}) : Float)";
     source = source.replace("COMBINE", combine.replace("READ", read).as_str());
     source = source.replace("IDENTITY", identity);
     source.replace("COUNT", &COUNT.to_string())

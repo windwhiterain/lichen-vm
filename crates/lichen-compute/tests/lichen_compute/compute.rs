@@ -36,17 +36,17 @@ fn parallel_rejects_an_unknown_backend_name() {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "Gpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from out.z, .at 0}) : Int)
+k := compute.parallel f "Gpu" Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from out.z, .at 0}) : Int)
 "#,
     );
     let all: Vec<&str> = diags.iter().map(String::as_str).collect();
@@ -67,17 +67,17 @@ fn parallel_rejects_a_non_string_backend() {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f 4 (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from out.z, .at 0}) : Int)
+k := compute.parallel f 4 Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from out.z, .at 0}) : Int)
 "#,
     );
     assert!(
@@ -170,7 +170,7 @@ fn jit_multi_arg_tuple() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 compute.launch k (5, 3)
 "#);
     assert_eq!(
@@ -190,7 +190,7 @@ fn jit_multi_arg_ternary() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int, @any : Int)) => p(0) + p(1) + p(2))
+k := compute.jit (p = (@any : Int, @any : Int, @any : Int) => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
 "#);
     assert_eq!(
@@ -210,7 +210,7 @@ fn jit_multi_arg_sub() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) - p(1))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0) - p(1))
 compute.launch k (10, 3)
 "#);
     assert_eq!(common::usize_of(&value), 7, "tuple subtraction produced 7");
@@ -228,7 +228,7 @@ fn launch_rejects_wrong_arity() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 compute.launch k 5
 "#,
     );
@@ -268,7 +268,7 @@ fn jit_multi_arg_all_ops() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0) + p(1)) - (p(0) <= p(1)))
+k := compute.jit (p = (@any : Int, @any : Int) => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
 "#);
     assert_eq!(common::usize_of(&value), 8, "mixed-op tuple produced 8");
@@ -285,11 +285,11 @@ fn jit_lowers_the_arithmetic_comparison_and_bitwise_operators() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k1 := compute.jit (x => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
-k2 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) > p(1))
-k3 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) >= p(1))
-k4 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) != p(1))
-k5 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0) < p(1)) | (p(0) == p(1)))
-k6 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0) > p(1)) ^ (p(0) == p(1)))
+k2 := compute.jit (p = (@any : Int, @any : Int) => p(0) > p(1))
+k3 := compute.jit (p = (@any : Int, @any : Int) => p(0) >= p(1))
+k4 := compute.jit (p = (@any : Int, @any : Int) => p(0) != p(1))
+k5 := compute.jit (p = (@any : Int, @any : Int) => (p(0) < p(1)) | (p(0) == p(1)))
+k6 := compute.jit (p = (@any : Int, @any : Int) => (p(0) > p(1)) ^ (p(0) == p(1)))
 (compute.launch k1 4, compute.launch k2 (5, 3), compute.launch k3 (3, 3), compute.launch k4 (5, 3), compute.launch k5 (5, 5), compute.launch k6 (5, 5))
 "#);
     let elements = common::array_values(&module, &value);
@@ -366,7 +366,7 @@ fn jit_nested_tuple_domain() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p <: (_x => ((_x => (@any : Int, @any : Int)) _, @any : Int)) => p(0)(0) + p(0)(1) + p(1))
+k := compute.jit (p = ((@any : Int, @any : Int), @any : Int) => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
     // A scalar kernel runs in the wasm interpreter, so the answer is the program's own.
@@ -459,7 +459,7 @@ fn jit_cross_kernel_tuple_argument() {
     // A bare kernel apply states no signature, so the caller's `x` is annotated.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 k1 := compute.jit (x : Int => k0 (x, 1))
 compute.launch k1 5
 "#);
@@ -475,8 +475,8 @@ fn jit_cross_kernel_passes_the_parameter_through() {
     // A whole-parameter read passes through as the callee's own locals.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) - p(1))
-k1 := compute.jit (q <: (_x => (@any : Int, @any : Int)) => k0 q)
+k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) - p(1))
+k1 := compute.jit (q = (@any : Int, @any : Int) => k0 q)
 compute.launch k1 (9, 4)
 "#);
     assert_eq!(
@@ -492,8 +492,8 @@ fn jit_cross_kernel_passes_a_sub_tuple_through() {
     // locals from the read's start.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p <: (_x => ((_x => (@any : Int, @any : Int)) _, @any : Int)) => p(0)(0) - p(0)(1) + p(1))
-k1 := compute.jit (r <: (_x => (@any : Int, ((_x => (@any : Int, @any : Int)) _, @any : Int))) => k0 r(1))
+k0 := compute.jit (p = ((@any : Int, @any : Int), @any : Int) => p(0)(0) - p(0)(1) + p(1))
+k1 := compute.jit (r = (@any : Int, ((@any : Int, @any : Int), @any : Int)) => k0 r(1))
 compute.launch k1 (100, ((9, 4), 5))
 "#);
     assert_eq!(
@@ -509,7 +509,7 @@ fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     //   launch k1 5 = k0(5, 1) = 6.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 k1 := compute.jit (x : Int => compute.launch k0 (x, 1))
 compute.launch k1 5
 "#);
@@ -554,7 +554,7 @@ fn jit_tuple_codomain_returns_several_values() {
     // The mirror of the multi-arity domain: one wasm stack slot per leaf.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0), p(1)))
+k := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(1)))
 compute.launch k (5, 3)
 "#);
     let elements = common::array_values(&module, &value);
@@ -567,7 +567,7 @@ fn jit_tuple_codomain_computes_each_leaf() {
     // Each leaf is its own scalar body, so a leaf read from the wrong stack slot shows.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0), p(0) + p(1)))
+k := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(0) + p(1)))
 compute.launch k (5, 3)
 "#);
     let elements = common::array_values(&module, &value);
@@ -580,8 +580,8 @@ fn jit_tuple_codomain_elements_are_indexable() {
     // The returned tuple is an ordinary array value; a read addresses a leaf.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0) + 10, p(1) + 100))
-r := (compute.launch k (2, 3) <: (_x => (@any : Int, @any : Int)))
+k := compute.jit (p = (@any : Int, @any : Int) => (p(0) + 10, p(1) + 100))
+r := (compute.launch k (2, 3) = (@any : Int, @any : Int))
 (r(0), r(1))
 "#);
     let elements = common::array_values(&module, &value);
@@ -613,7 +613,7 @@ fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // as `k.O`.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0) - p(1), p(0) + p(1)))
+k := compute.jit (p = (@any : Int, @any : Int) => (p(0) - p(1), p(0) + p(1)))
 compute.call k (10, 4)
 "#);
     assert_eq!(
@@ -635,8 +635,8 @@ fn jit_refuses_a_cross_kernel_call_to_a_multi_value_kernel() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p <: (_x => (@any : Int, @any : Int)) => (p(0), p(1)))
-k1 := compute.jit (q <: (_x => (@any : Int, @any : Int)) => compute.launch k0 q)
+k0 := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(1)))
+k1 := compute.jit (q = (@any : Int, @any : Int) => compute.launch k0 q)
 compute.launch k1 (5, 3)
 "#,
     );
@@ -662,7 +662,7 @@ fn a_tuple_domain_kernel_type_renders_as_a_function() {
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 k
 "#,
     );
@@ -707,17 +707,17 @@ fn parallel_range_write_is_map() {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from out.z, .at 2}) : Int)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from out.z, .at 2}) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -739,28 +739,28 @@ fn parallel_read_input_buffer() {
 ---
   compute = import "compute.lichen"
 ---
-In1  := _x => {.a @any : Int}
-Out1 := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par1 := _x => {.n @any : Int, .in In1 _}
-f1 := (k <: Par1) => {
+In1  := {.a @any : Int}
+Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par1 := {.n @any : Int, .in In1}
+f1 := (k = Par1) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out1){.z (compute.write (compute.Write{.to z, .at i, .value i + 10}))})
+  ((Out1){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
 }
-k1 := compute.parallel f1 "cpu" (Out1 _)
-inbuf := (compute.plrun k1 (compute.A{.n 3, .I In1{.a 0}}) : Struct)
-In2  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Out2 := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par2 := _x => {.n @any : Int, .in In2 _}
-f2 := (k <: Par2) => {
+k1 := compute.parallel f1 "cpu" Out1
+inbuf := (compute.plrun k1 ((compute.A _){.n 3, .I In1{.a 0}}) : Struct)
+In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par2 := {.n @any : Int, .in In2}
+f2 := (k = Par2) => {
   i := compute.range k.n
-  a := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
+  a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out2){.w (compute.write (compute.Write{.to w, .at i, .value a + a}))})
+  ((Out2){.w (compute.write ((compute.Write _){.to w, .at i, .value a + a}))})
 }
-k2 := compute.parallel f2 "cpu" (Out2 _)
-out := (compute.plrun k2 (compute.A{.n 3, .I In2{.b inbuf.z}}) : Struct)
-(compute.read (compute.Read{.from out.w, .at 1}) : Int)
+k2 := compute.parallel f2 "cpu" Out2
+out := (compute.plrun k2 ((compute.A _){.n 3, .I In2{.b inbuf.z}}) : Struct)
+(compute.read ((compute.Read _){.from out.w, .at 1}) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -776,16 +776,16 @@ fn parallel_write_only_collects_whole_buffer() {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + 1}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + 1}))})
 }
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 3, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
 compute.collect out.z
 "#);
     assert_eq!(
@@ -803,17 +803,17 @@ fn a_refused_plrun_count_says_why() {
 ---
   compute = import "compute.lichen"
 ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 2000000, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from out.z, .at 2}) : Int)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 2000000, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from out.z, .at 2}) : Int)
 "#,
     );
     assert_eq!(
@@ -834,29 +834,29 @@ fn a_runtime_scalar_reaches_the_body_beside_the_extent() {
     // See compute-runtime-scalars.md.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In0  := _x => {.a @any : Int}
-Out0 := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par0 := _x => {.n @any : Int, .in In0 _}
-g := (k <: Par0) => {
+In0  := {.a @any : Int}
+Out0 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par0 := {.n @any : Int, .in In0}
+g := (k = Par0) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out0){.z (compute.write (compute.Write{.to z, .at i, .value i + 10}))})
+  ((Out0){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
 }
-kg := compute.parallel g "cpu" (Out0 _)
-inbuf := (compute.plrun kg (compute.A{.n 3, .I In0{.a 0}}) : Struct)
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Out := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .alpha @any : Float, .in In _}
-Host := _x => {.n @any : Int, .alpha @any : Float, .I In _}
-f := (k <: Par) => {
+kg := compute.parallel g "cpu" Out0
+inbuf := (compute.plrun kg ((compute.A _){.n 3, .I In0{.a 0}}) : Struct)
+In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .alpha @any : Float, .in In}
+Host := {.n @any : Int, .alpha @any : Float, .I In}
+f := (k = Par) => {
   i := compute.range k.n
-  v := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
+  v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.w (compute.write (compute.Write{.to w, .at i, .value v + float2int k.alpha}))})
+  ((Out){.w (compute.write ((compute.Write _){.to w, .at i, .value v + float2int k.alpha}))})
 }
-k := compute.parallel f "cpu" (Out _)
+k := compute.parallel f "cpu" Out
 out := (compute.plrun k (Host{.n 3, .alpha 2.0, .I In{.b inbuf.z}}) : Struct)
-((compute.read (compute.Read{.from out.w, .at 0}) : Int), (compute.read (compute.Read{.from out.w, .at 1}) : Int), (compute.read (compute.Read{.from out.w, .at 2}) : Int))
+((compute.read ((compute.Read _){.from out.w, .at 0}) : Int), (compute.read ((compute.Read _){.from out.w, .at 1}) : Int), (compute.read ((compute.Read _){.from out.w, .at 2}) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(
@@ -883,29 +883,29 @@ fn a_scalar_leaf_of_the_wrong_class_is_refused_by_name() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In0  := _x => {.a @any : Int}
-Out0 := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par0 := _x => {.n @any : Int, .in In0 _}
-g := (k <: Par0) => {
+In0  := {.a @any : Int}
+Out0 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par0 := {.n @any : Int, .in In0}
+g := (k = Par0) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out0){.z (compute.write (compute.Write{.to z, .at i, .value i + 10}))})
+  ((Out0){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
 }
-kg := compute.parallel g "cpu" (Out0 _)
-inbuf := (compute.plrun kg (compute.A{.n 3, .I In0{.a 0}}) : Struct)
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Out := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .alpha @any : Float, .in In _}
-Host := _x => {.n @any : Int, .alpha _, .I In _}
-f := (k <: Par) => {
+kg := compute.parallel g "cpu" Out0
+inbuf := (compute.plrun kg ((compute.A _){.n 3, .I In0{.a 0}}) : Struct)
+In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .alpha @any : Float, .in In}
+Host := {.n @any : Int, .alpha @any, .I In}
+f := (k = Par) => {
   i := compute.range k.n
-  v := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
+  v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.w (compute.write (compute.Write{.to w, .at i, .value v + float2int k.alpha}))})
+  ((Out){.w (compute.write ((compute.Write _){.to w, .at i, .value v + float2int k.alpha}))})
 }
-k := compute.parallel f "cpu" (Out _)
+k := compute.parallel f "cpu" Out
 out := (compute.plrun k (Host{.n 3, .alpha 2, .I In{.b inbuf.z}}) : Struct)
-(compute.read (compute.Read{.from out.w, .at 0}) : Int)
+(compute.read ((compute.Read _){.from out.w, .at 0}) : Int)
 "#,
     );
     assert!(
@@ -924,7 +924,7 @@ fn a_refused_call_argument_element_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x <: (_x => (@any : Int, @any : Int)) => x(0))
+k := compute.jit (x = (@any : Int, @any : Int) => x(0))
 compute.call k (1, (2, "three"))
 "#,
     );
@@ -976,7 +976,7 @@ fn a_refused_call_run_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0) + p(1))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
 compute.call k (1, 2, 3)
 "#,
     );
@@ -1001,18 +1001,18 @@ fn parallel_multi_output_writes_every_output_in_one_pass() {
     // The codomain is a **struct of writes**, so one pass emits every output buffer.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i})), .y (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i})), .y (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 3, .I In{.a 0}}) : Struct)
-((compute.read (compute.Read{.from outs.x, .at 2}) : Int), (compute.read (compute.Read{.from outs.y, .at 2}) : Int))
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
+((compute.read ((compute.Read _){.from outs.x, .at 2}) : Int), (compute.read ((compute.Read _){.from outs.y, .at 2}) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(common::usize_of(&elements[0]), 2, "the first output's read");
@@ -1028,29 +1028,29 @@ fn parallel_multi_output_collects_each_output() {
     // `collect` materialises one output buffer whole out of the single pass.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In1  := _x => {.a @any : Int}
-Out1 := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par1 := _x => {.n @any : Int, .in In1 _}
-f1 := (k <: Par1) => {
+In1  := {.a @any : Int}
+Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par1 := {.n @any : Int, .in In1}
+f1 := (k = Par1) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out1){.z (compute.write (compute.Write{.to z, .at i, .value i + 10}))})
+  ((Out1){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
 }
-k1 := compute.parallel f1 "cpu" (Out1 _)
-inbuf := (compute.plrun k1 (compute.A{.n 3, .I In1{.a 0}}) : Struct)
-In2  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Out2 := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3})), .x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par2 := _x => {.n @any : Int, .in In2 _}
-f2 := (k <: Par2) => {
+k1 := compute.parallel f1 "cpu" Out1
+inbuf := (compute.plrun k1 ((compute.A _){.n 3, .I In1{.a 0}}) : Struct)
+In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3})), .x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par2 := {.n @any : Int, .in In2}
+f2 := (k = Par2) => {
   i := compute.range k.n
-  a := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
+  a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out2){.w (compute.write (compute.Write{.to w, .at i, .value a})), .x (compute.write (compute.Write{.to x, .at i, .value a + a})), .y (compute.write (compute.Write{.to y, .at i, .value i}))})
+  ((Out2){.w (compute.write ((compute.Write _){.to w, .at i, .value a})), .x (compute.write ((compute.Write _){.to x, .at i, .value a + a})), .y (compute.write ((compute.Write _){.to y, .at i, .value i}))})
 }
-k2 := compute.parallel f2 "cpu" (Out2 _)
-outs := (compute.plrun k2 (compute.A{.n 3, .I In2{.b inbuf.z}}) : Struct)
+k2 := compute.parallel f2 "cpu" Out2
+outs := (compute.plrun k2 ((compute.A _){.n 3, .I In2{.b inbuf.z}}) : Struct)
 compute.collect outs.x
 "#);
     assert_eq!(
@@ -1066,17 +1066,17 @@ fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
     // rebases the index by the worker's base.
     let (small_module, small, _) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 4})), .y (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4})), .y (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i + 3})), .y (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i + 3})), .y (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
     let small_expr = common::array_values(&small_module, &small);
@@ -1092,17 +1092,17 @@ outs := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
     );
     let (big_module, big, _) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i + 3})), .y (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i + 3})), .y (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4096, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4096, .I In{.a 0}}) : Struct)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
     let big_expr = common::array_values(&big_module, &big);
@@ -1126,18 +1126,18 @@ fn a_parallel_run_over_the_threshold_covers_every_index() {
     // three indices of **both** buffers.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i + 3})), .y (compute.write (compute.Write{.to y, .at i, .value i + i}))})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i + 3})), .y (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4096, .I In{.a 0}}) : Struct)
-((compute.read (compute.Read{.from outs.x, .at 0}) : Int), (compute.read (compute.Read{.from outs.x, .at 2048}) : Int), (compute.read (compute.Read{.from outs.x, .at 4095}) : Int), (compute.read (compute.Read{.from outs.y, .at 0}) : Int), (compute.read (compute.Read{.from outs.y, .at 2048}) : Int), (compute.read (compute.Read{.from outs.y, .at 4095}) : Int))
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4096, .I In{.a 0}}) : Struct)
+((compute.read ((compute.Read _){.from outs.x, .at 0}) : Int), (compute.read ((compute.Read _){.from outs.x, .at 2048}) : Int), (compute.read ((compute.Read _){.from outs.x, .at 4095}) : Int), (compute.read ((compute.Read _){.from outs.y, .at 0}) : Int), (compute.read ((compute.Read _){.from outs.y, .at 2048}) : Int), (compute.read ((compute.Read _){.from outs.y, .at 4095}) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(
@@ -1178,28 +1178,28 @@ outs := (compute.plrun k (compute.A{.n 4096, .I In{.a 0}}) : Struct)
 fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-g := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+g := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value i + 10}))})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
 }
-kg := compute.parallel g "cpu" (Out _)
-inbuf := (compute.plrun kg (compute.A{.n 3, .I In{.a 0}}) : Struct)
-In2  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Out2 := _x => {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par2 := _x => {.n @any : Int, .in In2 _}
-f := (k <: Par2) => {
+kg := compute.parallel g "cpu" Out
+inbuf := (compute.plrun kg ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
+In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par2 := {.n @any : Int, .in In2}
+f := (k = Par2) => {
   i := compute.range k.n
-  v := (compute.read (compute.Read{.from k.in.b, .at i}) : Int)
+  v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out2){.w (compute.write (compute.Write{.to w, .at i, .value v * 2}))})
+  ((Out2){.w (compute.write ((compute.Write _){.to w, .at i, .value v * 2}))})
 }
-k := compute.parallel f "cpu" (Out2 _)
-out := (compute.plrun k (compute.A{.n 3, .I In2{.b inbuf.z}}) : Struct)
-(compute.read (compute.Read{.from out.w, .at 1}) : Int)
+k := compute.parallel f "cpu" Out2
+out := (compute.plrun k ((compute.A _){.n 3, .I In2{.b inbuf.z}}) : Struct)
+(compute.read ((compute.Read _){.from out.w, .at 1}) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -1218,18 +1218,18 @@ fn a_write_inside_a_conditional_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i})), .y (if i <= 1 then compute.write (compute.Write{.to y, .at i, .value 1}) else compute.write (compute.Write{.to y, .at i, .value 2}))})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i})), .y (if i <= 1 then compute.write ((compute.Write _){.to y, .at i, .value 1}) else compute.write ((compute.Write _){.to y, .at i, .value 2}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 3, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from outs.x, .at 2}) : Int)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from outs.x, .at 2}) : Int)
 "#,
     );
     assert_eq!(
@@ -1251,18 +1251,18 @@ fn an_output_position_that_is_not_a_buffer_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to x, .at i, .value i})), .y i})
+  ((Out){.x (compute.write ((compute.Write _){.to x, .at i, .value i})), .y i})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 3, .I In{.a 0}}) : Struct)
-(compute.read (compute.Read{.from outs.x, .at 2}) : Int)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
+(compute.read ((compute.Read _){.from outs.x, .at 2}) : Int)
 "#,
     );
     assert_eq!(
@@ -1292,17 +1292,17 @@ fn a_program_value_where_a_buffer_belongs_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a (compute.Buf (compute.BufParam{.type Int, .length 8}))}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 8}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a (compute.Buf (compute.BufParam{.type Int, .length 8}))}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 8}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value i + 1}))})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 1}))})
 }
 data := [3, 1, 4, 1, 5, 9, 2, 6]
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 8, .I In{.a data}}) : Struct)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 8, .I In{.a data}}) : Struct)
 compute.collect out.z : Array
 "#,
     );
@@ -1329,32 +1329,32 @@ compute.collect out.z : Array
 fn a_kernel_reads_the_input_buffer_it_names() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 4})), .c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4})), .c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
-  v := (compute.read (compute.Read{.from k.in.c, .at i}) : Int)
+  v := (compute.read ((compute.Read _){.from k.in.c, .at i}) : Int)
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value v}))})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value v}))})
 }
-OutB := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-OutC := _x => {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Fill := _x => {.n @any : Int}
-fb := (c <: Fill) => {
+OutB := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+OutC := {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Fill := {.n @any : Int}
+fb := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((OutB){.b (compute.write (compute.Write{.to y, .at i, .value 1}))})
+  ((OutB){.b (compute.write ((compute.Write _){.to y, .at i, .value 1}))})
 }
-fc := (c <: Fill) => {
+fc := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((OutC){.c (compute.write (compute.Write{.to y, .at i, .value 2}))})
+  ((OutC){.c (compute.write ((compute.Write _){.to y, .at i, .value 2}))})
 }
-ones := (compute.plrun (compute.parallel fb "cpu" (OutB _)) ((Fill){.n 4}) : Struct)
-twos := (compute.plrun (compute.parallel fc "cpu" (OutC _)) ((Fill){.n 4}) : Struct)
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.b ones.b, .c twos.c}}) : Struct)
+ones := (compute.plrun (compute.parallel fb "cpu" OutB) ((Fill){.n 4}) : Struct)
+twos := (compute.plrun (compute.parallel fc "cpu" OutC) ((Fill){.n 4}) : Struct)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.b ones.b, .c twos.c}}) : Struct)
 compute.collect out.z : Array
 "#);
     assert_eq!(
@@ -1375,25 +1375,25 @@ fn a_read_of_a_writes_result_is_refused_by_name() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value 0}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value 0}))})
 }
-data := (compute.plrun (compute.parallel fill "cpu" (Out _)) ((Fill){.n 4}) : Struct)
-f := (k <: Par) => {
+data := (compute.plrun (compute.parallel fill "cpu" Out) ((Fill){.n 4}) : Struct)
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  w := compute.write (compute.Write{.to z, .at i, .value i + 7})
-  r := (compute.read (compute.Read{.from w, .at i}) : Int)
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value r + 1}))})
+  w := compute.write ((compute.Write _){.to z, .at i, .value i + 7})
+  r := (compute.read ((compute.Read _){.from w, .at i}) : Int)
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value r + 1}))})
 }
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.b data.z}}) : Struct)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.b data.z}}) : Struct)
 compute.collect out.z : Array
 "#,
     );
@@ -1433,7 +1433,7 @@ compute.launch k 1.5
     // the body's.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0))
 compute.launch k (1, 1.5)
 "#);
     assert_eq!(
@@ -1450,7 +1450,7 @@ compute.launch k (1, 1.5)
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0))
 compute.launch k (1, [1.5, 2.5, 3.5])
 "#,
     );
@@ -1471,7 +1471,7 @@ compute.launch k (1, [1.5, 2.5, 3.5])
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p <: (_x => (@any : Int, @any : Int)) => p(0))
+k := compute.jit (p = (@any : Int, @any : Int) => p(0))
 compute.launch k (1, y => 1.0)
 "#,
     );
@@ -1632,17 +1632,17 @@ compute.launch k 3.0
 fn a_write_to_another_output_than_its_position_exchanges_the_outputs() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.x (compute.write (compute.Write{.to y, .at i, .value i + i})), .y (compute.write (compute.Write{.to x, .at i, .value i}))})
+  ((Out){.x (compute.write ((compute.Write _){.to y, .at i, .value i + i})), .y (compute.write ((compute.Write _){.to x, .at i, .value i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 3, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
 (compute.collect outs.x : Array, compute.collect outs.y : Array)
 "#);
     let expr = common::array_values(&module, &value);
@@ -1673,23 +1673,23 @@ fn a_write_naming_an_input_buffer_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-Fill := _x => {.n @any : Int}
-fill := (c <: Fill) => {
+In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((Out){.z (compute.write (compute.Write{.to y, .at i, .value 0}))})
+  ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value 0}))})
 }
-data := (compute.plrun (compute.parallel fill "cpu" (Out _)) ((Fill){.n 4}) : Struct)
-f := (k <: Par) => {
+data := (compute.plrun (compute.parallel fill "cpu" Out) ((Fill){.n 4}) : Struct)
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write (compute.Write{.to k.in.b, .at i, .value i}))})
+  ((Out){.z (compute.write ((compute.Write _){.to k.in.b, .at i, .value i}))})
 }
-k := compute.parallel f "cpu" (Out _)
-out := (compute.plrun k (compute.A{.n 4, .I In{.b data.z}}) : Struct)
+k := compute.parallel f "cpu" Out
+out := (compute.plrun k ((compute.A _){.n 4, .I In{.b data.z}}) : Struct)
 compute.collect out.z : Array
 "#,
     );
@@ -1719,17 +1719,17 @@ fn a_write_naming_a_writes_result_is_refused() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  w := compute.write (compute.Write{.to z, .at i, .value i + 7})
-  ((Out){.z (compute.write (compute.Write{.to w, .at i / 2, .value i + 100}))})
+  w := compute.write ((compute.Write _){.to z, .at i, .value i + 7})
+  ((Out){.z (compute.write ((compute.Write _){.to w, .at i / 2, .value i + 100}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
 compute.collect outs.z : Array
 "#,
     );
@@ -1759,17 +1759,17 @@ compute.collect outs.z : Array
 fn a_statement_write_is_dropped_and_the_codowns_write_fills_the_output() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  compute.write (compute.Write{.to z, .at i, .value i + 7})
-  ((Out){.z (compute.write (compute.Write{.to z, .at i, .value i + 100}))})
+  compute.write ((compute.Write _){.to z, .at i, .value i + 7})
+  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 100}))})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
 compute.collect outs.z : Array
 "#);
     assert_eq!(
@@ -1783,17 +1783,17 @@ compute.collect outs.z : Array
     // statement, so it is dropped.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-In  := _x => {.a @any : Int}
-Out := _x => {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-Par := _x => {.n @any : Int, .in In _}
-f := (k <: Par) => {
+In  := {.a @any : Int}
+Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Par := {.n @any : Int, .in In}
+f := (k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  compute.write (compute.Write{.to z, .at i, .value i + 7})
+  compute.write ((compute.Write _){.to z, .at i, .value i + 7})
   ((Out){.z z})
 }
-k := compute.parallel f "cpu" (Out _)
-outs := (compute.plrun k (compute.A{.n 4, .I In{.a 0}}) : Struct)
+k := compute.parallel f "cpu" Out
+outs := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
 compute.collect outs.z : Array
 "#);
     assert_eq!(

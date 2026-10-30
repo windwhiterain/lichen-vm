@@ -7,6 +7,6 @@ The body is annotated as `Int`, so the recursive result's type is decided (`6: I
 Nothing carries the `raw` mark."
   output = "6: Int"
 ---
-Pair := _x => (@any : Int, @any : Int)
-gcd := (p <: Pair) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+Pair := (@any : Int, @any : Int)
+gcd := (p = Pair) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)

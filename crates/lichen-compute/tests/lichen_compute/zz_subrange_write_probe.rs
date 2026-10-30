@@ -13,16 +13,16 @@ use lichen_compute::language::new_store;
 /// The kernel: `y[i + off] = x[i]`, with the offset a runtime scalar leaf beside the extent.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
-PIn  := _x => {.x (compute.Buf (compute.BufParam{.type Int, .length _}))}
-POut := _x => {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
-PPar := _x => {.n @any : Int, .off @any : Int, .in PIn _, .out POut}
-PArg := _x => {.n @any : Int, .off @any : Int, .I PIn _}
-append_raw := (c <: PPar) => {
+PIn  := {.x (compute.Buf (compute.BufParam{.type Int, .length _}))}
+POut := {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
+PPar := {.n @any : Int, .off @any : Int, .in PIn, .out POut}
+PArg := {.n @any : Int, .off @any : Int, .I PIn}
+append_raw := (c = PPar) => {
   i := compute.range c.n
-  v := (compute.read (compute.Read{.from c.in.x, .at i}) : Int)
-  compute.write (compute.Write{.to c.out.y, .at (i + c.off), .value v})
+  v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Int)
+  compute.write ((compute.Write _){.to c.out.y, .at (i + c.off), .value v})
 }
-append := compute.parallel append_raw "gpu" (POut _)
+append := compute.parallel append_raw "gpu" POut
 x := (compute.buffer ([@any : Int, 4][1, 2, 3, 4] : Array) : (compute.Buf (compute.BufParam{.type Int, .length _})))
 "#;
 
