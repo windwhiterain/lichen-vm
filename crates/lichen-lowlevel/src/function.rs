@@ -5,8 +5,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, Function,
-    FunctionId, LowShape, LowValue, Module, NodeId, Operation, PendingAssert, Program, Scope,
-    TableItem,
+    FunctionId, LowValue, Module, NodeId, Operation, PendingAssert, Program, Scope, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -109,14 +108,6 @@ struct ApplyCtx<'a> {
     parameter_image: Option<NodeId>,
     /// Whether this walk is instantiating the parameter; wildcard cells become holes only here.
     in_parameter: bool,
-    /// Whether the walk is below a parameter-reading body cell.
-    ///
-    /// # Invariant
-    /// Every open descendant is this call's even when its class reaches the
-    /// callee template.
-    force: bool,
-    /// The parameter check this walk performs; only a value application clones a body.
-    check: ParameterCheck,
     /// Template keys a minted walk inserted; the enclosing pass drops them with the
     /// mint, so it groups only its own clones.
     minted_keys: Option<&'a mut Vec<NodeId>>,
@@ -524,8 +515,6 @@ impl<P: Program> Module<P> {
             parameter_slot,
             parameter_image: None,
             in_parameter: false,
-            force: false,
-            check,
             minted_keys: None,
             tag: self.nodes[node].function,
             closure: HashMap::new(),
@@ -847,138 +836,6 @@ impl<P: Program> Module<P> {
         root
     }
 
-    /// Whether an expression's value slot holds a value or an operation.
-    ///
-    /// # Invariant
-    /// An expression with an empty value slot is a checker-side cell, not a body
-    /// value; a per-call clone must leave it to the checker.
-    fn expression_has_value(&self, node: NodeId) -> bool {
-        let Some(value) = self.nodes[node].value.and_then(|value| value.as_enum()) else {
-            return true;
-        };
-        let LowValue::Array(array) = value else {
-            return true;
-        };
-        if array.layout() == 0 {
-            return true;
-        }
-        // SAFETY: a live payload of the module.
-        let Some(first) = unsafe { array.items() }.first() else {
-            return false;
-        };
-        let AnyNodeId::Dynamic(first) = first.node else {
-            return true;
-        };
-        self.nodes[first].value.is_some() || self.nodes[first].operation.is_some()
-    }
-
-    /// Whether `node`'s stated type is a function.
-    ///
-    /// # Invariant
-    /// A function-valued expression is minted by the closure path even when its
-    /// value slot is still empty; a forced body clone must leave it there.
-    fn is_function_expression(&self, node: NodeId) -> bool {
-        let Some(ty) = self.expr_type_half(node) else {
-            return false;
-        };
-        matches!(self.class_low_type(ty), Some(LowShape::Function(_, _)))
-    }
-
-    /// Whether `node`'s value is a type expression `[marker, type, ...]`.
-    ///
-    /// # Invariant
-    /// A type expression states a type, not this call's answer; a forced body
-    /// clone must leave it shared.
-    fn is_type_expression(&self, node: NodeId) -> bool {
-        let Some(value) = self.nodes[node].value.and_then(|value| value.as_enum()) else {
-            return false;
-        };
-        let LowValue::Array(array) = value else {
-            return false;
-        };
-        // SAFETY: a live payload of the module.
-        let items = unsafe { array.items() };
-        if items.len() < 2 {
-            return false;
-        }
-        let first = match items[0].node {
-            AnyNodeId::Dynamic(node) => Some(node),
-            AnyNodeId::Static(_) => None,
-        };
-        let second = match items[1].node {
-            AnyNodeId::Dynamic(node) => Some(node),
-            AnyNodeId::Static(_) => None,
-        };
-        let (Some(first), Some(second)) = (first, second) else {
-            return false;
-        };
-        self.nodes[first].value.is_none()
-            && self.nodes[first].operation.is_none()
-            && matches!(
-                self.nodes[second].value.and_then(|value| value.as_enum()),
-                Some(LowValue::Array(_))
-            )
-    }
-
-    /// Whether `node`'s value or operation graph reaches the applied parameter.
-    ///
-    /// # Invariant
-    /// The walk follows value items and operation operands, never classes: a
-    /// class may reach outside the function, while this asks whether the body
-    /// actually reads the parameter.
-    fn node_reaches_parameter(&self, node: NodeId, ctx: &ApplyCtx<'_>, depth: usize) -> bool {
-        if depth > 64 {
-            return false;
-        }
-        if node == ctx.parameter || Some(node) == ctx.parameter_slot {
-            return true;
-        }
-        if let Some(operation) = self.nodes[node].operation
-            && let Some(operand) = operation.operand
-            && self.node_reaches_parameter(operand, ctx, depth + 1)
-        {
-            return true;
-        }
-        let Some(value) = self.nodes[node].value else {
-            return false;
-        };
-        match value.as_enum() {
-            Some(LowValue::Array(array)) => {
-                // SAFETY: the payload is live for the module's lifetime.
-                let items = unsafe { array.items() };
-                let value_only = array.layout() != 0;
-                items
-                    .iter()
-                    .take(if value_only { 1 } else { items.len() })
-                    .any(|item| match item.node {
-                        AnyNodeId::Dynamic(child) => {
-                            self.node_reaches_parameter(child, ctx, depth + 1)
-                        }
-                        AnyNodeId::Static(_) => false,
-                    })
-            }
-            Some(LowValue::Table(table)) => {
-                // SAFETY: the payload is live for the module's lifetime.
-                unsafe { table.items() }.iter().any(|item| {
-                    let key = match item.key {
-                        AnyNodeId::Dynamic(child) => {
-                            self.node_reaches_parameter(child, ctx, depth + 1)
-                        }
-                        AnyNodeId::Static(_) => false,
-                    };
-                    let value = match item.value {
-                        AnyNodeId::Dynamic(child) => {
-                            self.node_reaches_parameter(child, ctx, depth + 1)
-                        }
-                        AnyNodeId::Static(_) => false,
-                    };
-                    key || value
-                })
-            }
-            _ => false,
-        }
-    }
-
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
@@ -1031,53 +888,6 @@ impl<P: Program> Module<P> {
             || self.blocks[self.nodes[template_root].block]
                 .parent
                 .is_some();
-        let function_value = matches!(
-            value.and_then(|value| value.as_enum()),
-            Some(LowValue::Function(_))
-        );
-        let owner_is_body = self.nodes[node]
-            .function
-            .is_none_or(|owner| self.function_descends_from(Some(owner), ctx.anchor));
-        let closure_application = self.functions[ctx.anchor].parent.is_some();
-        let returns_closure = self
-            .functions
-            .get(ctx.anchor)
-            .and_then(|function| self.nodes.get(function.r#return))
-            .is_some_and(|node| self.value_holds_function(node.value));
-        let body_has_apply = self.functions.get(ctx.anchor).is_some_and(|function| {
-            self.expr_value_half(function.r#return)
-                .is_some_and(|value| {
-                    self.nodes[value].operation.is_some_and(|operation| {
-                        !matches!(
-                            AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
-                            Some(crate::LowOperator::Index)
-                        )
-                    })
-                })
-        });
-        let parameter_is_function = self
-            .functions
-            .get(ctx.anchor)
-            .and_then(|function| self.expr_type_half(function.parameter))
-            .is_some_and(|ty| matches!(self.class_low_type(ty), Some(LowShape::Function(_, _))));
-        let material = value.is_some() || operation.is_some();
-        let top_level_call = ctx.tag.is_none();
-        let forced = ctx.force
-            && top_level_call
-            && !closure_application
-            && !returns_closure
-            && body_has_apply
-            && !parameter_is_function
-            && ctx.closure_scope.is_none()
-            && owner_is_body
-            && material
-            && self.expression_has_value(node)
-            && !self.is_type_expression(node)
-            && !self.is_function_expression(node)
-            && !function_value
-            && !self.value_holds_function(value)
-            && !closed
-            && !proven_concrete;
         // Judged against the call's anchor, so one call gives a node one answer.
         let depends_on_parameter = ctx.in_parameter
             || node == ctx.parameter
@@ -1085,36 +895,17 @@ impl<P: Program> Module<P> {
             || wildcard
             || (!proven_concrete && !closed)
             || scoped
-            || self.value_holds_foreign_function(value, ctx.anchor)
-            || forced;
+            || self.value_holds_foreign_function(value, ctx.anchor);
         if !depends_on_parameter {
             return node;
         }
         // Classes decide ordinary clones. Replay may rebuild an owned operation so its
         // operands reset with the run stamp.
         let class_inside = self.node_class_inside_scope(node, ctx);
-        // A caller-owned body cell is this call's; sharing it would let the
-        // first call's argument bind the second call's read.
-        let body_owned = forced
-            || (top_level_call
-                && !closure_application
-                && !returns_closure
-                && body_has_apply
-                && !parameter_is_function
-                && ctx.closure_scope.is_none()
-                && self.nodes[node].function == Some(ctx.anchor)
-                && self.node_reaches_parameter(node, ctx, 0)
-                && !self.is_function_expression(node)
-                && !function_value
-                && !self.value_holds_function(value)
-                && !self.value_holds_foreign_function(value, ctx.anchor)
-                && !closed
-                && !proven_concrete);
-        let replay_operation = body_owned
-            || (self.replaying
-                && operation.is_some()
-                && (self.function_descends_from(function, ctx.anchor)
-                    || self.functions[ctx.anchor].nodes.contains(&node)));
+        let replay_operation = self.replaying
+            && operation.is_some()
+            && (self.function_descends_from(function, ctx.anchor)
+                || self.functions[ctx.anchor].nodes.contains(&node));
         if !class_inside && !replay_operation && !wildcard {
             return node; // outside the scope — reference as-is
         }
@@ -1145,8 +936,6 @@ impl<P: Program> Module<P> {
         if let Some(keys) = ctx.minted_keys.as_deref_mut() {
             keys.push(node);
         }
-        let saved_force = ctx.force;
-        ctx.force = forced || body_owned;
         // The run stamp is whether the operator runs; `evaluated_deep` is the other axis
         // (`apply-clone-ownership.md`).
         let operation = operation.map(|operation| Operation {
@@ -1167,13 +956,7 @@ impl<P: Program> Module<P> {
         };
         // A mapping runs only for a kept value: a dropped answer must not clone a closure.
         let mapped = if carried {
-            value.map(|value| {
-                if body_owned {
-                    self.value_apply_expression(value, target, ctx)
-                } else {
-                    self.value_apply(value, target, ctx)
-                }
-            })
+            value.map(|value| self.value_apply(value, target, ctx))
         } else {
             None
         };
@@ -1218,47 +1001,9 @@ impl<P: Program> Module<P> {
         }
         // A clone is a singleton class here, so the slot write *is* the class write.
         self.nodes[clone].low_shape = low_shape;
-        ctx.force = saved_force;
         // A mark is **not** copied onto the clone: the anchor handoff is
         // `Module::marks_of`, which reads the clone's origin.
         clone
-    }
-
-    /// Map only the value slot of an expression, preserving its type and attributes.
-    ///
-    /// # Invariant
-    /// The type and attribute slots of a body expression are the checker's cells;
-    /// a per-call clone keeps them so a call's result type stays wired to the call.
-    fn value_apply_expression(
-        &mut self,
-        value: P::Value,
-        target: BlockId,
-        ctx: &mut ApplyCtx<'_>,
-    ) -> P::Value {
-        let Some(LowValue::Array(original)) = value.as_enum() else {
-            return self.value_apply(value, target, ctx);
-        };
-        let layout = original.layout();
-        if layout == 0 {
-            return self.value_apply(value, target, ctx);
-        }
-        // SAFETY: the payloads are live for the module's lifetime.
-        let source: Vec<ArrayItem> = unsafe { original.items() }.to_vec();
-        let mapped = self.value_apply(value, target, ctx);
-        let Some(LowValue::Array(mapped)) = mapped.as_enum() else {
-            return mapped;
-        };
-        // SAFETY: the payload is live for the module's lifetime.
-        let mut items: Vec<ArrayItem> = unsafe { mapped.items() }.to_vec();
-        for (slot, item) in source.iter().enumerate().skip(1) {
-            if let Some(target) = items.get_mut(slot) {
-                *target = *item;
-            }
-        }
-        P::Value::from(LowValue::Array(ArrayValue::with_layout(
-            self.alloc_array(&items, target),
-            layout,
-        )))
     }
 
     /// Map one template value onto the clones `target` holds; every payload
@@ -1405,8 +1150,6 @@ impl<P: Program> Module<P> {
                     parameter_slot,
                     parameter_image: None,
                     in_parameter: false,
-                    force: false,
-                    check: ctx.check,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
                     closure: HashMap::new(),
@@ -1538,54 +1281,6 @@ impl<P: Program> Module<P> {
     /// may answer with, however open its interior is.
     fn answer_elements_are_undecided(&self, value: P::Value) -> bool {
         crate::apply::answer_elements_are_undecided::<P>(value, |node| self.node_value(node))
-    }
-
-    /// Whether `value`'s tree holds a function at any depth.
-    ///
-    /// # Invariant
-    /// A closure is minted by the closure path, so a forced body clone must not
-    /// copy a value that carries one.
-    fn value_holds_function(&self, value: Option<P::Value>) -> bool {
-        let mut stack: Vec<AnyNodeId> = match value.and_then(|value| value.as_enum()) {
-            Some(LowValue::Function(_)) => return true,
-            // SAFETY: the payload is reachable from the caller's value.
-            Some(LowValue::Array(array)) => unsafe { array.items() }
-                .iter()
-                .map(|item| item.node)
-                .collect(),
-            // SAFETY: the payload is reachable from the caller's value.
-            Some(LowValue::Table(table)) => unsafe { table.items() }
-                .iter()
-                .flat_map(|item| [item.key, item.value])
-                .collect(),
-            _ => return false,
-        };
-        let mut seen = HashSet::new();
-        while let Some(node) = stack.pop() {
-            if !seen.insert(node) {
-                continue;
-            }
-            let value = match node {
-                AnyNodeId::Static(_) => None,
-                Dyn(node) => self.nodes[node].value.and_then(|value| value.as_enum()),
-            };
-            match value {
-                Some(LowValue::Function(_)) => return true,
-                // SAFETY: a live node's payload; this only reads.
-                Some(LowValue::Array(array)) => {
-                    stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
-                }
-                // SAFETY: a live node's payload; this only reads.
-                Some(LowValue::Table(table)) => {
-                    for item in unsafe { table.items() } {
-                        stack.push(item.key);
-                        stack.push(item.value);
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
     }
 
     /// Whether `value`'s tree holds a closure foreign to `against`.

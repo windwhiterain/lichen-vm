@@ -321,10 +321,13 @@ After the direct-template migration on `dev@ffef59c8`:
   prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
   shape. The README sync test passes.
 - The array instance path is measured: `A := [@any : Int, 2]; A[1, 2] : Array`
-  reads `[1, 2]`, and `A[f 1, f 2]` with `f := x => x + 1` reads `[2, 3]`.
+  reads `[1, 2]`. `A[f 1, f 2]` with a calling element is still a known gap:
+  the element template's value is specialized by the first call.
 
 ## Known remaining gaps
 
+- A direct array template whose element is a call still specializes the
+  element template: `A := [@any, 2]; A[f 1, f 2]` reports an element conflict.
 - A kernel body that reads a field through a template-valued parameter —
   `k.in.x`, where `k.in` is a template rather than an instance — can still be
   refused; the book's compute programs show the first refusal.

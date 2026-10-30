@@ -421,19 +421,3 @@ generation rule, not a checker constraint that follows it.
   `Meta::new` is the one way to build a `Meta` whose links did not come from this
   module: freezing a solved module remaps a live node's links onto local indices,
   and the artifact decoder reads them back.
-
-## 6. Repeated calls to one function
-
-A top-level call whose callee body returns an operation used to bind the first
-argument into the template's body read, so the second call was checked against
-it: `f := x => x + 1; (f 1, f 2)` reported `expected Int, found Int` with
-`1` and `2`. The fix clones a caller-owned body cell that reads the applied
-parameter when the call is top-level and the body's return is an operation;
-the clone keeps the expression's type and attribute slots, so the call's result
-type stays wired to the checker. `(f 1, f 2)` now answers `(2, 3)`, and
-`A := [@any, 2]; A[f 1, f 2]` answers `[2, 3]`.
-
-A call inside another function (`f := x => g x; (f 1, f 2)`) still records the
-first argument: the walk's `tag` is the enclosing function, so the top-level
-rule does not enter. Preserving the closure path is why that case is not cloned
-here; it is the next handle, not a claim that the class rule is complete.
