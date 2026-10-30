@@ -370,6 +370,19 @@ After the direct-template migration on `dev@ffef59c8`:
   through its name side, and a struct position step is physical. The serve
   schema probe passes; `examples/attention.lichen` now reaches the next
   refusal, an `Int`/`Float` mix in the attend body.
+- A codomain position holding a decided non-buffer is refused (`found 1`), but a
+  let-bound value in the same position is not (`tail=i` passes the check): the
+  actual's type cell is still empty at the instantiation check, so the undecided
+  branch's type compare writes the requirement instead of refusing it. The decided
+  branch compares values and catches the literal, which is why the test's `Int`
+  case reads as a missing refusal rather than a wrong one.
+- `examples/attention.lichen`'s `attend` kernel is classed `Int` at its output
+  buffer: the write's buffer operand is an integer cell, so the wasm assembler
+  refuses `BufferWriteCall(Int)` with a `Float` value (`mixed.rs`). The sibling
+  `scores` kernel has an identical `compute.buf` call and writes `Float`, so the
+  difference is in `attend`'s multi-accumulator loops: the buffer's class is
+  overwritten through the loop-bound cells. This is a checker class merge, not a
+  stale example.
 - `examples/rmsnorm.lichen` fails in parallel lowering: a kernel body reaches a
   node with neither a value nor an operation, and a read's buffer argument is
   not an input buffer.
