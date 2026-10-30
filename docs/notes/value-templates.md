@@ -312,11 +312,12 @@ After the direct-template migration on `dev@ffef59c8`:
 - `cargo test -p lichen-highlevel --test highlevel`: 136 passed.
 - `cargo test -p lichen-language --test language`: 275 passed.
 - `cargo test -p lichen-lowlevel --test basic`: 164 passed, 1 ignored.
-- The full `lichen-compute` suite is **137 passed, 103 failed, 1 ignored**
-  (the constructor model's baseline was 136 / 104 / 1). The remaining failures
-  are the same compute graph-lowering families plus direct templates whose
-  nested requirement is shared across kernels; they are not evidence against
-  the source model.
+- The full `lichen-compute` suite is **147 passed, 93 failed, 1 ignored**
+  after the field-position read fix (the direct-template baseline was
+  137 / 103 / 1, and the static-parameter-class fix was 136 / 104 / 1). The
+  remaining failures are the compute graph-lowering families plus direct
+  templates whose nested requirement is shared across kernels; they are not
+  evidence against the source model.
 - `examples/array.lichen` prints `[1, 2, 3]: Array`, `examples/tuple.lichen`
   prints `(1, Int): Tuple`, and `examples/struct.lichen` prints its declared
   shape. The README sync test passes.
@@ -329,8 +330,12 @@ After the direct-template migration on `dev@ffef59c8`:
 - A direct array template whose element is a call still specializes the
   element template: `A := [@any, 2]; A[f 1, f 2]` reports an element conflict.
 - A kernel body that reads a field through a template-valued parameter —
-  `k.in.x`, where `k.in` is a template rather than an instance — can still be
-  refused; the book's compute programs show the first refusal.
+  `k.in.x`, where `k.in` is a template rather than an instance — now resolves:
+  the chain starts at the shared template, so the field path from the parameter
+  to that base is prepended, the spec's `name_table[name] + 2` selector is read
+  through its name side, and a struct position step is physical. The serve
+  schema probe passes; `examples/attention.lichen` now reaches the next
+  refusal, an `Int`/`Float` mix in the attend body.
 - `examples/rmsnorm.lichen` fails in parallel lowering: a kernel body reaches a
   node with neither a value nor an operation, and a read's buffer argument is
   not an input buffer.
