@@ -5356,9 +5356,10 @@ where
 /// carries.
 ///
 /// # Invariant
-/// A named read `a.name` is `TableGet(name-table, "name")`, so the name is what a
-/// resolution walks the type with; `Ok(None)` for a selector that is not a named
-/// read at all.
+/// A named read `a.name` is `TableGet(name-table, "name")`, and the spec states the
+/// field's position as `name_table[<name>] + 2`, so the arithmetic's name side is
+/// followed and its constant side is not. `Ok(None)` for a selector that is not a
+/// named read at all: a computed index that is not this shape is never guessed at.
 fn field_name<P>(
     module: &Module<P>,
     selector: impl Into<AnyNodeId>,
@@ -5368,33 +5369,48 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let selector = selector.into();
-    if usize_value(module, selector).is_some() {
-        return Ok(None);
+    let mut current = selector.into();
+    for _ in 0..8 {
+        if usize_value(module, current).is_some() {
+            return Ok(None);
+        }
+        let Some(selector) = current.dynamic() else {
+            return Ok(None);
+        };
+        // **A named read arrives in two shapes**: `TableGet(names, "name")`, or `Index`
+        // carrying the name as its selector.
+        let key = match module.node_operation(selector) {
+            Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
+                Some(LowOperator::TableGet) => operand_expr(module, operation.operand)?.1,
+                Some(_) => return Ok(None),
+                // The spec's field position is `name_table[name] + 2`; the name side is
+                // the operand that is not the header's constant.
+                None => match AsEnum::<TypeOperator>::as_enum(&operation.operator) {
+                    Some(TypeOperator::Add) | Some(TypeOperator::Sub) => {
+                        let (left, right) = operand_expr(module, operation.operand)?;
+                        current = if usize_value(module, left).is_some() {
+                            right
+                        } else {
+                            left
+                        };
+                        continue;
+                    }
+                    _ => return Ok(None),
+                },
+            },
+            // **No operation: the selector is the name itself.**
+            None => AnyNodeId::Dynamic(selector),
+        };
+        return Ok(module
+            .node_value(key)
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+            .and_then(|v| match v {
+                LowValue::Str(name) => Some(name),
+                _ => None,
+            }));
     }
-    let Some(selector) = selector.dynamic() else {
-        return Ok(None);
-    };
-    // **A named read arrives in two shapes**: `TableGet(names, "name")`, or `Index`
-    // carrying the name as its selector.
-    let key = match module.node_operation(selector) {
-        Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
-            Some(LowOperator::TableGet) => operand_expr(module, operation.operand)?.1,
-            // A computed index is a conditional's selector, not a field read.
-            _ => return Ok(None),
-        },
-        // **No operation: the selector is the name itself.**
-        None => AnyNodeId::Dynamic(selector),
-    };
-    Ok(module
-        .node_value(key)
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-        .and_then(|v| match v {
-            LowValue::Str(name) => Some(name),
-            _ => None,
-        }))
+    Ok(None)
 }
-
 /// One level of a parameter read's index: the position, or the name, it selects.
 ///
 /// # Invariant
@@ -5503,7 +5519,19 @@ where
             (!deref && !(zero && odd)).then_some(step)
         })
         .collect();
-    resolve_steps(module, param_expr, &kept)
+    // **A template-valued field carries its own value in place** (`k.in.x`): the
+    // chain then starts at the shared template, so the field's own step is the
+    // route from the parameter to that base and is prepended here.
+    let parameter = param_value_of(module, param_expr)?;
+    let mut full = Vec::with_capacity(kept.len() + 1);
+    if module.class_root(current) != module.class_root(parameter) {
+        match field_path_to(module, AnyNodeId::Dynamic(parameter), current, 0) {
+            Some(prefix) => full.extend(prefix.into_iter().map(IndexStep::Position)),
+            None => return Ok(None),
+        }
+    }
+    full.extend(kept);
+    resolve_steps(module, param_expr, &full)
 }
 
 /// Convert a materialized read's physical slots into a parameter role path.
@@ -5536,6 +5564,60 @@ where
     Some(logical)
 }
 
+/// The physical field path from a compound value to the value whose class is `target`.
+///
+/// # Invariant
+/// The walk descends struct and tuple fields only, bounded by the parameter's own
+/// nesting depth, so a shared template reachable through a field is found without a
+/// whole-graph search. A struct step includes the value's two header slots, which is
+/// the form a chain's constant selector takes.
+fn field_path_to<P>(
+    module: &Module<P>,
+    value: AnyNodeId,
+    target: NodeId,
+    depth: usize,
+) -> Option<Vec<usize>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    if depth > 4 {
+        return None;
+    }
+    let base = if is_struct_value(module, value) {
+        shape::STRUCT_VALUE_FIELD_BASE
+    } else {
+        shape::TUPLE_VALUE_ELEMENT_BASE
+    };
+    let items = shape::value_items(module, value)?;
+    for at in 0..items.len().checked_sub(base)? {
+        let Some(field) = struct_field_value(module, value, at) else {
+            continue;
+        };
+        let physical = if base == shape::STRUCT_VALUE_FIELD_BASE {
+            at + shape::STRUCT_VALUE_FIELD_BASE
+        } else {
+            at
+        };
+        if field
+            .dynamic()
+            .is_some_and(|field| module.class_root(field) == module.class_root(target))
+        {
+            return Some(vec![physical]);
+        }
+        if (is_struct_value(module, field)
+            || field
+                .dynamic()
+                .is_some_and(|field| is_tuple_value(module, field)))
+            && let Some(mut path) = field_path_to(module, field, target, depth + 1)
+        {
+            path.insert(0, physical);
+            return Some(path);
+        }
+    }
+    None
+}
 /// Resolve a read's collected steps against the parameter's value, outermost
 /// first.
 ///
@@ -5563,11 +5645,30 @@ where
     let mut current = Some(value);
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
+        let Some(value) = current else {
+            break;
+        };
+        // **A struct's physical steps include its header**: the spec states a field
+        // position as `name_table[name] + 2`, so a constant step is a physical slot
+        // while a tuple's is its own element (`docs/notes/compound-element-slots.md`).
+        let on_struct = is_struct_value(module, value);
         let at = match step {
-            // A position is its own answer, so it is taken where no value reads.
-            IndexStep::Position(position) => *position,
+            IndexStep::Position(position) => {
+                if on_struct {
+                    position
+                        .checked_sub(shape::STRUCT_VALUE_FIELD_BASE)
+                        .ok_or_else(|| {
+                            format!(
+                                "a struct parameter read names position {position}, which is \
+                                 inside the struct value's own header"
+                            )
+                        })?
+                } else {
+                    *position
+                }
+            }
             IndexStep::Named(name) => {
-                let names = current.and_then(|value| struct_field_names(module, value));
+                let names = struct_field_names(module, value);
                 match names
                     .as_ref()
                     .and_then(|names| names.iter().position(|field| *field == Some(*name)))
@@ -5583,7 +5684,7 @@ where
             }
         };
         path.push(at);
-        current = current.and_then(|value| struct_field_value(module, value, at));
+        current = struct_field_value(module, value, at);
     }
     Ok(Some(path))
 }
