@@ -3065,11 +3065,16 @@ mod tests {
             !msg.contains("unresolved") && !msg.contains("field of imported module"),
             "field access hover msg = {msg}"
         );
-        // The editor evaluates nothing, so the field renders its type alone.
+        // The field renders its value and the shared marker as its type; the
+        // signature is the value's own, so the marker is stripped here.
         let rendered = msg
             .rsplit_once(" — `")
-            .map(|(_, ty)| ty.trim_end_matches('`'))
-            .unwrap_or_else(|| panic!("the field renders its type; got {msg}"));
+            .map(|(_, rendered)| rendered.trim_end_matches('`'))
+            .unwrap_or_else(|| panic!("the field renders its value and type; got {msg}"));
+        let rendered = rendered
+            .rsplit_once(" : TypeFunction")
+            .map(|(signature, _)| signature)
+            .unwrap_or(rendered);
         let sides: Vec<&str> = rendered
             .split("=>")
             .map(|side| side.trim().trim_end_matches('`').trim())

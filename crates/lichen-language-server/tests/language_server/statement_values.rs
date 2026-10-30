@@ -164,15 +164,27 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         !hover.contains("raw[Function"),
         "the function is not raw: {hover}"
     );
-    let cells = type_variables(&hover);
-    assert_eq!(
-        cells.len(),
-        2,
-        "jit names its input and output cells: {hover}"
+    // The wrapper takes a function and answers the kernel struct: its parameter's
+    // type is the shared function marker, and its result is the layout. The marker
+    // is a decided type, not an open cell, so the relation is domain to codomain
+    // rather than two named variables.
+    let signature = hover
+        .rsplit_once(" — `")
+        .map(|(_, rendered)| rendered.trim_end_matches('`'))
+        .unwrap_or(hover.as_str());
+    let sides: Vec<&str> = signature.split(" => ").collect();
+    assert_eq!(sides.len(), 2, "one arrow, domain to codomain: {hover}");
+    assert!(
+        sides[0].contains("Function"),
+        "the input is a function: {hover}"
     );
-    assert_ne!(
-        cells[0], cells[1],
-        "the wrapper's input and output cells are distinct: {hover}"
+    assert!(
+        sides[1].contains("Struct"),
+        "the output is the kernel struct: {hover}"
+    );
+    assert!(
+        type_variables(&hover).is_empty(),
+        "the wrapper's decided types name no open cell: {hover}"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.
@@ -193,17 +205,20 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         "the kernel parameter is a struct: {hover}"
     );
     assert!(!hover.contains("->"), "the thin arrow is gone: {hover}");
-    let cells = type_variables(&hover);
+    // The codomain is the kernel's own output type: the shared function marker,
+    // decided and with no signature cell of its own at this hover.
+    let signature = hover
+        .rsplit_once(" — `")
+        .map(|(_, rendered)| rendered.trim_end_matches('`'))
+        .unwrap_or(hover.as_str());
+    let sides: Vec<&str> = signature.split(" => ").collect();
+    assert_eq!(sides.len(), 2, "one arrow, domain to codomain: {hover}");
     assert!(
-        cells.len() >= 2,
-        "the symbolic codomain keeps named cells: {hover}"
+        sides[0].contains("Struct"),
+        "the kernel parameter is a struct: {hover}"
     );
-    let mut distinct = cells.clone();
-    distinct.sort();
-    distinct.dedup();
-    assert_eq!(
-        distinct.len(),
-        cells.len(),
-        "the symbolic codomain does not merge distinct cells: {hover}"
+    assert!(
+        sides[1].contains("Function"),
+        "the codomain is the kernel's function type: {hover}"
     );
 }

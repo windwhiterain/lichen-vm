@@ -258,6 +258,15 @@ where
             }
         };
         let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
+        // The field's value is this read's: an editor's hover reads a function's
+        // signature from the value, never from the shared `FunctionType` marker alone
+        // (`docs/notes/value-templates.md`). Only a struct container is forced; a lazy
+        // `TableGet` on a non-struct is the refusal's own shape.
+        if constant.is_some() {
+            self.module.evaluate_node_deep(value_node, None);
+        } else if self.is_struct_layout(container_ty) {
+            self.module.evaluate_node_deep(value_node, None);
+        }
         let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
