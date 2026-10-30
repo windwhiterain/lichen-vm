@@ -781,6 +781,27 @@ where
                     checker.module.evaluate_node_deep(ty, None);
                 }
             }
+            // A function's signature lives in its value, not in the shared
+            // `FunctionType` marker, so a function-valued field read materializes its
+            // value here, once every type slot is decided. An editor's hover renders
+            // the signature from it (`docs/notes/value-templates.md`).
+            for index in 0..checker.ir.expr.len() {
+                let expression = ExprId(index as u32);
+                if !matches!(checker.ir[expression].kind, ExprKind::NamedField { .. }) {
+                    continue;
+                }
+                let Some(ty) = checker.state[expression].ty else {
+                    continue;
+                };
+                let function = crate::shape::is_function_type_any(
+                    &mut checker.module,
+                    checker.type_expr,
+                    AnyNodeId::Dynamic(ty),
+                );
+                if function && let Some(value) = checker.state[expression].val {
+                    checker.module.evaluate_node_deep(value, None);
+                }
+            }
         }
 
         // The assert pass: drain the constraint worklist, requiring `USize(1)` of
