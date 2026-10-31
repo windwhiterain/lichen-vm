@@ -186,4 +186,14 @@ regresses the suite to 200/40, so the condition must be narrower: skip only a me
 whose operation's target is undecided, or whose filled value is a declaration holding
 open cells — measure both next.
 
+**Both narrow gates on the class fill were measured and regress.** Skipping an
+operation-bearing member when the filled value is a declaration (`answer_elements_are_undecided`
+over the value halves) gives 206/34; skipping only a member whose operation target is
+undecided gives 209/31. Neither flips a chain test, so the class fill is load-bearing
+elsewhere and the read's declaration is not gated by either condition. That closes the
+localized-site list: read, clone, wrapper, sources, write paths, class fill — each was
+measured, each is either load-bearing or inert. The remaining fix is **global**: the
+value model must keep a declaration's fact apart from the cells a call fills, and that
+cannot be reached by a condition at one site.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
