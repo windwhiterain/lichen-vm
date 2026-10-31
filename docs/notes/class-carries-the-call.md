@@ -339,7 +339,10 @@ nodes, not a clone. The kernel compiler's index placement now **looks through a 
 value half** (`Index(Index(container, at), 0)` places the element read, `body.rs`), which
 recovers three of the four device regressions and flips `nested_config::a_nested_config_records_each_leaf_for_what_it_is`
 with them: 218/22 → **221/19**. `fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`
-remains red. Seeding the lazy read's value node with the declaration field's value
+remains red, and its shape is now the graph build recording **0 dispatches** ("this
+function recorded 0 dispatch(es) and names no backend"), i.e. a `record_launch` inside the
+body refused before the graph could be formed — the next probe is that refusal's reason in
+this program (its kernels are elementwise, unlike the chain's reductions). Seeding the lazy read's value node with the declaration field's value
 (`seed_node_value`) was also measured inert (218/22, same four regressions): the
 declaration's value child is itself open in these shapes, so no build-time shape can be
 seeded from it. The next measurement is the kernel class derivation's own read: which
