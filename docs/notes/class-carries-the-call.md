@@ -616,7 +616,12 @@ therefore belongs to the freeze (carry an attribute slot's decided value) or to 
 cross-package certificate, not to the slot walk. A **full sweep** — evaluating every node of the
 package at freeze — was measured and is too broad: compute **180/60**, because body operators run
 on wildcard cells and their answers become errors the program then reads. A targeted pass over
-the attribute expressions is what remains.
+the attribute expressions is what remains. **It was written and measured inert**: collecting
+every attribute expression's value node (≈330 in the compute package) and evaluating it at freeze
+changes nothing, because the certificate's slot is the checker's **provided** expr — a cache the
+freeze never sees — not the declaration's stated attr slot. So the value has to travel with the
+**checker's** state across the package boundary, or the certificate has to be read from the
+declaration side; neither is a freeze pass.
 
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
