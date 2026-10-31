@@ -15,7 +15,7 @@ stmt := bind | assert
 bind := [`let`] name `:=` expr
 assert := `@assert` expr
 unify := expr `=` expr
-lambda := name => expr
+lambda := expr => expr
 apply := expr expr
 annotated := expr annotation+
 annotation := annotator expr
@@ -38,11 +38,9 @@ atom := number | string | `_` | @any | builtin
 
 sugar:
 ```sytax
-`<expr'1> <: <expr'2>` => `<expr'1> = <expr'2>`
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-`<name> <annoation*> => <expr>` => `<name> => {<name> <annoation*>; <expr>}`
-`<name> = <expr'1> => <expr'2>` => `<name> => {<name> = <expr'1>; <expr'2>}`
+`'a` => `a = _; a`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -181,11 +179,11 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 
 ```sytax
 `Function` := `@raw[@raw FunctionType, Type, ...]`
-`p => body` := `@raw[@raw p => body, Function, ...]`
-`{f := p => body; f a}` => `{let (p_clone => body_clone) = @clone (p => body); a = p_clone; body_clone}`
+`<p> => <body>` := `@raw[ <p> @raw=> <body>, Function, ...]`
+`{f := <p> => <body>; f a}` => `{let (p_clone => body_clone) = @clone (<p> => <body>); a = p_clone; body_clone}`
 ```
 
-> `@raw p => body`: lowlevel function.
+> `p @raw=> body`: lowlevel function.
 > `@clone f`: see section `### Clone`.   
 
 ### Clone
@@ -203,7 +201,7 @@ Clone an node with `Any` value produce an undecide node with `None` value if its
 Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
 
 ```sytax
-`x => {...; expr}` => `x => {...; return expr; @any = x;}`
+`'x => {...; expr}` => `'x => {...; return expr; @any = x;}`
 ```
 
 ## Struct
@@ -222,7 +220,7 @@ Struct is a special tuple that:
 `s{.n2 e3, .n1 e4}` 
 := 
 `{
-  let {.n1 e1, .n2 e2} = s;
+  let _{.n1 e1, .n2 e2} = s;
   v := raw[name_table, nominal_id, @raw None, @raw None]
   raw v[name_table["n1"]+2] = e1;
   raw v[name_table["n2"]+2] = e2;
@@ -242,7 +240,7 @@ A lichen source file has at most one single preprocessor `---...---` block.
 
 Preprocessor block can define metadata:
 
-`name = "value" `
+`name = "value"`
 
 or import module:
 - `name = import "path"`: import a lichen source module.
