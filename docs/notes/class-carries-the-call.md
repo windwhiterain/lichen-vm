@@ -427,6 +427,16 @@ value's items. The next probe is that value-item path: the clone must freshen th
 inside a value, per `docs/notes/apply-clone-ownership.md` (or the recording's unify must copy
 before it writes).
 
+A fourth reading answers it: the shared nodes are the ones `node_apply` returns **as-is**
+because they sit outside the apply's scope (`class_inside=false`, printed `SHARED … block=1 …
+items=5`; block 1 is the program's top level). That is the owner-tag rule
+[`apply-clone-ownership`](apply-clone-ownership.md) states — a node outside the call's template
+is referenced, not copied — so the sharing is **by design** and the defect is the recording's
+reliance on it: the body's read of the parameter's buffer resolves to the shared cell, and the
+placeholder binding writes there. The fix is the recording's read resolution (it has the
+per-recording cell in `field_sources`, recorded by `record_graph_parameter_sources`) or a
+copy-before-write in `record_launch` — not a change to the clone's sharing rule.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
