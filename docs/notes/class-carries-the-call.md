@@ -366,7 +366,7 @@ fourteen group by the first diagnostic:
 | *(test data fixed)* the `filled()` bindings and its template annotation; the tests now clear the check and join the recording-argument family | `nested_config`'s two |
 | a direct launch after a recording: "argument 0 … is a buffer and was not read from this function's parameter" — the recording's argument resolves to the declaration | `float_leaf`'s two, `graph_runtime_scalar::what_makes…` |
 | the collect refusal is recorded but never reported (the report's collection differs from the run path's) | `graph_jit::what_a_recorded_body…` |
-| the write's perspective: the control refuses `expected 32, found 0` at `.to`, and `expected 0, found 1` at `(w # 0)` | `perspective_requirements`'s two |
+| the write's perspective: the control refuses `expected 32, found 0` at `.to`, and `expected 0, found 1` at `(w # 0)` — measured site: `check_instantiate`'s decided field branch calls the **plain** `check_unify` on the whole exprs, so the perspective extension's sub-type relaxation (`is_subtype(declared, value)`, which would accept 0 under 32) never runs for an instance's field attribute; the second error is the write's own result perspective, which the prelude's `# (perspective_of x.to)` does not put on the result | `perspective_requirements`'s two |
 | the documented park | `compute::a_float_domain…` |
 
 Deferring the whole-term unify for **every** undecided actual against an open template was
