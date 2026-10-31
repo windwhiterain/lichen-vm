@@ -401,6 +401,16 @@ node (`1610`) holds `GraphInput(3)`, and the later recordings of the same test h
 the placeholder node is created by `build_graph` and nothing in the recording writes it, so
 the later program run's parameter unify does.
 
+**The recording-argument family, measured.** The five tests that refuse with "argument 0 of
+this dispatch is a buffer and was not read from this function's parameter" share one shape: a
+module that is evaluated more than once. The first evaluation's recording resolves the
+dispatch's input path to the program's own instance node (the same `Buf` wrapper across
+evaluations, its native cell the same node), and that cell holds `GraphInput(3)` — so the
+first recording's parameter binding wrote a placeholder into **the program's shared
+check-time node**. The second evaluation finds the same cell holding a runtime `Buffer` (a
+later launch's answer), and the dispatch refuses. The fix is the recording's parameter
+binding: it must write into the per-recording clone, never into the program's instance cell.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
