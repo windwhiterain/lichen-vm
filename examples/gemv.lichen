@@ -104,7 +104,7 @@
     declared values are the language's own transcendental sequences. The declared output is that \
     arithmetic worked out by hand, not a transcription of what the program printed. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[14.0, 32.0, 50.0, 68.0]: array{Float, 4}"
+  output = "[14.0, 32.0, 50.0, 68.0]: Array"
 ---
 Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 12})), .x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}

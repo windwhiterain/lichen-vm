@@ -183,7 +183,7 @@
     P1-42, `wontfix:D17`), which is why every stage here is one lane per output with exactly \
     one write, and which is also why the append rewrites the whole cache rather than one row. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
-  output = "[8.888384, 10.773098]: array{Float, 2}"
+  output = "[8.888384, 10.773098]: Array"
 ---
 KVIn  := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8})), .nk (compute.Buf (compute.BufParam{.type Float, .length 2})), .nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 KVOut := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}

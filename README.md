@@ -691,7 +691,7 @@ compute.collect out.y : Array
    The domain the reduction answers for is `|θ| ≤ 8192`, and above that it clamps rather \
    than refusing, so the answer there is the function of the clamp. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[1.0, 2.0, -1.744977, 4.685622, -7.536518, 2.0496058, -8.0589075, -6.9321]: array{Float, 8}"
+  output = "[1.0, 2.0, -1.744977, 4.685622, -7.536518, 2.0496058, -8.0589075, -6.9321]: Array"
 ---
 Turn := {.position (compute.Buf (compute.BufParam{.type Float, .length 4})), .inverse_frequency (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -825,7 +825,7 @@ compute.collect out.y : Array
    iteration, a matmul over small integers has no approximation in it at all and this is an
    **exact** correctness check. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[58.0, 64.0, 139.0, 154.0]: array{Float, 4}"
+  output = "[58.0, 64.0, 139.0, 154.0]: Array"
 ---
 Ain := {.a (compute.Buf (compute.BufParam{.type Float, .length 6})), .b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -921,7 +921,7 @@ compute.collect out.c : Array
    `graphrun`, element for element with the `cpu` path**, so the Newton `sqrt` above did not \
    drift on a device — which it might, since this device does not round `f32` division \ The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
-  output = "[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}"
+  output = "[-3.0, -2.0, 1.0, 6.0]: Array"
 ---
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -1118,7 +1118,7 @@ compute.collect out.y : Array
    is what the program prints. The data is `Q = 2 0 1 1 / 0 0 2 1`, `K = 1 1 0 0 / 0 1 1 0`, \
    `V = 1 2 3 4 / 5 6 7 8`, so the four rows of the answer differ from each other by `4 · p` and \
    by `1` across the head dimension — a transposition of either matrix would change every entry."
-  output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}"
+  output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: Array"
 ---
 QK := {.q (compute.Buf (compute.BufParam{.type Float, .length 8})), .k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Scored := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -1468,7 +1468,7 @@ out := (compute.plrun append (Par{.n 8, .cap 4, .dim 2, .t 2, .in (KVIn{.k kbuf,
     declared values are the language's own transcendental sequences. The declared output is that \
     arithmetic worked out by hand, not a transcription of what the program printed. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[14.0, 32.0, 50.0, 68.0]: array{Float, 4}"
+  output = "[14.0, 32.0, 50.0, 68.0]: Array"
 ---
 Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 12})), .x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -1691,7 +1691,7 @@ compute.collect out.y : Array
     P1-42, `wontfix:D17`), which is why every stage here is one lane per output with exactly \
     one write, and which is also why the append rewrites the whole cache rather than one row. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
-  output = "[8.888384, 10.773098]: array{Float, 2}"
+  output = "[8.888384, 10.773098]: Array"
 ---
 KVIn  := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8})), .nk (compute.Buf (compute.BufParam{.type Float, .length 2})), .nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 KVOut := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
@@ -3459,7 +3459,7 @@ replicated := (compute.plrun replicate (CPar{.n 25, .cols 5, .taps 9, .in (CIn{.
     `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
     the RTX 3060: the padded addressing, the seed leaf and the guard are all right there. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: array{Float, 25}"
+  output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: Array"
 ---
 PIn := {.x (compute.Buf (compute.BufParam{.type Float, .length 49}))}
 POut := {.y (compute.Buf (compute.BufParam{.type Float, .length 25}))}

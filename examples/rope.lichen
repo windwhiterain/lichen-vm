@@ -22,7 +22,7 @@
    The domain the reduction answers for is `|θ| ≤ 8192`, and above that it clamps rather \
    than refusing, so the answer there is the function of the clamp. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[1.0, 2.0, -1.744977, 4.685622, -7.536518, 2.0496058, -8.0589075, -6.9321]: array{Float, 8}"
+  output = "[1.0, 2.0, -1.744977, 4.685622, -7.536518, 2.0496058, -8.0589075, -6.9321]: Array"
 ---
 Turn := {.position (compute.Buf (compute.BufParam{.type Float, .length 4})), .inverse_frequency (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}

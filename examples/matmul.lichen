@@ -57,7 +57,7 @@
    iteration, a matmul over small integers has no approximation in it at all and this is an
    **exact** correctness check. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[58.0, 64.0, 139.0, 154.0]: array{Float, 4}"
+  output = "[58.0, 64.0, 139.0, 154.0]: Array"
 ---
 Ain := {.a (compute.Buf (compute.BufParam{.type Float, .length 6})), .b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}

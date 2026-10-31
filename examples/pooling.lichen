@@ -31,7 +31,7 @@
     `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
     the RTX 3060: the padded addressing, the seed leaf and the guard are all right there. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`)."
-  output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: array{Float, 25}"
+  output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: Array"
 ---
 PIn := {.x (compute.Buf (compute.BufParam{.type Float, .length 49}))}
 POut := {.y (compute.Buf (compute.BufParam{.type Float, .length 25}))}

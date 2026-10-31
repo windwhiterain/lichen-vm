@@ -131,7 +131,7 @@
    is what the program prints. The data is `Q = 2 0 1 1 / 0 0 2 1`, `K = 1 1 0 0 / 0 1 1 0`, \
    `V = 1 2 3 4 / 5 6 7 8`, so the four rows of the answer differ from each other by `4 · p` and \
    by `1` across the head dimension — a transposition of either matrix would change every entry."
-  output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}"
+  output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: Array"
 ---
 QK := {.q (compute.Buf (compute.BufParam{.type Float, .length 8})), .k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Scored := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}

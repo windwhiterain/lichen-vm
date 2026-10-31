@@ -54,7 +54,7 @@
    `graphrun`, element for element with the `cpu` path**, so the Newton `sqrt` above did not \
    drift on a device — which it might, since this device does not round `f32` division \ The host's data is built by **fill kernels**: the surface has no array-to-buffer \
    conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
-  output = "[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}"
+  output = "[-3.0, -2.0, 1.0, 6.0]: Array"
 ---
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
