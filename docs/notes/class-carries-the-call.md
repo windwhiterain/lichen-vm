@@ -177,4 +177,13 @@ the value really is on the node, yet the four write sites, the class fills and
 to see whether the value predates the operation (a checker-built value node that an
 operation was attached to) or is set by a path outside the traced sites.
 
+**The untraced writer is `fill_class_holes` (measured, next round's condition).** Its
+loop is the fifth write site: a merge gives the class's value to every hole, and an
+operation-bearing member is a hole — the `Node` invariant's "an operation-bearing
+member holds that value while the stamp stays zero" is exactly how the read's node
+acquired the declaration. Skipping **every** operation-bearing member in that fill
+regresses the suite to 200/40, so the condition must be narrower: skip only a member
+whose operation's target is undecided, or whose filled value is a declaration holding
+open cells — measure both next.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
