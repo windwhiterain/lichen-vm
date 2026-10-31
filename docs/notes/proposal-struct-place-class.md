@@ -57,6 +57,15 @@ A **closed** value child with an **open actual** registers the pending requireme
 
 ## 3. The mechanisms (not spec text)
 
+The gate is **not** a change to the lowlevel's unify rules: the engine keeps its class
+and value semantics, and a merge stays legal whenever the classes agree. What the
+mechanism adds is a **policy layer over the point where a value becomes a class's
+value**: the requirement records say which values a class admits, and `install_value`
+consults them before the merge/write that would make the value visible. That is the
+missing piece — the legal merged state was the defect's vehicle, because the class
+model's "undecided against decided writes" arm is itself legal, so no rule inside the
+merge can refuse the declaration; the refusal must be a precondition on the merge.
+
 ### 3.1 A candidate-aware relation, not `is_subtype` on nodes
 
 `AttrExt::is_subtype` is a **post-failed-unify relaxation**, not an admission predicate:
