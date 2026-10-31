@@ -660,6 +660,15 @@ node. Carrying it there — writing the decided attribute slot into the expr's a
 certificate chain would then read 32 without any cross-package state. That is the change the
 family needs: an attribute lowering rule, not another consumer-side fix.
 
+**The fork's premise is wrong, measured.** Scanning the frozen module's exprs for attribute
+expressions whose value is decided finds them: `# 0` and `# warp` both appear (`USize(0)` and
+`USize(32)`), so the **frozen package does state its perspectives**. The certificate's chain
+therefore does not fail because the value is missing from the freeze; the *program's* copy of the
+declaration's attribute expr is a different, undecided node (its value node has no operation and
+no origin), while the frozen one holds 32. The remaining question is narrowed to that copy: which
+checker path builds it (`provided_slot`/`stated_attributes`/the applied clone) and why it does
+not reuse the frozen value — the next round's single subject.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
