@@ -7011,7 +7011,7 @@ fn record_graph_parameter_sources<P>(
         let Ok(Some(path)) = param_path(module, parameter, candidate) else {
             continue;
         };
-        let path = physical_param_path::<P>(module, parameter, &path).unwrap_or(path);
+        // `param_path` already answers the parameter's **role** path.
         let Some(source) =
             value_at_path::<P>(module, placeholders, &path).and_then(|node| node.dynamic())
         else {
