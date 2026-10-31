@@ -422,4 +422,14 @@ read, so the write's output position can be placed as an input read — which is
 wrong product needs (the two `s(0)` uses in the fold saw different iteration values in the
 measured `[29, 32, 101, 112]`). The next probe is the compiled body of a one-write kernel.
 
+**The compiled matmul body, measured** (`lichen-tools`'s `zz_kernel_body_probe` prints it):
+the body's parameters are `[n, cols, k, index]`, and inside the fold's blocks the reads
+`r * k.k` and `(s(0) - 1) * k.cols` compile with **leaf 0** (the extent) where leaves 2 and 1
+belong, while `i / k.cols` outside the fold compiles with leaf 1 correctly. The write's
+value is a **fold-block parameter** (`BlockParam(3, 1)`) instead of the fold's result
+(`Value(33)`). So the drift is the kernel compiler's leaf resolution for reads homed in a
+nested block, not the arithmetic: the reads' steps are dropped or collapsed to the first
+leaf. A one-write kernel's body (no fold) compiles correctly, which is why only the
+fold-using examples drift.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
