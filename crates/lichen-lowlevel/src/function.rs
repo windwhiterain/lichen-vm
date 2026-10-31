@@ -1030,6 +1030,9 @@ impl<P: Program> Module<P> {
                     items.push(ArrayItem {
                         node: match item.node {
                             AnyNodeId::Static(_) => item.node,
+                            // A struct's identity is its declaration's: reference it
+                            // (`docs/notes/value-templates.md`).
+                            Dyn(node) if self.struct_identity_items.contains(&node) => item.node,
                             Dyn(node) => Dyn(self.node_apply(node, ctx)),
                         },
                         ..item

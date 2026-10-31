@@ -70,6 +70,7 @@ impl<P: Program> Module<P> {
             apply_result_owners: HashMap::new(),
             field_sources: HashMap::new(),
             requirement_nodes: HashSet::new(),
+            struct_identity_items: HashSet::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),
             clone_parameters: HashMap::new(),

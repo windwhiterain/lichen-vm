@@ -4322,6 +4322,10 @@ where
         None,
         Some(<P::Value as ValueType>::type_id_value(BUF_NOMINAL_ID)),
     );
+    // The wrapper's identity is the declaration's, so a clone references these
+    // (`docs/notes/value-templates.md`).
+    module.struct_identity_items.insert(names);
+    module.struct_identity_items.insert(id);
     // A field is a complete expression: its value, its type and its attributes
     // are its own.
     let native = element_slot(module, block, dyn_node(payload).ok()?)?;
@@ -4400,18 +4404,19 @@ where
         Some((names, id)) => (names, id),
         None => match buf_identity(module) {
             Some(identity) => identity,
-            None => (
-                AnyNodeId::Dynamic(struct_names_node::<P>(
-                    module,
-                    block,
-                    &[BUF_NATIVE_FIELD, "type", "length"],
-                )),
-                AnyNodeId::Dynamic(module.add_node(
+            None => {
+                let names =
+                    struct_names_node::<P>(module, block, &[BUF_NATIVE_FIELD, "type", "length"]);
+                let id = module.add_node(
                     block,
                     None,
                     Some(<P::Value as ValueType>::type_id_value(BUF_NOMINAL_ID)),
-                )),
-            ),
+                );
+                // The wrapper's identity is the declaration's (`docs/notes/value-templates.md`).
+                module.struct_identity_items.insert(names);
+                module.struct_identity_items.insert(id);
+                (AnyNodeId::Dynamic(names), AnyNodeId::Dynamic(id))
+            }
         },
     };
     let native = element_slot(module, block, dyn_node(payload).ok()?)?;

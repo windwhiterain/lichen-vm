@@ -419,6 +419,10 @@ where
     ) -> (NodeId, NodeId) {
         let id = self.fresh_nominal_id(occurrence);
         let name_table = self.build_struct_names(names);
+        // The identity items belong to the declaration, so a clone references them
+        // (`docs/notes/value-templates.md`).
+        self.module.struct_identity_items.insert(id);
+        self.module.struct_identity_items.insert(name_table);
         let mut items = vec![name_table, id];
         items.extend_from_slice(fields);
         let value = self.array_node(self.current_block, &items);

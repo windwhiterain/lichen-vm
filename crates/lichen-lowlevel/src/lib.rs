@@ -1059,6 +1059,13 @@ pub struct Module<P: Program> {
     /// would read the declaration. The match's write sets the mark, a clone copies it,
     /// and an answer clears it (`docs/notes/class-carries-the-call.md`).
     pub requirement_nodes: HashSet<NodeId>,
+    /// A struct value's **identity items**: its name table and its nominal id.
+    ///
+    /// # Invariant
+    /// A clone references these in place and never copies them: the table and the id are the
+    /// declaration's, so a per-call copy would give one type two identities
+    /// (`docs/notes/value-templates.md`).
+    pub struct_identity_items: HashSet<NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
