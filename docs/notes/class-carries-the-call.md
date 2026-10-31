@@ -249,23 +249,31 @@ fill (`x.r` answering `7: Int`) worked for the opposite reason: the actual's cla
 merged with the place's, so the class read found the decided member. Changing the right-`Any`
 arm is an **invariant change** and needs the maintainer's permission.
 
-## The join's minimal form, measured
+## The join's minimal form, and a misuse to avoid
 
-Same template, three ways to deliver the field's value; only the third fails:
+**The maintainer's correction: reading a template directly is invalid usage.** `@any` means
+the field is *never specialized*; a template is a **constraint**, not a place. To constrain
+something, the *thing* is unified with the template (it is an instance of it), and the read
+is of the **thing**, never of the template. So the programs that wrote into `x.r` after
+`x = t`, or read `x.r` off the template, measured a misuse, not the join — their expected
+answer is not the value written there.
 
-| program | actual | expected |
-|---|---|---|
-| `t := {.r @any : Int}; x := _; x = t; x.r = 7; x.r` | `7: Int` | `7: Int` |
-| `t := {.r @any : Int}; x := _; x = t; y := t{.r (1 + 2)}; x = y; x.r` | `3: Int` | `3: Int` |
-| `t := {.r @any : Int}; x := _; x = t; x.r = (1 + 2); x.r` | **`none: Int`** | **`3: Int`** |
+The valid shape, measured working:
 
-The third row is the chain's shape: a value decided only at runtime is written into the
-declared cell's class. The literal joins at check time (a decided write into the cell); the
-instance joins because its class becomes the place's class; the runtime answer joins the
-class too — but the declared cell's own slot keeps `Any`, and the read answers the slot, so
-the answer is lost. The class therefore holds two members that should be one value: the
-`Any` hole and the decided answer. The SPEC says a node holding `Any` is undecided
-(§Undecided), so the hole must be filled; the directional wildcard arm already adds the
-equality for the undecided right class and needs no change.
+```lichen
+t := {.r @any : Int}
+y := t{.r (1 + 2)}
+y.r
+```
+
+answers `3: Int`: the instance's cell holds the runtime value, and the read is of the
+instance. The language-level instance path is therefore fine.
+
+The chain's failure is in the **launch/recording path**, not in this language shape: the
+launch's result should be the thing (the recorded buffers), the codomain only constrains
+it, and the read `first.r` should read the recorded thing. Measured, it reads the codomain's
+declaration instead (the decode finds the declared `Buf`, `raw none` native), so the
+dispatch's result is resolving to the template rather than to the recorded instance. The
+fix's locus is that result value, and the measurement is the chain tests' answers.
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
