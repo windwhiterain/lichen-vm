@@ -354,8 +354,8 @@ field of the `Buf` it follows and what the lazy read replaced there.
 ## The remaining failures' shapes (measured)
 
 With the requirement mark, the recording's run-stamp reset, the three re-pinned digest tests,
-the role-path fix, the kernel body's leaf conversion and the maintainer-approved test-data
-fixes the suite stands at **227/13**. The
+the role-path fix, the kernel body's leaf conversion, the maintainer-approved test-data fixes
+and the recording's own-conflict rule the suite stands at **231/9**. The
 fourteen group by the first diagnostic:
 
 | shape | tests |
@@ -363,7 +363,8 @@ fourteen group by the first diagnostic:
 | `expected Struct, found none` (an undecided value meeting a struct requirement; the lazy read has no check-time value) | `fan_out_merge::under_a_pack…` |
 | `expected Struct, found Struct` — the **declaration's** `.length` pin (16) against the actual buffer (512); the frozen-marker refusal above it is fixed | `cooperative_product`'s three |
 | *(fixed)* the annotation `: OutE` — the SPEC's annotation unifies the value's **type**, so a value template is a type error; now `: Struct` | `graph_argument::the_two_buffer_chain…` (green) |
-| *(test data fixed)* the `filled()` bindings and its template annotation; the tests now clear the check and join the recording-argument family | `nested_config`'s two |
+| *(fixed)* the `filled()` bindings and its template annotations, then the recording's own-conflict rule: both tests pass | `nested_config`'s two (green) |
+| *(fixed, approved)* the `: Out2` annotation — the same value-template misuse as `: OutE`; now `: Struct` | `graph_runtime_scalar::what_makes…` (green) |
 | a direct launch after a recording: "argument 0 … is a buffer and was not read from this function's parameter" — the recording's argument resolves to the declaration | `float_leaf`'s two, `graph_runtime_scalar::what_makes…` |
 | the collect refusal: **measured** — the module's `extension_diagnostics` holds it (first of five, `compute.graph: a collect is asked here …`) and `diagnostic.rs` collects every `fails_build` entry, yet the test's message list shows a `compute.parallel` sentence in its place and no collect sentence: so the loss is in the **report's `out` assembly** (a dedup or an overwrite between the check's attributed diagnostics and the extension entries), not in the recording | `graph_jit::what_a_recorded_body…` |
 | the write's perspective: the control refuses `expected 32, found 0` at `.to`, and `expected 0, found 1` at `(w # 0)` — measured site: `check_instantiate`'s decided field branch calls the **plain** `check_unify` on the whole exprs, so the perspective extension's sub-type relaxation (`is_subtype(declared, value)`, which would accept 0 under 32) never runs for an instance's field attribute; the second error is the write's own result perspective, which the prelude's `# (perspective_of x.to)` does not put on the result. Measured: skipping the attribute slots at the instantiation (unifying value and type only) regresses two green perspective tests (225/15), so the attributes must go **through the extension's `unify_slots`**, not be skipped; and the prelude's two spellings (the direct `# (perspective_of …)` and the `r := …; r = …` form) refuse identically, so the second site is the computed-attribute replay, not the spelling. Delegating the attribute slots to the extension's `unify_slots` (per marker, at the instantiation) was measured **worse** too: 226/14, `an_imported_requirement_judges_like_an_inline_one` regresses, and the write test still refuses. The instantiation is therefore not where the perspective relaxation belongs; the deferred call-site replay is the site, and it needs its own measurement | `perspective_requirements`'s two |
