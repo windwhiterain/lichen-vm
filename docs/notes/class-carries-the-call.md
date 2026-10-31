@@ -135,4 +135,15 @@ writes an answer into the operand's node, so `r`'s node carries the codomain val
 appending `r` to the wrapper returns the type. The next measurement prints the
 binding's node value at the decode with and without that unify.
 
+**Measured at the decode, after the origin reading.** The decode's declared-branch does
+trigger (`buffer 14506, payload 8505`, the open native), but its `field_source_of` is
+`None`, and neither following the node's origin chain for eight hops nor inserting the
+declared field's source in `record_launch` (`declared -> assembled wrapper`) connects
+it: the suite stays 215/25. So the read's declaration (`14506`) is not linked to the
+recorded wrapper by origin or by class — the launch's declared field it *was* built
+from is a different node. The separation's remaining question is exactly that
+identity: which node the launch's declaration and the body's read share, and whether
+the read should resolve through the wrapper the launch assembled rather than the
+declaration it was cloned from.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
