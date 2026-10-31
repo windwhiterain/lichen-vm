@@ -640,6 +640,17 @@ expr's attribute slot), which needs the static module's function table; that is 
 round starts. Both experiments (`origin` chain, targeted attribute sweep) are reverted; the
 suite stays 234/6.
 
+**The frozen return states no attribute, measured directly.** Reading the frozen module's
+function table (`StaticFunction::return` → the return expr → the attribute slots) shows every
+prelude function's return expr carrying `LowValue::Any` in all attribute positions. The
+`# warp` sits on the **declaration** expr — the right side of `r = (Buf …) # warp` — not on the
+return `r`; the certificate finds it only through the class merge, and *that* expr's value node
+is undecided because the attribute is a **read of a top-level binding** (`warp := 32`), which
+the definition pass evaluates when a body runs, never during a check. `annotation_value_slot`
+now evaluates the term's **value half** (it returned early on the expr node), which is correct
+and measured neutral; the remaining piece is deciding a body's variable read outside its
+definition pass, which is the next subject.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar

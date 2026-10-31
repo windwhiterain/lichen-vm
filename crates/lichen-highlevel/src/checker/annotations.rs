@@ -204,6 +204,12 @@ where
             .term
             .expect("an annotation value expr is compiled");
         if self.node_value(term).is_some() {
+            // The term's **value half** may still be a computation
+            // (`docs/notes/array-attribute-view.md`).
+            if let Some(value) = self.module.expr_value_half(term) {
+                self.module
+                    .evaluate_node_deep_ref(AnyNodeId::Dynamic(value), None);
+            }
             return term;
         }
         if self.module.node_operation(term).is_some() {
