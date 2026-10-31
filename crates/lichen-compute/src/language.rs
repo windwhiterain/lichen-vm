@@ -102,13 +102,56 @@ pub fn wiring() -> Wiring<'static> {
 /// The registration is **deferred**: the wrapper is checked and frozen when a program
 /// first imports it, so a run that imports no compute package compiles none of it.
 pub fn register_compute(store: &mut PackageStore<LangProgram>) -> Result<(), String> {
-    store.register_native_deferred(
+    store.register_linked_deferred(
         COMPUTE_PATH,
         WRAPPER_SOURCE,
         compute_native_ops!(LangProgram),
+        &WRAPPER_BINDINGS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>(),
     );
     Ok(())
 }
+
+/// The wrapper's top-level statements, in source order, so a program binds them directly.
+///
+/// # Invariant
+/// One name per statement of `compute.lichen` — the registry pairs names with statements by
+/// position and refuses a mismatch, so this list moves with the prelude
+/// (`docs/notes/value-templates.md`).
+const WRAPPER_BINDINGS: [&str; 30] = [
+    "type_of",
+    "perspective_of",
+    "warp",
+    "KT",
+    "K",
+    "A",
+    "P",
+    "S",
+    "BufParam",
+    "Buf",
+    "jit",
+    "launch",
+    "call",
+    "parallel",
+    "plrun",
+    "range",
+    "row",
+    "col",
+    "Read",
+    "Write",
+    "WriteAtomic",
+    "read",
+    "write",
+    "write_atomic",
+    "collect",
+    "buf",
+    "Mma",
+    "mma",
+    "graph",
+    "graphrun",
+];
 
 /// The plugin list that names this sub-language, in the slot key's own spelling.
 ///
