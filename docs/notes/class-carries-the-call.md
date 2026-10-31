@@ -214,8 +214,12 @@ Float, .length 4}))}; x := _; x = OutR; x.r` prints `(raw none, Float, 4): Struc
 declaration. `plrun`'s `r = k.O` is the same unify with the codomain in place of `OutR`,
 which is why the chain family reads the declaration.
 
-Under the proposal a type expression in a field states the **requirement** and carries no
-value: the place stays the actual's (undecided here), so the minimal program answers an
-undecided `Int`-typed value instead of the declaration.
+The type-valued form is **not** a discriminating repro, however: under the proposal the
+field's value child `Int` is a closed **pin** on the type value `Int` (bare `I` stores a
+type value, `value-templates.md`), the read is the actual's undecided value of type
+`Type`, and an undecided `Type`-typed value renders `raw none: Type` — the same text the
+declaration read renders today. The smallest *discriminating* case is the pinned scalar:
+`(_ = {.r 5 : Int}).r` answers `5: Int` today (the pin installed as the value) and
+`none: Int` under the proposal (the pin deferred, the read the actual's undecided value).
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).

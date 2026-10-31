@@ -14,9 +14,11 @@
 > denotation, shared and checked; the **attributes** are `t`'s attribute children,
 > shared, and the match applies **the attribute's own relation with the declaration on
 > the left** (`declared ⊑ value` for `Perspective`); the **value** child: a **closed**
-> value is a **pin** (`a`'s value must equal it), an **open** value is a fresh cell for
-> this use filled by `a`, a **type expression** states the type requirement and carries
-> no value; a **group** child is matched position by position.
+> value is a **pin** (`a`'s value must equal it) — **a type value included**: bare `I`
+> stores the type value `I` (`value-templates.md`), so it pins the matched value to `I`
+> and does **not** make the field I-typed, whose type is the **type child**'s denotation;
+> an **open** value is a fresh cell for this use filled by `a`; a **group** child is
+> matched position by position.
 >
 > The match's answer is `a`; `t` is never specialized and never a place's value. A read
 > of a matched place answers `a`'s value for that part.
@@ -220,6 +222,11 @@ the match does with the template's value; no symbolic change is needed.
    gets its own fresh cell (the branch does not insert the node into the remap), and each
    fresh cell carries its own copy of the requirement. The original `Any` slots keep their
    no-overwrite protection throughout.
+0d. **The minimal discriminating case.** `(_ = {.r 5 : Int}).r` answers `none: Int` — the
+   closed pin is deferred, so the read is the actual's value (undecided), not the pin. The
+   type-valued form `(_ = {.r Int}).r` is **not** discriminating by output: the pin is the
+   type value `Int`, the read is undecided of type `Type`, and an undecided `Type`-typed
+   value renders `raw none: Type` — the same text the current declaration read renders.
 0b. **A partially-open group.** A decided outer struct with an open native/payload (the
    wrapper shape the class note records) is matched per child: the open payload keeps its
    cell, its requirement is recorded, and **no declaration value is installed** into it;
