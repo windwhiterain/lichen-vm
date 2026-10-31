@@ -99,8 +99,13 @@ application cannot check what the dynamic one checked:
 - **Freeze** maps each dynamic requirement into the frozen tables the same way it maps an
   edge: the declared cell and the expectation's node refs are frozen with their usual
   remap (`freeze.rs`'s `freeze` construction), and the set is stored per class.
-- **Codec** persists it as its own section, versioned like the other artifact sections; a
-  reader that meets an unknown section refuses the artifact by name.
+- **Container format** persists it where the other frozen maps are written:
+  `crates/lichen-language/src/persist/container.rs` writes `apply_result_owners` and
+  `field_sources` as sorted node-index pairs and gates the whole artifact on
+  `ARTIFACT_FORMAT_VERSION`. The pending requirements are written the same way (sorted by
+  class root, each entry with its expectation refs), the format version is bumped, and a
+  reader of an older format is refused by the existing
+  `unknown artifact format version` check.
 - **Load** restores the table and rewrites the refs with the artifact's own module ids.
 - **The static clone walk** (`static_module/apply.rs`'s remap) copies the set through its
   static remap, as the dynamic walk does.
