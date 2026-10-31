@@ -93,9 +93,9 @@ fn mismatched(leaf: &str, kind: &str) -> String {
 ---
 In1  := {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
 Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
-Par  := {{.n @any : Int, .scale {leaf}, .in In1}}
-Arg  := {{.n @any : Int, .scale {leaf}, .I In1}}
-GA   := {{.n @any : Int, .scale {leaf}, .in In1}}
+Par  := {{.n @any : Int, .scale @any : {leaf}, .in In1}}
+Arg  := {{.n @any : Int, .scale @any : {leaf}, .I In1}}
+GA   := {{.n @any : Int, .scale @any : {leaf}, .in In1}}
 mismatch_raw := (k = Par) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type {kind}, .length {rows}}})
