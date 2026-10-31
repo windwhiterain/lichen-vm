@@ -184,7 +184,7 @@ panics, so it is latent and deserves its own round.
 - `8684d33c` — an attribute's value may live at its class.
 - `4d46b595` — an annotation's term may hold an undecided value half.
 
-## Round 27: two fixed, four left
+## Round 27: three fixed, three left
 
 `68085942` fixes `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name`.
 The old "deep pass does not visit `$call`" reading is not the mechanism. The
@@ -200,11 +200,12 @@ recorded input now reaches that later refusal correctly.
 
 The other current findings:
 
-- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` is a
-  **test-data conflict**, not an implementation defect. Its second program passes
-  `1.5` to `@any : Int`. The SPEC's annotation rule unifies the type, and the same
-  test file also pins the class refusal. Do not admit Float there to make the test
-  green; the program needs a maintainer-approved correction.
+- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` is green
+  after correcting its test data. The mixed domain now declares `(Int, Float)`
+  instead of requiring an illegal Float-to-Int conversion. The compound case uses
+  the SPEC's actual array-instance spelling `[@any : Float, 3][…] : Array`, and its
+  assertion names the aggregate's missing scalar encoding rather than the retired
+  three-locals model. The Float-to-Int class-refusal test still passes.
 - `fan_out_merge::under_a_pack…` is fixed after the maintainer chose **Tuple** for
   graph's multiple returns. The test now uses both `: Tuple` and the SPEC's tuple
   access spelling, `r(0)`/`r(1)`; `r[0]` is an Array read by definition. Each

@@ -1433,7 +1433,7 @@ compute.launch k 1.5
     // the body's.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0))
+k := compute.jit (p = (@any : Int, @any : Float) => p(0))
 compute.launch k (1, 1.5)
 "#);
     assert_eq!(
@@ -1451,7 +1451,7 @@ compute.launch k (1, 1.5)
         r#"
 --- compute = import "compute.lichen" ---
 k := compute.jit (p = (@any : Int, @any : Int) => p(0))
-compute.launch k (1, [1.5, 2.5, 3.5])
+compute.launch k (1, ([@any : Float, 3][1.5, 2.5, 3.5] : Array))
 "#,
     );
     assert_eq!(
@@ -1461,10 +1461,9 @@ compute.launch k (1, [1.5, 2.5, 3.5])
     );
     assert!(
         messages[0].contains("compute.kernel_launch")
-            && messages[0].contains("takes 2 arguments")
-            && messages[0].contains("supplied 4"),
-        "the aggregate's three elements are three locals a two-local domain does not have: \
-         {messages:?}"
+            && messages[0].contains("argument element 1.0 is no value")
+            && messages[0].contains("not a concrete Int or Float"),
+        "the aggregate has no scalar encoding for one compound local: {messages:?}"
     );
 
     // A function codomain is permitted; its argument has no scalar encoding.
