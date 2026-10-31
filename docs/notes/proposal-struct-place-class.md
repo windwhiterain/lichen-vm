@@ -106,10 +106,13 @@ clone exists, so all three are in the match's path:
    actual registers the records (§2) and unifies the **types only**; the actual's value
    slot stays open. A decided actual keeps the whole-term unify, whose agreement is the
    pins' check and whose disagreement is the existing diagnostic.
-2. **A function's birth normalize** — the `@any = x` sugar (`§Function`: "Function auto
-   unify `@any` to parameter in the end"), executed by the checker's normalization. It is
-   the same match (a template's `@any` requirement against the parameter's cell) and
-   registers through the same path; it installs no template value.
+2. **A function's birth normalize** — the checker's normalization: after each top-level
+   statement, every new lambda's value node is deep-evaluated before the definition pass
+   (`checker.rs`'s `build_with`). The SPEC's sugar `'x => {…; expr}` => `{…; @any = x}`
+   is that site. In the implementation the wildcard completion is a **write** of `Any`
+   (`checker/lambda.rs`, the identity-return completion), which installs no declaration
+   and therefore needs no gate today; any unify the normalize performs is the same
+   registration as site 1.
 3. **An apply's runtime unify** — the parameter slots; the clone walk copies the records
    through its remap (the clone rule in §2), and the gate checks them at the bind.
 
