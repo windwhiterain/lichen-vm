@@ -193,6 +193,15 @@ impl<P: Program> Registry<P> {
     /// `key` is unregistered: a registered key is a resident module, and re-inserting it
     /// would shadow the resident one. The caller checks first ([`Self::get`], comparing
     /// [`Package::hash`] to recognize a key reallocated after reclamation).
+    /// The keys of the filed artifacts.
+    ///
+    /// # Invariant
+    /// Every key answers [`Self::get`] at the moment it is read; the caller holds no borrow
+    /// across the two calls.
+    pub fn keys(&self) -> Vec<ModuleKey> {
+        self.entries.keys().copied().collect()
+    }
+
     pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
         assert!(
             !self.entries.contains_key(&key),

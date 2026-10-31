@@ -175,6 +175,27 @@ impl<P: Program> Module<P> {
             .clone()
     }
 
+    /// The keys of every frozen module this one holds, in registration order.
+    ///
+    /// # Invariant
+    /// A key with no live module is never reported: the caller looks its module up by
+    /// [`Self::frozen_module`] and expects the two reads to agree.
+    pub fn frozen_module_keys(&self) -> Vec<ModuleKey> {
+        self.registry
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+    }
+
+    /// The frozen module behind `key`, or `None` when none is registered.
+    pub fn frozen_module(&self, key: ModuleKey) -> Option<Arc<StaticModule<P>>> {
+        self.registry
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .map(|entry| entry.module.clone())
+    }
+
     /// Whether the frozen body returns its parameter: its return expr *is* the
     /// parameter expr.
     pub fn static_function_returns_parameter(&self, function: StaticFunctionRef) -> bool {

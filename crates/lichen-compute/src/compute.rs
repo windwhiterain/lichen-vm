@@ -4254,6 +4254,53 @@ where
 /// id before its two fields, so the payload is the first field and a reader
 /// that walks the fields skips the header
 /// (`docs/notes/value-templates.md`).
+/// The `Buf` type's identity, read from the frozen wrapper package: its name table and its
+/// nominal id.
+///
+/// # Invariant
+/// A buffer's type is its **declaration's**: a wrapper the runtime builds states the table and
+/// id the frozen `Buf` declaration's value holds, so a runtime buffer and a program's `Buf`
+/// value are one type whichever module built them (`docs/notes/value-templates.md`).
+fn buf_identity<P>(module: &Module<P>) -> Option<(AnyNodeId, AnyNodeId)>
+where
+    P: Program,
+    P::Value: ValueType + AsEnum<LowValue>,
+{
+    static LEARNED: std::sync::OnceLock<Option<(AnyNodeId, AnyNodeId)>> =
+        std::sync::OnceLock::new();
+    if let Some(identity) = LEARNED.get() {
+        return *identity;
+    }
+    let found = module.frozen_module_keys().into_iter().find_map(|key| {
+        let frozen = module.frozen_module(key)?;
+        frozen.nodes.iter().find_map(|node| {
+            let Some(LowValue::Array(array)) =
+                node.value.as_ref().and_then(|value| value.as_enum())
+            else {
+                return None;
+            };
+            // SAFETY: the value is a payload of a node of a registered static module, whose
+            // arena outlives this read.
+            let items = unsafe { array.items() };
+            if items.len() < 3 {
+                return None;
+            }
+            let table = match module.node_value(items[0].node)?.as_enum()? {
+                LowValue::Table(table) => table,
+                _ => return None,
+            };
+            let named = [BUF_NATIVE_FIELD, BUF_ELEMENT_FIELD, "length"]
+                .iter()
+                .all(|name| module.name_table_index(table, name).is_some());
+            if !named || module.node_value(items[1].node)?.type_id().is_none() {
+                return None;
+            }
+            Some((items[0].node, items[1].node))
+        })
+    });
+    *LEARNED.get_or_init(|| found)
+}
+
 fn buf_value<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -4350,25 +4397,29 @@ where
         Some(<P::Value as From<TypeValue>>::from(element_type(class))),
     );
     let (names, id) = match header {
-        Some((names, id)) => (
-            module.as_dynamic(names, block),
-            module.as_dynamic(id, block),
-        ),
-        None => (
-            struct_names_node::<P>(module, block, &[BUF_NATIVE_FIELD, "type", "length"]),
-            module.add_node(
-                block,
-                None,
-                Some(<P::Value as ValueType>::type_id_value(BUF_NOMINAL_ID)),
+        Some((names, id)) => (names, id),
+        None => match buf_identity(module) {
+            Some(identity) => identity,
+            None => (
+                AnyNodeId::Dynamic(struct_names_node::<P>(
+                    module,
+                    block,
+                    &[BUF_NATIVE_FIELD, "type", "length"],
+                )),
+                AnyNodeId::Dynamic(module.add_node(
+                    block,
+                    None,
+                    Some(<P::Value as ValueType>::type_id_value(BUF_NOMINAL_ID)),
+                )),
             ),
-        ),
+        },
     };
     let native = element_slot(module, block, dyn_node(payload).ok()?)?;
     let element = element_slot(module, block, element)?;
     let length = element_slot(module, block, length)?;
     let items = [
-        ArrayItem::new(AnyNodeId::Dynamic(names)),
-        ArrayItem::new(AnyNodeId::Dynamic(id)),
+        ArrayItem::new(names),
+        ArrayItem::new(id),
         ArrayItem::new(AnyNodeId::Dynamic(native)),
         ArrayItem::new(AnyNodeId::Dynamic(element)),
         ArrayItem::new(AnyNodeId::Dynamic(length)),
