@@ -369,4 +369,14 @@ Deferring the whole-term unify for **every** undecided actual against an open te
 measured **75/165**: the value unify is load-bearing for the ordinary matches, so the fix
 for `fan_out_merge` must be narrower than "a requirement never unifies".
 
+**`cooperative_product` has two layers, measured.** The first refusal is the checker's
+`check_unify(template_ty, struct_template())` for the **frozen** `compute.Mma` template:
+its type is the frozen `Struct` marker (a static module's node), and the unify against the
+checker's local marker reports "expected Struct, found …". Skipping that unify (measurement
+only) reveals the second layer: the `Mma` declaration pins `.a`'s `.length` to 16 while the
+test passes 512-element buffers, and the instantiation's value unify reports
+`expected Struct, found Struct` with `value_a: USize(16)`, `value_b: USize(512)`. So even
+after the frozen-marker unify, the test's program and the prelude's `Mma` declaration
+disagree about what `.length` means — a question the maintainer's ruling should settle.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
