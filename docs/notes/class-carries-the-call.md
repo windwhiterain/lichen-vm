@@ -529,8 +529,17 @@ do not* — makes them two types. That is a cross-module nominal-type identity q
 data fix. The maintainer's ruling: **static and dynamic ids must mirror** — a materialized
 frozen template's nominal id is the static module's id, so a frozen `Mma.c` and a locally built
 `Buf` are one type. The check has no static origin on an IR expression (`ExprState` carries
-none), so the mirror needs a mechanism, not a local patch; the two remaining pieces are the
-mirror itself and the graph run's declared result type.
+none), so the mirror needs a mechanism, not a local patch.
+
+**Where the ids collide, measured.** The value error's root is one node compared with itself
+(`root=(10884, 10884)`) holding `TypeId(0)` against `TypeId(99)`: two nominal-id cells were
+unified into one class by the field unify, so the conflict is a **class value conflict on the
+type id** — the frozen `Buf` declaration's id (0) meeting a locally minted occurrence id (99).
+`check_instantiate` already reuses the template's id for an instance (its `value_items` copies
+`nominal_node` from the template), so the local id is minted earlier: the occurrence whose
+struct value is *lowered locally* rather than materialized from the frozen body. The mirror
+therefore belongs where a frozen template's body is lowered for a local call, not in the
+unify's comparison.
 
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
