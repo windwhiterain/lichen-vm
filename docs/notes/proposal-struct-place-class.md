@@ -1,13 +1,11 @@
-# Proposal (v12): the wildcard branch transfers its requirements to its own fresh cell; the match decides per position; frozen artifacts carry the set
+# Proposal (v13): both wildcard branches transfer their requirements to their own fresh cells; the match decides per position; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v11 (`c7c61289`). v12 fixes
-> the transfer: the wildcard branch of `node_apply` returns **before** the walk's ordinary
-> `ctx.remap.insert`, so a generic "copy the set through the remap" cannot reach the fresh
-> cell. The branch itself now copies the wildcard class's requirements onto the fresh
-> cell's class, and it does **not** insert the node into the remap — each occurrence keeps
-> its own fresh cell, so occurrences are not deduplicated. No in-place replacement, no
-> invariant change. §2 and acceptance case 0c carry the change; the spec file is
-> untouched.
+> Status: **proposal — for review, not applied.** Supersedes v12 (`400ed52d`). v13 adds the
+> **static mirror** of the wildcard rule: `static_node_apply`'s `Any` branch
+> (`static_module/apply.rs`) also returns before `ctx.remap.insert`, so the static branch
+> itself copies the frozen wildcard class's requirements onto the fresh cell, with the
+> same occurrence independence. The frozen acceptance case and Step 4 of the plan name
+> that branch. No in-place replacement, no invariant change; the spec file is untouched.
 
 ## 1. The match rule (spec text, as v6)
 
@@ -35,7 +33,12 @@ A **closed** value child with an **open actual** registers the pending requireme
 >
 > - **Union.** A class union merges the members' requirement sets.
 > - **Clone.** A dynamic clone copies its template's set through the clone walk's remap;
->   a static clone copies it from the frozen artifact's set through the static remap.
+>   a static clone copies it from the frozen artifact's set through the static remap. A
+>   **wildcard** cell is the exception on both sides, because both wildcard branches return
+>   before their remap entry exists: each branch itself copies the wildcard class's
+>   requirements onto the fresh cell it allocates (the dynamic branch and its static mirror
+>   alike), and neither enters the node in the remap, so each occurrence keeps its own
+>   fresh cell.
 > - **Pre-write gate.** A concrete value becomes visible to a class only after every
 >   pending requirement of the class accepts it. A refusal leaves the value uninstalled.
 > - **The wildcard is not a candidate.** A value of `Any` is undecided, not an answer: a
@@ -216,7 +219,10 @@ the match does with the template's value; no symbolic change is needed.
 5. **Equal Refinement predicates**: the same predicate under a deferred actual is
    accepted by equality (`equality || subtype`, not subtype alone).
 6. **Frozen path**: an imported module's deferred requirement refuses a wrong bind after
-   load, showing the artifact carried the set.
+   load, showing the artifact carried the set; a frozen wildcard cell with a deferred
+   requirement reaches a concrete bind after static application — the static wildcard
+   branch transferred the requirement to the fresh cell, and the wrong bind is refused
+   there.
 7. **Type parameter / `@any : Int` / plrun codomain** as v5.
 
 ## 7. Rulings kept

@@ -70,7 +70,12 @@
 - `StaticModule.pending_requirements`; freeze maps the records with the edge remap; the
   container format writes them sorted by class root and bumps `ARTIFACT_FORMAT_VERSION`;
   load restores and rewrites the refs; the static clone walk copies them through its
-  remap. Acceptance case 6 (an imported deferred requirement refuses after load).
+  remap. **The static wildcard branch is named separately**: like the dynamic branch it
+  returns before `ctx.remap.insert`, so the branch itself copies the frozen wildcard
+  class's requirements onto the fresh cell, and the occurrence-independence behavior is
+  unchanged. Acceptance case 6 (an imported deferred requirement refuses after load, and a
+  frozen wildcard's deferred requirement reaches a concrete bind after static
+  application).
 - Measure: the imported-requirement tests, the static path's tests, and the language
   suite (the container format's round trip).
 
