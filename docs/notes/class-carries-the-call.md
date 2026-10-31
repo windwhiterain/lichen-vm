@@ -146,4 +146,14 @@ identity: which node the launch's declaration and the body's read share, and whe
 the read should resolve through the wrapper the launch assembled rather than the
 declaration it was cloned from.
 
+**The read's node is stable and carries a written answer (measured).** Across the
+wrapper variants (`r = k.O`, appending `r`) the decode finds the **same** node
+(`14506`) in every run: an `Index` whose target is undecided and whose own value is a
+five-slot `Buf` struct carrying the declaration's nominal id. A node with an operation
+**and** a decided struct value is a node an answer was **written** into — the class
+bind wrote the requirement into the read's node, above the undecided target. The
+wrapper's return value therefore cannot move it, and the separation's site is the
+write: the bind must write the call's actual into the read's node, or the read's node
+must not be the class's answer while its target is undecided.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
