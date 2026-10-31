@@ -467,6 +467,18 @@ built from that declaration's field list, `assemble_parameter`) is the route; th
 attempt crashed on a cyclic value walk and the safe version needs a `visited` set and the
 pairing itself, which is the next step.
 
+**The writer, named: the prelude's `plrun` binding.** `plrun := k = K => a = (k.I _) => …`
+unifies the runtime argument `a` with `(k.I _)`, and `k.I` is the **declared input group**
+(`In1`) substituted for the prelude's implicit parameter `I`. So the unify merges the
+argument's cells with the *declaration's* cells — the `In1` native is the cell measured as
+`1810` — and a later launch's buffer lands there. The pure-language shape is not expressible:
+`In := {.a @any : Int}; K := {.I In}; apply := (k = K) => (x = (k.I _) => x.a)` is refused
+("this field read cannot be checked: the container's type is not decided here"), because `k.I`
+is the compute package's implicit type parameter and not an ordinary value field. The next
+site is the checker's **implicit-parameter substitution**: substituting a declaration for `I`
+must instantiate its open cells per call (`instantiate_requirement_value`), which is the same
+rule the language already applies to a value template.
+
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
 already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
