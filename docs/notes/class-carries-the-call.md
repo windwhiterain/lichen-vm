@@ -437,6 +437,26 @@ placeholder binding writes there. The fix is the recording's read resolution (it
 per-recording cell in `field_sources`, recorded by `record_graph_parameter_sources`) or a
 copy-before-write in `record_launch` — not a change to the clone's sharing rule.
 
+**The writer is the launch, not the recording, measured.** A value journal over the
+recording's apply (every write to a node the window did not create, restored on every exit,
+`Module::begin_value_journal`/`rollback_value_journal`) left the five tests' answers
+**unchanged**: the Buffer reaches the shared cell from the **direct launch's** apply
+(`out := plrun shape (Arg3{…})`), which runs between the first recording and the second in the
+definition pass. So a journal scoped to the recording cannot help; the write is the ordinary
+call's parameter binding.
+
+**And the clone walk shares value-less cells.** The apply's `wildcard` branch freshens only a
+cell whose value is `LowValue::Any`; a template cell that holds **no value** falls through and
+the outside-the-scope return shares it. Broadening `wildcard` to
+`value.is_none() && operation.is_none()` was measured **worse**: 225/15.
+
+**A compute-free example does not reproduce it.** `T := {.a @any : Int}; f := x = T => x.a;
+(f (T{.a 1}), f (T{.a 2}))` answers `(1, 2)`; the nested-template shape
+`step := (s = P) => Arg{.n s.n, .I In{.d s.in.d}}` applied to two instances answers
+`((1, (2,)), (3, (4,)))`; and a placeholder argument followed by a concrete one answers
+`((none, (none,)), (3, (4,)))`. Repeated applies are correct at the language level, so the
+defect is the compute layer's binding of a **runtime buffer** into a shared template cell.
+
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
 already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
