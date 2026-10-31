@@ -6526,6 +6526,69 @@ where
 /// # Invariant
 /// A decided payload is returned directly. Only an empty or wildcard payload follows a source,
 /// either from the payload itself or from its `Buf` wrapper, with at most eight links.
+/// The recording's own cell for a dispatch argument, walked from the argument's read chain.
+///
+/// # Invariant
+/// A read whose **container** is linked to a recording cell resolves at that cell, and a
+/// value-half read resolves at the container's own cell, so a declaration's shared slot —
+/// which another evaluation may have answered — is never the argument's payload
+/// (`docs/notes/class-carries-the-call.md`).
+fn recorded_input_node<P>(module: &Module<P>, cfg: NodeId, path: &[usize]) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut node = value_at_path::<P>(module, cfg, path)?;
+    for _ in 0..8 {
+        let Some(dynamic) = node.dynamic() else {
+            break;
+        };
+        let Some(operation) = module.node_operation(dynamic) else {
+            break;
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            break;
+        }
+        let Some(operand) = operation.operand else {
+            break;
+        };
+        let Ok(operands) = module.operand_expr(operand, "Index") else {
+            break;
+        };
+        let (Some(container), Some(step)) = (
+            operands.first(),
+            operands.get(1).and_then(|step| module.usize_value(*step)),
+        ) else {
+            break;
+        };
+        let Some(source) = field_source_of(module, *container) else {
+            break;
+        };
+        // A **value-half** read is the container's own recording cell, not a field of it.
+        if step == shape::EXPR_VALUE_SLOT {
+            node = AnyNodeId::Dynamic(source);
+            continue;
+        }
+        let base = if is_struct_value(module, AnyNodeId::Dynamic(source)) {
+            shape::STRUCT_VALUE_FIELD_BASE
+        } else {
+            0
+        };
+        let Some(at) = step.checked_sub(base) else {
+            break;
+        };
+        let Some(cell) = value_at_path::<P>(module, source, &[at]) else {
+            break;
+        };
+        node = cell;
+    }
+    Some(node)
+}
+
 fn recorded_buffer_payload<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -6862,7 +6925,8 @@ where
     for (position, path) in roles.inputs.iter().enumerate() {
         // An input path names the `Buf` the caller passes; the placeholder rides in
         // its payload.
-        let found = value_at_path::<P>(module, cfg, path);
+        let found = recorded_input_node::<P>(module, cfg, path)
+            .or_else(|| value_at_path::<P>(module, cfg, path));
         let Some(node) =
             found.and_then(|buffer| recorded_buffer_payload::<P>(module, block, buffer))
         else {

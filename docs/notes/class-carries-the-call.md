@@ -489,6 +489,15 @@ declaration's instantiation (the `I`-style type function, which changes the surf
 recording's argument resolution (take the placeholder at the argument's path and validate by
 provenance rather than by class, which is the next measurement).
 
+**The provenance resolution is in** (`recorded_input_node`): a marked read's chain is walked
+from the cfg, and each step whose **container** is linked to a recording cell resolves at that
+cell — a value-half read (`Index(container, 0)`, the mark's lazy value) resolves at the
+container's own cell, a field read resolves at the same field of it. Measured: the graph
+refusals disappear from the five tests; they now fail one step later, at the **runtime unify**
+of the polluted declaration slot against the new placeholder (`expected Struct, found Struct`,
+`Buffer` vs `GraphInput(3)`), and the suite stays 227/13. Next: clear the stale answer from the
+declaration slot the recording is about to bind.
+
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
 already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
