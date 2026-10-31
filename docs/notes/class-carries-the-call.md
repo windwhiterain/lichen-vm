@@ -319,4 +319,17 @@ struct and buffer value contains a type-level field whose tree has an open cell,
 bake was disabled for ordinary reads. The read's bake cannot be gated on openness alone; it
 needs a narrower marker of "this container is a requirement, not a thing".
 
+**The requirement mark makes the chain family green (measured).** A match of an undecided
+place against a template now marks the place's value node
+(`Module::requirement_nodes`; the checker sets it in `check_unify_expr` when
+`requirement_is_open` holds for the expected side), and `value_slot_read` keeps a marked
+container's read **lazy** — the value stays an `Index`, while the declared type is still
+the read's — so the runtime answer is what the read answers. The clone walk copies the
+mark. Measured: the four `chain_merge` tests and two `runtime_scalar_leaf` tests flip
+green, and four tests regress (`compile_order_class` two, `fuse_licence`'s elementwise
+merge, `graph_runtime_scalar`'s second scalar), a net 216/24 → **218/22**. The
+regressions are all device-compile/answer tests: their dispatch path needs the baked
+read's check-time shape, so the mark must be narrowed (or the read must keep both a
+check-time shape and a lazy value) before the device tests can pass.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).

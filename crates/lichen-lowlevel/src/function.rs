@@ -933,6 +933,10 @@ impl<P: Program> Module<P> {
             self.record_clone_parameter(clone, ctx.parameter, parameter_image);
         }
         ctx.remap.insert(node, clone);
+        // A requirement's mark travels with its clone.
+        if self.requirement_nodes.contains(&node) {
+            self.requirement_nodes.insert(clone);
+        }
         if let Some(keys) = ctx.minted_keys.as_deref_mut() {
             keys.push(node);
         }

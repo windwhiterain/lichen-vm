@@ -247,6 +247,9 @@ where
         // Constrain a function's signature, preserving its body; other templates
         // constrain the whole value layout.
         let actual_value = self.value_of(actual);
+        let actual_value_is_decided = self.actual_value_is_decided(actual_value);
+        let expected_states_requirement =
+            self.expected_states_requirement(expected_term, expected_ty);
         self.record_template_field_sources(expected, actual, actual_value);
         // A template against an undecided actual: the template is the cell's
         // **requirement** — a link, never a write.
@@ -270,6 +273,11 @@ where
         }
 
         self.compute_operands(actual_term, expected_term);
+        // A requirement matched into an undecided place: a read of it stays lazy
+        // (`docs/notes/class-carries-the-call.md`).
+        if !actual_value_is_decided && expected_states_requirement {
+            self.module.requirement_nodes.insert(actual_value);
+        }
         // A known function is unified through its expr, so the constraint
         // compares two signatures.
         let found = if self.is_function_type(expected_ty)
@@ -297,6 +305,17 @@ where
     /// Whether an expression's value is already decided.
     pub(super) fn actual_value_is_decided(&self, value: NodeId) -> bool {
         self.module.node_value(AnyNodeId::Dynamic(value)).is_some()
+    }
+
+    /// Whether the expected side states a requirement: a template whose open slot the
+    /// actual fills.
+    ///
+    /// # Invariant
+    /// The predicate is [`Self::requirement_is_open`]'s, not raw openness: an ordinary
+    /// type-level field is a value, and only a template's open slot makes a requirement.
+    fn expected_states_requirement(&mut self, expected: NodeId, expected_ty: NodeId) -> bool {
+        let value = self.module.expr_value_half(expected).unwrap_or(expected);
+        self.requirement_is_open(value, expected_ty, 0)
     }
 
     /// The nearest binding of a parameter, with its term replaced.

@@ -69,6 +69,7 @@ impl<P: Program> Module<P> {
             applied_exprs: HashMap::new(),
             apply_result_owners: HashMap::new(),
             field_sources: HashMap::new(),
+            requirement_nodes: HashSet::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),
             clone_parameters: HashMap::new(),

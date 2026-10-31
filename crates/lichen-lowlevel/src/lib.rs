@@ -1052,6 +1052,13 @@ pub struct Module<P: Program> {
     /// Keys and values are exact value nodes, never equality-class roots; this directed link
     /// records provenance without unifying the required and supplied fields.
     pub field_sources: HashMap<NodeId, NodeId>,
+    /// The nodes whose value is a **template's requirement**, not a thing's answer.
+    ///
+    /// # Invariant
+    /// A read of one stays lazy: the answer replaces the requirement, so a baked field
+    /// would read the declaration. The match's write sets the mark, a clone copies it,
+    /// and an answer clears it (`docs/notes/class-carries-the-call.md`).
+    pub requirement_nodes: HashSet<NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
