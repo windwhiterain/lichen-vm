@@ -1,6 +1,6 @@
-# Implementation plan for the template-match proposal (v7)
+# Implementation plan for the template-match proposal (v13)
 
-> Status: plan for [proposal-struct-place-class](proposal-struct-place-class.md) v7. It is
+> Status: plan for [proposal-struct-place-class](proposal-struct-place-class.md) v13. It is
 > an implementation order, not a spec text; the proposal stays the reviewed artefact. The
 > steps are cut so each one is measurable on its own and the tree stays green (or keeps
 > its current count) between them.
@@ -48,9 +48,11 @@
   for a deep-closed actual; every open position registers its records and stays open.
 - The same registration for the parameter templates the apply matches (`check_app`'s
   template path), so the runtime patterns carry their records.
-- Measure: this is the first enforcing step, so the 22 tests and the acceptance cases are
-  read here, not in a later step. A regression is fixed in the registration (which
-  positions are registered), never by turning the gate off.
+- Measure: this is the first enforcing step, so the **22 tests** are read here. The
+  **acceptance cases 1–3** wait for Step 3's dynamic clone copy — they need the records on
+  the clone — while case 0 (the checker's initial unify) and 0b/0c (the partially-open
+  group and the wildcard) are readable here. A regression is fixed in the registration
+  (which positions are registered), never by turning the gate off.
 
 ## Step 3 — enforce at the gate
 
