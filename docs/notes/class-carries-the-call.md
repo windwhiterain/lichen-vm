@@ -214,12 +214,28 @@ Float, .length 4}))}; x := _; x = OutR; x.r` prints `(raw none, Float, 4): Struc
 declaration. `plrun`'s `r = k.O` is the same unify with the codomain in place of `OutR`,
 which is why the chain family reads the declaration.
 
-The type-valued form is **not** a discriminating repro, however: under the proposal the
-field's value child `Int` is a closed **pin** on the type value `Int` (bare `I` stores a
-type value, `value-templates.md`), the read is the actual's undecided value of type
-`Type`, and an undecided `Type`-typed value renders `raw none: Type` — the same text the
-declaration read renders today. The smallest *discriminating* case is the pinned scalar:
-`(_ = {.r 5 : Int}).r` answers `5: Int` today (the pin installed as the value) and
-`none: Int` under the proposal (the pin deferred, the read the actual's undecided value).
+**The maintainer's ruling overrules the "pin is check-only" reading.** A template's
+determined content is a **requirement the unified object must agree with, and it is the
+answer** while the object is undecided: `(_ = {.r 5 : Int}).r` reads `5: Int` and that is
+correct. `@any` is the spelling for "no requirement". So the defect is **not** that the
+determined value is installed — installing it is the semantics — and the proposal's
+"closed value is a pin only / the template is never a place's value" premise is
+superseded.
+
+What still holds is the **open** part: a template's open cell (e.g. `@any`, a buffer's
+native) must be filled by the actual, and the read must answer the filled value. Measured
+on the same template:
+
+```lichen
+t := {.r @any : Int}
+x := _; x = t
+y := t{.r 7}; x = y
+x.r
+```
+
+answers `7: Int` — the actual joins the declaration's class and the open cell fills. So
+the minimal open-cell path already works; the chain family's defect is that its recorded
+value **never performs that join**, and the read therefore answers the declaration's open
+cell. The fix's locus is the join, not a gate that refuses the install.
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
