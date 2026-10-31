@@ -234,6 +234,8 @@ where
 {
     value
         .and_then(|value| printer.diagnostic_value(value))
+        // An attribute side is a **slot**: its element 0 is the number compared.
+        .or_else(|| printer.attribute_half(node))
         .unwrap_or_else(|| printer.node(node))
 }
 

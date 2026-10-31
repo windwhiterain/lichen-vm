@@ -39,24 +39,38 @@ fn show(label: &str, source: &str) {
     print(label, &report);
 }
 
+/// The head `perspective_requirements` builds: a three-element buffer from a kernel.
+fn head() -> String {
+    r#"
+---
+  order = "30"
+  compute = import "compute.lichen"
+---
+Out := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Int, .length c.n})
+  ((Out){.b (compute.write ((compute.Write _){.to d, .at i, .value (i + 1)}))})
+}
+filler := compute.parallel fill "cpu" Out
+b := (compute.plrun filler ((Fill){.n 3}) : Struct)
+"#
+    .to_string()
+}
+
 #[test]
-fn probe_the_statement_return_certificate() {
+fn probe_the_body_requirement() {
     let _ = std::panic::catch_unwind(|| {
         show(
-            "annotated return",
-            "g := x => (x # 32)\n(g 0) # 64\n",
-        );
-        show(
-            "statement return",
-            "g := x => {r := x; r = (r # 32)}\n(g 0) # 64\n",
-        );
-        show(
-            "statement return admitted",
-            "g := x => {r := x; r = (r # 32)}\n(g 0) # 32\n",
-        );
-        show(
-            "statement return narrow",
-            "g := x => {r := x; r = (r # 32)}\n(g 0) # 1\n",
+            "body requirement",
+            &format!(
+                "{}
+use := (x = (compute.Buf (compute.BufParam{{.type Int, .length 3}}))) => compute.read ((compute.Read _){{.from x, .at 1}})
+use (b.b # 1)
+",
+                head()
+            ),
         );
     });
 }

@@ -134,6 +134,22 @@ where
             .unwrap_or_else(|| "?".to_string())
     }
 
+    /// The spelling of an **attribute slot's** value half, when `value` is a slot.
+    ///
+    /// # Invariant
+    /// An attribute's side is a `[value, type]` slot, so the number a refinement
+    /// compares is element 0; spelling the slot itself would name the pair.
+    pub fn attribute_half(&mut self, node: NodeId) -> Option<String> {
+        let value = self.module.class_value(node)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        // SAFETY: `array` is the payload of a value read from a live node.
+        let first = unsafe { array.items() }.first()?.node;
+        let held = self.module.node_value(first)?;
+        self.diagnostic_value(held)
+    }
+
     /// Render a node-less mismatch value; arrays return `None` for node fallback.
     pub fn diagnostic_value(&mut self, value: P::Value) -> Option<String> {
         if let Some(structural) = value.as_enum() {

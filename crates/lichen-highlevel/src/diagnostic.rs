@@ -712,14 +712,30 @@ where
                 expr: edge.argument_expr,
                 path: path.into(),
             });
+            // An **attribute** position is a refinement's, so the reader states it
+            // as one: its sides are the requirement and the provided slot, the same
+            // order every other attribute mismatch is read in
+            // (`docs/notes/attributes.md` § "the acceptance table").
+            let (a, b, value_a, value_b) = match apply.attribute {
+                true => (apply.failing.1, apply.failing.0, err.value_b, err.value_a),
+                false => (
+                    apply.parameter_type,
+                    apply.argument_type,
+                    err.value_a,
+                    err.value_b,
+                ),
+            };
             return Diag {
                 budget: None,
                 loc,
-                kind: DiagKind::Runtime,
-                a: apply.parameter_type,
-                b: apply.argument_type,
-                value_a: err.value_a,
-                value_b: err.value_b,
+                kind: match apply.attribute {
+                    true => DiagKind::Attribute,
+                    false => DiagKind::Runtime,
+                },
+                a,
+                b,
+                value_a,
+                value_b,
                 assert_value: None,
                 assert_spelling: None,
                 index: None,

@@ -280,7 +280,7 @@ fn a_write_returns_the_input_buffer_perspective() {
 fn a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it() {
     let head = head();
     let source = format!(
-        "{head}\nuse := (x : (compute.Buf (compute.BufParam{{.type Int, .length 3}}))) => compute.read ((compute.Read _){{.from x, .at 1}})\nuse (b.b # 1)\n"
+        "{head}\nuse := (x = (compute.Buf (compute.BufParam{{.type Int, .length 3}}))) => compute.read ((compute.Read _){{.from x, .at 1}})\nuse (b.b # 1)\n"
     );
     let report = compile(&source);
     assert!(
