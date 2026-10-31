@@ -295,4 +295,14 @@ read, the dispatch's argument loses its buffer shape — the `In{.d s.in.d}` ins
 `.d` leaf is seen as something else at the place walk. That is the next site, and it is
 upstream of the decode the proposal targeted.
 
+**The chain's refused input, measured.** At the build, the failing input is the second
+dispatch's `.p` (path `[1, 1]`): the node is the assembled `Buf` (`14506`), and
+`buf_payload` answers its native **element slot** (`8505`, an `Array`), whose value item is
+the payload the recording placed — an open slot, so `recorded_buffer_payload` cannot reach
+a decided `ComputeValue` and refuses "argument 1 of this dispatch is not a buffer". Reading
+the slot's decided value item first was measured **inert** (216/24 unchanged), so the
+payload is not merely behind the slot's item; the item itself is open at this point. The
+next measurement is where that item's value is written: the payload the recording placed
+for the first dispatch's output.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
