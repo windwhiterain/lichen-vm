@@ -277,12 +277,15 @@ Measured after cleanup:
 - both kernel rendering tests pass: an opaque type no longer hides a decided
   native value behind a class variable, and their expectations now follow the
   constructor-signature model rather than the retired direct-`Int` wrapper;
-- `jit_inline_lichen_function` and `jit_inline_nested_function` pass: a cloned
-  scalar literal can still hold an expr-shaped value, so `scalar_literal` now
-  checks up to eight clone origins after its value-first read. The follow-up
-  also kept direct arithmetic, closure constants, cross-kernel calls, tuple
-  codomains, and the two scalar-class conversion cases green. No unification or
-  replay rule changed.
+- `jit_inline_lichen_function` and `jit_inline_nested_function` passed at that
+  slice: a cloned scalar literal can still hold an expr-shaped value, so
+  `scalar_literal` now checks up to eight clone origins after its value-first
+  read. The follow-up also kept direct arithmetic, closure constants, cross-kernel
+  calls, tuple codomains, and the two scalar-class conversion cases green. No
+  unification or replay rule changed. **Later:** the class-inside clone fix refused
+  `jit_inline_nested_function`'s nested inline reduction (its index target is a
+  computation); [apply-clone-ownership](apply-clone-ownership.md) records that
+  regression as accepted rather than hidden, and the test is still red.
 - `jit_cross_kernel_subexpr` passes: routed arithmetic now uses
   `operand_nodes_of`, whose existing contract preserves an Apply slot, so an
   unevaluated `k0(x)` result lowers as `CallKernel` instead of its empty result

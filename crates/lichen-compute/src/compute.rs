@@ -1897,11 +1897,7 @@ where
                         }
                     };
                     // Each element becomes a fresh scalar node in a real array value,
-                    // of the buffer's own class.
-                    let element_class = match results {
-                        ScalarData::Int(_) => ScalarClass::Int,
-                        ScalarData::Float(_) => ScalarClass::Float,
-                    };
+                    // typed by the buffer's declaration below.
                     let elements: Vec<ArrayItem> = match results {
                         ScalarData::Int(values) => values
                             .into_iter()
