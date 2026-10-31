@@ -76,14 +76,23 @@ binding of a package script is a runtime slot, so a body's reference to it has
 no check-time value, and `instantiate_requirement_value` then freshens the
 expression it sees.
 
-**Next measurement.** `Module::static_read` of the frozen node behind a
-package-side reference (the local index of 117's source) tells whether the
-freeze's eager statement evaluation decided it (it should: `warp := 32`'s term
-is evaluated at freeze) — if it did, the loss is in materialising the frozen
-cell into the program's module; if it did not, the package's definition pass
-needs to fill the binding cells before the freeze. Both are narrow, and both
-are read from `register_embedded`'s eager block
-(`crates/lichen-language/src/package.rs`).
+**Measured (round 25): the frozen cell is undecided and has no operation.**
+Inside the frozen `compute` module (`ModuleKey(1)`), node 117 — the cell behind
+the package-side reference — holds `None` and `operation = false`, while the
+literal node 165 holds `USize(32)`. So the freeze's eager statement evaluation
+decided the *literal*, not the **capture cell**: a body's reference to a
+top-level binding is a capture a *call* binds, and no call runs during the
+freeze. That is the semantic shape of the blocker, not a lost value.
+
+**Proposed fix direction (needs a ruling).** Materialise a package function's
+**top-level captures** at freeze: when a frozen function's body references a
+top-level binding, write the statement's decided value into the capture cell
+before freezing, so the frozen body states what it captured. The machinery
+exists in part — `StaticFunction::open_captures` is computed at freeze
+(`StaticModule::fill_open_captures`), and the checker knows which binding each
+capture names — so the change is to carry that link into the module rather than
+to re-derive it. It is a semantic addition (a frozen body's captured constant
+becomes part of the artifact) and should be ruled on before implementing.
 
 ### 2 and 3. `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`
 
