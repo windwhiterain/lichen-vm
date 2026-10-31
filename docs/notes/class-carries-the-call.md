@@ -379,6 +379,17 @@ test passes 512-element buffers, and the instantiation's value unify reports
 after the frozen-marker unify, the test's program and the prelude's `Mma` declaration
 disagree about what `.length` means — a question the maintainer's ruling should settle.
 
+**`float_leaf`'s scale program has a placeholder leak, measured.** After a graph recording of
+`scale`, the program launches `scale` directly with a real buffer, and that launch meets
+`expected Struct, found Struct` with `value_a: ComputeValue(Buffer(..))` against
+`value_b: ComputeValue(GraphInput(3))`: the recording's placeholder is compared with the
+graph's own input, so a placeholder from the recording reached the *shared* kernel
+parameter that the direct launch reads. The graph's own dispatches are refused first
+("argument 0 of this dispatch is a buffer and was not read from this function's parameter"),
+so the recording links `s.in.a` to the declaration rather than the placeholder. Neither
+`assemble_parameter` (it builds a new struct) nor `field_sources` (a map) mutates the
+declaration, so the next probe is the read's source in the recording (`s.in.a`).
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
