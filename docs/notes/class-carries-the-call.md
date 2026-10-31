@@ -286,4 +286,13 @@ highlevel suites stay green. The chain family is **not** moved by it, so its ans
 arrives through a node the rule does not reach — the recorder's decode path is the next
 site.
 
+**The chain family's current refusal is a check-time dispatch diagnostic, not a decode
+result.** Measured on `chain_merge::the_merged_chain_answers_the_un_passed_program_and_a_moved_bias_moves_it`:
+the build reports "compute.graph: argument 1 of this dispatch is not a buffer" (span
+39:9, stage `Check`) at the body's `first := compute.plrun total ((Arg){.n s.n, .I
+In{.d s.in.d}})`, and the second diagnostic is its consequence. So before any answer is
+read, the dispatch's argument loses its buffer shape — the `In{.d s.in.d}` instance's
+`.d` leaf is seen as something else at the place walk. That is the next site, and it is
+upstream of the decode the proposal targeted.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
