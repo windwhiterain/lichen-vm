@@ -126,4 +126,13 @@ recording's environment inside the definition pass — not a separate run-time p
 is why every attempt to fix the read at run time was inert: the read was answered
 before the run.
 
+**Measured after the definition-pass reading.** Two more attempts left the suite at
+215/25: following the `field_sources` link in the VM's read (30/210, reverted), and
+transferring the link across the clone walk so every remapped template with a source
+gives its clone the mapped link (inert — the decode still finds the declaration). The
+remaining hypothesis is the wrapper's own body: `r = k.O` is a **unify**, and a unify
+writes an answer into the operand's node, so `r`'s node carries the codomain value and
+appending `r` to the wrapper returns the type. The next measurement prints the
+binding's node value at the decode with and without that unify.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
