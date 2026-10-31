@@ -53,4 +53,21 @@ The two measurements above are the boundary: the fact is real (the member's clas
 copying it is not enough either (the call's own value differs), so the missing piece is not a wider or
 narrower criterion but a place to keep the fact apart from the class.
 
+**The maintainer's ruling (this round): implement the separation, do not weaken the
+tests.** Measured before the ruling: 23 of the remaining 25 compute failures share
+one root — a declared cell (the codomain/argument struct's field requirement, e.g.
+`OutR.r`, a decided Buf type expression) never receives the recording's runtime
+result: a read through the codomain resolves to the template's wrapper with an open
+payload, a kernel config field declared `@any : Int` has no value in the compiled
+template, and a parameter buffer reads as closed over. The tests encode the
+language's surface (a `compute.plrun` result's codomain fields are buffers), so the
+work is the separation below, not a test rewrite.
+
+The separation's shape, as the measurements bound it: the **fact** a template states
+(a field's type/requirement) and the **cells** a call fills must be stored apart — a
+per-recording registry from a declared cell to the value the call recorded, consulted
+where a read walks the declaration, instead of a class merge that carries both. The
+kernel template's open cells are the same gap on the compile side: a field declared
+`@any` is a cell an apply fills, not a node the compile should demand.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
