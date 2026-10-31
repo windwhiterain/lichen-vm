@@ -276,4 +276,14 @@ declaration instead (the decode finds the declared `Buf`, `raw none` native), so
 dispatch's result is resolving to the template rather than to the recorded instance. The
 fix's locus is that result value, and the measurement is the chain tests' answers.
 
+**The answer-over-requirement rule (implemented, measured).** `write_node_answer` now
+lets a slot **holding a template's requirement — a value with an open cell — take the
+answer**, while a slot holding a decided value is still left alone (`equality.rs`). A
+requirement is not the thing's value, so a read of the thing answers what ran. Measured:
+compute 215/25 → **216/24**, the flip being `compute::jit_inline_nested_function`, the
+accepted regression recorded in `apply-clone-ownership.md`; the language, engine and
+highlevel suites stay green. The chain family is **not** moved by it, so its answer
+arrives through a node the rule does not reach — the recorder's decode path is the next
+site.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).

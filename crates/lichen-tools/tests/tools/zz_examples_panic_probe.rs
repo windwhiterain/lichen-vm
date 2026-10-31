@@ -38,7 +38,11 @@ fn per_example_survey() {
                 let message = payload
                     .downcast_ref::<String>()
                     .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_string()))
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&str>()
+                            .map(|text| (*text).to_string())
+                    })
                     .unwrap_or_else(|| "<non-string panic>".into());
                 println!(
                     "PROBE: {name}: PANICKED {}",

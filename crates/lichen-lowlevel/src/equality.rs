@@ -351,10 +351,10 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// **Unify is the gate, and it is the only one.** An empty class takes the answer
-    /// whole. A class holding a value is unified with the answer: one value and the
-    /// answer is that class's own, so it fills this node's hole; a disagreement is
-    /// recorded and nothing is written. A slot that holds a value is left alone either
-    /// way, so an answer never overwrites one.
+    /// whole; a class holding a value is unified with it, and agreement makes the answer
+    /// its own. A slot holding a decided value is left alone; a slot holding a template's
+    /// requirement (a value with an open cell) takes the answer: a requirement is not the
+    /// thing's value.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
@@ -372,9 +372,53 @@ impl<P: Program> Module<P> {
         );
         self.unify_any_path = any_path;
         if agrees {
-            self.write_node_value_if_absent(node, Some(value));
+            // A requirement gives way to the thing's answer; a decided value never does.
+            if held.is_some_and(|held| self.value_holds_open_cell(held, 0)) {
+                self.set_node_value(node, Some(value));
+            } else {
+                self.write_node_value_if_absent(node, Some(value));
+            }
         }
         self.stamp_node_ran(node);
+    }
+
+    /// Whether `value` holds an open cell anywhere in its tree.
+    ///
+    /// # Invariant
+    /// An open cell is a node with no value or with `Any` — the wildcard a template's
+    /// field states, which the SPEC calls undecided. It is what distinguishes a template's
+    /// requirement from a thing's answer.
+    fn value_holds_open_cell(&self, value: P::Value, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return false;
+        };
+        // SAFETY: `array` is `value`'s payload, which the caller keeps reachable.
+        for item in unsafe { array.items() } {
+            let held = match item.node {
+                AnyNodeId::Dynamic(node) => self.nodes.get(node).and_then(|node| node.value),
+                AnyNodeId::Static(sref) => self
+                    .static_module(sref.module)
+                    .nodes
+                    .get(sref.index.index)
+                    .and_then(|node| node.value),
+            };
+            match held {
+                None => return true,
+                Some(held) => match held.as_enum() {
+                    Some(LowValue::Any) => return true,
+                    Some(LowValue::Array(_)) => {
+                        if self.value_holds_open_cell(held, depth + 1) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                },
+            }
+        }
+        false
     }
 
     /// Give a concrete `value` to **every** member of `representative`'s class.
