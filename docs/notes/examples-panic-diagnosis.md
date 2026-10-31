@@ -230,7 +230,9 @@ reverted and are **not** part of this note's branch.
 ## Current measurement (round 24): the panic has changed shape
 
 > **A later reading, after the requirement mark.** The survey's counts have moved: **8
-> panicked, 6 drifted, 34 clean, 1 skipped**. The panics are the same answer-collision
+> panicked, 4 drifted, 36 clean, 1 skipped** (the leaf-resolution fix restored `gemv` and
+> `matmul`; `topk` still drifts, and the three named below are unchanged). The reading just
+> below this note's original one recorded 6 drifted before that fix. The panics are the same answer-collision
 > family (`filter`, `lazy_infinite`, `mathlib`, `pooling`, `silu`, `stencil`, `torus`,
 > `worldgen`). The drifts are the three named below **plus** `gemv`, `matmul` and `topk`,
 > whose declared arrays differ from what the program prints. Measured cause: disabling the
