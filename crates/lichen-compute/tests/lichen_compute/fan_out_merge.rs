@@ -109,14 +109,14 @@ filler := compute.parallel fill "cpu" Data
 /// The diamond as a program that runs its recording and answers it.
 ///
 /// # Invariant
-/// The run's answer is the array of the graph's returns in the recording's own order, so ordinal
+/// The run's answer is the tuple of the graph's returns in the recording's own order, so ordinal
 /// `k` names the `k`-th return: each is collected on its own, which is what makes the second one
 /// an observation rather than an inference.
 fn running() -> String {
     format!(
         "{head}\n{fill}count :=  ({count})\ndata := (compute.plrun filler ((Fill){{.n count}}) : Struct)\n\
-         r := (compute.graphrun built (count, data.d) : Array)\n\
-         (compute.collect (r[0]), compute.collect (r[1]))\n",
+         r := (compute.graphrun built (count, data.d) : Tuple)\n\
+         (compute.collect (r(0)), compute.collect (r(1)))\n",
         head = recording(),
         fill = filled(),
         count = COUNT,

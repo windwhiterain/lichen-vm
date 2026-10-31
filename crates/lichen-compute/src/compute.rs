@@ -7920,30 +7920,34 @@ where
     };
     let produced = values;
     let buffer_declaration = graph::buffer_declaration(id);
-    let result_node = |module: &mut Module<P>, result: &RunResult| -> Option<NodeId> {
-        let (value, buffer) = match result {
+    let result_node = |module: &mut Module<P>, result: &RunResult| -> Option<(NodeId, NodeId)> {
+        let (value, buffer, marker_kind) = match result {
             RunResult::Buffer { class, data } => (
                 <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
                     module.alloc_payload(data, block),
                     *class,
                 )),
                 Some(*class),
+                TypeValue::TypeStruct,
             ),
             RunResult::Resident(resident) => (
                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident)),
                 Some(resident.class),
+                TypeValue::TypeStruct,
             ),
             RunResult::Count(count) => (
                 <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
                 None,
+                TypeValue::TypeInt,
             ),
             RunResult::Float(number) => (
                 <P::Value as From<LowValue>>::from(LowValue::Float(*number)),
                 None,
+                TypeValue::TypeFloat,
             ),
         };
         let node = module.add_node(block, None, Some(value));
-        match buffer {
+        let node = match buffer {
             Some(class) => current_buf_value_with_header::<P>(
                 module,
                 block,
@@ -7952,12 +7956,48 @@ where
                 buffer_declaration,
             ),
             None => Some(node),
-        }
+        }?;
+        let marker = module.add_node(
+            block,
+            None,
+            Some(<P::Value as From<TypeValue>>::from(marker_kind)),
+        );
+        let universe = module.add_node(
+            block,
+            None,
+            Some(<P::Value as From<TypeValue>>::from(TypeValue::TypeType)),
+        );
+        let r#type = if matches!(marker_kind, TypeValue::TypeStruct) {
+            let r#type = module.add_node(block, None, None);
+            let items = [
+                ArrayItem::new(AnyNodeId::Dynamic(marker)),
+                ArrayItem::new(AnyNodeId::Dynamic(r#type)),
+            ];
+            let handle = module.alloc_array(&items, block);
+            module.write_node_value(
+                r#type,
+                Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                    handle.into(),
+                ))),
+            );
+            r#type
+        } else {
+            array_node::<P>(
+                module,
+                block,
+                &[
+                    ArrayItem::new(AnyNodeId::Dynamic(marker)),
+                    ArrayItem::new(AnyNodeId::Dynamic(universe)),
+                ],
+            )
+        };
+        module.record_element_type(node, AnyNodeId::Dynamic(r#type));
+        Some((node, r#type))
     };
     // Left where they are: a device result stays resident until the language asks
     // for host data.
     let value = if produced.len() == 1 {
-        let node = result_node(module, &produced[0])?;
+        let (node, _) = result_node(module, &produced[0])?;
         module.node_value(AnyNodeId::Dynamic(node))?
     } else {
         // **Every compound element is a complete slot**
@@ -7966,8 +8006,7 @@ where
         let items: Vec<ArrayItem> = produced
             .iter()
             .map(|result| {
-                let value = result_node(module, result)?;
-                let r#type = module.add_node(block, None, Some(width));
+                let (value, r#type) = result_node(module, result)?;
                 let slot: Vec<ArrayItem> = std::iter::once(value)
                     .chain(std::iter::once(r#type))
                     .chain(std::iter::repeat_n(

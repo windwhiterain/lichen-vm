@@ -184,7 +184,7 @@ panics, so it is latent and deserves its own round.
 - `8684d33c` — an attribute's value may live at its class.
 - `4d46b595` — an annotation's term may hold an undecided value half.
 
-## Round 27: one fixed, five left
+## Round 27: two fixed, four left
 
 `68085942` fixes `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name`.
 The old "deep pass does not visit `$call`" reading is not the mechanism. The
@@ -205,13 +205,13 @@ The other current findings:
   `1.5` to `@any : Int`. The SPEC's annotation rule unifies the type, and the same
   test file also pins the class refusal. Do not admit Float there to make the test
   green; the program needs a maintainer-approved correction.
-- `fan_out_merge::under_a_pack…` still needs a **compute-library typing ruling**,
-  not a new language rule. `run_graph` returns the multiple results as a positional
-  compound of complete slots, but `$graphrun`'s checker-owned fresh type cell is
-  not connected to the graph's codomain. The SPEC distinguishes Tuple from Array
-  but does not choose the compute library's public result contract. The choices
-  are to type that result explicitly (and say which one it is) or to correct the
-  test's `: Array` expectation after the maintainer chooses Tuple.
+- `fan_out_merge::under_a_pack…` is fixed after the maintainer chose **Tuple** for
+  graph's multiple returns. The test now uses both `: Tuple` and the SPEC's tuple
+  access spelling, `r(0)`/`r(1)`; `r[0]` is an Array read by definition. Each
+  result's complete slot now carries its actual type, registered with
+  `record_element_type`: Struct for buffers, Int for counts and Float for floats.
+  Struct's type is self-referential, not `[TypeStruct, Type]`. The focused test and
+  the whole `fan_out_merge` module (**4 passed / 0 failed**) are green.
 - For the three perspective/cooperative failures, the SPEC's clone rule is that
   an out-of-scope undecided node is a **reference**. A measurement of an ordinary
   imported `c := 32; f := x => c` answers `32: Int`, so a blanket freeze-time
