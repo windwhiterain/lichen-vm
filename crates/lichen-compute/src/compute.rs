@@ -1438,6 +1438,9 @@ where
                     }
                 }
                 ComputeOperator::ParLaunch => {
+                    if std::env::var("DBG_PL").is_ok() {
+                        eprintln!("PLRUN eval recording={}", graph::is_recording());
+                    }
                     // A recording intercepts first: a recorded dispatch's arguments
                     // are placeholders, with no buffers or count to read.
                     if graph::is_recording() {
@@ -6721,6 +6724,9 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    if std::env::var("DBG_PL").is_ok() {
+        eprintln!("RECORD_LAUNCH entry");
+    }
     let refuse = |module: &mut Module<P>, reason: String| {
         graph::record_refusal(&reason);
         module.record_extension_diagnostic(ExtensionDiagnostic::failure(
@@ -6877,7 +6883,12 @@ where
     let placed = match graph::record_dispatch(
         fragment, backend, extent, &scalars, &inputs, origin, replay,
     ) {
-        Ok(placed) => placed,
+        Ok(placed) => {
+            if std::env::var("DBG_PL").is_ok() {
+                eprintln!("RECORD_DISPATCH ok {} placed", placed.len());
+            }
+            placed
+        }
         Err(reason) => {
             refuse(module, reason);
             return None;
@@ -7202,6 +7213,9 @@ where
         }),
         None,
     );
+    // A recording re-runs the body: a node that ran outside the window would answer
+    // from its cache and record nothing.
+    module.reset_run_stamps(function);
     // Started before the apply and finished after it, so a dispatch the body
     // performs is inside the window.
     graph::begin();

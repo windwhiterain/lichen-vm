@@ -541,6 +541,24 @@ impl<P: Program> Module<P> {
             })
     }
 
+    /// Reset every body node's run stamp of a dynamic function.
+    ///
+    /// # Invariant
+    /// A recording re-runs the body it records: a node whose operator ran outside the
+    /// recording would answer from its cache and record nothing. Values stay in their
+    /// slots; the run stamp alone is cleared.
+    pub fn reset_run_stamps(&mut self, function: AnyFunctionId) {
+        let AnyFunctionId::Dynamic(function) = function else {
+            return;
+        };
+        let Some(function) = self.functions.get(function) else {
+            return;
+        };
+        for node in function.nodes.clone() {
+            self.stamp_node_ran_if(node, false);
+        }
+    }
+
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
         self.nodes[node].runned = true;

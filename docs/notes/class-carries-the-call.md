@@ -339,13 +339,13 @@ nodes, not a clone. The kernel compiler's index placement now **looks through a 
 value half** (`Index(Index(container, at), 0)` places the element read, `body.rs`), which
 recovers three of the four device regressions and flips `nested_config::a_nested_config_records_each_leaf_for_what_it_is`
 with them: 218/22 → **221/19**. `fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`
-remains red, and its shape is now the graph build recording **0 dispatches** ("this
-function recorded 0 dispatch(es) and names no backend to run them on. … the body's own
-value came back as a decided value, not a lazy one"). A probe on `record_launch`'s refusal
-printed **nothing**, so no dispatch even attempted: the body's `$plrun` ops were already
-runned when the recording started, and the recording got a decided value back. The mark
-changed when the body's ops are first evaluated; the next measurement is their run stamp at
-the graph op, compared before and after the mark. Seeding the lazy read's value node with the declaration field's value
+is **fixed** by resetting the body's run stamps before a recording: the function's nodes
+are un-stamped in `build_graph` (`Module::reset_run_stamps`), so the recording re-runs the
+body it records instead of answering from a cache it inherited from the definition pass.
+A probe showed the dispatches were recorded in one recording and the graph's `finish()`
+saw none — two evaluations of the graph op, the second answering from the body's run
+stamps. Measured: **221/19 → 222/18**, and the engine, language and compute-gpu suites are
+unchanged. Seeding the lazy read's value node with the declaration field's value
 (`seed_node_value`) was also measured inert (218/22, same four regressions): the
 declaration's value child is itself open in these shapes, so no build-time shape can be
 seeded from it. The next measurement is the kernel class derivation's own read: which
