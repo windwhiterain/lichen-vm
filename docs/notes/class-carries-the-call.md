@@ -390,6 +390,13 @@ so the recording links `s.in.a` to the declaration rather than the placeholder. 
 `assemble_parameter` (it builds a new struct) nor `field_sources` (a map) mutates the
 declaration, so the next probe is the read's source in the recording (`s.in.a`).
 
+The probe answered it: at the recording's input path `[3, 0]`, the first recording's payload
+node (`1610`) holds `GraphInput(3)`, and the later recordings of the same test hold
+`ComputeValue(Buffer(..))` in that same node — a recording's placeholder node is
+**overwritten by a runtime buffer** between runs. The write is what the next round hunts:
+the placeholder node is created by `build_graph` and nothing in the recording writes it, so
+the later program run's parameter unify does.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
