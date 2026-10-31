@@ -584,6 +584,17 @@ pointer, so two calls of one declaration get two tables. The mirror's real site 
 materialisation — an immutable identity value should keep its static ref — not a clone rule and
 not the wrapper's construction.
 
+**Solved** (`c05c3466`): the freeze evaluated only the root value and type, so a bound
+function body's record was never evaluated and had no frozen identity. `register_embedded` now
+evaluates every bound statement's term, so the record's name table and nominal id exist in the
+frozen module; `buf_identity`'s scan finds the `Buf` declaration (its name check had also asked
+for the wrong field — `BUF_ELEMENT_FIELD` instead of `"type"`). Measured: `cooperative_product`'s
+cpu and gpu products match the host (compute **232/8 → 234/6**), engine binaries green, gpu's
+four validation failures pre-existing. The family's last test, the warp-uniform one, moves from
+the compile refusal to its own assertion: the check accepts `# 64` where the certificate states
+32 — the same attribute-propagation gap `perspective_requirements` measures, so it joins that
+family rather than this one.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
