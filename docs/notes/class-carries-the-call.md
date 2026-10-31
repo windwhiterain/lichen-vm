@@ -443,6 +443,11 @@ already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the 
 does not help while the shared cell keeps its stale values. The remaining route is the
 copy-before-write: the recording must hand the body its own copy of the argument tree.
 
+The run-stamp reset is **not** the cause: disabling `build_graph`'s `reset_run_stamps` leaves
+the five tests red and turns `fuse_licence`'s elementwise merge red again (226/14), so the
+reset is needed and orthogonal. The recording's re-run is what exposes the shared cell, not
+what creates it.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
