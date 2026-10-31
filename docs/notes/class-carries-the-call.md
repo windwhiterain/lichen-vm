@@ -107,10 +107,14 @@ round).** In one run, the checker's `check_named_field` builds the `first.r` rea
 `NodeId(12183)` whose value and type are open, while the recording's input decode
 (`value_at_path`) finds `NodeId(14506)` — a clone whose `Index` target
 (`NodeId(14504)`) is **undecided** yet whose own value is a decided `Buf` struct.
-So the stale answer is baked into the **clone's field**, in the instantiation that
-copies the body for the apply, not into the checker's read: the checker's read stays
-lazy and the clone carries the declaration. The separation's next site is therefore
-`check_instantiate`'s clone — the clone's field value must be the argument's own
-cell, not the requirement's decided value.
+So the stale answer is **not** the checker's read. **Corrected the next round:** a
+probe of the clone walk (`node_apply`) shows the read's `Index` clones are fresh
+(`proven false`, `closed false`, `template_decided true`, `value none`), so the clone
+does **not** carry the template's answer either — the value is decided after the
+clone, when the `Index` runs on its target's value. The question is therefore the
+**target**: the `first` binding's runtime value inside the applied body, which the
+wrapper's `r = k.O` and the codomain's type leave as the *declaration*. A
+`record_launch` probe confirms the recorded wrapper itself is assembled
+(`GraphValue` payload); it is the binding's value that loses it.
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
