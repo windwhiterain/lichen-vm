@@ -7294,6 +7294,8 @@ where
     // A recording re-runs the body: a node that ran outside the window would answer
     // from its cache and record nothing.
     module.reset_run_stamps(function);
+    // The conflicts this binding records are the recording's own.
+    let binding_errors = module.unify_errors.len();
     // Started before the apply and finished after it, so a dispatch the body
     // performs is inside the window.
     graph::begin();
@@ -7302,6 +7304,7 @@ where
 
     // Not forced, and measured: an unread dispatch is not performed.
     let (result, recorded) = evaluate_until_the_return_is_nameable::<P>(module, block, apply);
+    module.unify_errors.truncate(binding_errors);
     // Every path out of the recording closes it, refusals and all.
     if result.is_none() {
         let refusals = graph::abandon();
