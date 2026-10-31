@@ -333,7 +333,9 @@ read's check-time shape, so the mark must be narrowed (or the read must keep bot
 check-time shape and a lazy value) before the device tests can pass. Narrowing the mark to
 `apply_result_owners` was measured: it loses the chain flips (216/24, the chain red), so
 the plrun result is not an apply result in that map and the narrowing cannot be the
-discriminator. Seeding the lazy read's value node with the declaration field's value
+discriminator. The clone walk's copy of the mark was measured **unnecessary** for the
+chain (218/22 with and without it): the checker's reads resolve against the template body's
+nodes, not a clone. Seeding the lazy read's value node with the declaration field's value
 (`seed_node_value`) was also measured inert (218/22, same four regressions): the
 declaration's value child is itself open in these shapes, so no build-time shape can be
 seeded from it. The next measurement is the kernel class derivation's own read: which
