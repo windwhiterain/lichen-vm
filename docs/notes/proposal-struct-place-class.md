@@ -1,13 +1,13 @@
-# Proposal (v11): the match decides per position, `Any` is open and never replaced in place; pending requirements are records; frozen artifacts carry the set
+# Proposal (v12): the wildcard branch transfers its requirements to its own fresh cell; the match decides per position; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v10 (`06a3560a`). v11 makes
-> the wildcard's transition explicit: a slot holding `Any` still occupies the slot (the
-> model never replaces an occupied slot), so the concrete value is not written over it —
-> the apply's clone walk's `Any` → fresh empty cell is the transition, the pending
-> requirement is copied with the class through that remap, and the gate checks the
-> concrete value on the fresh cell. No in-place replacement, no change to the
-> no-overwrite invariant, no spec change to the wildcard's semantics. §2 and acceptance
-> case 0c carry the change; the spec file is untouched.
+> Status: **proposal — for review, not applied.** Supersedes v11 (`c7c61289`). v12 fixes
+> the transfer: the wildcard branch of `node_apply` returns **before** the walk's ordinary
+> `ctx.remap.insert`, so a generic "copy the set through the remap" cannot reach the fresh
+> cell. The branch itself now copies the wildcard class's requirements onto the fresh
+> cell's class, and it does **not** insert the node into the remap — each occurrence keeps
+> its own fresh cell, so occurrences are not deduplicated. No in-place replacement, no
+> invariant change. §2 and acceptance case 0c carry the change; the spec file is
+> untouched.
 
 ## 1. The match rule (spec text, as v6)
 
@@ -43,9 +43,12 @@ A **closed** value child with an **open actual** registers the pending requireme
 > - **The concrete value arrives on a fresh cell.** A slot holding `Any` still occupies the
 >   slot — the model never replaces an occupied slot — so the concrete value is not
 >   written over it. The apply's clone walk already turns `Any` into a fresh empty cell;
->   the pending requirement is copied with the class through that remap, and the gate
->   checks the concrete value where it arrives. No in-place `Any` → value replacement is
->   introduced, and the no-overwrite invariant is unchanged.
+>   the pending requirement is transferred to that cell **at the wildcard branch itself**,
+>   because that branch returns before the walk's ordinary remap entry exists: the branch
+>   copies the requirements recorded on the wildcard's class onto the fresh cell's class.
+>   The wildcard node is **not** entered in the walk's remap: every occurrence keeps its
+>   own fresh cell, so occurrences are not deduplicated onto one clone. No in-place
+>   `Any` → value replacement is introduced, and the no-overwrite invariant is unchanged.
 > - **Movement.** GC relocation and freeze move an already-checked value; they keep the
 >   set and do not re-check.
 
@@ -189,10 +192,13 @@ the match does with the template's value; no symbolic change is needed.
    `k.O` is nowhere in `r`'s class.
 0c. **The wildcard does not discharge a requirement, and the concrete value arrives on a
    fresh cell.** With a pending pin 5 on a class, writing `Any` is accepted and the pin
-   stays pending. The slot holding `Any` is not replaced in place: the apply's clone walk
-   (`function.rs`: the `Any` → fresh empty cell replacement) produces the fresh class that
-   inherits the requirement through the remap, and the concrete value is written there —
-   `5` accepted, `6` refused `expected 5, found 6`. The original `Any` slot keeps its
+   stays pending. The slot holding `Any` is not replaced in place, and the wildcard branch
+   of the clone walk has no remap entry to carry the set: the branch itself copies the
+   wildcard class's requirements onto the fresh cell it allocates, so the pin reaches the
+   cell where the concrete value is written — `5` accepted, `6` refused `expected 5, found
+   6`. Two separate `Any` occurrences of the same wildcard node stay **independent**: each
+   gets its own fresh cell (the branch does not insert the node into the remap), and each
+   fresh cell carries its own copy of the requirement. The original `Any` slots keep their
    no-overwrite protection throughout.
 0b. **A partially-open group.** A decided outer struct with an open native/payload (the
    wrapper shape the class note records) is matched per child: the open payload keeps its
