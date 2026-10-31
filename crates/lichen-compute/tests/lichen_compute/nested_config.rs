@@ -126,7 +126,7 @@ fn filled(shape: &str, kind: &str, offsets: &[usize]) -> String {
             format!("int2float (i + {offset})")
         };
         declarations.push_str(&format!(
-            "  {name} = compute.buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}})\n"
+            "  {name} := compute.buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}})\n"
         ));
         writes.push(format!(
             ".{name} (compute.write ((compute.Write _){{.to {name}, .at i, .value {value}}}))"
@@ -140,7 +140,7 @@ fill := (c = Fill) => {{
 {declarations}  (({shape}){{{writes}}})
 }}
 filler := compute.parallel fill "cpu" {shape}
-data := (compute.plrun filler ((Fill){{.n {ELEMENTS}}}) : {shape})
+data := (compute.plrun filler ((Fill){{.n {ELEMENTS}}}) : Struct)
 "#,
         writes = writes.join(", "),
     )

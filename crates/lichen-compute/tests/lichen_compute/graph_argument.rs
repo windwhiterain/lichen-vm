@@ -103,7 +103,7 @@ built
 fn running() -> String {
     format!(
         "{}\n{fill}count :=  ({count})\nfirst := (compute.plrun ones_filler ((Fill){{.n {count}}}) : \
-         OutE)\nsecond := (compute.plrun tens_filler ((Fill){{.n {count}}}) : Struct)\nout := \
+         Struct)\nsecond := (compute.plrun tens_filler ((Fill){{.n {count}}}) : Struct)\nout := \
          compute.collect (compute.graphrun built (count, first.e, second.e))\nout\n",
         chain(TWO_BUFFERS),
         fill = filled(),
