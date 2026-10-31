@@ -753,12 +753,19 @@ where
             self.state[e].ty = Some(template_ty);
             return expr;
         }
-        self.check_unify(
-            template_ty,
-            self.struct_template(),
-            self.loc(template, 1),
-            DiagKind::Guard,
-        );
+        // A structural marker needs no unify; a frozen body cannot descend.
+        if !shape::is_struct_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(template_ty),
+        ) {
+            self.check_unify(
+                template_ty,
+                self.struct_template(),
+                self.loc(template, 1),
+                DiagKind::Guard,
+            );
+        }
         // The arguments, in call order: the value is the tuple of arguments.
         let Some((elements, vals)) = self.instantiation_arguments(value, template_ty) else {
             return self.refused_expr(e);
