@@ -1,10 +1,11 @@
-# Proposal (v7): pending requirements as records; the attribute relation reads the candidate value; frozen artifacts carry the set
+# Proposal (v8): the match covers the checker's initial unify and the birth normalize; pending requirements are records; the attribute relation reads the candidate; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v6 (`28c93b45`). It answers
-> the three remaining blockers: a candidate-aware relation that does not need the value
-> installed, the full `equality || attribute-subtype` decision, and the frozen/static
-> requirement path. The spec text of v6's sections 1–2 is kept; the mechanisms below are
-> revised. The spec file is untouched.
+> Status: **proposal — for review, not applied.** Supersedes v7 (`396f7383`). v8 adds the
+> site v7's path table missed: the checker's **initial general unify**
+> (`check_unify_expr`) and the function's **birth normalize**, the other two of the three
+> dynamic unification sites `Module::unify`'s own invariant names. The spec text of §1–2
+> is unchanged; the paths and the acceptance argument are extended. The spec file is
+> untouched.
 
 ## 1. The match rule (spec text, as v6)
 
@@ -90,6 +91,33 @@ requirement registry (`lib.rs:1084`). `install_value` replaces the direct writes
 `relocate_node_value` and freeze's direct `node.value` write (`freeze.rs:268–279`) are
 **licensed movements** of an already-checked value: they keep the set and skip the gate.
 
+### 3.3a The three dynamic unification sites, all routed
+
+`Module::unify`'s invariant names exactly three sites: **the checker's initial unify, a
+function's birth normalize, and an apply's runtime unify**. A match that covered only the
+last two would leave the checker's own `r = k.O` installing the declaration before any
+clone exists, so all three are in the match's path:
+
+1. **The checker's initial unify** — `check_unify_expr` in `checker/templates.rs`. Its
+   function-template branch already does the right thing for an undecided actual (it
+   records the requirement and unifies types only); the general branch does not, and
+   `r = k.O` (a struct template, not a function type) takes the general branch. The
+   general branch becomes the same registration: a template against an **undecided**
+   actual registers the records (§2) and unifies the **types only**; the actual's value
+   slot stays open. A decided actual keeps the whole-term unify, whose agreement is the
+   pins' check and whose disagreement is the existing diagnostic.
+2. **A function's birth normalize** — the `@any = x` sugar (`§Function`: "Function auto
+   unify `@any` to parameter in the end"), executed by the checker's normalization. It is
+   the same match (a template's `@any` requirement against the parameter's cell) and
+   registers through the same path; it installs no template value.
+3. **An apply's runtime unify** — the parameter slots; the clone walk copies the records
+   through its remap (the clone rule in §2), and the gate checks them at the bind.
+
+The acceptance argument for the plrun case, stated against this: after the checker's
+initial unify, `r` holds **no** value — it holds the codomain's records; `first.r` cannot
+read a declaration the checker installed because the checker installed none. The read
+answers whatever the runtime fills (the recorded buffer), or is undecided before the fill.
+
 ### 3.4 Frozen and static paths
 
 A frozen artifact carries the requirement set with the cells it names, or a static
@@ -119,6 +147,8 @@ the match does with the template's value; no symbolic change is needed.
 
 | path | what happens |
 |---|---|
+| checker, initial unify (`check_unify_expr`) | a template against an undecided actual registers the records and unifies types only; a decided actual keeps the whole-term unify (its agreement is the pin check) |
+| checker, birth normalize (`@any = x`) | the same registration; no template value is installed |
 | checker (`check_instantiate`) | resolves each field's type/attributes; a decided actual checks now; a closed pin with an open actual pushes a `Pin`; an open attribute with an open actual pushes an `Attribute`; an open value child stays a fresh cell |
 | dynamic apply (clone walk) | copies the set through the remap; a union merges the sets |
 | static apply | copies the frozen set through the static remap |
@@ -128,6 +158,10 @@ the match does with the template's value; no symbolic change is needed.
 
 ## 6. Acceptance cases
 
+0. **The checker's initial unify**: `r := $plrun(k.native, a, k.O); r : type_of (k.O);
+   r = k.O` — after the unify `r` has no value; a read of `r.r` before the result runs is
+   undecided, and after the result fills it answers the recorded buffer. The declaration
+   `k.O` is nowhere in `r`'s class.
 1. **Deferred pin**: `S := {.a 5 : Int}; x := _; S{.a x}; x = 5` accepted, `x = 6`
    refused `expected 5, found 6`, no pre-fill.
 2. **Two pins on one class**: `S1{.a x}` with 5 and `S2{.a x}` with 6, `x = 5` accepted
