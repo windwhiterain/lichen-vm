@@ -167,4 +167,14 @@ the asserting write is not one of those five sites. The next measurement is
 `Module::node_value`'s class route: whether a member's read resolves through the
 class representative rather than its own slot.
 
+**`node_value` is the node's own slot, and the value has no traced writer.** The
+accessor lives in `static_module.rs`'s `impl<P> Module<P>`: `Dyn(node)` reads
+`self.nodes.get(node)?.value`, the static arm its frozen table — no class route. So
+the value really is on the node, yet the four write sites, the class fills and
+`add_node`-with-both do not produce it. The next measurement must instrument the
+**operation attachment** (`self.nodes[clone].operation = operation` in
+`function.rs`/`template.rs`) and `node_value`'s read of the decode's node in one run,
+to see whether the value predates the operation (a checker-built value node that an
+operation was attached to) or is set by a path outside the traced sites.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
