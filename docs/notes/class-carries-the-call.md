@@ -305,4 +305,18 @@ payload is not merely behind the slot's item; the item itself is open at this po
 next measurement is where that item's value is written: the payload the recording placed
 for the first dispatch's output.
 
+**The refused input is the declaration read, and gating the read on openness is far too
+broad (measured).** The focused probe shows the second dispatch's `.p` input is the
+codomain's **declaration** `Buf` (`14506`): its native field is an open node (`8505`, no
+value), so no payload can be recovered from it. The read `first.r` therefore answered the
+declaration — the answer-over-requirement rule fires only when the *container's node* takes
+the answer, and `first`'s value was the declaration at check time, so the read's field was
+baked from it.
+
+Making the checker's `value_slot_read` skip its bake for a container whose value holds an
+open cell — so the read stays a lazy `Index` — measured **72/168**: nearly every decided
+struct and buffer value contains a type-level field whose tree has an open cell, so the
+bake was disabled for ordinary reads. The read's bake cannot be gated on openness alone; it
+needs a narrower marker of "this container is a requirement, not a thing".
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
