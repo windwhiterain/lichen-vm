@@ -572,6 +572,18 @@ none to `buf_identity` (its frozen-module scan finds nothing) — so the next st
 per-module declaration lookup, e.g. registering the wrapper as a *linked* package whose
 bindings hand the runtime the `Buf` binding's value.
 
+**The linked registration is in** (`ef8d5a4d`): the wrapper package now registers its 30
+top-level statements as direct bindings and freezes with them; the engine and compute binaries
+stay green and the gpu's four validation failures are pre-existing. Measured: `buf_identity`
+still answers `None` — the frozen module holds the `Buf` **function**, not its body's record
+value (the freeze evaluates the root value and type, not every body), so the scan finds no
+Buf-shaped struct. The declaration's identity nodes are therefore created **per
+materialisation**: the frozen body's record items are value-bearing static nodes, and the engine
+materialises them as dynamic leaves (`as_dynamic`/`materialize_leaf`), each with its own arena
+pointer, so two calls of one declaration get two tables. The mirror's real site is that
+materialisation — an immutable identity value should keep its static ref — not a clone rule and
+not the wrapper's construction.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
