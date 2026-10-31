@@ -31,10 +31,15 @@
 ## Step 2 — the checker resolves the roles and registers the records
 
 - `check_instantiate` (checker/structs.rs): per field, resolve the type from the field's
-  type child and the attributes by their own relation; a decided actual checks now (as
-  today); a **closed pin with an open actual** pushes `Pin`; an **open attribute with an
-  open actual** pushes `Attribute`; an open value child stays a fresh cell. No value is
-  installed from the declaration.
+  type child and the attributes by their own relation. The decision is **per position,
+  not per group**: a field whose value is merely shallow-decided can still hold open
+  children (the wrapper shape), so only a **deep-closed** field checks now; a closed pin
+  with an open field pushes `Pin`; an open attribute with an open field pushes
+  `Attribute`; an open value child stays a fresh cell; a group recurses into its
+  children. No value is installed from the declaration.
+
+  The same correction applies to `check_unify_expr`: the whole-term unify is kept only
+  for a deep-closed actual; every open position registers its records and stays open.
 - The same registration for the parameter templates the apply matches (`check_app`'s
   template path), so the runtime patterns carry their records.
 - Measure: still 215/25 (records are checked only by the gate, and the gate does not yet

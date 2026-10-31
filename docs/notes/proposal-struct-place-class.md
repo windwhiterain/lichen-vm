@@ -1,11 +1,13 @@
-# Proposal (v8): the match covers the checker's initial unify and the birth normalize; pending requirements are records; the attribute relation reads the candidate; frozen artifacts carry the set
+# Proposal (v9): the match decides per position; pending requirements are records; the attribute relation reads the candidate; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v7 (`396f7383`). v8 adds the
-> site v7's path table missed: the checker's **initial general unify**
-> (`check_unify_expr`) and the function's **birth normalize**, the other two of the three
-> dynamic unification sites `Module::unify`'s own invariant names. The spec text of §1–2
-> is unchanged; the paths and the acceptance argument are extended. The spec file is
-> untouched.
+> Status: **proposal — for review, not applied.** Supersedes v8 (`82d327b5`). v9 fixes the
+> granularity: the match decides **per position**, not per group. A shallow
+> `actual_value_is_decided` admits a decided outer struct with open children (a recorded
+> wrapper shape), and the whole-term route would descend into those children and install
+> the template's values; the whole-term unify is now kept only for a **deep-closed**
+> actual, and every open position registers its records and stays open. The spec text of
+> §1–2 is unchanged; §3.3a, the paths and the acceptance cases are corrected. The spec
+> file is untouched.
 
 ## 1. The match rule (spec text, as v6)
 
@@ -102,10 +104,18 @@ clone exists, so all three are in the match's path:
    function-template branch already does the right thing for an undecided actual (it
    records the requirement and unifies types only); the general branch does not, and
    `r = k.O` (a struct template, not a function type) takes the general branch. The
-   general branch becomes the same registration: a template against an **undecided**
-   actual registers the records (§2) and unifies the **types only**; the actual's value
-   slot stays open. A decided actual keeps the whole-term unify, whose agreement is the
-   pins' check and whose disagreement is the existing diagnostic.
+   general branch becomes the same registration, and the decision is made **per
+   position, not for the group**: `actual_value_is_decided` is shallow
+   (`checker/templates.rs`: `node_value(value).is_some()`), and a group can have a decided
+   outer value with open children (`class-carries-the-call.md` records exactly that — a
+   decided wrapper with an open payload). So the match recurses: each child decides
+   pin/fill/defer by its **own** state, a template against an **open** position registers
+   the records (§2) and unifies the **types only**, and the position's value slot stays
+   open. The whole-term unify is kept only for a **deep-closed** actual — every position
+   closed, payloads included — where its agreement is the pins' check and its
+   disagreement is the existing diagnostic. A partially-open group therefore never takes
+   the whole-term route, and the template's values cannot descend into its open
+   children.
 2. **A function's birth normalize** — the checker's normalization: after each top-level
    statement, every new lambda's value node is deep-evaluated before the definition pass
    (`checker.rs`'s `build_with`). The SPEC's sugar `'x => {…; expr}` => `{…; @any = x}`
@@ -150,9 +160,9 @@ the match does with the template's value; no symbolic change is needed.
 
 | path | what happens |
 |---|---|
-| checker, initial unify (`check_unify_expr`) | a template against an undecided actual registers the records and unifies types only; a decided actual keeps the whole-term unify (its agreement is the pin check) |
+| checker, initial unify (`check_unify_expr`) | per position: an open position registers the records and unifies types only; the whole-term unify is kept only for a **deep-closed** actual (its agreement is the pin check) |
 | checker, birth normalize (`@any = x`) | the same registration; no template value is installed |
-| checker (`check_instantiate`) | resolves each field's type/attributes; a decided actual checks now; a closed pin with an open actual pushes a `Pin`; an open attribute with an open actual pushes an `Attribute`; an open value child stays a fresh cell |
+| checker (`check_instantiate`) | resolves each field's type/attributes per position: a **deep-closed** field checks now; a closed pin with an open field pushes a `Pin`; an open attribute with an open field pushes an `Attribute`; an open value child stays a fresh cell; a group recurses into its children |
 | dynamic apply (clone walk) | copies the set through the remap; a union merges the sets |
 | static apply | copies the frozen set through the static remap |
 | every visibility site | `install_value`; refusal before the write |
@@ -165,6 +175,10 @@ the match does with the template's value; no symbolic change is needed.
    r = k.O` — after the unify `r` has no value; a read of `r.r` before the result runs is
    undecided, and after the result fills it answers the recorded buffer. The declaration
    `k.O` is nowhere in `r`'s class.
+0b. **A partially-open group.** A decided outer struct with an open native/payload (the
+   wrapper shape the class note records) is matched per child: the open payload keeps its
+   cell, its requirement is recorded, and **no declaration value is installed** into it;
+   the closed positions pin. The whole-term unify is not used for this actual.
 1. **Deferred pin**: `S := {.a 5 : Int}; x := _; S{.a x}; x = 5` accepted, `x = 6`
    refused `expected 5, found 6`, no pre-fill.
 2. **Two pins on one class**: `S1{.a x}` with 5 and `S2{.a x}` with 6, `x = 5` accepted
