@@ -297,7 +297,8 @@ where
         for _ in 0..8 {
             // The walk reads each position where it lives; a frozen one is not copied.
             self.module.evaluate_node_deep_ref(node, None);
-            let value = self.module.node_value(node)?;
+            // A class member may hold no slot value of its own: the class answers for it.
+            let value = self.module.class_value(node.dynamic()?)?;
             if let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
                 && array.layout() != 0
             {

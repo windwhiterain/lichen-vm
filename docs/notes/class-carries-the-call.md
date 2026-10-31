@@ -604,6 +604,17 @@ the attribute it should name — a slot-resolution problem between the stated an
 layouts, not a missing certificate. The two `perspective_requirements` tests and this one read
 the same mechanism, so fixing the resolution serves all three.
 
+**Deeper: the attribute value lives only in the prelude's check state.**
+`attribute_value` read the slot's **own** value; a class member may hold none, so it now reads
+the class's (`class_value`). Measured: no regression (compute 234/6, engine binaries green), but
+the certificate still answers `None`: the perspective expr's first item — the attribute's value
+node — is undecided even after the deep evaluation, and the **frozen return expr's origin
+carries no stated attribute** (`origin_stated=[]`). So the warp constant (32) exists in the
+prelude's *checker state* only, and the freeze does not carry it into the frozen nodes: the
+call's certificate is a hole by construction, and the requirement check silently skips. The fix
+therefore belongs to the freeze (carry an attribute slot's decided value) or to the checker's
+cross-package certificate, not to the slot walk.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
