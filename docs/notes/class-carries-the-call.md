@@ -519,17 +519,20 @@ typing decision, not a local patch.
 **`cooperative_product`'s next layer, measured.** After the `Mma` lengths became element
 counts, the unify's two sides print byte-identically (`Buf Int 256`) and still disagree: the
 first difference is the value's **name table** — a **dynamic** handle against a **static** one —
-and `LowValue`'s equality compares the handles. A table is a mapping of names to positions, so
-the unify now compares tables by content (`name_tables_agree`: same length, same
-`(name, position)` entries, whichever module holds them). That removes the table difference and
-the next one is the **nominal type id**: the frozen `compute.Buf` type carries the **static**
-module's occurrence id (`BUF_NOMINAL_ID = 0`), a local `compute.Buf` occurrence mints the
-**dynamic** IR index (99), and `TypeValue::TypeId`'s invariant — *equal ids unify, different ids
-do not* — makes them two types. That is a cross-module nominal-type identity question, not a
-data fix. The maintainer's ruling: **static and dynamic ids must mirror** — a materialized
-frozen template's nominal id is the static module's id, so a frozen `Mma.c` and a locally built
-`Buf` are one type. The check has no static origin on an IR expression (`ExprState` carries
-none), so the mirror needs a mechanism, not a local patch.
+and `LowValue`'s equality compares the handles. Comparing tables by **content**
+(`name_tables_agree`: same length, same `(name, position)` entries) was measured **wrong**: it
+turns three engine tests red (`two_struct_values_conflict_on_their_name_tables`,
+`instances_of_different_struct_occurrences_conflict`,
+`a_struct_instance_with_mismatched_fields_is_rejected`) — the language's own contract is that a
+struct value's name table is **its declaration's**, so two tables from different declarations
+must conflict even with the same names. The change was reverted.
+
+So the remaining difference is the **nominal type id**: the frozen `compute.Buf` type carries
+the **static** module's occurrence id (`BUF_NOMINAL_ID = 0`), a local `compute.Buf` occurrence
+mints the **dynamic** IR index (99), and `TypeValue::TypeId`'s invariant — *equal ids unify,
+different ids do not* — makes them two types. The maintainer's ruling: **static and dynamic ids
+must mirror** — a materialized frozen template's nominal id is the static module's id, so a
+frozen `Mma.c` and a locally built `Buf` are one type.
 
 **Where the ids collide, measured.** The value error's root is one node compared with itself
 (`root=(10884, 10884)`) holding `TypeId(0)` against `TypeId(99)`: two nominal-id cells were
@@ -540,7 +543,6 @@ type id** — the frozen `Buf` declaration's id (0) meeting a locally minted occ
 struct value is *lowered locally* rather than materialized from the frozen body. The mirror
 therefore belongs where a frozen template's body is lowered for a local call, not in the
 unify's comparison.
-
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and

@@ -5,8 +5,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue,
     EXPR_ATTR_BASE, FunctionIdentity, LocalNodeId, LowOperator, LowShape, LowValue, Module, Node,
-    NodeId, Program, StaticFunctionRef, StaticNodeId, TableItem, ValueExt as _,
-    ancestors::AncestorPairs,
+    NodeId, Program, StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -819,33 +818,6 @@ impl<P: Program> Module<P> {
     /// an attribute is a hole and constrains nothing, so two arrays that spell different
     /// tails still meet attribute to attribute. See `docs/notes/array-attribute-view.md`.
     #[stacksafe]
-    /// Whether two name tables are **one mapping**, whichever module holds them.
-    ///
-    /// # Invariant
-    /// A table's identity is its content — the names and the positions they name — so a
-    /// frozen template's table and a local struct's table agree; comparing the handles
-    /// instead would refuse every value a frozen declaration shares
-    /// (`docs/notes/value-templates.md`).
-    fn name_tables_agree(&self, a: AnyHandle<[TableItem]>, b: AnyHandle<[TableItem]>) -> bool {
-        // SAFETY: each handle belongs to a live value; a static module's arena outlives
-        // the read.
-        let (left, right) = unsafe { (a.items(), b.items()) };
-        if left.len() != right.len() {
-            return false;
-        }
-        left.iter().all(|entry| {
-            let Some((name, index)) = self.name_table_entry(entry) else {
-                return false;
-            };
-            right.iter().any(|other| {
-                matches!(
-                    self.name_table_entry(other),
-                    Some((other_name, other_index)) if other_name == name && other_index == index
-                )
-            })
-        })
-    }
-
     fn unify_array_items(
         &mut self,
         a: ArrayValue,
@@ -1183,9 +1155,6 @@ impl<P: Program> Module<P> {
                         }
                     }
                 }
-                (Some(LowValue::Table(pa)), Some(LowValue::Table(pb))) => {
-                    self.name_tables_agree(pa, pb)
-                }
                 // Two functions are one when their identities resolve to one
                 // logical function — the frozen/static expr included.
                 _ if self.value_expr_equal(x, y) => true,
@@ -1235,15 +1204,6 @@ impl<P: Program> Module<P> {
                             self.add_equality(ra, rb);
                         }
                         ok
-                    }
-                    (Some(LowValue::Table(pa)), Some(LowValue::Table(pb))) => {
-                        let agreed = self.name_tables_agree(pa, pb);
-                        if agreed {
-                            self.add_equality(ra, rb);
-                        } else {
-                            self.record_value_error(root, Some(x), Some(y));
-                        }
-                        agreed
                     }
                     // A function's parameter and return decide its signature.
                     (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
