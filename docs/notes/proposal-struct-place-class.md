@@ -1,95 +1,99 @@
-# Proposal (v4): the template match fills fresh cells; it never installs the template's value
+# Proposal (v5): the template match fills fresh cells; pins are deferred to the bind; attributes keep their own direction
 
-> Status: **proposal — for review, not applied.** Supersedes v3 (`f1ebd0ae`). It keeps
-> the confirmed rulings of [value-templates](value-templates.md) rather than overturning
-> them: `=` remains the only template match, `:` stays a non-match, a direct template is
-> instantiated per use, and a call-result template keeps `r : type_of (k.O); r = k.O`.
-> The rule below states what that match does with the template's **expression children**
-> — the four aspects the review asked to separate. The spec file is untouched.
+> Status: **proposal — for review, not applied.** Supersedes v4 (`f45c6a6b`). It
+> answers the three remaining blockers: a deferred pin with a later-bind recheck, the
+> attribute relation's actual direction, and how the runtime match gets its roles. The
+> value-templates confirmed rulings are kept. The spec file is untouched.
 
-## The rule: text proposed for §Function, after the apply reduction
+## 1. The match rule: text proposed for §Function, after the apply reduction
 
 > A **template match** is `a = t` where `t` is a template (a direct template value, a
 > parameter pattern, or a call-result template). The match reads `t`'s expression
 > children, and for each position:
 >
-> - the **type** is `t`'s type child's denotation; it is shared and checked (`a`'s type
->   is a subtype of it);
-> - the **attributes** are `t`'s attribute children; they are shared and unified
->   directionally (`a`'s attribute is a subtype of `t`'s);
-> - the **value** child: a **closed** value is a **pin** — `a`'s value must equal it
->   (`expected 5, found 6`); an **open** value (`@any`, an empty cell) is a fresh empty
->   cell for this use, filled by `a`; a **type expression** states the type requirement
->   and carries no value; `t` is never specialized;
-> - a **group** child (a struct value, e.g. a buffer's parameter group) is matched
->   position by position by the same rule.
+> - the **type** is `t`'s type child's denotation; it is shared and checked;
+> - the **attributes** are `t`'s attribute children; they are shared, and the match
+>   applies **the attribute's own relation with the declaration on the left**
+>   (`declared ⊑ value` for `Perspective`), never a plain `a <: t`;
+> - the **value** child: a **closed** value is a **pin** — `a`'s value must equal it; an
+>   **open** value (`@any`, an empty cell) is a fresh empty cell for this use, filled by
+>   `a`; a **type expression** states the type requirement and carries no value;
+> - a **group** child is matched position by position by the same rule.
 >
-> The match's answer is `a`. A read of a matched place answers `a`'s value for that
-> part; before `a` runs, an open part is undecided — never the template's value.
+> The match's answer is `a`; `t` is never specialized and is never a place's value. A
+> read of a matched place answers `a`'s value for that part.
 
-This is the confirmed per-use instantiation ruling ("its open value slots become fresh
-empty cells, while its types, attributes, name table and nominal id are shared. The
-actual fills the fresh slots, so the template itself is never specialized") stated as the
-match's rule; it adds no syntax and changes no other form.
+## 2. The deferred pin: text proposed after the match rule
 
-## How the four review aspects map
+> A pin whose `a` is **not yet decided** is a **deferred requirement**: the match records
+> it on the place's class and does not install the pin's value. When the class binds a
+> value, the pin is checked against it and a mismatch is refused with the same
+> `expected <pin>, found <value>` the decided case reports. An instance never pre-fills a
+> place from its declaration.
 
-1. **type** — from `t`'s **type child**, not the whole field expression: the field
-   construction already splits the children (`checker/tuples.rs`, the field's value and
-   type children) and calls `type_denotation` on the type child. `check_ann`'s
-   whole-RHS `type_denotation` is not used for the field; that path is why v3's example
-   was wrong.
-2. **attributes** — the existing directional requirement (subtype via the attribute's
-   `is_subtype`), unchanged.
-3. **value pin** — only a **closed** value child pins. `S := {.a 5 : Int}; S{.a 6}`
-   keeps its refusal (`expected 5, found 6`, pinned by
-   `struct_element_attributes`); `(Buf (BufParam{.length 8}))`'s length is closed and
-   pins; its native `@any` is open and is filled.
-4. **compound template content** — a group child is matched position by position, so the
-   buffer group's internal pins and opens are preserved instead of comparing the shared
-   `Struct` type.
+Acceptance semantics (the review's counterexample):
 
-## §Struct: the reduction text is unchanged
+```lichen
+S := {.a 5 : Int}
+x := _
+s := S{.a x}     // x stays open; 5 is recorded as the place's pending requirement
+x = 5            // accepted; s.a reads 5
+```
 
-Today's lines are exactly this match — `raw v[...] = e1` matches the fresh place against
-the declaration, and `e = raw v[...]` fills it. No spec text changes in §Struct; the new
-paragraph states what the match does with the value.
+```lichen
+S := {.a 5 : Int}
+x := _
+s := S{.a x}
+x = 6            // refused: expected 5, found 6
+```
 
-## Paths
+## 3. Where the deferred requirement lives, and who checks it
 
-| path | what the rule does |
+The record is **data the checker places on the class**, not a lowlevel guess:
+
+- The checker knows the roles (a type expression, a closed pin, an open cell, a group)
+  and the attribute relations, so it resolves the type and attribute aspects and, for an
+  open actual, registers the pin on the place's class: `pending_pins: class → value`.
+- The runtime's bind (`write_node_answer`/the class write) consults `pending_pins` for
+  the class it fills and reports a mismatch through the existing unify-error channel.
+  The comparison is **closed-value equality**, which the lowlevel already has
+  (`value_expr_equal`); no `Perspective`/`Refinement` knowledge is required at run time
+  because the attribute relation was checked at the checker.
+- No lowlevel predicate for "type expression vs pin" is needed: the checker classified
+  each child and registered only the pins.
+
+## 4. §Struct: the reduction text is unchanged
+
+`raw v[...] = e1` is the match; `e = raw v[...]` fills the place. The rule above states
+what the match does with the template's value; no symbolic change is needed.
+
+## 5. Paths
+
+| path | what happens |
 |---|---|
-| `check_instantiate` (`checker/structs.rs`) | per field, match the supplied term against the declaration: type from the type child, attributes directional, a closed value child pins, an open one is fresh, a group recurses. The **decided** branch's whole-term `check_unify(vals[argument], field)` is replaced by this match; the **undecided** branch's existing type/attribute checks are the match's type/attribute aspects and stay |
-| runtime apply (`apply.rs`'s parameter slots) | the parameter pattern's slots are the same match: a closed slot pins, an open slot is filled by the argument, a group recurses. This covers the expected parameter templates (`(k = Par)`) that the review named |
-| library wrappers (`launch`, `call`, `write`, `write_atomic`, `mma`, `plrun`) | their `r = declaration` is a match under the rule, so **no library edit** — the confirmed ruling ("a direct template is instantiated per use; `=` is the only template match") is kept |
-| reads (`value_slot_read`, `slot_value_of`, lowlevel `Index`) | unchanged: a place answers the matched value's part; an open part before its value runs is undecided |
+| `check_instantiate` (`checker/structs.rs`) | per field, resolve the type from the type child and the attributes by their own relation; a closed value child pins; an open child registers a pending pin and leaves the place open; a group recurses. The decided branch's whole-term `check_unify` is replaced by this resolution; the undecided branch's type/attribute work stays and the pin becomes its deferred case |
+| runtime apply (`apply.rs`) | the parameter pattern's slots: a closed slot registered as a pending pin is checked at the bind by value equality; an open slot is filled; groups recurse. The type/attribute work is the checker's and unchanged |
+| library wrappers | no edit: `r = declaration` is a match, and the value-templates rulings are kept |
+| reads | unchanged: a place answers the matched value's part; an open part is undecided until its bind |
 
-## Four examples
+## 6. Acceptance examples
 
-1. **Type parameter.** `id = (T : Type) => T; id Int`. `T` is a parameter place (an open
-   cell), not a template's value child; the match fills it with `Int` and the call
-   answers `Int`.
-2. **`@any : Int` config.** `Par := {.n @any : Int, .scale @any : Float}`. `.scale`'s
-   type child `Float` is checked, its value child `@any` is a fresh cell, and `s.scale`
-   fills it; the kernel reads the supplied float and the declaration adds no value.
-3. **`plrun` codomain.** `r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O`.
-   The codomain's open buffer fields are fresh cells, `r`'s recorded buffer fills them,
-   its closed `.length` pins check; `first.r` answers `r`'s buffer (the recorded
-   wrapper).
-4. **Value pin.** `S := {.a 5 : Int}; S{.a 6}` refuses with `expected 5, found 6` — the
-   closed value child is a pin.
+1. **Deferred pin** (§2): `x = 5` accepted, `x = 6` refused with `expected 5, found 6`,
+   the instance never pre-filled.
+2. **Attribute direction**: requirement `# 4` against actual `# 8` is **accepted**
+   (`declared ⊑ value`); against `# 2` it is **refused** — the checker and the runtime
+   apply agree, and the existing test (`struct_element_attributes`) keeps its outcome.
+3. **Type parameter**: `id = (T : Type) => T; id Int` fills `T` with `Int`.
+4. **`@any : Int` config**: `.scale`'s type child `Float` is checked, its `@any` is a
+   fresh cell, `s.scale` fills it; the declaration adds no value.
+5. **`plrun` codomain**: the codomain's open buffer fields are fresh cells filled by the
+   recorded result; its closed `.length` pins check; `first.r` answers the recorded
+   wrapper. `r : type_of (k.O); r = k.O` stays as the ruling states.
 
-## Compatibility and the rulings it keeps
+## 7. Rulings kept
 
-- `=` is the only template match; `:` is not a match; a direct template is instantiated
-  per use; the call-result template stays `r : type_of (k.O); r = k.O`.
-- §Struct's reduction text is unchanged; only the match's rule is stated where the spec
-  already defines the apply reduction.
-- A decided field answers as today; an open field answers its fill or undecided.
-- The pin semantics and the compound content are preserved (aspects 3 and 4).
-
-## What this proposal does not claim
-
-- It does not touch `a = b`'s direction, the annotation rule, or any syntax.
-- It does not rely on post-unify error truncation: a pin is a check, and the fresh-cell
-  fill is the template's own per-use instantiation.
+`=` is the only template match; `:` is not a match; a direct template is instantiated per
+use (open slots fresh; types, attributes, name table, nominal id shared); the call-result
+template stays `r : type_of (k.O); r = k.O`; the annotation rule is untouched; the
+attribute extensions keep their own relations (the match applies them, it does not
+replace them).
