@@ -55,9 +55,9 @@ fn scaled(kind: &str) -> String {
 ---
 In1  := {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {elements}}}))}}
 Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
-Par  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
-Arg  := {{.n @any : Int, .cols @any : Int, .scale {kind}, .I In1}}
-GA   := {{.n @any : Int, .cols @any : Int, .scale {kind}, .in In1}}
+Par  := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .in In1}}
+Arg  := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .I In1}}
+GA   := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .in In1}}
 scale_raw := (k = Par) => {{
   i := compute.range k.n
   r := i / k.cols

@@ -50,7 +50,7 @@ fn nested(kind: &str, ga: &str, cols: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-Meta  := {{.rows @any : Int, .cols {kind}}}
+Meta  := {{.rows @any : Int, .cols @any : {kind}}}
 In2   := {{.a (compute.Buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}})), .b (compute.Buf (compute.BufParam{{.type {kind}, .length {ELEMENTS}}}))}}
 Out   := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {ROWS}}}))}}
 Par   := {{.meta Meta, .in In2}}
@@ -172,7 +172,7 @@ fn nested_graph() -> String {
 /// The nested head whose every leaf but the extent is an `Int`, and whose step carries
 /// them as arguments.
 const INT: &str = "Int";
-const CARRYING: &str = "{.rows Int, .cols Int, .in In2}";
+const CARRYING: &str = "{.rows @any : Int, .cols @any : Int, .in In2}";
 
 /// What the nested launch answers: `a[i] * COLS + b[i]`.
 fn nested_answer() -> Vec<usize> {
@@ -310,7 +310,7 @@ fn a_nested_config_records_each_leaf_for_what_it_is() {
     );
 
     // The same config with a `Float` `.meta.cols` passed as a literal.
-    let graph = graph_of(&nested("Float", "{.rows Int, .in In2}", "2.5"));
+    let graph = graph_of(&nested("Float", "{.rows @any : Int, .in In2}", "2.5"));
     let Node::Kernel(node) = &graph.nodes()[0];
     assert_eq!(
         node.count,
