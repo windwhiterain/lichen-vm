@@ -322,9 +322,9 @@ pub fn finish() -> Result<(Graph, Backend, Option<(StaticNodeId, StaticNodeId)>)
             .ok_or_else(|| "a graph was finished with no recording in progress".to_string())?;
         let Some(backend) = recording.backend else {
             return Err(format!(
-                "this function recorded {} dispatch(es) and names no backend to run them on. A \
-                 graph is run by a runner against a backend, and there is no third value to fall \
-                 back to",
+                "this function's return is not a value a graph can hand back without a backend: \
+                 it recorded {} dispatch(es) and names no backend to run them on. A graph is run \
+                 by a runner against a backend, and there is no third value to fall back to",
                 recording.nodes.len()
             ));
         };

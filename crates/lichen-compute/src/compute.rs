@@ -7262,7 +7262,17 @@ where
     }
     // The ceiling a positional body's tuple is built at, and the number the
     // undecided-apply refusal names.
-    let arity = graph::MAX_GRAPH_INPUTS;
+    let arity = parameter_value
+        .and_then(|node| module.node_value(node))
+        .and_then(|value| value.as_enum())
+        .and_then(|value| match value {
+            LowValue::Array(array) => {
+                // SAFETY: the parameter value is live in `module` for this read.
+                Some(unsafe { array.items() }.len())
+            }
+            _ => None,
+        })
+        .unwrap_or(graph::MAX_GRAPH_INPUTS);
     let placeholders = match roles {
         Some(roles) => {
             // A buffer role's cell is a `Buf` wrapper around the placeholder;
@@ -7343,12 +7353,31 @@ where
         // One placeholder per slot, and the slot is the number, so `ins(k)` is the
         // `k`-th argument.
         None => {
+            let layout = module.full_width_layout().unwrap_or(0);
+            let wildcard = <P::Value as From<LowValue>>::from(LowValue::Any);
             let cells: Vec<ArrayItem> = (0..arity)
                 .map(|slot| {
                     let value =
                         <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
-                    let node = module.add_node(block, None, Some(value));
-                    ArrayItem::new(AnyNodeId::Dynamic(node))
+                    let value = module.add_node(block, None, Some(value));
+                    let r#type = module.add_node(block, None, Some(wildcard));
+                    let items: Vec<ArrayItem> = std::iter::once(value)
+                        .chain(std::iter::once(r#type))
+                        .chain(std::iter::repeat_n(
+                            module.add_node(block, None, Some(wildcard)),
+                            lichen_lowlevel::EXPR_ATTR_BASE,
+                        ))
+                        .map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)))
+                        .collect();
+                    let handle = module.alloc_array(&items, block);
+                    let slot = module.add_node(
+                        block,
+                        None,
+                        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                            lichen_lowlevel::ArrayValue::with_layout(handle, layout),
+                        ))),
+                    );
+                    ArrayItem::new(AnyNodeId::Dynamic(slot))
                 })
                 .collect();
             let root = array_node::<P>(module, block, &cells);
