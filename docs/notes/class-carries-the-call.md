@@ -457,6 +457,16 @@ the outside-the-scope return shares it. Broadening `wildcard` to
 `((none, (none,)), (3, (4,)))`. Repeated applies are correct at the language level, so the
 defect is the compute layer's binding of a **runtime buffer** into a shared template cell.
 
+**And the compute-side mapping does not reach it.** `record_graph_parameter_sources` maps a
+body node to the recording's cell by `param_path(module, parameter, candidate)`, which walks
+an `Index` chain; the shared cell that the argument resolution reads is the declaration's
+**bare native cell** (the `Buf`'s `@any`, no operation), so `param_path` answers `None` and no
+source is recorded — measured: `PAY payload=NodeId(1810) source=None` on every recording.
+A structural pairing of the declaration's tree with the placeholder's (the placeholder is
+built from that declaration's field list, `assemble_parameter`) is the route; the first
+attempt crashed on a cyclic value walk and the safe version needs a `visited` set and the
+pairing itself, which is the next step.
+
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
 already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
