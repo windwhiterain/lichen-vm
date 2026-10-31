@@ -156,4 +156,15 @@ wrapper's return value therefore cannot move it, and the separation's site is th
 write: the bind must write the call's actual into the read's node, or the read's node
 must not be the class's answer while its target is undecided.
 
+**The written answer is not written by any of the four write paths (measured).**
+Instrumented on the chain test, the decode's node (`14506`) appears in **no**
+`write_node_answer`, `write_node_value`, `write_node_value_if_absent`,
+`set_node_value`, class fill, or birth-with-both trace, while `add_node` never
+creates a node holding an operation and a value together. `Node`'s own invariant
+names the shape — "an operation-bearing member holds that value while the stamp stays
+zero, so it still reads as owed an answer" — so the value is an **asserted** one, but
+the asserting write is not one of those five sites. The next measurement is
+`Module::node_value`'s class route: whether a member's read resolves through the
+class representative rather than its own slot.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
