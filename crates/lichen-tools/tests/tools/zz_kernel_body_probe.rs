@@ -6,8 +6,10 @@ use lichen_compute::language::LangProgram;
 
 #[test]
 fn matmul_kernel_body() {
-    let path =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/matmul.lichen");
+    let name = std::env::var("PROBE_EXAMPLE").unwrap_or_else(|_| "matmul.lichen".into());
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name);
     let source = lichen_tools::readme::read_normalized(&path);
     let mut store = lichen_compute::language::new_store(None).expect("the package registers");
     let (module, _value, _root) =
