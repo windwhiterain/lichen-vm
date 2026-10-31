@@ -4271,6 +4271,26 @@ where
     if let Some(identity) = LEARNED.get() {
         return *identity;
     }
+    if std::env::var("DBG_TABLES").is_ok() {
+        for key in module.frozen_module_keys() {
+            let Some(frozen) = module.frozen_module(key) else {
+                continue;
+            };
+            for (index, node) in frozen.nodes.iter().enumerate() {
+                let Some(LowValue::Table(table)) =
+                    node.value.as_ref().and_then(|value| value.as_enum())
+                else {
+                    continue;
+                };
+                // SAFETY: the handle belongs to a live value of a registered static module.
+                let names: Vec<Option<&'static str>> = unsafe { table.items() }
+                    .iter()
+                    .map(|entry| module.name_table_entry(entry).map(|(name, _)| name))
+                    .collect();
+                eprintln!("TABLES module={key:?} index={index} names={names:?}");
+            }
+        }
+    }
     let found = module.frozen_module_keys().into_iter().find_map(|key| {
         let frozen = module.frozen_module(key)?;
         frozen.nodes.iter().find_map(|node| {
@@ -4289,9 +4309,23 @@ where
                 LowValue::Table(table) => table,
                 _ => return None,
             };
-            let named = [BUF_NATIVE_FIELD, BUF_ELEMENT_FIELD, "length"]
+            let named = [BUF_NATIVE_FIELD, "type", "length"]
                 .iter()
                 .all(|name| module.name_table_index(table, name).is_some());
+            if std::env::var("DBG_SCAN").is_ok() {
+                // SAFETY: the handle belongs to a live value of a registered static module.
+                let names: Vec<Option<&'static str>> = unsafe { table.items() }
+                    .iter()
+                    .map(|entry| module.name_table_entry(entry).map(|(name, _)| name))
+                    .collect();
+                eprintln!(
+                    "SCAN len={} named={named} names={names:?} id={:?}",
+                    items.len(),
+                    module
+                        .node_value(items[1].node)
+                        .map(|value| format!("{value:?}").chars().take(30).collect::<String>())
+                );
+            }
             if !named || module.node_value(items[1].node)?.type_id().is_none() {
                 return None;
             }

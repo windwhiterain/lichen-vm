@@ -1339,6 +1339,11 @@ where
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
+        // A bound value outlives the root; its record is the shared identity
+        // (`docs/notes/value-templates.md`).
+        for (_, term) in &terms {
+            module.evaluate_node_deep(*term, None);
+        }
 
         // Embedded source with no imports: its identity is its own source hash.
         let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
