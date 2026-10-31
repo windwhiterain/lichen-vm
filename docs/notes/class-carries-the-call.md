@@ -630,6 +630,16 @@ operator's type and the graph run declines `low_type`, so `: Array` unifies a ho
 type's denotation. Giving the graph run a declared result type (`Tuple` of its returns, or the
 denotation the annotation names) is the open piece; it is a typing decision, not a run fix.
 
+**The certificate chain, followed.** With `attribute_value` also reading a clone's **origin**
+chain (a clone carries no operation, so its source must answer — and that change alone is
+inert), the chain for the warp test is two nodes deep and ends in a **hole with no operation**:
+the certificate's attr slot is `None`, its source `None`, and the source has no origin. So the
+perspective's value (32) is never written into the frozen nodes at all — not lost by a clone.
+The decisive next read is the **frozen declaration itself** (`StaticFunction::return` → the
+expr's attribute slot), which needs the static module's function table; that is where the next
+round starts. Both experiments (`origin` chain, targeted attribute sweep) are reverted; the
+suite stays 234/6.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
