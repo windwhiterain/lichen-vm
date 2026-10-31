@@ -506,8 +506,15 @@ return refusal instead. `float_leaf`'s class refusal lives in `lichen-graph-ir`'
 `refusal.rs` (`ScalarClassMismatch`), but the compute runner's `RunArgument::Count`/`Float`
 skip the class comparison (`compute/graph.rs`'s `classes` walk), so an Int handed to a Float
 leaf answers instead of refusing — the test's wording names a check the runner does not make.
-`fan_out_merge` gets one value back from a body whose return is two sibling dispatches, so the
-`: Array` annotation meets a length-1 cluster.
+`fan_out_merge` gets one value back from a body whose return is two sibling dispatches
+(`returned_value_ids` does record `[Value(1), Value(2)]`); the run's multi-value result is a
+plain array of expr slots, and `: Array` on the graph run then fails at check with "expected
+Struct, found none" — the graph run's **value** is undecided at check (`$graphrun`'s
+`NativeApply` is `decided: false`), so no annotation on it can be checked. Removing the
+annotation instead makes `r[0]` refuse ("array read cannot be checked: the container's type is
+not decided"), and `: Struct` moves the refusal to the graph op's own return check ("expected
+Array, found Struct"). The test needs a **declared result type for the graph run**, which is a
+typing decision, not a local patch.
 
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
