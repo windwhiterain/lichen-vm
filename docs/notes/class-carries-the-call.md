@@ -497,6 +497,16 @@ refusals disappear from the five tests; they then failed one step later, at the 
 unify** of the polluted declaration slot against the new placeholder (`expected Struct, found
 Struct`, `Buffer` vs `GraphInput(3)`).
 
+**Three more readings** (after 230/10): `graph_jit`'s scalar variant never runs the `Call` op
+at all — a probe of `unrecordable`'s gate during the recording printed only `Read` entries, so
+the "a graph has no node for one" sentence cannot come from that arm and the body ends with the
+return refusal instead. `float_leaf`'s class refusal lives in `lichen-graph-ir`'s
+`refusal.rs` (`ScalarClassMismatch`), but the compute runner's `RunArgument::Count`/`Float`
+skip the class comparison (`compute/graph.rs`'s `classes` walk), so an Int handed to a Float
+leaf answers instead of refusing — the test's wording names a check the runner does not make.
+`fan_out_merge` gets one value back from a body whose return is two sibling dispatches, so the
+`: Array` annotation meets a length-1 cluster.
+
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and
