@@ -543,6 +543,15 @@ type id** — the frozen `Buf` declaration's id (0) meeting a locally minted occ
 struct value is *lowered locally* rather than materialized from the frozen body. The mirror
 therefore belongs where a frozen template's body is lowered for a local call, not in the
 unify's comparison.
+
+**The mirror's first half is in** (`2704a6a8`): `buf_identity` reads the frozen wrapper
+package's `Buf` declaration and returns its name table and nominal id, and the runtime's
+three-field wrapper states them — so a wrapper and a declared `Buf` are one type. Measured: the
+cooperative operands' id difference is gone (both sides `TypeId(99)`), the suite stays 232/8,
+and the engine and gpu binaries are unchanged (the four gpu validation failures reproduce at
+`HEAD`). The remaining difference is the declaration's **name table** being copied into the
+dynamic module by an apply's materialisation (a dynamic handle against the static one); the
+mirror's second site is that copy, not the unify.
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and
