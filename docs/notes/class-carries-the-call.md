@@ -353,17 +353,20 @@ field of the `Buf` it follows and what the lazy read replaced there.
 
 ## The remaining failures' shapes (measured)
 
-With the requirement mark, the recording's run-stamp reset, the three re-pinned digest tests
-and the role-path fix the suite stands at **226/14**. The eighteen group by the first diagnostic:
+With the requirement mark, the recording's run-stamp reset, the three re-pinned digest tests,
+the role-path fix and the kernel body's leaf conversion the suite stands at **226/14**. The
+fourteen group by the first diagnostic:
 
 | shape | tests |
 |---|---|
-| `expected Struct, found none` (an undecided value meeting a struct requirement; e.g. `In2{.p first.e}` where the lazy read has no check-time value) | `fan_out_merge::under_a_pack…` |
-| `expected Struct, found Struct` (two struct types that are not one) | `cooperative_product`'s three |
-| `unresolved name 'a'` | `nested_config::a_nested_config_runs_on_the_device…` |
-| *(re-pinned, maintainer-approved)* the read's address is the consumer's entry parameter | `fuse_licence::a_lane_dependent…` |
-| *(re-pinned, maintainer-approved)* the merged fragment's digest | `runtime_scalar_leaf::a_normalise…` |
-| the documented parks | `compute::a_float_domain…` |
+| `expected Struct, found none` (an undecided value meeting a struct requirement; the lazy read has no check-time value) | `fan_out_merge::under_a_pack…` |
+| `expected Struct, found Struct` — the **declaration's** `.length` pin (16) against the actual buffer (512); the frozen-marker refusal above it is fixed | `cooperative_product`'s three |
+| `expected Struct, found <struct value>` — the `: OutE` annotation's denotation is the template's **value**, not its type | `graph_argument::the_two_buffer_chain…` |
+| `unresolved name 'a'` — the test's `filled()` writes bindings with `=` (the SPEC's `bind` needs `:=`); awaiting the maintainer's permission | `nested_config`'s two |
+| a direct launch after a recording: "argument 0 … is a buffer and was not read from this function's parameter" — the recording's argument resolves to the declaration | `float_leaf`'s two, `graph_runtime_scalar::what_makes…` |
+| the collect refusal is recorded but never reported (the report's collection differs from the run path's) | `graph_jit::what_a_recorded_body…` |
+| the write's perspective: the control refuses `expected 32, found 0` at `.to`, and `expected 0, found 1` at `(w # 0)` | `perspective_requirements`'s two |
+| the documented park | `compute::a_float_domain…` |
 
 Deferring the whole-term unify for **every** undecided actual against an open template was
 measured **75/165**: the value unify is load-bearing for the ordinary matches, so the fix
