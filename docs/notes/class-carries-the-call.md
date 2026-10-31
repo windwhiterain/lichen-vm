@@ -479,6 +479,16 @@ site is the checker's **implicit-parameter substitution**: substituting a declar
 must instantiate its open cells per call (`instantiate_requirement_value`), which is the same
 rule the language already applies to a value template.
 
+**The class merge is the SPEC's own rule.** `docs/language-spec.md` §Lowlevel states it: *"Nodes
+inside same class must share same value, class is merged by unify."* So the unify of a runtime
+result with a declaration (`r = k.O`) **must** merge their classes, and every open cell of the
+declaration then holds the runtime answer; no engine-side exception can be added without
+changing that sentence. And the requirement is load-bearing: dropping `r = k.O` from `plrun`
+alone answers **163/77** — the chain's fixes depend on it. The two remaining routes are the
+declaration's instantiation (the `I`-style type function, which changes the surface) or the
+recording's argument resolution (take the placeholder at the argument's path and validate by
+provenance rather than by class, which is the next measurement).
+
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
 already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
