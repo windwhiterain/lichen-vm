@@ -379,4 +379,13 @@ test passes 512-element buffers, and the instantiation's value unify reports
 after the frozen-marker unify, the test's program and the prelude's `Mma` declaration
 disagree about what `.length` means — a question the maintainer's ruling should settle.
 
+**`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
+recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
+list shows it), but it never reaches the report: the collected error list is a *different*
+collection (its count restarts between two records, so the run path's diagnostics are not
+the `evaluate_raw` report's). The placeholder check now also recognizes the assembled `Buf`
+**value** (`[names, id, native, type, length]`, whose native slot's first item is the
+payload the recording placed) instead of only the two-item wrapper; that arm is true for
+this program and the test still fails for the reporting gap.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).

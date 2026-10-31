@@ -461,6 +461,20 @@ where
     // SAFETY: `wrapper` is a live array of `module`, and this reads only the `Buf`
     // wrapper's two slots.
     let wrapper = unsafe { wrapper.items() };
+    // The `Buf` value: its native slot's first item is the payload.
+    if let Some(native) = wrapper.get(shape::STRUCT_VALUE_FIELD_BASE)
+        && let Some(value) = module.node_value(native.node)
+        && let Some(LowValue::Array(slot)) = AsEnum::<LowValue>::as_enum(&value)
+        && let Some(payload) = unsafe { slot.items() }.first()
+        && matches!(
+            module
+                .node_value(payload.node)
+                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value)),
+            Some(ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_))
+        )
+    {
+        return true;
+    }
     let [payload, element] = wrapper else {
         return false;
     };
