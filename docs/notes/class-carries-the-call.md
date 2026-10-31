@@ -526,7 +526,11 @@ the next one is the **nominal type id**: the frozen `compute.Buf` type carries t
 module's occurrence id (`BUF_NOMINAL_ID = 0`), a local `compute.Buf` occurrence mints the
 **dynamic** IR index (99), and `TypeValue::TypeId`'s invariant — *equal ids unify, different ids
 do not* — makes them two types. That is a cross-module nominal-type identity question, not a
-data fix.
+data fix. The maintainer's ruling: **static and dynamic ids must mirror** — a materialized
+frozen template's nominal id is the static module's id, so a frozen `Mma.c` and a locally built
+`Buf` are one type. The check has no static origin on an IR expression (`ExprState` carries
+none), so the mirror needs a mechanism, not a local patch; the two remaining pieces are the
+mirror itself and the graph run's declared result type.
 
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
