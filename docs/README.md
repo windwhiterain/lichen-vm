@@ -72,6 +72,7 @@ authority, and this table only names the state.
 | [The one-buffer gather: a wall, or an unnamed spelling?](notes/gather-spelling.md) | `lichen-compute` | current |
 | [The recorded leg's count: the rule is principled, its own sentence is nearly unreachable](notes/recorded-extent-count.md) | `lichen-compute` (`compute.rs`, `compute/graph.rs`), `lichen-compute-gpu` | current |
 | [A class carries the call, not only the fact](notes/class-carries-the-call.md) | `lichen-lowlevel` (`equality`), `lichen-compute` | current |
+| [Handoff: the six tests still red against the SPEC](notes/handoff-remaining-six.md) | `lichen-compute`, `lichen-highlevel` (`checker`), `lichen-language` (freeze) | current |
 | [Non-termination is the program's own](notes/nontermination-is-the-programs.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`) | current |
 | [A colliding answer is a unify error](notes/answer-collision.md) | `lichen-lowlevel` (`equality`, `write_node_answer`), `lichen-compute` | current |
 | [The read-path collection was disabled](notes/gc-trigger-disabled.md) | `lichen-lowlevel` (`evaluation`, `gc`) | historical |
