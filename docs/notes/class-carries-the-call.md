@@ -448,6 +448,13 @@ the five tests red and turns `fuse_licence`'s elementwise merge red again (226/1
 reset is needed and orthogonal. The recording's re-run is what exposes the shared cell, not
 what creates it.
 
+Cloning every struct value in the recording's apply (a `whole_clone` flag that skips the
+clone walk's two sharing returns) was measured **worse**: 226/14 — `fuse_licence`'s elementwise
+merge regresses again and the five tests keep their refusal. So the copy must be narrower than
+"every struct value the walk reaches", and the family needs the maintainer's design input:
+which values a recording owns, and where the placeholder binding's write belongs, is a
+clone-ownership decision, not a local patch (`apply-clone-ownership.md`).
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
