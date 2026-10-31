@@ -83,4 +83,23 @@ cell, and inserting that source at the declared cell's class root. The separatio
 therefore has to keep the actual's **cell** apart from the requirement's, not give
 the requirement a source.
 
+**Why a source link at the read is not the answer (measured, this round).** The VM's
+`Index` read (`evaluation.rs`) was changed to follow `field_sources` — the directed
+requirement-to-actual link the checker already keeps — instead of the class. The
+suite fell from 215 to **30 passing / 210 failing**: the link records provenance for
+the *decode* paths, and following it at every read rewrites reads that already
+answer through the class. So the separation is not a substitution at the read.
+
+**The two sites the chain needs, from the code.** First, the checker's `check_field`
+(`checker/structs.rs`) bakes the read's value at check time: it takes the
+container's current value slot (`value_slot_read`) and stores it as the read's
+`val`, so a template's field declaration becomes the read's answer and the VM never
+re-evaluates it. The read node does carry a `LowOperator::Index` operation, but a
+baked value means the runtime never runs it. Second, the wrapper's `r = k.O` unify
+merges the runtime result's class with the codomain *type* value, and the
+representative is the type, so appending `r` to the wrapper still returns the
+declaration (measured: the suite stays 215/25). The separation therefore has to
+make a read of a template's field stay **unevaluated** at check time and let the
+runtime's own binding answer it — not to move a value from one map to another.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
