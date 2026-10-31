@@ -651,6 +651,15 @@ now evaluates the term's **value half** (it returned early on the expr node), wh
 and measured neutral; the remaining piece is deciding a body's variable read outside its
 definition pass, which is the next subject.
 
+**The fork, stated.** The attribute's lowering places the *spelled* constraint slot in
+`ExprState::attr`, and the expr's attribute **item** remains a wildcard; the frozen declaration
+therefore carries `Any`, and the program's clone of it starts as a fresh hole. The value exists
+at check (the reference's term is the binding's expr), but it is never written into the expr
+node. Carrying it there — writing the decided attribute slot into the expr's attribute item when
+`check_ann` settles one — would make the frozen package state its perspectives, and the
+certificate chain would then read 32 without any cross-package state. That is the change the
+family needs: an attribute lowering rule, not another consumer-side fix.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
