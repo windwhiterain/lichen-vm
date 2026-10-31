@@ -11,12 +11,15 @@
 - `cargo test -p lichen-lowlevel` and the language/serve suites are the controls a change
   to the engine can move; they must be read with each step.
 
-## Step 1 — records, relations and a no-op gate
+## Step 1 — records, relations and a gate that is **disabled**
 
 - `Module`: `pending_requirements: HashMap<NodeId, Vec<PendingRequirement>>`,
   `attr_relations: HashMap<ExtensionId, Box<dyn AttrRelation<P>>>`, where
   `PendingRequirement` is `Pin { expects: NodeId }` or
-  `Attribute { extension: ExtensionId, expects: NodeId }`.
+  `Attribute { extension: ExtensionId, expects: NodeId }`. The gate carries an explicit
+  `enforce: bool`, set `false` in this step: it is a *disabled* phase, not a no-op that
+  silently reads an empty set — registration lands in Step 2 and enforcement is switched
+  on in the same step, so there is no window in which a populated set is unenforced.
 - The gate `install_value(class, value)`: checks the class's records (empty at first, so
   it is a no-op) and returns `Err(UnifyError)` before writing on a refusal. The five
   write sites (`write_node_value`, `write_node_answer`, `propagate_class_value`,
@@ -28,8 +31,11 @@
 - Measure: compute 215/25 unchanged, lowlevel and language green — the gate is inert
   while the sets are empty.
 
-## Step 2 — the checker resolves the roles and registers the records
+## Step 2 — the checker resolves the roles, registers the records, and turns the gate on
 
+- Registration **and** enforcement land in this one step: the gate's `enforce` is set
+  `true` in the same commit that first populates the sets, so no populated set is ever
+  unenforced.
 - `check_instantiate` (checker/structs.rs): per field, resolve the type from the field's
   type child and the attributes by their own relation. The decision is **per position,
   not per group**: a field whose value is merely shallow-decided can still hold open
@@ -42,8 +48,9 @@
   for a deep-closed actual; every open position registers its records and stays open.
 - The same registration for the parameter templates the apply matches (`check_app`'s
   template path), so the runtime patterns carry their records.
-- Measure: still 215/25 (records are checked only by the gate, and the gate does not yet
-  see them), but the registration itself is observable in the probe.
+- Measure: this is the first enforcing step, so the 22 tests and the acceptance cases are
+  read here, not in a later step. A regression is fixed in the registration (which
+  positions are registered), never by turning the gate off.
 
 ## Step 3 — enforce at the gate
 

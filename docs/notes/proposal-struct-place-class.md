@@ -1,12 +1,12 @@
-# Proposal (v9): the match decides per position; pending requirements are records; the attribute relation reads the candidate; frozen artifacts carry the set
+# Proposal (v10): the match decides per position and treats `Any` as open; pending requirements are records; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v8 (`82d327b5`). v9 fixes the
-> granularity: the match decides **per position**, not per group. A shallow
-> `actual_value_is_decided` admits a decided outer struct with open children (a recorded
-> wrapper shape), and the whole-term route would descend into those children and install
-> the template's values; the whole-term unify is now kept only for a **deep-closed**
-> actual, and every open position registers its records and stays open. The spec text of
-> §1–2 is unchanged; §3.3a, the paths and the acceptance cases are corrected. The spec
+> Status: **proposal — for review, not applied.** Supersedes v9 (`4cb15f0e`). v10 adds the
+> wildcard rule and the match's own openness predicate: `Any` is undecided, so a write of
+> `Any` neither checks nor discharges a pending requirement (a pending pin 5 accepts
+> `Any`, stays pending, then accepts 5 and refuses 6); and **deep-closed is the match's
+> predicate, not `evaluated_deep`** — the deep pass deliberately treats `Any` as concrete
+> for structural proofs, while the match treats it as open, or a wildcard-containing
+> actual could take the whole-term route. §2, §3.3a and §6 carry the change; the spec
 > file is untouched.
 
 ## 1. The match rule (spec text, as v6)
@@ -36,8 +36,12 @@ A **closed** value child with an **open actual** registers the pending requireme
 > - **Union.** A class union merges the members' requirement sets.
 > - **Clone.** A dynamic clone copies its template's set through the clone walk's remap;
 >   a static clone copies it from the frozen artifact's set through the static remap.
-> - **Pre-write gate.** A value becomes visible to a class only after every pending
->   requirement of the class accepts it. A refusal leaves the value uninstalled.
+> - **Pre-write gate.** A concrete value becomes visible to a class only after every
+>   pending requirement of the class accepts it. A refusal leaves the value uninstalled.
+> - **The wildcard is not a candidate.** A value of `Any` is undecided, not an answer: a
+>   write of `Any` neither checks nor discharges a pending requirement, which stays
+>   pending for the concrete value that follows (a pending pin 5 accepts `Any`, is still
+>   pending, then accepts 5 and refuses 6).
 > - **Movement.** GC relocation and freeze move an already-checked value; they keep the
 >   set and do not re-check.
 
@@ -115,7 +119,11 @@ clone exists, so all three are in the match's path:
    closed, payloads included — where its agreement is the pins' check and its
    disagreement is the existing diagnostic. A partially-open group therefore never takes
    the whole-term route, and the template's values cannot descend into its open
-   children.
+   children. **Deep-closed is the match's own predicate, not `evaluated_deep`**: the deep
+   pass deliberately treats `Any` as concrete for structural proofs
+   (`compound-element-slots.md` §47–52), while for the match an `Any` position is
+   **open**. Reusing the pass's verdict would let a wildcard-containing actual take the
+   whole-term route.
 2. **A function's birth normalize** — the checker's normalization: after each top-level
    statement, every new lambda's value node is deep-evaluated before the definition pass
    (`checker.rs`'s `build_with`). The SPEC's sugar `'x => {…; expr}` => `{…; @any = x}`
@@ -175,6 +183,9 @@ the match does with the template's value; no symbolic change is needed.
    r = k.O` — after the unify `r` has no value; a read of `r.r` before the result runs is
    undecided, and after the result fills it answers the recorded buffer. The declaration
    `k.O` is nowhere in `r`'s class.
+0c. **The wildcard does not discharge a requirement.** With a pending pin 5 on a class,
+   writing `Any` is accepted and the pin stays pending; a later concrete `5` is accepted
+   and a concrete `6` is refused `expected 5, found 6`.
 0b. **A partially-open group.** A decided outer struct with an open native/payload (the
    wrapper shape the class note records) is matched per child: the open payload keeps its
    cell, its requirement is recorded, and **no declaration value is installed** into it;
