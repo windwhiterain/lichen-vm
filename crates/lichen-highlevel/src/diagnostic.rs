@@ -712,10 +712,7 @@ where
                 expr: edge.argument_expr,
                 path: path.into(),
             });
-            // An **attribute** position is a refinement's, so the reader states it
-            // as one: its sides are the requirement and the provided slot, the same
-            // order every other attribute mismatch is read in
-            // (`docs/notes/attributes.md` § "the acceptance table").
+            // An attribute position is a refinement's, read requirement-first.
             let (a, b, value_a, value_b) = match apply.attribute {
                 true => (apply.failing.1, apply.failing.0, err.value_b, err.value_a),
                 false => (

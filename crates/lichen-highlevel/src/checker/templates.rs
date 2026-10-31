@@ -273,8 +273,7 @@ where
         }
 
         self.compute_operands(actual_term, expected_term);
-        // The statement states the actual's attributes: the value it names carries
-        // the annotated side's slots, so a call site reads them.
+        // A statement states the actual's attributes, so a call site reads them.
         self.adopt_stated_attributes(actual_term, expected_term);
         // A requirement matched into an undecided place: a read of it stays lazy
         // (`docs/notes/class-carries-the-call.md`).

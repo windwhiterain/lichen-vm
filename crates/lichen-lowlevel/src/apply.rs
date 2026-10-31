@@ -88,8 +88,7 @@ impl<P: Program> Module<P> {
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
-        // Which position failed: `value@0` and `type@1` are the parameter expr's
-        // first two slots, so a later one is an attribute's.
+        // The failing position: slot 0 is the value, 1 the type, later attributes.
         let mut attribute_failed = false;
         let mut failing = (cloned_param, argument.dynamic().unwrap_or(cloned_param));
         // Every position is compared, attributes included: the order

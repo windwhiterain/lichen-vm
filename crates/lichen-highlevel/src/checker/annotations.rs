@@ -207,13 +207,9 @@ where
     ///
     /// # Invariant
     /// Only a **wildcard** position is cleared: a slot the value already states is
-    /// its own, and the statement's unify compares the two. Clearing is what lets
-    /// that unify carry the stated slot into the value: `Any` unifies with
-    /// everything and merges with nothing, so an uncleared position would keep
-    /// saying nothing and a call site would read the argument instead of the
-    /// callee's claim. A body's `r = (x # 32)` therefore states its return's
-    /// perspective (`docs/notes/attributes.md` § "A declared return attribute
-    /// rides to the call site").
+    /// its own. `Any` unifies with everything and merges with nothing, so a
+    /// wildcard left in place says the position never decides, and a call site
+    /// reads the argument instead of the callee's claim.
     pub(super) fn adopt_stated_attributes(&mut self, actual: NodeId, expected: NodeId) {
         for marker in P::Attr::ORDER {
             let canonical = marker.order_index() as u32;

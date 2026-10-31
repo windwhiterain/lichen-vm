@@ -1,21 +1,34 @@
-//! Probe: the attribute certificate the three remaining perspective tests read.
+//! Probe: the attribute certificate the remaining perspective tests read.
 //!
 //! # Invariant
 //!
 //! Print-only. Each program prints every diagnostic with its span, the check kind
 //! and the two conflicting node values, so a failure names the site that refused.
-//!
-//! The measured finding (`docs/notes/handoff-remaining-six.md`, round 28): a
-//! **statement's** stated attribute is not what a call site reads. A body whose
-//! value is an annotated expression carries its attribute (`x => (x # 32)` is
-//! refused `expected 64, found 32`), while the identical claim written as a
-//! statement (`x => {r := x; r = (r # 32)}`) is dropped, because the statement's
-//! attribute never reaches the returned value's expr.
 
 use super::common;
 
 use lichen_compute::language::LangProgram;
 use lichen_language::Report;
+
+/// The head `perspective_requirements` builds: a three-element buffer from a kernel.
+fn head() -> String {
+    r#"
+---
+  order = "30"
+  compute = import "compute.lichen"
+---
+Out := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Int, .length c.n})
+  ((Out){.b (compute.write ((compute.Write _){.to d, .at i, .value (i + 1)}))})
+}
+filler := compute.parallel fill "cpu" Out
+b := (compute.plrun filler ((Fill){.n 3}) : Struct)
+"#
+    .to_string()
+}
 
 /// Every diagnostic, with the facts the checker recorded.
 fn print(label: &str, report: &Report<LangProgram>) {
@@ -39,36 +52,22 @@ fn show(label: &str, source: &str) {
     print(label, &report);
 }
 
-/// The head `perspective_requirements` builds: a three-element buffer from a kernel.
-fn head() -> String {
-    r#"
----
-  order = "30"
-  compute = import "compute.lichen"
----
-Out := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Fill := {.n @any : Int}
-fill := (c = Fill) => {
-  i := compute.range c.n
-  d := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((Out){.b (compute.write ((compute.Write _){.to d, .at i, .value (i + 1)}))})
-}
-filler := compute.parallel fill "cpu" Out
-b := (compute.plrun filler ((Fill){.n 3}) : Struct)
-"#
-    .to_string()
-}
-
 #[test]
-fn probe_the_body_requirement() {
+fn probe_the_frozen_certificate() {
     let _ = std::panic::catch_unwind(|| {
+        // Declared `# warp`, so `0` is refused; the meet names `1`.
         show(
-            "body requirement",
+            "write warp in, lane-varying siblings",
             &format!(
-                "{}
-use := (x = (compute.Buf (compute.BufParam{{.type Int, .length 3}}))) => compute.read ((compute.Read _){{.from x, .at 1}})
-use (b.b # 1)
-",
+                "{}\nw := compute.write ((compute.Write _){{.to (b.b # compute.warp), .at (0 # 1), .value (0 # 1)}})\n(w # 0)\n",
+                head()
+            ),
+        );
+        // Plain siblings: the meet equals the field by coincidence.
+        show(
+            "write warp in, plain siblings",
+            &format!(
+                "{}\nw := compute.write ((compute.Write _){{.to (b.b # compute.warp), .at 0, .value 0}})\n(w # 0)\n",
                 head()
             ),
         );

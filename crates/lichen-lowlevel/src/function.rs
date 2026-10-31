@@ -49,15 +49,18 @@ pub struct ApplyError {
     pub argument: NodeId,
     pub apply_node: NodeId,
     pub error_index: usize,
-    /// The failed position is an **attribute** one: `value@0` and `type@1` are the
-    /// parameter expr's first two slots, so every later position is an attribute.
+    /// The failed position is an **attribute** one.
     ///
     /// # Invariant
-    /// The order a requirement is judged by lives in the checker, so an attribute
-    /// position's failure is a refinement's, not a type's.
+    /// `value@0` and `type@1` are the parameter expr's first two slots, so every
+    /// later position is an attribute's, and the order it is judged by is the
+    /// checker's, not a type's.
     pub attribute: bool,
-    /// The **position** that failed, parameter side and argument side, so a reader
-    /// of the mismatch names the slot the compare saw rather than a type.
+    /// The **position** that failed, parameter side then argument side.
+    ///
+    /// # Invariant
+    /// A reader of the mismatch names the slot the compare saw, not the
+    /// parameter's type, so an attribute's numbers are the two sides.
     pub failing: (NodeId, NodeId),
 }
 
