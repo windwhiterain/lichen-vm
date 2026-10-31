@@ -330,6 +330,9 @@ green, and four tests regress (`compile_order_class` two, `fuse_licence`'s eleme
 merge, `graph_runtime_scalar`'s second scalar), a net 216/24 → **218/22**. The
 regressions are all device-compile/answer tests: their dispatch path needs the baked
 read's check-time shape, so the mark must be narrowed (or the read must keep both a
-check-time shape and a lazy value) before the device tests can pass.
+check-time shape and a lazy value) before the device tests can pass. Narrowing the mark to
+`apply_result_owners` was measured: it loses the chain flips (216/24, the chain red), so
+the plrun result is not an apply result in that map and the narrowing cannot be the
+discriminator.
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
