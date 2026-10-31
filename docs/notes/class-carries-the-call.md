@@ -669,6 +669,15 @@ no origin), while the frozen one holds 32. The remaining question is narrowed to
 checker path builds it (`provided_slot`/`stated_attributes`/the applied clone) and why it does
 not reuse the frozen value — the next round's single subject.
 
+**The copy, read.** The certificate slot's chain is `slot(836) → attr item(837) → origin(768)`,
+where 768 is a **fresh cell with no origin** — a wildcard freshening, not a clone of the frozen
+32 value (the frozen exprs that carry `# warp` are five-item arrays whose attr item is the static
+node 165, value `USize(32)`, measured). `instantiate_requirement` (the term rebuild that keeps
+the expr's attribute items) and the apply clone's static-item rule both *should* keep the static
+165, so the hole's producer is not either of them on the path read so far. This needs a
+step-through of the apply's item mapping rather than more probes: the next session should trace
+`value_apply`'s item mapping for the declaration expr's attribute slot specifically.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
