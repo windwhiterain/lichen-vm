@@ -43,9 +43,9 @@ fn product(a: &[i64], b: &[i64], c: &[i64]) -> Vec<i64> {
 ///
 /// # Invariant
 /// The operands are a host's own buffers, so a fill kernel builds each one and writes the
-/// table the oracle spells (`index % 4`, `index % 3`, `index % 5`). The `Mma` type states the
-/// matrix's fixed lengths, so a buffer's **type** carries the shape's edge and its
-/// **allocation** is the launch's own element count, the flattened matrix
+/// table the oracle spells (`index % 4`, `index % 3`, `index % 5`). A `Buf`'s `.length` is its
+/// **element count**, so the operands declare the flattened matrices (`rows * steps`,
+/// `steps * columns`, `rows * columns`) and so does `compute.Mma`
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
     format!(
@@ -54,9 +54,9 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
   order = "30"
   compute = import "compute.lichen"
 ---
-A := {{.a (compute.Buf (compute.BufParam{{.type Int, .length {rows}}}))}}
-B := {{.b (compute.Buf (compute.BufParam{{.type Int, .length {steps}}}))}}
-C := {{.c (compute.Buf (compute.BufParam{{.type Int, .length {columns}}}))}}
+A := {{.a (compute.Buf (compute.BufParam{{.type Int, .length {a_length}}}))}}
+B := {{.b (compute.Buf (compute.BufParam{{.type Int, .length {b_length}}}))}}
+C := {{.c (compute.Buf (compute.BufParam{{.type Int, .length {c_length}}}))}}
 Fill := {{.n @any : Int}}
 fill_a := (c = Fill) => {{
   i := compute.range c.n
@@ -82,9 +82,9 @@ c := (compute.plrun kc ((Fill){{.n {c_len}}}) : Struct)
 product := (compute.mma compute.Mma{{.s "{backend}", .a a.a, .b b.b, .c c.c}})
 compute.collect product : Array
 "#,
-        rows = ROWS,
-        steps = STEPS,
-        columns = COLUMNS,
+        a_length = ROWS * STEPS,
+        b_length = STEPS * COLUMNS,
+        c_length = ROWS * COLUMNS,
         a_len = a.len(),
         b_len = b.len(),
         c_len = c.len(),

@@ -71,7 +71,9 @@ raw  = (c : Par) => {
 
 Reads, writes and `collect` keep `(compute.Read _)`-style instantiations: their
 length is open (`_`), because a read or a write does not care how long the buffer
-is. `Mma` states the cooperative matrix's fixed lengths (16, 32, 16).
+is. `Mma` states its operands' **element counts** — the flattened cooperative matrices
+(`16·32`, `32·16`, `16·16`, i.e. 512, 512, 256), exactly as every other `Buf`'s `.length` does;
+the matrix's own shape (16, 32, 16) lives in the device op, not in the declaration.
 
 **`write` is itself a pure function, and its result is a buffer.** The wrapper
 ascribes the result `(Buf _)`: a write returns the buffer's **new version**, so

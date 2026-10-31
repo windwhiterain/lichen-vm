@@ -30,10 +30,10 @@ collect := b = (Buf _) => $collect(b)
 buf := x = BufParam => {b := Buf x; b.native = $buf(x.type, x.length); b}
 Mma := {
   .s @any : string
-  .a (Buf (BufParam{.type Int, .length 16})) # warp
-  .b (Buf (BufParam{.type Int, .length 32})) # warp
-  .c (Buf (BufParam{.type Int, .length 16})) # warp
+  .a (Buf (BufParam{.type Int, .length 512})) # warp
+  .b (Buf (BufParam{.type Int, .length 512})) # warp
+  .c (Buf (BufParam{.type Int, .length 256})) # warp
 }
-mma := x = Mma => {r := $mma(x.s, x.a, x.b, x.c); r = (Buf (BufParam{.type Int, .length 16})) # warp}
+mma := x = Mma => {r := $mma(x.s, x.a, x.b, x.c); r = (Buf (BufParam{.type Int, .length 256})) # warp}
 graph := f => {f = (x => _); $graph(f)}
 graphrun := g => a => $graphrun(g, a)
