@@ -415,4 +415,11 @@ required for the body to compile and its placement is what changes the numbers â
 the element **slot** where the value half names the slot's **value item**. The next round's
 fix is in that placement, not in the mark.
 
+**The mark does fire inside a kernel body.** `write`'s prelude body is `r := $write(..); r = (Buf
+_) # ..`, so a kernel body that calls `compute.write` marks the write's own result, and the
+kernel's `.c` field read is then a lazy `Index(Index(..), 0)`. The look-through places that
+read, so the write's output position can be placed as an input read â€” which is the shape a
+wrong product needs (the two `s(0)` uses in the fold saw different iteration values in the
+measured `[29, 32, 101, 112]`). The next probe is the compiled body of a one-write kernel.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
