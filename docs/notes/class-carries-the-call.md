@@ -623,6 +623,13 @@ freeze never sees — not the declaration's stated attr slot. So the value has t
 **checker's** state across the package boundary, or the certificate has to be read from the
 declaration side; neither is a freeze pass.
 
+**`fan_out_merge`'s run path, measured.** `run_graph` is entered with the recorded graph and
+**succeeds** at the definition pass — two results — and returns a plain two-slot array. The
+failure is the annotation's *type*: `check_native_call` mints a **fresh cell** for a native
+operator's type and the graph run declines `low_type`, so `: Array` unifies a hole against the
+type's denotation. Giving the graph run a declared result type (`Tuple` of its returns, or the
+denotation the annotation names) is the open piece; it is a typing decision, not a run fix.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
