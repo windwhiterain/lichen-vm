@@ -2045,6 +2045,17 @@ where
         {
             return self.value(call);
         }
+        // A read's value half names the read
+        // (`docs/notes/class-carries-the-call.md`).
+        if let Some(element) = target.dynamic()
+            && let Some(operation) = self.module.node_operation(element)
+            && matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            )
+        {
+            return self.index(element);
+        }
         let index = arguments.get(1);
         // **What it saw, in the graph's terms**: the refusal names the target, the index
         // and the chain.

@@ -335,7 +335,11 @@ check-time shape and a lazy value) before the device tests can pass. Narrowing t
 the plrun result is not an apply result in that map and the narrowing cannot be the
 discriminator. The clone walk's copy of the mark was measured **unnecessary** for the
 chain (218/22 with and without it): the checker's reads resolve against the template body's
-nodes, not a clone. Seeding the lazy read's value node with the declaration field's value
+nodes, not a clone. The kernel compiler's index placement now **looks through a read's
+value half** (`Index(Index(container, at), 0)` places the element read, `body.rs`), which
+recovers three of the four device regressions and flips `nested_config::a_nested_config_records_each_leaf_for_what_it_is`
+with them: 218/22 → **221/19**. `fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`
+remains red. Seeding the lazy read's value node with the declaration field's value
 (`seed_node_value`) was also measured inert (218/22, same four regressions): the
 declaration's value child is itself open in these shapes, so no build-time shape can be
 seeded from it. The next measurement is the kernel class derivation's own read: which
