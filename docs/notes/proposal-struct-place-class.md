@@ -1,111 +1,95 @@
-# Proposal (v3): a struct field's declaration is an annotation; the value is the argument's
+# Proposal (v4): the template match fills fresh cells; it never installs the template's value
 
-> Status: **proposal — for review, not applied.** Supersedes v2 (`e6abccb2`). Addresses
-> the review's four requirements for a v3: a role-based declaration, a real merge-free
-> check, the complete path, and three semantic examples. No new syntax; the annotation
-> (§Annotation) is the check the language already has. The spec file is untouched.
+> Status: **proposal — for review, not applied.** Supersedes v3 (`f1ebd0ae`). It keeps
+> the confirmed rulings of [value-templates](value-templates.md) rather than overturning
+> them: `=` remains the only template match, `:` stays a non-match, a direct template is
+> instantiated per use, and a call-result template keeps `r : type_of (k.O); r = k.O`.
+> The rule below states what that match does with the template's **expression children**
+> — the four aspects the review asked to separate. The spec file is untouched.
 
-## 1. Declaration, by role
+## The rule: text proposed for §Function, after the apply reduction
 
-Proposed for §Type, after the sentence "expression with unit variant lowlevel value has
-type `Type`":
-
-> A **declaration** is an expression in a **declaration position**:
+> A **template match** is `a = t` where `t` is a template (a direct template value, a
+> parameter pattern, or a call-result template). The match reads `t`'s expression
+> children, and for each position:
 >
-> - the annotation of an annotated expression (`e : d`);
-> - a struct template's field expression (`s := {.n1 d1 …}`);
-> - the codomain argument of a kernel launch (a library position:
->   `compute.parallel f "gpu" d`).
+> - the **type** is `t`'s type child's denotation; it is shared and checked (`a`'s type
+>   is a subtype of it);
+> - the **attributes** are `t`'s attribute children; they are shared and unified
+>   directionally (`a`'s attribute is a subtype of `t`'s);
+> - the **value** child: a **closed** value is a **pin** — `a`'s value must equal it
+>   (`expected 5, found 6`); an **open** value (`@any`, an empty cell) is a fresh empty
+>   cell for this use, filled by `a`; a **type expression** states the type requirement
+>   and carries no value; `t` is never specialized;
+> - a **group** child (a struct value, e.g. a buffer's parameter group) is matched
+>   position by position by the same rule.
 >
-> A declaration states a type; it is not a value. An expression in a value position —
-> an argument, a parameter binding, the left of `=` — is never a declaration, even when
-> its type is `Type`: `id = (T : Type) => T; id Int` binds `Int` to `T`.
+> The match's answer is `a`. A read of a matched place answers `a`'s value for that
+> part; before `a` runs, an open part is undecided — never the template's value.
 
-This is positional, so it covers `Buf x` and `@any : Int` (struct field declarations) and
-`k.O` (the annotation `r : type_of (k.O)`), and it excludes a type parameter, whose
-binding is a value unify.
+This is the confirmed per-use instantiation ruling ("its open value slots become fresh
+empty cells, while its types, attributes, name table and nominal id are shared. The
+actual fills the fresh slots, so the template itself is never specialized") stated as the
+match's rule; it adds no syntax and changes no other form.
 
-## 2. The check: the annotation is already merge-free for values
+## How the four review aspects map
 
-Proposed clarification of §Annotation:
+1. **type** — from `t`'s **type child**, not the whole field expression: the field
+   construction already splits the children (`checker/tuples.rs`, the field's value and
+   type children) and calls `type_denotation` on the type child. `check_ann`'s
+   whole-RHS `type_denotation` is not used for the field; that path is why v3's example
+   was wrong.
+2. **attributes** — the existing directional requirement (subtype via the attribute's
+   `is_subtype`), unchanged.
+3. **value pin** — only a **closed** value child pins. `S := {.a 5 : Int}; S{.a 6}`
+   keeps its refusal (`expected 5, found 6`, pinned by
+   `struct_element_attributes`); `(Buf (BufParam{.length 8}))`'s length is closed and
+   pins; its native `@any` is open and is filled.
+4. **compound template content** — a group child is matched position by position, so the
+   buffer group's internal pins and opens are preserved instead of comparing the shared
+   `Struct` type.
 
-> The annotation unifies and replaces the **type attributes**; the expression's **value**
-> attribute is not unified with the annotation. A declaration in an annotation position
-> therefore checks `e`'s type and leaves `e`'s value alone. When `e`'s value is
-> undecided, the type check is deferred to its bind.
+## §Struct: the reduction text is unchanged
 
-No new primitive and no post-unify suppression: the annotation's own rule is the check,
-and the class merge happens only among type attributes. The `a = b` => `a <: b` rule is
-untouched, so no recursion through `<:`.
+Today's lines are exactly this match — `raw v[...] = e1` matches the fresh place against
+the declaration, and `e = raw v[...]` fills it. No spec text changes in §Struct; the new
+paragraph states what the match does with the value.
 
-## 3. §Struct: the declaration becomes an annotation
+## Paths
 
-Proposed reduction, replacing today's:
-
-```sytax
-`s{.n2 e3, .n1 e4}` 
-:= 
-`{
-  let {.n1 d1, .n2 d2} = s;
-  v := raw[name_table, nominal_id, @raw None, @raw None];
-  raw v[name_table["n1"]+2] : d1;
-  raw v[name_table["n2"]+2] : d2;
-  e4 = raw v[name_table["n1"]+2];
-  e3 = raw v[name_table["n2"]+2];
-  raw[raw v, Struct, ...]
-}`
-
-`s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
-```
-
-> `raw v[...] : d` is the annotation: it checks the place's type against the declaration
-> and carries no value. `e = raw v[...]` binds the supplied expression's value. The
-> field's value is `e`'s; the declaration's is nobody's.
-
-## 4. The library
-
-`compute.lichen`'s `plrun` ends with `r : type_of (k.O); r = k.O`. The annotation is the
-requirement; the `r = k.O` **value bind is removed**. The codomain still reaches
-`$plrun` as its third operand — the recording's roles and the launch's declared layout
-read it there, not through `r`'s value.
-
-## 5. The four paths
-
-| path | change |
+| path | what the rule does |
 |---|---|
-| general unify (`ExprKind::Unify` → `check_unify_expr`, `checker.rs`) | **none** — a declaration is not unified through `=`; the requirement goes through the annotation (`check_ann`) |
-| struct instantiation (`check_instantiate`, `checker/structs.rs`) | both branches check the field against its declaration as a **type** (the decided branch's `check_unify(vals[argument], field)` becomes the annotation check); the undecided branch (`structs.rs:826-877`) already checks type and attributes only and now does so by rule |
-| runtime apply (`apply.rs` parameter slots) | **none** — a parameter is a value position; no declaration is a parameter |
-| `plrun`'s `r = k.O` (`compute.lichen`) | the value bind is removed; the annotation stays |
+| `check_instantiate` (`checker/structs.rs`) | per field, match the supplied term against the declaration: type from the type child, attributes directional, a closed value child pins, an open one is fresh, a group recurses. The **decided** branch's whole-term `check_unify(vals[argument], field)` is replaced by this match; the **undecided** branch's existing type/attribute checks are the match's type/attribute aspects and stay |
+| runtime apply (`apply.rs`'s parameter slots) | the parameter pattern's slots are the same match: a closed slot pins, an open slot is filled by the argument, a group recurses. This covers the expected parameter templates (`(k = Par)`) that the review named |
+| library wrappers (`launch`, `call`, `write`, `write_atomic`, `mma`, `plrun`) | their `r = declaration` is a match under the rule, so **no library edit** — the confirmed ruling ("a direct template is instantiated per use; `=` is the only template match") is kept |
+| reads (`value_slot_read`, `slot_value_of`, lowlevel `Index`) | unchanged: a place answers the matched value's part; an open part before its value runs is undecided |
 
-## 6. Three semantic examples
+## Four examples
 
-**Type parameter binding.** `id = (T : Type) => T; id Int`. The apply unifies the
-argument with the cloned parameter (`=`), both value positions; `T` binds `Int` and the
-call answers `Int`. A declaration rule keyed on a position does not fire.
+1. **Type parameter.** `id = (T : Type) => T; id Int`. `T` is a parameter place (an open
+   cell), not a template's value child; the match fills it with `Int` and the call
+   answers `Int`.
+2. **`@any : Int` config.** `Par := {.n @any : Int, .scale @any : Float}`. `.scale`'s
+   type child `Float` is checked, its value child `@any` is a fresh cell, and `s.scale`
+   fills it; the kernel reads the supplied float and the declaration adds no value.
+3. **`plrun` codomain.** `r := $plrun(k.native, a, k.O); r : type_of (k.O); r = k.O`.
+   The codomain's open buffer fields are fresh cells, `r`'s recorded buffer fills them,
+   its closed `.length` pins check; `first.r` answers `r`'s buffer (the recorded
+   wrapper).
+4. **Value pin.** `S := {.a 5 : Int}; S{.a 6}` refuses with `expected 5, found 6` — the
+   closed value child is a pin.
 
-**`@any : Int` config.** `Par := {.n @any : Int, .scale @any : Float}`. Instantiating
-`Par{.scale s.scale}` annotates the instance's `.scale` place with `Float`: the type is
-checked, and the place's value is `s.scale`'s — a runtime float the kernel reads. The
-declaration `Float` carries no value into the place.
+## Compatibility and the rulings it keeps
 
-**`plrun` codomain field read.** `r := $plrun(k.native, a, k.O); r : type_of (k.O)`.
-`r` keeps the launcher's result as its value; the codomain is the requirement. A body's
-`first.r` reads the result's field (the recorded wrapper) and the codomain's declaration
-is nowhere in that class.
-
-## Compatibility
-
-- A decided instance answers as today: the place already holds the supplied value.
-- An open field answers its later bind or undecided — the `plrun` result's `.r` read the
-  22 tests ask for.
-- Removing `r = k.O` was measured inert on the current suite (215/25), so no test relies
-  on that bind today; the codomain's type still reaches `r` through the annotation.
-- The SPEC's §Annotation gains one clarifying sentence; §Struct changes the two `= d`
-  lines to `: d`. No new syntax, no change to `=`, clones, or attributes.
+- `=` is the only template match; `:` is not a match; a direct template is instantiated
+  per use; the call-result template stays `r : type_of (k.O); r = k.O`.
+- §Struct's reduction text is unchanged; only the match's rule is stated where the spec
+  already defines the apply reduction.
+- A decided field answers as today; an open field answers its fill or undecided.
+- The pin semantics and the compound content are preserved (aspects 3 and 4).
 
 ## What this proposal does not claim
 
-- It does not touch `a = b` or the subtype direction.
-- It does not rely on "the declaration's type is `Type`".
-- It does not assume the checker's post-unify error truncation is a check.
+- It does not touch `a = b`'s direction, the annotation rule, or any syntax.
+- It does not rely on post-unify error truncation: a pin is a check, and the fresh-cell
+  fill is the template's own per-use instantiation.
