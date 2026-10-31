@@ -418,6 +418,15 @@ decided `Buf` cell into every cloned cfg, and the recording's write lands there;
 belongs to the clone walk's sharing rule (or to the unify's write), not to the placeholder
 assembly.
 
+A third reading rules out `node_apply`'s own closed-cell rule: a probe printed every
+array-valued node the clone walk meets, and **none** was judged closed (`closed=false,
+depends=true` on every one), so every such node *is* cloned. The shared cell is therefore not
+a node the walk visits at all — it is reached only as an **item of another node's value**
+(the cfg's nested `In1{…}` field), and the walk copies a node's own slot without walking its
+value's items. The next probe is that value-item path: the clone must freshen the open slots
+inside a value, per `docs/notes/apply-clone-ownership.md` (or the recording's unify must copy
+before it writes).
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
