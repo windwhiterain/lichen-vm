@@ -561,6 +561,17 @@ is produced before the struct's array reaches that walk, so the clone rule has n
 on. The mirror's second half therefore needs the **materialisation itself** to keep the
 declaration's identity items as refs, not a rule in the clone walk.
 
+**The identity-item mechanism is in** (`677ad523`): the checker marks a struct value's name
+table and nominal id (`Module::struct_identity_items`) and the clone walk references marked
+items in place, so a per-call clone cannot give one declaration two identities. Measured: no
+regression (232/8, engine binaries green), and the cooperative pair still differs at item 0
+because the two tables are **independently built**: the program's comes from the prelude's
+`Buf` body (marked and shared), the runtime wrapper's is a fresh local node (marked too, but a
+different node). The wrapper needs the **declaration's** node, and the spliced package exposes
+none to `buf_identity` (its frozen-module scan finds nothing) — so the next step is a
+per-module declaration lookup, e.g. registering the wrapper as a *linked* package whose
+bindings hand the runtime the `Buf` binding's value.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
