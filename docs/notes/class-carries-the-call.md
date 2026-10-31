@@ -560,6 +560,14 @@ clone's first two items in place (`value_apply`) was written and measured **iner
 is produced before the struct's array reaches that walk, so the clone rule has nothing to act
 on. The mirror's second half therefore needs the **materialisation itself** to keep the
 declaration's identity items as refs, not a rule in the clone walk.
+
+**`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
+outside the test binary: the check refuses with only the return refusal, and the direct form
+`out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
+`jit`/`call` path's types are already wrong before any recording begins, and the expected "a
+graph has no node for one" sentence (the `unrecordable` arm) is never reached because the
+dispatch is never attempted. The family needs the scalar-kernel call path, not a recording
+rule.
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and
