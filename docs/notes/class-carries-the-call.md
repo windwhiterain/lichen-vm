@@ -196,4 +196,26 @@ measured, each is either load-bearing or inert. The remaining fix is **global**:
 value model must keep a declaration's fact apart from the cells a call fills, and that
 cannot be reached by a condition at one site.
 
+## The defect's minimal form
+
+One expression is enough to read a declaration out of a place, no compute library and no
+kernel:
+
+```lichen
+(_ = {.r Int}).r
+```
+
+It prints `raw none: Type` — the declaration `Int` itself (a value of type `Type`) — where
+the field's value should be the actual's, and the actual is undecided. The mechanism is the
+one unify: `_ = {.r Int}` is the undecided-against-decided write arm, so the struct value
+whose `.r` is the type expression `Int` becomes the class's answer, and `.r` reads it. The
+compute form only enlarges the value: `OutR := {.r (compute.Buf (compute.BufParam{.type
+Float, .length 4}))}; x := _; x = OutR; x.r` prints `(raw none, Float, 4): Struct`, the Buf
+declaration. `plrun`'s `r = k.O` is the same unify with the codomain in place of `OutR`,
+which is why the chain family reads the declaration.
+
+Under the proposal a type expression in a field states the **requirement** and carries no
+value: the place stays the actual's (undecided here), so the minimal program answers an
+undecided `Int`-typed value instead of the declaration.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
