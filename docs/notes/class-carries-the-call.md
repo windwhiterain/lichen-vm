@@ -516,6 +516,18 @@ not decided"), and `: Struct` moves the refusal to the graph op's own return che
 Array, found Struct"). The test needs a **declared result type for the graph run**, which is a
 typing decision, not a local patch.
 
+**`cooperative_product`'s next layer, measured.** After the `Mma` lengths became element
+counts, the unify's two sides print byte-identically (`Buf Int 256`) and still disagree: the
+first difference is the value's **name table** — a **dynamic** handle against a **static** one —
+and `LowValue`'s equality compares the handles. A table is a mapping of names to positions, so
+the unify now compares tables by content (`name_tables_agree`: same length, same
+`(name, position)` entries, whichever module holds them). That removes the table difference and
+the next one is the **nominal type id**: the frozen `compute.Buf` type carries the **static**
+module's occurrence id (`BUF_NOMINAL_ID = 0`), a local `compute.Buf` occurrence mints the
+**dynamic** IR index (99), and `TypeValue::TypeId`'s invariant — *equal ids unify, different ids
+do not* — makes them two types. That is a cross-module nominal-type identity question, not a
+data fix.
+
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and
