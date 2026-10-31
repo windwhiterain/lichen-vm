@@ -117,4 +117,13 @@ wrapper's `r = k.O` and the codomain's type leave as the *declaration*. A
 `record_launch` probe confirms the recorded wrapper itself is assembled
 (`GraphValue` payload); it is the binding's value that loses it.
 
+**Where the chain's refusal is recorded (measured, this round).** The diagnostic is
+`stage: Check`, and `common::run` panics on it before any run: `Mode::Evaluate`'s
+definition pass "runs every body and every top-level statement", so `built := compute.graph
+step` is evaluated there and the recording is what the checker/build-time values drive.
+The same program's plain dispatch legs are in the same pass, so the defect is the
+recording's environment inside the definition pass — not a separate run-time path. That
+is why every attempt to fix the read at run time was inert: the read was answered
+before the run.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
