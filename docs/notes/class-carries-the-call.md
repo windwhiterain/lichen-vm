@@ -406,4 +406,13 @@ the `evaluate_raw` report's). The placeholder check now also recognizes the asse
 payload the recording placed) instead of only the two-item wrapper; that arm is true for
 this program and the test still fails for the reporting gap.
 
+**The example drift is the look-through's placement, measured.** A `matmul` probe prints its
+inputs correctly (`a = [1..6]`, `b = [7..12]`) and the product wrong (`[29, 32, 101, 112]`
+against `[58, 64, 139, 154]`), so the kernel computes from right buffers with a wrong body
+value: disabling the look-through in `body.rs`'s `index` makes the compilation **refuse**
+("a kernel body's index cannot be placed") rather than answer, so the look-through is
+required for the body to compile and its placement is what changes the numbers — it returns
+the element **slot** where the value half names the slot's **value item**. The next round's
+fix is in that placement, not in the mark.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
