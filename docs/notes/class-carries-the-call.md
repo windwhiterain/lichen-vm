@@ -411,6 +411,13 @@ check-time node**. The second evaluation finds the same cell holding a runtime `
 later launch's answer), and the dispatch refuses. The fix is the recording's parameter
 binding: it must write into the per-recording clone, never into the program's instance cell.
 
+A second reading narrows where the sharing is: the three recordings' **cfg** nodes differ
+(`6051`, `9666`, `10242` — one fresh cfg per evaluation), while the node the input path
+resolves to is the **same** (`3179`) in all three. So the clone walk shares the program's
+decided `Buf` cell into every cloned cfg, and the recording's write lands there; the fix
+belongs to the clone walk's sharing rule (or to the unify's write), not to the placeholder
+assembly.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
