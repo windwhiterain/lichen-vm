@@ -70,4 +70,17 @@ where a read walks the declaration, instead of a class merge that carries both. 
 kernel template's open cells are the same gap on the compile side: a field declared
 `@any` is a cell an apply fills, not a node the compile should demand.
 
+**The mechanism, measured on the chain family's second dispatch (this round).** The
+recording assembles the first dispatch's output as a fresh wrapper (`19210`, payload
+`19190`, a `GraphValue`), and the declared cell it was built from is `2955`; the
+second dispatch's argument read (`first.r`) resolves instead to `14506` — an `Index`
+node whose value is a `Buf` struct whose `.native` is an **array** (the declared
+type term), not a recorded value. So the read returns the **requirement's class
+representative**, with the recorded wrapper a member of the same class. Three
+attempts to bridge it without separating the storage were measured and left the
+suite at 215/25: forcing the cfg deeply, following `field_sources` from the declared
+cell, and inserting that source at the declared cell's class root. The separation
+therefore has to keep the actual's **cell** apart from the requirement's, not give
+the requirement a source.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
