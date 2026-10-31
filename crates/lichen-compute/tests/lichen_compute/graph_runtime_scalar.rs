@@ -294,7 +294,7 @@ neither_raw := (k = Par2) => {
         format!(
             "GA := {{.n @any : Int, .cols @any : Int, .in In2}}\nstep := (s = GA) => {{\n  \
              compute.plrun kernel ((Arg2){{.n s.n, .cols s.cols, .I In2{{.a s.in.a, .b s.in.b}}}}) \
-             : Out2\n}}\nbuilt := compute.graph step\nbuilt\n"
+             : Struct\n}}\nbuilt := compute.graph step\nbuilt\n"
         )
     };
     for (reads, name, body) in [
