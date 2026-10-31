@@ -437,6 +437,12 @@ placeholder binding writes there. The fix is the recording's read resolution (it
 per-recording cell in `field_sources`, recorded by `record_graph_parameter_sources`) or a
 copy-before-write in `record_launch` — not a change to the clone's sharing rule.
 
+Measured the first route: resolving the input path through `field_sources` reaches the
+recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
+already wrote — the unify reports `Buffer` against `GraphInput(3)` — so the resolution alone
+does not help while the shared cell keeps its stale values. The remaining route is the
+copy-before-write: the recording must hand the body its own copy of the argument tree.
+
 **`graph_jit`'s missing refusal, measured.** The "a collect is asked here…" sentence is
 recorded (`unrecordable`'s guard is true during the recording, and the module's diagnostic
 list shows it), but it never reaches the report: the collected error list is a *different*
