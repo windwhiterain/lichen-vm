@@ -1,13 +1,13 @@
-# Proposal (v10): the match decides per position and treats `Any` as open; pending requirements are records; frozen artifacts carry the set
+# Proposal (v11): the match decides per position, `Any` is open and never replaced in place; pending requirements are records; frozen artifacts carry the set
 
-> Status: **proposal — for review, not applied.** Supersedes v9 (`4cb15f0e`). v10 adds the
-> wildcard rule and the match's own openness predicate: `Any` is undecided, so a write of
-> `Any` neither checks nor discharges a pending requirement (a pending pin 5 accepts
-> `Any`, stays pending, then accepts 5 and refuses 6); and **deep-closed is the match's
-> predicate, not `evaluated_deep`** — the deep pass deliberately treats `Any` as concrete
-> for structural proofs, while the match treats it as open, or a wildcard-containing
-> actual could take the whole-term route. §2, §3.3a and §6 carry the change; the spec
-> file is untouched.
+> Status: **proposal — for review, not applied.** Supersedes v10 (`06a3560a`). v11 makes
+> the wildcard's transition explicit: a slot holding `Any` still occupies the slot (the
+> model never replaces an occupied slot), so the concrete value is not written over it —
+> the apply's clone walk's `Any` → fresh empty cell is the transition, the pending
+> requirement is copied with the class through that remap, and the gate checks the
+> concrete value on the fresh cell. No in-place replacement, no change to the
+> no-overwrite invariant, no spec change to the wildcard's semantics. §2 and acceptance
+> case 0c carry the change; the spec file is untouched.
 
 ## 1. The match rule (spec text, as v6)
 
@@ -39,9 +39,13 @@ A **closed** value child with an **open actual** registers the pending requireme
 > - **Pre-write gate.** A concrete value becomes visible to a class only after every
 >   pending requirement of the class accepts it. A refusal leaves the value uninstalled.
 > - **The wildcard is not a candidate.** A value of `Any` is undecided, not an answer: a
->   write of `Any` neither checks nor discharges a pending requirement, which stays
->   pending for the concrete value that follows (a pending pin 5 accepts `Any`, is still
->   pending, then accepts 5 and refuses 6).
+>   write of `Any` neither checks nor discharges a pending requirement.
+> - **The concrete value arrives on a fresh cell.** A slot holding `Any` still occupies the
+>   slot — the model never replaces an occupied slot — so the concrete value is not
+>   written over it. The apply's clone walk already turns `Any` into a fresh empty cell;
+>   the pending requirement is copied with the class through that remap, and the gate
+>   checks the concrete value where it arrives. No in-place `Any` → value replacement is
+>   introduced, and the no-overwrite invariant is unchanged.
 > - **Movement.** GC relocation and freeze move an already-checked value; they keep the
 >   set and do not re-check.
 
@@ -183,9 +187,13 @@ the match does with the template's value; no symbolic change is needed.
    r = k.O` — after the unify `r` has no value; a read of `r.r` before the result runs is
    undecided, and after the result fills it answers the recorded buffer. The declaration
    `k.O` is nowhere in `r`'s class.
-0c. **The wildcard does not discharge a requirement.** With a pending pin 5 on a class,
-   writing `Any` is accepted and the pin stays pending; a later concrete `5` is accepted
-   and a concrete `6` is refused `expected 5, found 6`.
+0c. **The wildcard does not discharge a requirement, and the concrete value arrives on a
+   fresh cell.** With a pending pin 5 on a class, writing `Any` is accepted and the pin
+   stays pending. The slot holding `Any` is not replaced in place: the apply's clone walk
+   (`function.rs`: the `Any` → fresh empty cell replacement) produces the fresh class that
+   inherits the requirement through the remap, and the concrete value is written there —
+   `5` accepted, `6` refused `expected 5, found 6`. The original `Any` slot keeps its
+   no-overwrite protection throughout.
 0b. **A partially-open group.** A decided outer struct with an open native/payload (the
    wrapper shape the class note records) is matched per child: the open payload keeps its
    cell, its requirement is recorded, and **no declaration value is installed** into it;
