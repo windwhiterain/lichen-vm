@@ -155,6 +155,81 @@ where
         result
     }
 
+    /// The slot `node` carries at canonical attribute `canonical`, read through
+    /// the array's own layout.
+    ///
+    /// # Invariant
+    /// Only a **carried** position answers: a canonical index the layout omits is
+    /// read from the module's default attribute array, which is the shared
+    /// wildcard, and no caller may write it.
+    fn carried_slot(&self, node: NodeId, canonical: u32) -> Option<NodeId> {
+        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        let lichen_lowlevel::LowValue::Array(array) =
+            lichen_utils::extend::AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value)?
+        else {
+            return None;
+        };
+        let layout = self.module.attribute_layout(array.layout());
+        let offset = layout.iter().position(|index| *index == canonical)?;
+        // SAFETY: `array` is the payload of the value just read from a live node.
+        unsafe { array.items() }
+            .get(shape::EXPR_ATTR_BASE + offset)
+            .and_then(|item| item.node.dynamic())
+    }
+
+    /// The slot `node` **states** at `canonical`, or `None` for a wildcard or an
+    /// uncarried position.
+    fn stated_slot(&self, node: NodeId, canonical: u32) -> Option<NodeId> {
+        let slot = self.carried_slot(node, canonical)?;
+        let value = self
+            .module
+            .node_value(AnyNodeId::Dynamic(slot))
+            .and_then(|value| {
+                lichen_utils::extend::AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value)
+            });
+        (!matches!(value, Some(lichen_lowlevel::LowValue::Any))).then_some(slot)
+    }
+
+    /// The slot `node` holds a **wildcard** at, or `None` when it states one.
+    fn carried_wildcard(&self, node: NodeId, canonical: u32) -> Option<NodeId> {
+        let slot = self.carried_slot(node, canonical)?;
+        let value = self
+            .module
+            .node_value(AnyNodeId::Dynamic(slot))
+            .and_then(|value| {
+                lichen_utils::extend::AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value)
+            });
+        matches!(value, Some(lichen_lowlevel::LowValue::Any)).then_some(slot)
+    }
+
+    /// Let the value a statement names take the attributes the statement's
+    /// annotated side states.
+    ///
+    /// # Invariant
+    /// Only a **wildcard** position is cleared: a slot the value already states is
+    /// its own, and the statement's unify compares the two. Clearing is what lets
+    /// that unify carry the stated slot into the value: `Any` unifies with
+    /// everything and merges with nothing, so an uncleared position would keep
+    /// saying nothing and a call site would read the argument instead of the
+    /// callee's claim. A body's `r = (x # 32)` therefore states its return's
+    /// perspective (`docs/notes/attributes.md` § "A declared return attribute
+    /// rides to the call site").
+    pub(super) fn adopt_stated_attributes(&mut self, actual: NodeId, expected: NodeId) {
+        for marker in P::Attr::ORDER {
+            let canonical = marker.order_index() as u32;
+            let Some(stated) = self.stated_slot(expected, canonical) else {
+                continue;
+            };
+            let Some(wildcard) = self.carried_wildcard(actual, canonical) else {
+                continue;
+            };
+            if wildcard == stated {
+                continue;
+            }
+            self.module.clear_wildcard(wildcard);
+        }
+    }
+
     /// The value's existing attribute slot for `marker` — the node its runtime
     /// expr carries at that attribute's position.
     ///

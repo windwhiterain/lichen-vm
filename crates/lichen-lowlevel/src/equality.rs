@@ -336,6 +336,32 @@ impl<P: Program> Module<P> {
         self.write_node_value(node, value);
     }
 
+    /// Empty a slot that holds the **wildcard**, so a later unify may write it.
+    ///
+    /// # Invariant
+    /// Only a lone wildcard (`Any`) is cleared: a wildcard says the position never
+    /// decides, so the one way a statement may give it a value is to empty it first.
+    /// The node must be alone in its class — a shared wildcard is the default
+    /// attribute array's, and clearing it would empty every hole at once. Every
+    /// occupied slot that is not this one keeps [`Self::write_node_value`]'s rule.
+    ///
+    /// Answers whether the slot was cleared.
+    pub fn clear_wildcard(&mut self, node: NodeId) -> bool {
+        let alone = self.nodes[node].equality.parent().is_none()
+            && self.nodes[node].equality.next().is_none();
+        let wildcard = matches!(
+            self.nodes[node]
+                .value
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value)),
+            Some(LowValue::Any)
+        );
+        if !alone || !wildcard {
+            return false;
+        }
+        self.set_node_value(node, None);
+        true
+    }
+
     /// GC's sole licence to rewrite an occupied slot.
     ///
     /// # Invariant
