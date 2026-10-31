@@ -613,7 +613,10 @@ carries no stated attribute** (`origin_stated=[]`). So the warp constant (32) ex
 prelude's *checker state* only, and the freeze does not carry it into the frozen nodes: the
 call's certificate is a hole by construction, and the requirement check silently skips. The fix
 therefore belongs to the freeze (carry an attribute slot's decided value) or to the checker's
-cross-package certificate, not to the slot walk.
+cross-package certificate, not to the slot walk. A **full sweep** — evaluating every node of the
+package at freeze — was measured and is too broad: compute **180/60**, because body operators run
+on wildcard cells and their answers become errors the program then reads. A targeted pass over
+the attribute expressions is what remains.
 
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
