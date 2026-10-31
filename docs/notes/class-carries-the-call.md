@@ -430,6 +430,11 @@ value is a **fold-block parameter** (`BlockParam(3, 1)`) instead of the fold's r
 (`Value(33)`). So the drift is the kernel compiler's leaf resolution for reads homed in a
 nested block, not the arithmetic: the reads' steps are dropped or collapsed to the first
 leaf. A one-write kernel's body (no fold) compiles correctly, which is why only the
-fold-using examples drift.
+fold-using examples drift. The fix converts the steps through `physical_param_path`
+before the shape walk: the steps are physical item indices (the struct's two header slots
+included), while the shape speaks role positions. Measured: `k.k` and `k.cols` resolve to
+leaves 2 and 1, the matmul example's first product element answers `58.0` again, the
+survey's drifts drop from six to four (`gemv` and `matmul` clean, `topk` still drifts), and
+the compute suite stays 226/14.
 
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).

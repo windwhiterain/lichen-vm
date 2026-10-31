@@ -696,6 +696,14 @@ where
         // **The slot is the path flattened**, summing each skipped element's arity; the
         // steps are reversed first.
         positions.reverse();
+        // The steps are physical item indices; the shape speaks role positions.
+        if let Some(logical) = self
+            .params
+            .iter()
+            .find_map(|slot| super::physical_param_path(self.module, slot.expr, &positions))
+        {
+            positions = logical;
+        }
         let offset = self.offset_of(&positions);
         if offset.is_none() {
             return Ok(None);
