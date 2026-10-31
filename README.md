@@ -305,7 +305,7 @@ type — the nominal id is per written occurrence and shared by the clones, so
 `Box Int` and `Box Type` differ only in their field lists (the value shape),
 not in their type (the shared `Struct` template).  They therefore coexist in
 one tuple."
-  output = "((@any,), (@any,), (@any,)): Tuple"
+  output = "((none,), (none,), (none,)): Tuple"
 ---
 Box := t => {.f @any : t}
 (Box Int, Box Type, Box Int)
@@ -1297,7 +1297,7 @@ compute.collect out.o : Array
     of a position rather than an effect, which forces one write per lane per output and so \
     forces the bijection. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
     conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The arithmetic is exact — every element is an integer below `2^24` — so each position holds the copy or the replacement and not a rounding of it."
-  output = "([1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0], [5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]): tuple{array{Float, 8}, array{Float, 8}}"
+  output = "([1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0], [5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]): Tuple"
 ---
 KVIn := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8})), .nk (compute.Buf (compute.BufParam{.type Float, .length 2})), .nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 KVOut := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}

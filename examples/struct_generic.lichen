@@ -6,7 +6,7 @@ type — the nominal id is per written occurrence and shared by the clones, so
 `Box Int` and `Box Type` differ only in their field lists (the value shape),
 not in their type (the shared `Struct` template).  They therefore coexist in
 one tuple."
-  output = "((@any,), (@any,), (@any,)): Tuple"
+  output = "((none,), (none,), (none,)): Tuple"
 ---
 Box := t => {.f @any : t}
 (Box Int, Box Type, Box Int)
