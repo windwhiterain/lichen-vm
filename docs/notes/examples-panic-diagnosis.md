@@ -229,6 +229,17 @@ reverted and are **not** part of this note's branch.
 
 ## Current measurement (round 24): the panic has changed shape
 
+> **A later reading, after the requirement mark.** The survey's counts have moved: **8
+> panicked, 6 drifted, 34 clean, 1 skipped**. The panics are the same answer-collision
+> family (`filter`, `lazy_infinite`, `mathlib`, `pooling`, `silu`, `stencil`, `torus`,
+> `worldgen`). The drifts are the three named below **plus** `gemv`, `matmul` and `topk`,
+> whose declared arrays differ from what the program prints. Measured cause: disabling the
+> requirement mark (`check_unify_expr`'s insert) makes those three clean again and turns
+> `convolution2d` into a panic — so the mark fixes `convolution2d` and drifts the three,
+> i.e. a marked read's check-time value is not what the kernel's argument walk needs. The
+> role-path fix does not move any of these (measured with the old conversion restored:
+> identical list).
+
 The survey now walks **49** examples: **37 clean, 8 panicked, 3 drifted, 1 skipped**
 (`compute_jit.lichen`). The 8 panics are **all the same answer collision**, not the
 released-block reference this note was written about:
