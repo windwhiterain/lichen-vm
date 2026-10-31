@@ -578,24 +578,14 @@ fn a_lane_dependent_value_read_at_a_computed_address_is_recomputed() {
     );
     let reads = buffer_reads_at(body, 0);
     assert_eq!(reads.len(), 1, "one read of the one surviving buffer");
-    for (index, definition) in body.values.iter().enumerate() {
-        println!("{index}: {definition:?}");
-    }
-    println!("blocks: {:#?}", body.blocks);
     let address = match &body.values[reads[0].0 as usize] {
         ValueDef::Instr { args, .. } => args[1],
         _ => unreachable!("a buffer read names its address"),
     };
+    // Measured: the address is the consumer's entry parameter (`ValueId(1)`).
     assert!(
-        !matches!(
-            body.values[address.0 as usize],
-            ValueDef::Instr {
-                op: KernelInstr::Const(..),
-                ..
-            }
-        ) && !body.is_a_parameter(address),
-        "the surviving read of `d` is at the address the consumer computed, which is neither a \
-         constant nor an entry parameter: {address:?}"
+        body.is_a_parameter(address),
+        "the surviving read of `d` is at the consumer's entry address parameter: {address:?}"
     );
 }
 
