@@ -34,8 +34,16 @@ fn per_example_survey() {
         let declared = readme::declared_output(&source);
         let run = catch_unwind(AssertUnwindSafe(|| readme::program_output(&file, &source)));
         match (declared, run) {
-            (_, Err(_)) => {
-                println!("PROBE: {name}: PANICKED");
+            (_, Err(payload)) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_string()))
+                    .unwrap_or_else(|| "<non-string panic>".into());
+                println!(
+                    "PROBE: {name}: PANICKED {}",
+                    message.chars().take(300).collect::<String>()
+                );
                 panicked.push(name);
             }
             (None, Ok(_)) => {

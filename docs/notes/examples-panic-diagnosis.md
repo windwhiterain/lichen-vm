@@ -226,3 +226,28 @@ the investigation is open:
 Neither changes a production file, an example, or a test expectation. The two
 temporary instrumentation prints (`evaluation.rs:517` and `gc.rs:265`) were
 reverted and are **not** part of this note's branch.
+
+## Current measurement (round 24): the panic has changed shape
+
+The survey now walks **49** examples: **37 clean, 8 panicked, 3 drifted, 1 skipped**
+(`compute_jit.lichen`). The 8 panics are **all the same answer collision**, not the
+released-block reference this note was written about:
+
+```text
+error: expected ?, found ? — two answers met on one node (`answer-collision.md`)
+   --> 68:12  examples/filter.lichen
+ 68 | smooth := (compute.plrun fill_smooth (Fill{.n 3}) : Struct).smooth
+```
+
+The same shape recurs at `mathlib.lichen:181` and the other six. Every one is a
+`compute.plrun(...).field` read hitting the collision, i.e. the class/template family
+that [class-carries-the-call](class-carries-the-call.md) and the spec proposal describe —
+so the examples test cannot be fixed independently of that family.
+
+The 3 drifts likewise belong elsewhere: `decode_loop` and `generate` print `raw none`
+where the declared values are the collected arrays (the same class/template family), and
+`import/math` is the parked wrapper rendering (`class-channel.md` §1.1.2's
+`wrapper_functions_render_with_named_type_variables`).
+
+The released-block GC panic this note investigated is **not** the current failure; the
+note's earlier measurements are kept as history, not as the current reading.
