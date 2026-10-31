@@ -351,4 +351,22 @@ declaration's value child is itself open in these shapes, so no build-time shape
 seeded from it. The next measurement is the kernel class derivation's own read: which
 field of the `Buf` it follows and what the lazy read replaced there.
 
+## The remaining failures' shapes (measured)
+
+With the requirement mark and the recording's run-stamp reset the suite stands at
+**222/18**. The eighteen group by the first diagnostic:
+
+| shape | tests |
+|---|---|
+| `expected Struct, found none` (an undecided value meeting a struct requirement; e.g. `In2{.p first.e}` where the lazy read has no check-time value) | `fan_out_merge::under_a_pack…` |
+| `expected Struct, found Struct` (two struct types that are not one) | `cooperative_product`'s three |
+| `unresolved name 'a'` | `nested_config::a_nested_config_runs_on_the_device…` |
+| a plain assertion on the pass's line (the digest differs) | `runtime_scalar_leaf::a_normalise…` |
+| a stale hardcoded expectation (the read's address is a `BlockParam`; measured earlier) | `fuse_licence::a_lane_dependent…` |
+| the documented parks | `compute::a_float_domain…` |
+
+Deferring the whole-term unify for **every** undecided actual against an open template was
+measured **75/165**: the value unify is load-bearing for the ordinary matches, so the fix
+for `fan_out_merge` must be narrower than "a requirement never unifies".
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
