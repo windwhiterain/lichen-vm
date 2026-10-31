@@ -219,3 +219,74 @@ The other current findings:
   capture materialization is not justified and would add semantics rather than
   repair this path. The remaining work belongs to the attribute certificate /
   requirement instantiation path; do not change the Any or capture invariants.
+
+## Round 28: one fixed, two left, and the certificate's real seam
+
+The suite stands at **compute 239 / 2**, and the engine binaries are green
+(lowlevel 164 / 0 with one ignored, highlevel 136 / 0, language 276 / 0, and the
+artifact subset inside it).
+
+**Fixed: a body's statement states its return's attribute.** The decisive
+reading is a pair of inline programs:
+
+| program | before | after |
+|---|---|---|
+| `g := x => (x # 32); (g 0) # 64` | refused `expected 64, found 32` | unchanged |
+| `g := x => {r := x; r = (r # 32)}; (g 0) # 64` | **accepted** | refused `expected 64, found 32` |
+
+So this half was never a package-boundary or freeze problem: a statement's stated
+attribute did not reach the value it names at all, because the returned expr's
+attribute position holds a **wildcard** (`Any`), and `Any` unifies with
+everything and merges with nothing. `Checker::adopt_stated_attributes` now clears
+the wildcard the statement's annotated side states a slot for, and the statement's
+own unify writes it through. `Module::clear_wildcard` is the one licensed writer:
+only a **lone** wildcard may be emptied, so the shared default attribute array
+cannot be touched. `attribute_value` also walks the slot's **value half** at every
+width; the old walk keyed on a non-zero layout, so a two-item `[value, type]` slot
+answered its own array instead of the number.
+
+**Fixed: an apply's attribute refusal names the attribute.** `apply_parameter_check`
+compares every position, but the recorded `ApplyError` named the parameter's and
+argument's **type** slots, so a perspective mismatch printed
+`expected Struct, found Struct`. `ApplyError` now records the failing position
+(`failing`) and whether it is an attribute one (`attribute`: `value@0`, `type@1`,
+so every later slot is an attribute's); the diagnostic is an `Attribute` mismatch
+read requirement-first, and `TypePrinter::attribute_half` spells a slot side's
+element 0 (reading through static nodes). Measured: `expected 32, found 1`.
+
+`perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`
+also annotated its parameter with a struct **value** (`x : (compute.Buf …)`), the
+same mistake the two earlier test-data fixes repaired; the parameter is a
+template, so it is spelled `x = (compute.Buf …)`.
+
+**Corrected reading: the write's certificate was never measured as its field.**
+[attributes](attributes.md) said `(w # 0)` printing `expected 0, found 32` was
+"only possible if the field, not the whole argument's meet, is what the call site
+took". It is not: with `.at 0, .value 0` the meet is `gcd(32, 0, 0) = 32`, the
+same number. With lane-varying siblings the sentence names the meet instead
+(`expected 0, found 1`), so the call site falls back to the argument's whole
+provided slot and the field reference is never resolved. `zz_attribute_certificate_probe`
+pins both readings.
+
+**The two left turn on one measurement: a program's call into the frozen package
+has no callee.** `check_app`'s `callee = self.module.function_apply_function(callee_expr)`
+answers `None` for `compute.write` and `compute.mma` (probe print, every call in
+both programs), so the whole signature path is skipped: `parameter_expr` is
+`None` (no signature requirement), `applied_exprs` stays empty (no certificate),
+and the `deferred_requirements` replay is skipped too, because it needs a
+`Dynamic(fid)` callee. That is why the certificate is the meet. The next round
+starts at `function_apply_function` for an imported package binding — its value
+must be `LowValue::Function(AnyFunctionId::Static(..))`, and something between the
+freeze's binding table and the field read loses it.
+
+The second remaining defect is independent and smaller: `check_instantiate`'s
+decided-field branch calls the **plain** `check_unify` on the whole exprs, so the
+perspective's order never runs for an instance's field attribute and
+`.to (b.b # 0)` is refused `expected 32, found 0` where `32 | 0` holds (the top
+satisfies any requirement). A per-marker delegation at the instantiation was
+measured worse at 232/8; a narrower shape — value and type strictly, attributes
+through the extension — has not been measured since.
+
+**Landed:** `adopt_stated_attributes`, `clear_wildcard`, the `attribute_value`
+walk, `ApplyError`'s failing position, the attribute-mismatch diagnostic and its
+renderer, the test-data fix, and the probe.
