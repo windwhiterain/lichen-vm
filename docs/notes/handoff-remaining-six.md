@@ -183,3 +183,38 @@ panics, so it is latent and deserves its own round.
 - `c05c3466` — a bound statement is evaluated at freeze (**232/8 → 234/6**).
 - `8684d33c` — an attribute's value may live at its class.
 - `4d46b595` — an annotation's term may hold an undecided value half.
+
+## Round 27: one fixed, five left
+
+`68085942` fixes `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name`.
+The old "deep pass does not visit `$call`" reading is not the mechanism. The
+unknown-role placeholder path built a ceiling-width tuple of **bare** `GraphInput`
+nodes. The parameter pattern instead carries full `[value, type, attrs…]` element
+slots, so the apply's structural unify failed and the recording discarded the
+binding error. `ins(0)` consequently had no value and `$call` stopped at its
+operand gate before `unrecordable` could run. The fix reads the positional
+parameter's real arity and gives every placeholder a complete expression slot.
+The whole `graph_jit` module is now **8 passed / 0 failed**. The no-backend
+diagnostic keeps the old substring but says "without a backend", because a
+recorded input now reaches that later refusal correctly.
+
+The other current findings:
+
+- `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` is a
+  **test-data conflict**, not an implementation defect. Its second program passes
+  `1.5` to `@any : Int`. The SPEC's annotation rule unifies the type, and the same
+  test file also pins the class refusal. Do not admit Float there to make the test
+  green; the program needs a maintainer-approved correction.
+- `fan_out_merge::under_a_pack…` still needs a **compute-library typing ruling**,
+  not a new language rule. `run_graph` returns the multiple results as a positional
+  compound of complete slots, but `$graphrun`'s checker-owned fresh type cell is
+  not connected to the graph's codomain. The SPEC distinguishes Tuple from Array
+  but does not choose the compute library's public result contract. The choices
+  are to type that result explicitly (and say which one it is) or to correct the
+  test's `: Array` expectation after the maintainer chooses Tuple.
+- For the three perspective/cooperative failures, the SPEC's clone rule is that
+  an out-of-scope undecided node is a **reference**. A measurement of an ordinary
+  imported `c := 32; f := x => c` answers `32: Int`, so a blanket freeze-time
+  capture materialization is not justified and would add semantics rather than
+  repair this path. The remaining work belongs to the attribute certificate /
+  requirement instantiation path; do not change the Any or capture invariants.
