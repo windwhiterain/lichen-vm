@@ -353,8 +353,8 @@ field of the `Buf` it follows and what the lazy read replaced there.
 
 ## The remaining failures' shapes (measured)
 
-With the requirement mark, the recording's run-stamp reset and the two re-pinned tests the
-suite stands at **224/16**. The eighteen group by the first diagnostic:
+With the requirement mark, the recording's run-stamp reset, the two re-pinned tests and the
+role-path fix the suite stands at **225/15**. The eighteen group by the first diagnostic:
 
 | shape | tests |
 |---|---|
