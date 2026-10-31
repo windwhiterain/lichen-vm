@@ -59,10 +59,18 @@ A **closed** value child with an **open actual** registers the pending requireme
 
 ### 3.1 A candidate-aware relation, not `is_subtype` on nodes
 
-The existing `AttrExt::is_subtype` reads its operands through `Ctx::node_value`
-(`program.rs:225–237`), and the gate runs **before** the value is installed, so it would
-read `None` and answer `false` — refusing a legal `# 8`. The relation the gate calls
-therefore takes the candidate **as a value**:
+`AttrExt::is_subtype` is a **post-failed-unify relaxation**, not an admission predicate:
+`check_unify_relaxed` computes both operands, attempts `try_unify`, and only when errors
+were recorded consults the relation; if it holds, the diagnostics are truncated
+(`checker/diagnostics.rs`). Two consequences make it the wrong call at the gate. First,
+the gate has a **candidate value in hand** and no unify attempt — there is no error to
+relax, and attempting a unify to manufacture one would perform the merge/write the gate
+exists to prevent. (An undecided value produces no unify error at all; the current
+checker avoids that arm by computing both operands first, which is exactly the case the
+gate cannot reproduce.) Second, if the truncation is reached, `try_unify` has already
+merged the classes; dropping the diagnostics does not undo the merge. The gate therefore
+needs a **different predicate over the candidate value**, not the same relation called
+earlier:
 
 ```text
 trait AttrRelation<P> {
