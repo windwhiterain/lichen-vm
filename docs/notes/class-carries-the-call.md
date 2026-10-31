@@ -102,4 +102,15 @@ declaration (measured: the suite stays 215/25). The separation therefore has to
 make a read of a template's field stay **unevaluated** at check time and let the
 runtime's own binding answer it — not to move a value from one map to another.
 
+**The node the recorder finds is a clone, not the checker's read (measured, this
+round).** In one run, the checker's `check_named_field` builds the `first.r` read as
+`NodeId(12183)` whose value and type are open, while the recording's input decode
+(`value_at_path`) finds `NodeId(14506)` — a clone whose `Index` target
+(`NodeId(14504)`) is **undecided** yet whose own value is a decided `Buf` struct.
+So the stale answer is baked into the **clone's field**, in the instantiation that
+copies the body for the apply, not into the checker's read: the checker's read stays
+lazy and the clone carries the declaration. The separation's next site is therefore
+`check_instantiate`'s clone — the clone's field value must be the argument's own
+cell, not the requirement's decided value.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
