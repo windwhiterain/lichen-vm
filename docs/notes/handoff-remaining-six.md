@@ -63,13 +63,27 @@ gets a wildcard-freshened cell instead of the frozen value.
 - `annotation_value_slot` now evaluates the term's value half (it returned
   early on the expr node) → correct, inert.
 
-**Next measurement.** Step through `value_apply`'s **item mapping** for the
-declaration expr's attribute slot (not the consumers): the copy's item 0 is a
-fresh cell with no origin, which only the clone walk's `wildcard` branch
-creates. Find which source node the walk sees as a wildcard there, and why it
-is not the static 165. `value_apply` lives in
-`crates/lichen-lowlevel/src/function.rs` (`node_apply`'s clone path around
-line 840; the wildcard branch freshens `LowValue::Any` cells only).
+**Measured since.** The fresh cell is **not** the clone walk's: every node the
+walk's `wildcard` branch freshens records an `origin` (`function.rs`, the
+`FRESH` probe showed sources in the `mma` function with `origin = None`), while
+the certificate's item 0 has none. It is a **checker-created** cell
+(`Checker::fresh_cell`, whose `CELL` backtrace names
+`instantiate_requirement_value` and `check_app`). And the annotation's own
+`pe` is the root: at the **package's** check the `# warp` reference has an
+undecided value half (`pe=38 → term 137 → half 117 = None`), while the same
+reference in the **program** is decided (`half = USize(1)`) — a top-level
+binding of a package script is a runtime slot, so a body's reference to it has
+no check-time value, and `instantiate_requirement_value` then freshens the
+expression it sees.
+
+**Next measurement.** `Module::static_read` of the frozen node behind a
+package-side reference (the local index of 117's source) tells whether the
+freeze's eager statement evaluation decided it (it should: `warp := 32`'s term
+is evaluated at freeze) — if it did, the loss is in materialising the frozen
+cell into the program's module; if it did not, the package's definition pass
+needs to fill the binding cells before the freeze. Both are narrow, and both
+are read from `register_embedded`'s eager block
+(`crates/lichen-language/src/package.rs`).
 
 ### 2 and 3. `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`
 
