@@ -238,4 +238,15 @@ the minimal open-cell path already works; the chain family's defect is that its 
 value **never performs that join**, and the read therefore answers the declaration's open
 cell. The fix's locus is the join, not a gate that refuses the install.
 
+**The join is blocked by the directional wildcard rule (measured in the code).** When the
+recorded value meets the codomain's declaration in `write_node_answer`, the unify descends
+to the declared `@any` cell: the left side is the recorded, decided value and the right side
+the held `Any`. `unify_inner`'s wildcard arm returns success for that pair **without
+joining the classes** — the documented rule is "a left `Any` joins an undecided right class;
+a right `Any` leaves the left class unchanged" ([replay-apply](replay-apply.md)). The
+classes stay apart, so the read cannot see the recorded native. The minimal same-template
+fill (`x.r` answering `7: Int`) worked for the opposite reason: the actual's class was
+merged with the place's, so the class read found the decided member. Changing the right-`Any`
+arm is an **invariant change** and needs the maintainer's permission.
+
 The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
