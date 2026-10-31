@@ -552,6 +552,14 @@ and the engine and gpu binaries are unchanged (the four gpu validation failures 
 `HEAD`). The remaining difference is the declaration's **name table** being copied into the
 dynamic module by an apply's materialisation (a dynamic handle against the static one); the
 mirror's second site is that copy, not the unify.
+
+**The second site, measured.** At the moment the tables are compared, both sides are
+**undecided cells** (`value=None`, `function=None`, block 1): one is a source node with no
+origin, the other a clone whose origin is the declaration's table node. Keeping a struct
+clone's first two items in place (`value_apply`) was written and measured **inert** — the pair
+is produced before the struct's array reaches that walk, so the clone rule has nothing to act
+on. The mirror's second half therefore needs the **materialisation itself** to keep the
+declaration's identity items as refs, not a rule in the clone walk.
 **And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
 apply and truncates them after it: the binding conflicts a recording meets are the recording's,
 not the program's. Measured: **230/10** — `nested_config`'s two tests and
