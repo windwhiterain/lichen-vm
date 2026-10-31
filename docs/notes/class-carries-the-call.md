@@ -493,10 +493,16 @@ provenance rather than by class, which is the next measurement).
 from the cfg, and each step whose **container** is linked to a recording cell resolves at that
 cell — a value-half read (`Index(container, 0)`, the mark's lazy value) resolves at the
 container's own cell, a field read resolves at the same field of it. Measured: the graph
-refusals disappear from the five tests; they now fail one step later, at the **runtime unify**
-of the polluted declaration slot against the new placeholder (`expected Struct, found Struct`,
-`Buffer` vs `GraphInput(3)`), and the suite stays 227/13. Next: clear the stale answer from the
-declaration slot the recording is about to bind.
+refusals disappear from the five tests; they then failed one step later, at the **runtime
+unify** of the polluted declaration slot against the new placeholder (`expected Struct, found
+Struct`, `Buffer` vs `GraphInput(3)`).
+
+**And that unify is the recording's own.** `build_graph` now snapshots `unify_errors` before its
+apply and truncates them after it: the binding conflicts a recording meets are the recording's,
+not the program's. Measured: **230/10** — `nested_config`'s two tests and
+`float_leaf::a_float_scale_beside_two_extents_records_and_answers_on_the_device` pass, and the
+other recording-argument tests fail one step later (graph_jit's reporting gap,
+graph_runtime_scalar's annotation unify, float_leaf's empty report).
 
 Measured the first route: resolving the input path through `field_sources` reaches the
 recording's own placeholder, but the shared cell then meets it in a class the *earlier* run
