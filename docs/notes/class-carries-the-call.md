@@ -595,6 +595,15 @@ the compile refusal to its own assertion: the check accepts `# 64` where the cer
 32 — the same attribute-propagation gap `perspective_requirements` measures, so it joins that
 family rather than this one.
 
+**The perspective family's certificate, measured.** For the warp test the call's certificate
+slot *is* found (`applied_exprs` → the stated attribute, marker index 0) but
+`attribute_value(slot)` answers `None`: the slot's **class value is an expr array** (a 5-item
+`LowValue::Array`, layout 1), not a number, while the slot node itself is a clone
+(`origin` = a frozen prelude node). So the certificate read lands on an expression rather than
+the attribute it should name — a slot-resolution problem between the stated and full-width expr
+layouts, not a missing certificate. The two `perspective_requirements` tests and this one read
+the same mechanism, so fixing the resolution serves all three.
+
 **`graph_jit`'s scalar variant, isolated.** A print-only probe compiled the same program
 outside the test binary: the check refuses with only the return refusal, and the direct form
 `out := compute.call one (3)` refuses with **`expected Struct, found Int`** — so the scalar
