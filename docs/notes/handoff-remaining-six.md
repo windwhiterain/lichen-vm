@@ -125,15 +125,28 @@ returns (the value is an array of slots) or the annotation's own denotation.
 
 ### 5. `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name`
 
-**Measured with a print-only probe (`scalar_kernel_body_diagnostics` in
-`crates/lichen-tools/tests/tools/zz_kernel_body_probe.rs`, removed after the
-reading).** The scalar variant's program refuses with only "this function's
-return is not a value a graph can hand back", and its **direct form**
-`out := compute.call one (3)` refuses with `expected Struct, found Int`. The
-scalar `jit`/`call` path's types are wrong before any recording begins, so the
-expected `unrecordable` arm ("a graph has no node for one") is never reached.
-Fix the scalar call path first; the recording will then report the intended
-sentence.
+**Corrected reading (round 26).** The earlier note here was wrong: the direct
+form `out := compute.call one (3)` **compiles cleanly** (`ok=true`). The
+`expected Struct, found Int` came from the probe's own `out : Struct`
+annotation — a scalar result is `Int` by the `jit` prelude's `r : type_of (k.O)`.
+So the scalar `jit`/`call` typing is not broken.
+
+**What the recording does instead, measured.** With `DBG_OPS` on
+`unrecordable`'s gate, **no compute operator runs at all** while the scalar
+variant records, and the recording's result is the `call` body's **record
+expr** (a five-item expr array, layout 1) whose value is undecided: the scalar
+kernel's `.O` is the **open template** `_ + 1`, so `r = k.O` (the prelude's
+return match) leaves `r` a hole, and the recording refuses at the return
+before any dispatch — the expected `unrecordable` sentence ("a graph has no
+node for one") is unreachable because the dispatch is never reached.
+
+**Next measurement.** Why the `$call` node is not deep-evaluated inside the
+recording: the `call` prelude's body is a block whose value is the record of
+its bindings; its field `r` holds the `$call` apply. Instrument
+`evaluate_until_the_return_is_nameable`'s deep pass on the record's fields, or
+check whether the block's value short-circuits the pass. If the field is
+visited, the `unrecordable` arm fires and the test passes with no other
+change.
 
 ### 6. `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches`
 
