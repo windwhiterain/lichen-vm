@@ -927,3 +927,45 @@ round-37/38 traps still apply: substituting a class representative recurses, and
 copying a class's operation onto every member over-claims (229/12). **A capability
 claim is a hypothesis until measured** — round 43 measured that neither the
 per-apply claim nor the operation-owner lookup supplies (1).
+
+## Round 44: the claim carries the operation, and the next refusal is nested
+
+Committed `9d6d2c20`. Compute still **240/1**, engines 136/0, 164/0, 276/0.
+
+**The carrier works.** A body whose return states a **hole** now claims the
+*reference* its annotation named: `check_ann` records each computed attribute value's
+`(marker, slot, term)` per function, and `check_lambda` takes the last one when
+`state[return].attr` holds no class value. Measured at the call site: the claim
+materialised through the apply's remap is a node with `op=Some(Apply)`, and
+`certificate_field` reaches `field=Some(ExprId(114))` — the caller's `.to` field.
+Two details were needed:
+
+- the reference's **argument is an expr** in a frozen copy, so the field read's
+  `Index` operation is the argument's *value half* (`slot_value_node`), not the
+  argument node's own operation;
+- the claim must be recorded as the computation's **term**, not as the slot the
+  annotation filled: the slot is the same node (`NodeId(3783)`) the block's return
+  already names, so it carries no operation. Measured with the slot-only variant:
+  `certificate_field` returns `None` and the answer stays 32.
+
+**The refusal moved, and it is one defect further out.** The positive program now
+fails at the write *call* (`span (16, 22)`) with `expected Struct, found Struct` and
+`value_a=USize(32)`, `value_b=USize(0)`: the apply's parameter check descends into
+the record and compares `Write.to`'s slot against the caller's `# 0` without the
+order. Measured in the pardon pass (`DBG_P`, reverted): the surviving
+`unify_errors` entry has `root_a`/`root_b` = the two **records** (both `layout 0`),
+while the clashing pair is the error's own `a`/`b` — the record fields' slots.
+`Checker::attribute_nodes` therefore finds no marker (13 entries, neither root
+among them), so `is_subtype` is never consulted.
+
+**The next fix, precisely** (not yet attempted): pardon on the error's **innermost**
+pair (`UnifyError::a`/`b`) as well as its roots, and make the record fields' attribute
+slots known — registering each template field's attribute slot in
+`check_instantiation` (the position loop already computes `actual`/`expected` there).
+Both were measured to be necessary but not sufficient alone: registering the defaults
+or the compared slots without the innermost-pair lookup changed nothing (`known`
+stayed 13).
+
+**Traps reconfirmed**: `AttrExt::unify_slots` at the instantiation (235/6, apply
+errors `expected 32, found 32`), and a "descend while the value is an array" reader
+that walks into a buffer's struct value.
