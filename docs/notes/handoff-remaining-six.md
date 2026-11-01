@@ -334,3 +334,66 @@ Two cautions for whoever picks it up:
 - The level of the bug is the **read**, not the freeze: `write`'s frozen return
   expr already carries the reference now (round 28's fix), so nothing else gates
   the certificate.
+
+## Round 30: the erasure is load-bearing, measured three ways
+
+State unchanged at the tip: **compute 239 / 2**, engine binaries green. This round
+was measurements only; nothing in that number moved.
+
+**First, a correction that never landed (the reviewer caught it).** Round 28 said
+"two different `Any`s" and "the clone's hole" in its final report, but the note
+kept neither, and its `62f11028` message claims `attribute_value` walks the value
+half at every width — **`lambda.rs` was never in that commit** and still keys on
+`array.layout() != 0`. Corrected here: the wildcard that swallows a statement's
+`# 32` is the checker's per-expr fill (`slot_expr`'s `self.any()`), **not** the
+function normalization's `Any` (that one is written on the *parameter's value
+cell* by `check_lambda`). And an applied clone turns the wildcard into a **fresh
+hole** (`static_node_apply`'s wildcard branch allocates an empty node; measured
+`slot=570 [none]`, `slot=123 [none]`). `stated_attributes` skips `Any` but not a
+hole, so the certificate *is* found — as an empty slot, which names no operation,
+so `certificate_field` cannot follow it and the call site reads the argument's
+meet. That hole is why clearing has to happen before the clone.
+
+**The erasure is load-bearing at the lowlevel, three ways.**
+
+1. *Replace the wildcard with undecided at build time.* Filling every unstated
+   attribute position with a hole instead of `Any` — the SPEC's own not-decided
+   form, §Undecided — gives **107 / 134**, with `compute.parallel: a definition
+   cycle: NodeId(…) is lowered while it is already being lowered`. Reason: a
+   full-width expr unifies **all** its attribute positions, so a hole joins the
+   other side's class and unrelated computations become one. Narrowing it to
+   **value exprs only** (type values keep the wildcard) measures the same
+   **107 / 134**, so type values are not the cause.
+2. *Carry the claim on the declaration.* Added `Function::return_attribute`
+   (canonical index + slot), recorded by `check_lambda` from the body value's
+   constraint slot (a statement's annotated side included) and read first by
+   `check_app`, keeping the applied expr as the fallback. Measured **238 / 3** —
+   `a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it` regresses to
+   `expected Struct, found Struct`. The declaration cannot replace the erasure's
+   *lowlevel* effect: the erasure makes the statement's unify write the slot into
+   the value's cell, which the applied clone then carries; a checker-side fact is
+   not visible to that unify.
+3. *Re-point the value's expr instead of emptying its wildcard.* The expr nodes
+   are immutable, so `state[actual].term` was re-pointed at a new expr carrying the
+   stated slots (no lowlevel writer at all). Measured **238 / 3**, the same test
+   regressed — the unify must see the wildcard emptied, not the state re-pointed.
+
+**A real finding on the side: the pardon post-pass is sensitive to slot
+registration.** `Checker::build` (`checker.rs` around 828) walks every failed unify
+and, when the error's root is in `Checker::attribute_nodes`, looks the attribute up
+and **pardons** the error if `ext.is_subtype(root_a, root_b)` holds. Registering an
+annotation's constraint slot there — which the declaration route did in order to
+read its marker — made the body-requirement's `32` against `1` failure get pardoned
+outright, because the direction is `divides(a, b)`. So *any* future work that adds
+an `attribute_nodes` entry changes which failures survive. That pass deserves its
+own measurement: a too-narrow provider pardoned against a wider requirement is not
+what the acceptance table says.
+
+**What this means for the next round.** The statement's claim needs a
+representation that is *both* decoupled (does not join a class on unify) *and*
+decidable by a statement. `Any` gives the first, a hole gives the second, and the
+two measurements above show each alone collapses something. So the change is a
+**rule**, not a value: either attribute positions must be skipped by unify when
+both sides state nothing, or the checker must carry the claim in a place the
+lowlevel unify can write without the erasure. Do not re-run route 1 or route 3
+without a new fact — they are measured.

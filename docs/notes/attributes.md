@@ -200,11 +200,20 @@ perspective's default is `0`, the lattice identity), the checker compares the at
 where the order lives, and a requirement stated about a **parameter** inside a body is
 recorded and replayed at each apply (`Checker::deferred_requirements`). Measured at
 `c3eefe04`: a read's certificate is the meet of its operands (`(r # 32)` over a `# 32`
-buffer at a `# 1` index is refused `expected 32, found 1`), and **a write's certificate is
-its `.to` field alone** — `(w # 32)` checks and `(w # 0)` is refused `expected 0, found
-32`, which is only possible if the field, not the whole argument's meet, is what the call
-site took. The design record is [array-attribute-view](array-attribute-view.md) §"The
-isomorphism: every expression carries the default, the order is the checker's".
+buffer at a `# 1` index is refused `expected 32, found 1`). The design record is
+[array-attribute-view](array-attribute-view.md) §"The isomorphism: every expression
+carries the default, the order is the checker's".
+
+**CORRECTED (round 30): the write's certificate was never measured as its `.to` field.**
+This paragraph said `(w # 0)` printing `expected 0, found 32` was "only possible if the
+field, not the whole argument's meet, is what the call site took". It is not: written
+with `.at 0, .value 0` the meet is `gcd(32, 0, 0) = 32`, the same number. With
+lane-varying siblings the sentence names the **meet** instead — `(w # 0)` on a `# 32`
+`.to` with `.at (0 # 1)` and `.value (0 # 1)` prints `expected 0, found 1` — so the call
+site falls back to the argument's whole provided slot and the body's field reference is
+never resolved. `zz_attribute_certificate_probe` pins both readings. The inline
+equivalent with a **dynamic** callee does resolve the field (`expected 0, found 32`), so
+this is the frozen path's gap, not the language's.
 
 **A compound's elements are complete slots.** The superior's verdict: a struct's
 fields — and an array's, a set's or a tuple's elements — are the complete `[value, type,
@@ -221,13 +230,13 @@ bare value. Measured: `write_persp` reads `?a # 0`, `read_persp`/`read_persp2` `
 frozen field read's attribute projection was a node of the frozen module whose applied
 certificate cell had no done operation to read, so the call fell back to the argument's
 whole provided slot (`write_persp2` read `?a # 0` where the `.to` slot stated `warp`).
-**That reading does not reproduce at `c3eefe04`**, and the field-level answer is what the
-`write` test pins: a write through a `# 32` buffer at a `# 1` index certifies `32`, not the
-meet (`1`) and not the absent top (`0`) — `(w # 0)` prints `expected 0, found 32`. What is
-**not** measured is the shape the old probe used: a *body-internal* field read of a
-parameter (`x.to`) through a frozen callee. The probe that read it (`write_persp2`) is not
-in the tree, so that half is an open question with no reading behind it rather than a known
-seam; anyone re-measuring it should restore the probe first.
+**That reading does not reproduce as a *field* reading**, for the reason corrected above:
+the value it printed was the argument's meet, which coincides with the field's number
+whenever the sibling claims are the top. What is **not** measured is the shape the old
+probe used: a *body-internal* field read of a parameter (`x.to`) through a frozen callee.
+The probe that read it (`write_persp2`) is not in the tree, so that half is an open
+question with no reading behind it rather than a known seam; anyone re-measuring it should
+restore the probe first.
 
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
 attribute is right in the type slot it is right in *any* attribute slot, so an expr's
