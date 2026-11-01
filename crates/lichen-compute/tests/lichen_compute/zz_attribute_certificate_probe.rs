@@ -10,26 +10,6 @@ use super::common;
 use lichen_compute::language::LangProgram;
 use lichen_language::Report;
 
-/// The head `perspective_requirements` builds: a three-element buffer from a kernel.
-fn head() -> String {
-    r#"
----
-  order = "30"
-  compute = import "compute.lichen"
----
-Out := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Fill := {.n @any : Int}
-fill := (c = Fill) => {
-  i := compute.range c.n
-  d := compute.buf (compute.BufParam{.type Int, .length c.n})
-  ((Out){.b (compute.write ((compute.Write _){.to d, .at i, .value (i + 1)}))})
-}
-filler := compute.parallel fill "cpu" Out
-b := (compute.plrun filler ((Fill){.n 3}) : Struct)
-"#
-    .to_string()
-}
-
 /// Every diagnostic, with the facts the checker recorded.
 fn print(label: &str, report: &Report<LangProgram>) {
     println!("=== {label}: ok={} ===", report.ok());
@@ -53,23 +33,17 @@ fn show(label: &str, source: &str) {
 }
 
 #[test]
-fn probe_the_frozen_certificate() {
+fn probe_the_field_reference_certificate() {
     let _ = std::panic::catch_unwind(|| {
-        // Declared `# warp`, so `0` is refused; the meet names `1`.
+        // The write's shape, inline: the statement names the field's own slot.
         show(
-            "write warp in, lane-varying siblings",
-            &format!(
-                "{}\nw := compute.write ((compute.Write _){{.to (b.b # compute.warp), .at (0 # 1), .value (0 # 1)}})\n(w # 0)\n",
-                head()
-            ),
+            "inline field reference",
+            "---\n  compute = import \"compute.lichen\"\n---\nT := {.to @any : Int}\nw := (x = T) => {r := x.to; r = (r # (compute.perspective_of x.to))}\n(w (T{.to (0 # 32)})) # 0\n",
         );
-        // Plain siblings: the meet equals the field by coincidence.
+        // The same call, demanded at the field's own perspective.
         show(
-            "write warp in, plain siblings",
-            &format!(
-                "{}\nw := compute.write ((compute.Write _){{.to (b.b # compute.warp), .at 0, .value 0}})\n(w # 0)\n",
-                head()
-            ),
+            "inline field reference admitted",
+            "---\n  compute = import \"compute.lichen\"\n---\nT := {.to @any : Int}\nw := (x = T) => {r := x.to; r = (r # (compute.perspective_of x.to))}\n(w (T{.to (0 # 32)})) # 32\n",
         );
     });
 }
