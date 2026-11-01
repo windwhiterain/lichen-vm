@@ -301,6 +301,15 @@ where
         self.state[e].term = Some(actual_term);
         self.state[e].val = self.state[actual].val;
         self.state[e].ty = self.state[actual].ty;
+        // A statement states the actual attribute: its annotated side names it.
+        if self.state[actual].attr.is_none()
+            && let Some(stated) = self.state[expected].attr
+        {
+            self.state[e].attr = Some(stated);
+            if let Some(marker) = self.attribute_markers.get(&expected).copied() {
+                self.attribute_markers.insert(e, marker);
+            }
+        }
         actual_term
     }
 

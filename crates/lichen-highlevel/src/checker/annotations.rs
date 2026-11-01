@@ -742,6 +742,7 @@ where
                     }
                     // The annotation value *is* the slot (it replaces).
                     constraint_slot = Some(slot);
+                    self.attribute_markers.insert(e, *marker);
                     slots.push(slot);
                     // A refinement is enforced: registered while the expression is
                     // lowered, so the apply clone re-checks it per call.
@@ -758,6 +759,7 @@ where
                     .unwrap_or_else(|| self.missing_slot_of(marker, self.loc(e, 2)));
                 if !ext.is_label() {
                     constraint_slot = Some(node);
+                    self.attribute_markers.insert(e, *marker);
                 }
                 slots.push(node);
             }
@@ -787,6 +789,17 @@ where
         // The constraint slot is what the apply-time check reads; a label is
         // metadata only.
         self.state[e].attr = constraint_slot;
+        // A constraint's marker travels with the slot: a return attribute is
+        // recorded by marker (`Checker::attribute_markers`).
+        if constraint_slot.is_some() {
+            for marker in &own_tail {
+                if let Some(ext) = self.attribute_extension(marker)
+                    && !ext.is_label()
+                {
+                    self.attribute_markers.insert(e, *marker);
+                }
+            }
+        }
         let mut expr = Vec::with_capacity(shape::slot_width::<P>());
         expr.push(value_node);
         expr.push(type_expr);

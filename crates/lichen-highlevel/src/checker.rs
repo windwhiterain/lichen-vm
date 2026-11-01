@@ -178,6 +178,12 @@ where
     /// only compared with it where the apply supplies one
     /// (`docs/notes/array-attribute-view.md`).
     deferred_requirements: HashMap<FunctionId, Vec<(P::Attr, NodeId)>>,
+    /// The attribute marker of an expr's `state.attr` slot, where one is known.
+    ///
+    /// # Invariant
+    /// A return attribute is recorded with its **marker**, and the slot node alone
+    /// cannot name one, so the setter records it here.
+    attribute_markers: HashMap<ExprId, P::Attr>,
     /// The attribute each expr's **attribute slot node** belongs to.
     ///
     /// # Invariant
@@ -615,6 +621,7 @@ where
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
             deferred_requirements: HashMap::new(),
+            attribute_markers: HashMap::new(),
             attribute_nodes: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,

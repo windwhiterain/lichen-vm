@@ -395,6 +395,33 @@ impl<P: Program> Module<P> {
         ))
     }
 
+    /// The **attribute a frozen body states about its return**, copied per call.
+    ///
+    /// # Invariant
+    /// The claim is the declaration's, so it is read from `StaticFunction` and
+    /// materialised for this call: a per-call read may not resurrect the answer the
+    /// prelude computed, which is what the applied clone holds.
+    pub fn materialize_static_return_attribute(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+    ) -> Option<(u32, NodeId)> {
+        let module = self.static_module(function.module);
+        let entry = module.functions.get(function.index.0)?;
+        let (index, slot) = entry.return_attribute?;
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        let mut rule = FrozenClassRule::new();
+        let slot = self.clone_static_signature_node(
+            &module,
+            slot,
+            block,
+            &mut remap,
+            function.index,
+            &mut rule,
+        );
+        Some((index, slot))
+    }
+
     /// The frozen signature copied into `block`, its frozen classes preserved.
     #[stacksafe]
     fn materialize_static_signature_with_classes(
@@ -812,6 +839,7 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             return_type: NodeId::default(),
+            return_attribute: None,
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.
             static_origin: Some(sref),

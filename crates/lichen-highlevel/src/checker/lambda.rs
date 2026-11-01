@@ -175,6 +175,13 @@ where
         // The return's type cell, stored so a type-level clone-on-unify reads
         // the codomain without forcing `r#return`.
         self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
+        // The body states what it returns; the declaration carries the claim.
+        if let Some(slot) = self.state[r#return].attr
+            && let Some(marker) = self.attribute_markers.get(&r#return).copied()
+        {
+            self.module.functions[function].return_attribute =
+                Some((marker.order_index() as u32, slot));
+        }
         // The return may belong to a nested closure's scope, but the entry
         // point must be this function's member.
         if !self.module.functions[function].nodes.contains(&ret) {
@@ -567,17 +574,26 @@ where
             }
             None => false,
         };
-        // The applied clone's return expr states the call's attribute — the same
-        // expr whose type slot states its type.
+        // The callee declaration states the call attribute: read it, not the answer.
+        let declared_certificate = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].return_attribute,
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .materialize_static_return_attribute(sref, self.current_block),
+            None => None,
+        };
         let certificate = match returns_parameter {
             true => None,
-            false => self
-                .module
-                .applied_exprs
-                .get(&apply)
-                .copied()
-                .and_then(|expr| self.stated_attributes(expr).first().copied())
-                .map(|(attribute, slot)| (slot, attribute.order_index() as u32)),
+            false => declared_certificate
+                .map(|(index, slot)| (slot, index))
+                .or_else(|| {
+                    self.module
+                        .applied_exprs
+                        .get(&apply)
+                        .copied()
+                        .and_then(|expr| self.stated_attributes(expr).first().copied())
+                        .map(|(attribute, slot)| (slot, attribute.order_index() as u32))
+                }),
         };
         if let Some((slot, index)) = certificate
             && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
@@ -592,12 +608,16 @@ where
                 // A hole: the result follows a field the clone's reference names, or
                 // the argument's whole provided slot.
                 None => {
+                    // The reference is on the slot first: its value half is the answer.
                     let mut field = self
                         .module
                         .applied_parameters
                         .get(&apply)
                         .copied()
-                        .and_then(|parameter| self.certificate_field(value, parameter, argument));
+                        .and_then(|parameter| {
+                            self.certificate_field(slot, parameter, argument)
+                                .or_else(|| self.certificate_field(value, parameter, argument))
+                        });
                     // The apply's own parameter clone is the one that bound the
                     // argument's value, and the certificate's class may name it.
                     if field.is_none()

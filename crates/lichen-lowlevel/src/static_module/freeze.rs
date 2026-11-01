@@ -169,6 +169,10 @@ impl<P: Program> StaticModule<P> {
                 return_type: *node_map
                     .get(&function.return_type)
                     .unwrap_or(&node_map[&function.r#return]),
+                // The body's claim about its return, mapped like every other node.
+                return_attribute: function
+                    .return_attribute
+                    .and_then(|(index, slot)| node_map.get(&slot).map(|slot| (index, *slot))),
                 // A re-exported function keeps its original-position id, so two
                 // re-exports of one function compare equal.
                 origin: function.static_origin,

@@ -823,6 +823,12 @@ pub struct Function {
     pub parameter: NodeId,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
+    /// The attribute a body states about its returned value: canonical index, slot.
+    ///
+    /// # Invariant
+    /// The declaration carries it, so every call reads the claim per call and a
+    /// frozen callee keeps it, instead of a callee's answer being read as its claim.
+    pub return_attribute: Option<(u32, NodeId)>,
     /// The static function this closure was materialized from; `None` for a source closure.
     pub static_origin: Option<StaticFunctionRef>,
     /// The template a minted closure was made from; `None` for a template itself.
@@ -875,6 +881,12 @@ pub struct StaticFunction {
     pub r#return: LocalNodeId,
     /// The static mirror of [`Function::return_type`].
     pub return_type: LocalNodeId,
+    /// The static mirror of [`Function::return_attribute`]: canonical index, slot.
+    ///
+    /// # Invariant
+    /// A frozen callee keeps the claim its body stated, so a call site reads it from
+    /// the declaration instead of from the applied clone's answer.
+    pub return_attribute: Option<(u32, LocalNodeId)>,
     /// The real original this static function is a re-export of; `None` for its own.
     pub origin: Option<StaticFunctionRef>,
     pub asserts: Vec<LocalNodeId>,
