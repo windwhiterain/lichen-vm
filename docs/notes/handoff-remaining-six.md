@@ -687,3 +687,38 @@ unify was enforcing the attribute order through. Any further attempt must keep t
 whole-expr unify for value+type and take the attribute order *without* re-implementing
 the type comparison — e.g. run the whole-expr unify and retain only an attribute
 failure whose order holds, rather than splitting the positions.
+
+## Round 37: why the write certificate is a hole — a class-carried call, dropped at the freeze
+
+The last red test's second defect is now explained from the code and measured
+(`DBG_WRITE` on the certificate branch, reverted).
+
+**`certificate_field` never runs.** For `compute.write`, the certificate slot is
+found (`stated_attributes(applied_expr)` returns the Perspective item) but
+`attribute_value(slot)` answers `None`, so the hole branch runs — and
+`certificate_field` returns `None` immediately because **the slot has no
+operation**: `node_operation(certificate)` is `None`. The call then falls back to
+`provided_slot(argument)`, the whole argument's meet, which is `32` in the positive
+program (the declared `# warp`), where the field would have given `0`.
+
+**Why the reference lost its operation.** In the prelude, `write`'s body is
+`r = (Buf _) # (perspective_of x.to)`; the statement's adoption empties `r`'s
+wildcard and the statement's unify then **merges the item's class** with the
+annotation's reference node — the operation lives on the *reference*, and the item
+is a member of that class. The freeze copies each node's **own** value and operation
+(`freeze.rs`), and `static_node_apply` clones a member with its own operation — so
+the frozen item is a value-less, operation-less node, and the per-call clone is a
+bare hole. The class link that carries the call is not reproduced.
+
+**Resolving the member to its class representative is measured wrong.** Doing it at
+the top of `static_node_apply` (undecided && no operation → representative) makes
+several tests **overflow the stack**: representatives resolve to each other through
+the class list, so the substitution recurses. A fix must carry **the class's
+operation** deterministically — e.g. copy the representative's operation onto the
+frozen member at freeze, or keep a per-class operation lookup that cannot cycle —
+not substitute one member for another.
+
+**State**: tip `d7c49ccf` + this note; compute **240/1**, the one red being the write
+perspective with its two defects (the instantiation's attribute order, round 36's
+second attempt recorded; and this certificate hole). Engines 164/0, 136/0, 276/0;
+gpu's four SPIR-V failures pre-existing; comments and fmt clean.
