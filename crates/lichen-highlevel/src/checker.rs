@@ -110,6 +110,25 @@ struct Binding {
     ty: NodeId,
 }
 
+#[cfg(test)]
+mod attribute_defaults;
+
+/// The **single** canonical position whose default is `matches`'s one, if exactly one.
+///
+/// # Invariant
+/// One node answers for every canonical default position, so a class that owns the
+/// default matches them all: it names an attribute only when exactly one position
+/// does, and a shared match names none (`Checker::attribute_pair`).
+fn sole_default(matches: &[bool]) -> Option<usize> {
+    let mut found = matches
+        .iter()
+        .enumerate()
+        .filter(|(_, matched)| **matched)
+        .map(|(position, _)| position);
+    let position = found.next()?;
+    found.next().is_none().then_some(position)
+}
+
 pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
@@ -1328,38 +1347,30 @@ where
         self.module.array_attribute(&value, canonical)
     }
 
-    /// The attribute a read states, when it states one: the marker and the slot
-    /// the element's own attribute expr is.
-    ///
-    /// # Invariant
-    /// The slot is the element's **attribute expr**, not the element: a reader of
-    /// the slot compares its value position, so returning the element would put the
-    /// term's value where a perspective belongs. The marker travels with it because
-    /// a slot read as a claim needs the attribute it claims.
     /// The attribute a compare's two operands are judged by, with the pair it states.
     ///
     /// # Invariant
     /// The marker is never guessed: it is the one a side **names**, and two sides that
     /// name different attributes answer nothing. A side names its own slot, its class's,
-    /// or — through the class a **default** slot owns — the canonical attribute that
-    /// default is. The pair is the operands themselves: their value position is the
+    /// or — when **exactly one** canonical default is that class — that position's
+    /// attribute. The pair is the operands themselves: their value position is the
     /// number an order compares.
-    pub(super) fn attribute_pair(&self, x: NodeId, y: NodeId) -> Option<(P::Attr, NodeId, NodeId)> {
+    pub fn attribute_pair(&self, x: NodeId, y: NodeId) -> Option<(P::Attr, NodeId, NodeId)> {
         let known = |node: NodeId| -> Option<P::Attr> {
             if let Some(marker) = self.attribute_nodes.get(&node).copied() {
                 return Some(marker);
             }
             self.module.node_value(AnyNodeId::Dynamic(node))?;
             let root = self.module.class_root(node);
-            // A class a default slot owns names that default's attribute.
             self.attribute_nodes.get(&root).copied().or_else(|| {
-                P::Attr::ORDER
+                let matches: Vec<bool> = P::Attr::ORDER
                     .iter()
-                    .find(|marker| {
+                    .map(|marker| {
                         self.module.default_attribute(marker.order_index() as u32)
                             == Some(AnyNodeId::Dynamic(root))
                     })
-                    .copied()
+                    .collect();
+                sole_default(&matches).map(|position| P::Attr::ORDER[position])
             })
         };
         // A side may name its attribute one level in: the slot its layout gives.
