@@ -1,6 +1,7 @@
 //! The `lowlevel` layer of the `basic` test crate: one shared harness, one module per category.
 
 mod assert;
+mod attribute_clash;
 mod compaction;
 mod equality;
 mod evaluation;
