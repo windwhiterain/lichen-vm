@@ -548,3 +548,51 @@ tests red.
 **State**: tip `f5cb630b`; compute **240/2**, lowlevel 164/0, highlevel 136/0,
 language 276/0; comments and fmt gates clean. The two red tests are still the warp
 certificate and the write perspective, both gated on the frozen callee path.
+
+## Round 34: the import projection, read end to end
+
+All readings below are measured with prints on the tip and then reverted; the tree
+is clean at `2ad755f1` with compute **240/2**.
+
+**The export array is the bindings alone.** `compute.lichen`'s export is a
+**30-item** array with **no name-table/id header**, so `compute.jit` is at position
+**10** and `compute.launch` at position **11** (source order). The read chain is
+`Index(<call result>, 0)` at the top and, at depth 2, `Index(<export>, k)` with the
+*physical* `k`: measured `position=10 width=30` and `position=11 width=30`. So
+`Module::static_function_of_callee` receives the right position — its offsets are
+**not** the defect it was suspected of.
+
+**The artifact's binding value names the function.** The export item the resolver
+reads is a `Static` node holding `LowValue::Function(AnyFunctionId::Static(..))`:
+export[10] (`jit`) → `StaticFunctionId(7)`, export[11] (`launch`) →
+`StaticFunctionId(10)`. The offsets are the nested lambdas (each `f => b => …`
+creates a closure entry), so `jit`=7 is consistent with `type_of`=0,
+`perspective_of`=1, `A`=2, `P`=3, `S`=4 (+its inner), `Buf`=6.
+
+**The frozen return type is what fails the guard.** For the outer apply
+`(compute.launch k1) 6`, the callee is the inner call, and `is_function_type` is
+asked about the inner call's declared return type. Read as a frozen ref (see
+below), that type's element 0 is `TypeValue(TypeStruct)` — the *struct* marker —
+which is why the guard reports `expected TypeFunction, found Struct`. Two readings
+fit and are **not yet separated**: either static function 10 is not `launch`, or
+`launch`'s frozen return type is wrong (a body that returns a lambda should state
+the function marker).
+
+**A materialised copy can never satisfy a shape predicate that reads identity.**
+`shape::is_universe_any` compares a **Dynamic** id to the universe **by equality
+class**, and accepts a **Static** id by content (`shape::is_static_universe`:
+element 0 is the type marker and element 1 is *the same* static node). The frozen
+signature is materialised as *copies*, so its universe is a different class: the
+guard fired on a copied type whose element 0 was `TypeValue(TypeFunction)` — a
+correct-looking type that the predicate still rejected. Measured fix direction:
+reading the frozen ref instead of a copy (`Module::static_return_type_item`, a new
+reader that returns the frozen return expr's type item without materialising)
+moved the diagnostic's path from `Many([Type, Value])` to `One(Type)` but did not
+fix the family, because the type it then reads is the Struct one above. The reader
+is reverted, not landed.
+
+**Next measurement (single subject)**: print the frozen function table's
+parameter and return type per index, and identify each index by shape (a function
+parameter is the function marker; `launch`'s `k = K` is the struct marker). That
+separates "wrong ref" from "wrong frozen return type", and only then is a fix
+landable.
