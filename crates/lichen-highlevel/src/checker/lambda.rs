@@ -372,7 +372,17 @@ where
         let function_ty = self.state[function].ty.unwrap();
         // The callee's **expr** names the function: its value half holds it.
         let callee_expr = self.state[function].term.unwrap();
-        let callee = self.module.function_apply_function(callee_expr);
+        let callee = self
+            .module
+            .function_apply_function(callee_expr)
+            .or_else(|| {
+                // A frozen binding states its function structurally, so the callee is
+                // resolved without evaluating it.
+                self.module
+                    .expr_value_half(callee_expr)
+                    .and_then(|half| self.module.static_function_of_callee(half))
+                    .map(AnyFunctionId::Static)
+            });
         // The callee's **parameter expr** states its requirement: the same read as
         // its type slot (`docs/notes/attributes.md`).
         let parameter_expr = match callee {
@@ -428,11 +438,8 @@ where
         // A decided callee states the result type now; the runtime binds the same cell.
         let c = self.fresh_cell();
         let declared_return = match callee {
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .materialize_static_signature_expr(sref, true, self.current_block)
-                .and_then(|returned| self.module.expr_type_item(returned))
-                .map(Some),
+            // A frozen callee states its signature, not the call's own type cell.
+            Some(AnyFunctionId::Static(_)) => None,
             Some(AnyFunctionId::Dynamic(fid)) => {
                 let declared = self.module.functions[fid].return_type;
                 // Only a decided return type is a fact the call can state now; an
@@ -456,9 +463,9 @@ where
             Some(AnyFunctionId::Static(sref)) => Some(sref),
             _ => None,
         };
-        // A **decided** non-function callee is refused here; an
-        // undecided one waits for the runtime apply.
-        if self.type_is_concrete(function_ty) && !self.is_function_type(function_ty) {
+        // A resolved callee is a function; an unresolved non-function one is refused.
+        let callable = callee.is_some() || self.is_function_type(function_ty);
+        if !callable && self.type_is_concrete(function_ty) {
             let fn_ty = self.function_template();
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
@@ -493,7 +500,7 @@ where
         self.module.apply_result_owners.insert(apply, apply);
         self.call_applies.insert(e, apply);
         // The call's type application at check; a function under check is skipped.
-        if self.is_function_type(function_ty) {
+        if callable {
             let in_progress = matches!(
                 callee,
                 Some(AnyFunctionId::Dynamic(function))
