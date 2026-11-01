@@ -457,3 +457,45 @@ its global unnecessity.
 No proposal is written until both are measured. The rule question ("an attribute
 position's unify rule") may still be real, but v15's premise — the erasure being
 what carries a statement's claim — is dead.
+
+## Round 32: the wildcard rule, read from the code
+
+Round 31 left "what carries 32 to the call's certificate" open. It is not the
+erasure, and it is not a `class` merge of the attribute position. The rule is in
+the lowlevel:
+
+> `unify_inner` (`crates/lichen-lowlevel/src/equality.rs`, "Directional wildcard:
+> only a left `Any` may join an undecided right class"): if **either** side is the
+> wildcard, the unify succeeds and does nothing at all — except one case: a **left**
+> `Any` against an **undecided right** side **joins their classes**
+> (`add_equality(ra, rb)`).
+
+So the SPEC's "Only merge if right side is undecided" (`language-spec.md` §Any) is
+implemented **directionally**: a right-hand `Any` never acts, and a left-hand `Any`
+against a *decided* right side writes nothing.
+
+Measured consequences (with instrumentation, then reverted):
+
+- With `adopt_stated_attributes` **removed**, the statement program
+  `g := x => {r := x; r = (r # 32)}` / `(g 0) # 64` still refuses
+  `expected 64, found 32`. So the erasure is **not** the statement-attribute
+  mechanism — this confirms round 31's refutation by a second route.
+- The applied expr's Perspective position for that call holds an expression array
+  (five items, layout 1) whose element 0 is `USize(32)`; `stated_attributes` finds
+  it, `attribute_value` returns 32, and the call carries `# 32`. Where the array
+  enters the returned expr is still untraced, so the *write* that puts it there is
+  open; what is settled is that it is not the erasure.
+- Removing the erasure costs exactly one test: `238/3`, the extra failure being
+  `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`.
+  That is the erasure's **only** measured benefit; its path is still unidentified.
+
+**Therefore the two red tests do not depend on the erasure at all.** Both come from
+the frozen boundary, measured in round 29: a program's call into the imported
+compute package has `callee = None`, so the whole signature path (parameter
+requirement, `applied_exprs`, certificate) is skipped, and the certificate falls
+back to the argument's provided slot. The second test's positive case additionally
+needs the instantiation to consult the attribute's order.
+
+Next work is therefore on those two, and the erasure is parked: not needed by the
+statement family, needed by one unrelated test, and neither removed nor extended
+until that test's path is measured.
