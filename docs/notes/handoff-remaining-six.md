@@ -828,3 +828,29 @@ names, against the index that carries the claim. If they differ, the freeze's
 function mapping (`function_map`: dynamic id → static position) and the recorded
 `return_attribute` disagree — i.e. the claim is attached to the wrong static entry —
 and the fix belongs to that mapping, not to the carrier.
+
+## Round 41: the mapping is N -> N-1, and statement bodies still record nothing
+
+Measured (`DBG_MAP` at the freeze, reverted):
+
+- **The static function table is a traversal order**: dynamic id `N` maps to static
+  `N-1` for every entry (dynamic 22..24 → static 21..23). So a static index equals no
+  dynamic id, and nothing may compare them.
+- The claims reach **static 21** (and, before this round's change, only that one):
+  dynamic 22..24 are the annotation-bodied functions (`range`/`row`/`col`, each
+  `… # 1`), which the existing `state[r#return].attr` recording already covered.
+- `compute.write` resolves to `Static(ModuleKey(1), StaticFunctionId(28))` — dynamic
+  **29** — whose entry is **None**. So a **statement** body never records its claim.
+
+**Landed anyway** (`54d65e22`): `Checker::body_claims` records each function's stated
+statement claim (set where `check_unify_expr` inherits it, keyed by the current
+function so a nested lambda cannot clobber its parent), and `check_lambda` falls back
+to it. Neutral on every suite (compute 240/1, lowlevel 164/0, highlevel 136/0,
+language 276/0). It did **not** give `write` a claim, so the inheritance itself is
+not firing for that body.
+
+**Next measurement (single subject)**: for the prelude's `write` body, print the
+body value expr's `ExprKind` **by name**, plus `state[actual].attr` and
+`state[expected].attr` at the statement — the earlier discriminant readings were not
+identified, and the inheritance may be skipped because the actual already states an
+attribute or because the annotation's slot is unset.
