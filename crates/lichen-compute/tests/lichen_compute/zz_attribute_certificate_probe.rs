@@ -54,7 +54,7 @@ fn probe_the_directed_attribute_unify() {
             "a silent callee hands no certificate",
             "id := x => x + 1\n(id 0) # 32\n",
         );
-        // Admitted, where `gcd(1, 0) = 1` would refuse: the callee's claim is lost.
+        // Admitted: an argument-derived certificate short-circuits the combine.
         show(
             "a silent callee's provider is the function, not the argument",
             "id := x => x + 1\n((id # 1) 0) # 32\n",

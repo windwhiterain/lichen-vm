@@ -144,9 +144,10 @@ rule is a declaration of intent there.
 
 The open state becomes representable instead of the wildcard fill; the erasure
 (`clear_wildcard`, `adopt_stated_attributes`) is withdrawn; the two remaining
-perspective tests get their certificate path. Persisted shape changes **only if**
-§3's carrier is option (a); with a checker-side table (b) nothing persisted moves,
-at the cost of a loaded artifact losing the marker. Re-measure after the change,
+perspective tests get their certificate path. **The carrier must be persisted or
+deterministically rebuildable** (§3): a new artifact-side field bumps
+`ARTIFACT_FORMAT_VERSION`, and a shape change is avoided only if the marker can be
+rebuilt from the existing artifact. Re-measure after the change,
 **both directions and both paths**:
 
 - template pinning, dynamic **and** frozen: `f (5 # 8)` then `f (5 # 2)`, and the
@@ -173,7 +174,11 @@ callee that states nothing. So the provider's `Apply` combine
 callee's own annotation, and both candidate mechanisms ("an annotation was lost" /
 "the combine skips the function") collapse into one: the shortcut fires first. Rows
 4b and 4c are consistent with that single reading, and row 4c's stating argument
-is what will tell the two *future* outcomes apart (`1` versus `64`). Not a defect
-claim: under the design this fallback is the silent callee's intended path. The
-rows become meaningful only after §2's rule lands, when a silent callee can hand no
-claim at all.
+is what will tell the two *future* outcomes apart (`1` versus `64`).
+
+The fallback is intended only for a **stated but unresolved** certificate. A truly
+silent callee must hand no claim so the consumer's combine runs
+(`attributes.md`: a silent callee hands no certificate); the tip conflates the two,
+and that conflation is exactly what §3's reader rule changes. So the rows become
+meaningful only after §2's rule lands, when a silent callee can hand no claim at
+all.
