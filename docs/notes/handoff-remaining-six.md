@@ -854,3 +854,31 @@ body value expr's `ExprKind` **by name**, plus `state[actual].attr` and
 `state[expected].attr` at the statement — the earlier discriminant readings were not
 identified, and the inheritance may be skipped because the actual already states an
 attribute or because the annotation's slot is unset.
+
+## Round 42: no function body is a Unify — the statement claim never reaches the recorder
+
+Measured with `DBG_W` on `check_unify_expr` and the body-value kind (reverted):
+
+- Across the prelude and the probe's programs, **48 `check_lambda` calls: only three
+  bodies are annotations** (dynamic 22/23/24 — `range`/`row`/`col` — each recording a
+  `Perspective` marker), and **no body value is a `Unify`, `Record` or `Apply`**; the
+  rest are "other" kinds.
+- `check_unify_expr`'s statement dump shows **no statement whose expected side is an
+  annotation**: the only two confirmed shapes are `parameter = apply` (attr `None` on
+  both sides) and `native = named-field`.
+
+So `r = (Buf _) # p` is not compiled as a unify whose expected side is the
+annotation, and it is not the body's value either — which is why neither
+`state[r#return].attr` nor `body_claims` ever gets a claim for `write`, while the
+annotation-bodied `range`/`row`/`col` do.
+
+**Landed** (`33254a17`, neutral at compute 240/1 with the engines green): a clone of a
+function keeps its template's `return_attribute` (a clone is the same function), and
+the slot a claim names is a root of the frozen closure (a claim about the return is
+not part of the returned value's graph). Both are needed for the carrier to be
+correct even before the last link works.
+
+**Next measurement (single subject)**: what `r = (Buf _) # p` *is* in the IR. Print,
+for the `write` body only, every child expr's kind by name in order (the block's
+statements), so the shape of a source `name = expr # attr` line is identified instead
+of inferred. Then the recorder can be attached where that shape's claim is decided.
