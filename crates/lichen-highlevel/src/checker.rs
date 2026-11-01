@@ -667,6 +667,16 @@ where
             missing_slots: vec![None; P::Attr::ORDER.len()],
         };
         checker.install_constants();
+        // A default attribute slot is that attribute's own: the pardon judges it.
+        for marker in P::Attr::ORDER {
+            if let Some(node) = checker
+                .module
+                .default_attribute(marker.order_index() as u32)
+                .and_then(|node| node.dynamic())
+            {
+                checker.attribute_nodes.insert(node, *marker);
+            }
+        }
         // Prove the canonical structures concrete before the definition pass, so
         // the clone walk references them in place.
         checker.module.evaluate_node_deep(checker.type_expr, None);
@@ -850,19 +860,59 @@ where
             let pair = [(error.a, error.b), (error.root_a, error.root_b)]
                 .into_iter()
                 .find_map(|(a, b)| {
-                    let marker = checker
-                        .attribute_nodes
-                        .get(&a)
-                        .or_else(|| checker.attribute_nodes.get(&b))
-                        .copied()?;
+                    // A released node has no class: only a live node is read again.
+                    let known = |node: NodeId| {
+                        checker
+                            .attribute_nodes
+                            .get(&node)
+                            .or_else(|| {
+                                checker.module.node_value(AnyNodeId::Dynamic(node))?;
+                                checker
+                                    .attribute_nodes
+                                    .get(&checker.module.class_root(node))
+                            })
+                            .copied()
+                    };
+                    let (marker, a, b) = match (known(a), known(b)) {
+                        (Some(marker), _) => (marker, a, b),
+                        (None, Some(marker)) => (marker, a, b),
+                        // A frame may name the **exprs** that carry the slot: the slot is
+                        // the expr's attribute position.
+                        (None, None) => P::Attr::ORDER.iter().find_map(|marker| {
+                            let slot = |node: NodeId| {
+                                checker
+                                    .slot_attribute(
+                                        AnyNodeId::Dynamic(node),
+                                        marker.order_index() as u32,
+                                    )
+                                    .and_then(|node| node.dynamic())
+                            };
+                            let (left, right) = (slot(a)?, slot(b)?);
+                            // One shared default slot states no position of its own.
+                            if left == right {
+                                return None;
+                            }
+                            known(left)
+                                .or_else(|| known(right))
+                                .map(|_| (*marker, left, right))
+                        })?,
+                    };
                     Some((marker, a, b))
                 });
             let Some((marker, a, b)) = pair else {
                 continue;
             };
+            // A checker-side unify states the found side first; an apply the requirement.
+            let checker_side = checker.diary.iter().any(|entry| {
+                entry
+                    .errors
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&index))
+            });
+            let (declared, value) = if checker_side { (b, a) } else { (a, b) };
             let admitted = checker
                 .attribute_extension(&marker)
-                .is_some_and(|ext| ext.is_subtype(&checker, a, b));
+                .is_some_and(|ext| ext.is_subtype(&checker, declared, value));
             if admitted {
                 pardoned.push(index);
             }

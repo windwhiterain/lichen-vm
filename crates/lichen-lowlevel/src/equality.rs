@@ -927,6 +927,15 @@ impl<P: Program> Module<P> {
                 steps.pop();
                 if !child_ok {
                     *ok = false;
+                    // The conflict is this item's: name the pair that clashed.
+                    if let Some(error) = this.unify_errors.last_mut()
+                        && error.a == root.0
+                        && error.b == root.1
+                        && let (AnyNodeId::Dynamic(left), AnyNodeId::Dynamic(right)) = (na, nb)
+                    {
+                        error.a = left;
+                        error.b = right;
+                    }
                 }
                 child_ok
             };

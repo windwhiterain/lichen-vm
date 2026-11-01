@@ -156,6 +156,17 @@ impl<P: Program> Module<P> {
     /// Total by construction: a value whose layout id was never registered reads as
     /// carrying no attribute, so every canonical attribute it is asked for falls to
     /// [`Self::array_attribute`]'s default arm rather than panicking on a stale id.
+    /// Canonical attribute `canonical`'s **default** slot: the node every array whose
+    /// layout omits it reads.
+    ///
+    /// # Invariant
+    /// The default is that attribute's own position, so a compare against it is a
+    /// compare of that attribute and its order may judge it
+    /// ([`Module::array_attribute`], `docs/notes/array-attribute-view.md`).
+    pub fn default_attribute(&self, canonical: u32) -> Option<AnyNodeId> {
+        default_attribute(self.default_attributes, canonical)
+    }
+
     pub fn attribute_layout(&self, id: u32) -> &[u32] {
         self.attribute_layouts
             .get(id as usize)
