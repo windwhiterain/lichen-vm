@@ -793,6 +793,16 @@ where
                         self.ir[pe].kind,
                         ExprKind::Apply { .. } | ExprKind::NativeCall { .. }
                     );
+                    // A reference is recorded as a candidate claim: which one is the
+                    // body's is decided where the return's slot is known.
+                    if computed && let Some(function) = self.current_function() {
+                        let term = self.state[pe].term.expect("an attribute value is compiled");
+                        self.reference_claims.entry(function).or_default().push((
+                            marker.order_index() as u32,
+                            slot,
+                            term,
+                        ));
+                    }
                     if let Some(p) = provider
                         && !computed
                     {

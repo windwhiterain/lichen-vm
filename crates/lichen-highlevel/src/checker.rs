@@ -186,6 +186,15 @@ where
     attribute_markers: HashMap<ExprId, P::Attr>,
     /// Each function's **last stated claim**: the statement attribute a body wrote.
     body_claims: HashMap<FunctionId, (u32, NodeId)>,
+    /// The attribute **references** a body's annotations name, per function.
+    ///
+    /// # Invariant
+    /// A reference is a computation, so its slot is a hole: a claim must name the
+    /// computation's own term, which carries the operation, and the slot it filled,
+    /// which is what the body's return names. The list is per site because a body
+    /// states one; the last is the return's (`Checker::body_claims` is the decided
+    /// side).
+    reference_claims: HashMap<FunctionId, Vec<(u32, NodeId, NodeId)>>,
     /// The attribute each expr's **attribute slot node** belongs to.
     ///
     /// # Invariant
@@ -625,6 +634,7 @@ where
             deferred_requirements: HashMap::new(),
             attribute_markers: HashMap::new(),
             body_claims: HashMap::new(),
+            reference_claims: HashMap::new(),
             attribute_nodes: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,

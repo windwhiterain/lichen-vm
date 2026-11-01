@@ -177,11 +177,23 @@ where
         // The return's type cell, stored so a type-level clone-on-unify reads
         // the codomain without forcing `r#return`.
         self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
-        // The body claims what it returns; the declaration carries the claim.
-        if let Some(slot) = self.state[r#return].attr
+        // The body claims what it returns; a hole claims its reference.
+        let hole = self.state[r#return]
+            .attr
+            .is_some_and(|slot| self.module.class_value(slot).is_none());
+        let reference = hole
+            .then(|| {
+                self.reference_claims
+                    .get(&function)
+                    .and_then(|claims| claims.last())
+                    .map(|&(index, _slot, term)| (index, term))
+            })
+            .flatten();
+        if let Some(claim) = reference {
+            self.module.functions[function].return_attribute = Some(claim);
+        } else if let Some(slot) = self.state[r#return].attr
             && let Some(marker) = self.attribute_markers.get(&r#return).copied()
         {
-            // The claim may be a member that holds none of the class's operation.
             let slot = self.module.class_operation_owner(slot).unwrap_or(slot);
             self.module.functions[function].return_attribute =
                 Some((marker.order_index() as u32, slot));
@@ -241,8 +253,13 @@ where
                 Some(node) => node,
                 None => return None,
             };
-            let field_operation = self.module.node_operation(called);
-            let Some(field_operation) = field_operation else {
+            // The reference's argument is an **expr**: a frozen one is copied whole,
+            // so the read's operation is its value half's.
+            let called = match self.module.node_operation(called) {
+                Some(_) => called,
+                None => slot_value_node(&*self, called),
+            };
+            let Some(field_operation) = self.module.node_operation(called) else {
                 return None;
             };
             if !matches!(
