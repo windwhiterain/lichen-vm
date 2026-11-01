@@ -1355,7 +1355,7 @@ where
     /// or — when **exactly one** canonical default is that class — that position's
     /// attribute. The pair is the operands themselves: their value position is the
     /// number an order compares.
-    pub fn attribute_pair(&self, x: NodeId, y: NodeId) -> Option<(P::Attr, NodeId, NodeId)> {
+    pub(super) fn attribute_pair(&self, x: NodeId, y: NodeId) -> Option<(P::Attr, NodeId, NodeId)> {
         let known = |node: NodeId| -> Option<P::Attr> {
             if let Some(marker) = self.attribute_nodes.get(&node).copied() {
                 return Some(marker);
