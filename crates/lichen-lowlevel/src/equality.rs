@@ -20,6 +20,18 @@ pub struct UnifyStep {
     pub b: NodeId,
 }
 
+/// Which operand of a failed unify states the requirement, when its caller knows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum OperandOrder {
+    /// The caller stated no order: a consumer must not judge this error.
+    #[default]
+    Unknown,
+    /// The first operand is the provided value, the second the requirement.
+    FoundFirst,
+    /// The first operand is the requirement, the second the provided value.
+    RequirementFirst,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnifyError<P: Program> {
     /// The two top-level operands the trigger framed: a diagnostic is attributed
@@ -33,6 +45,21 @@ pub struct UnifyError<P: Program> {
     pub b: NodeId,
     pub value_a: Option<P::Value>,
     pub value_b: Option<P::Value>,
+    /// The innermost pair the descent clashed at, in the error's own operand order.
+    ///
+    /// # Invariant
+    /// Only an item this error's own unify compared is named: the frame a descent
+    /// reached, never the operands the diagnostic attributes.
+    pub clash: Option<(NodeId, NodeId)>,
+    /// The canonical attribute that pair states, when the frame it clashed in is an
+    /// attribute's own.
+    ///
+    /// # Invariant
+    /// The index is the **frame's**: a consumer resolves the marker from it rather
+    /// than from a node, because the value a default slot holds belongs to none.
+    pub clash_attribute: Option<u32>,
+    /// Which operand states the requirement, when the caller stated one.
+    pub operand_order: OperandOrder,
 }
 
 /// A side of a unification: a node's class, a bare value, or both. See docs/notes/lowlevel-vm.md.
@@ -497,6 +524,9 @@ impl<P: Program> Module<P> {
             b: root.1,
             value_a: a,
             value_b: b,
+            clash: None,
+            clash_attribute: None,
+            operand_order: OperandOrder::Unknown,
         });
     }
 
@@ -888,59 +918,69 @@ impl<P: Program> Module<P> {
             left.len().min(right.len()).min(EXPR_ATTR_BASE)
         };
         let mut ok = true;
-        let mut descend =
-            |this: &mut Self, index: usize, na: AnyNodeId, nb: AnyNodeId, ok: &mut bool| -> bool {
-                // Two views of one frozen node are one value: nothing to compare, and
-                // a frozen cycle reaches itself this way.
-                if let (AnyNodeId::Static(left), AnyNodeId::Static(right)) = (na, nb)
-                    && left == right
-                {
+        let mut descend = |this: &mut Self,
+                           index: usize,
+                           canonical: Option<u32>,
+                           na: AnyNodeId,
+                           nb: AnyNodeId,
+                           ok: &mut bool|
+         -> bool {
+            // Two views of one frozen node are one value: nothing to compare, and
+            // a frozen cycle reaches itself this way.
+            if let (AnyNodeId::Static(left), AnyNodeId::Static(right)) = (na, nb)
+                && left == right
+            {
+                return true;
+            }
+            // An expr already on the descent is one structure: the frame
+            // comparing it owns its interior.
+            let guarded = matches!(na, AnyNodeId::Static(_)) || matches!(nb, AnyNodeId::Static(_));
+            if guarded {
+                if any_path.contains(na, nb) {
                     return true;
                 }
-                // An expr already on the descent is one structure: the frame
-                // comparing it owns its interior.
-                let guarded =
-                    matches!(na, AnyNodeId::Static(_)) || matches!(nb, AnyNodeId::Static(_));
-                if guarded {
-                    if any_path.contains(na, nb) {
-                        return true;
-                    }
-                    any_path.insert(na, nb);
-                }
-                steps.push(UnifyStep {
-                    index,
-                    a: node_or_default(na),
-                    b: node_or_default(nb),
-                });
-                let child_ok = this.unify_inner(
-                    Side::of(na, this.node_value(na)),
-                    Side::of(nb, this.node_value(nb)),
-                    path,
-                    depth + 1,
-                    steps,
-                    any_path,
-                    root,
-                );
-                if guarded {
-                    any_path.remove(na, nb);
-                }
-                steps.pop();
-                if !child_ok {
-                    *ok = false;
-                    // The conflict is this item's: name the pair that clashed.
-                    if let Some(error) = this.unify_errors.last_mut()
-                        && error.a == root.0
-                        && error.b == root.1
-                        && let (AnyNodeId::Dynamic(left), AnyNodeId::Dynamic(right)) = (na, nb)
-                    {
-                        error.a = left;
-                        error.b = right;
+                any_path.insert(na, nb);
+            }
+            steps.push(UnifyStep {
+                index,
+                a: node_or_default(na),
+                b: node_or_default(nb),
+            });
+            let recorded = this.unify_errors.len();
+            let child_ok = this.unify_inner(
+                Side::of(na, this.node_value(na)),
+                Side::of(nb, this.node_value(nb)),
+                path,
+                depth + 1,
+                steps,
+                any_path,
+                root,
+            );
+            if guarded {
+                any_path.remove(na, nb);
+            }
+            steps.pop();
+            if !child_ok {
+                *ok = false;
+                // The clash is this item's: name it, but only on the errors **this**
+                // child produced — an older error is never rewritten.
+                if let (AnyNodeId::Dynamic(left), AnyNodeId::Dynamic(right)) = (na, nb)
+                    && left != right
+                {
+                    for error in &mut this.unify_errors[recorded..] {
+                        if error.clash.is_none() {
+                            error.clash = Some((left, right));
+                        }
+                        if error.clash_attribute.is_none() {
+                            error.clash_attribute = canonical;
+                        }
                     }
                 }
-                child_ok
-            };
+            }
+            child_ok
+        };
         for (index, (ia, ib)) in left.iter().zip(right.iter()).take(leading).enumerate() {
-            descend(self, index, ia.node, ib.node, &mut ok);
+            descend(self, index, None, ia.node, ib.node, &mut ok);
             if !ok {
                 return false;
             }
@@ -975,7 +1015,14 @@ impl<P: Program> Module<P> {
             let (Some(na), Some(nb)) = (na, nb) else {
                 continue;
             };
-            descend(self, EXPR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
+            descend(
+                self,
+                EXPR_ATTR_BASE + canonical as usize,
+                Some(canonical),
+                na,
+                nb,
+                &mut ok,
+            );
             if !ok {
                 return false;
             }
@@ -1403,6 +1450,9 @@ impl<P: Program> Module<P> {
             b: rb,
             value_a: self.nodes[ra].value,
             value_b: self.nodes[rb].value,
+            clash: None,
+            clash_attribute: None,
+            operand_order: OperandOrder::Unknown,
         });
     }
 }

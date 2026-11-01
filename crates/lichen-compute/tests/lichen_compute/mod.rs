@@ -55,7 +55,6 @@ mod union_ports;
 mod zz_gc_panic_probe;
 
 mod zz_argmax_probe;
-mod zz_attribute_certificate_probe;
 mod zz_dynamic_trip_probe;
 mod zz_fold_struct_probe;
 mod zz_fold_type_probe;

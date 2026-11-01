@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use lichen_lowlevel::{
     AnyNodeId, ArrayItem, ArrayValue, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue,
-    Module, NodeId, Operation, Registry,
+    Module, NodeId, OperandOrder, Operation, Registry,
 };
 use stacksafe::stacksafe;
 
@@ -667,16 +667,6 @@ where
             missing_slots: vec![None; P::Attr::ORDER.len()],
         };
         checker.install_constants();
-        // A default attribute slot is that attribute's own: the pardon judges it.
-        for marker in P::Attr::ORDER {
-            if let Some(node) = checker
-                .module
-                .default_attribute(marker.order_index() as u32)
-                .and_then(|node| node.dynamic())
-            {
-                checker.attribute_nodes.insert(node, *marker);
-            }
-        }
         // Prove the canonical structures concrete before the definition pass, so
         // the clone walk references them in place.
         checker.module.evaluate_node_deep(checker.type_expr, None);
@@ -855,61 +845,52 @@ where
         // **Every failed unify asks its attribute's order** (`docs/notes/array-attribute-view.md`).
         let mut pardoned = Vec::new();
         for index in 0..checker.module.unify_errors.len() {
-            let error = &checker.module.unify_errors[index];
-            // A compare may descend: the clashing pair is tried before the roots.
-            let pair = [(error.a, error.b), (error.root_a, error.root_b)]
-                .into_iter()
-                .find_map(|(a, b)| {
-                    // A released node has no class: only a live node is read again.
-                    let known = |node: NodeId| {
-                        checker
-                            .attribute_nodes
-                            .get(&node)
-                            .or_else(|| {
-                                checker.module.node_value(AnyNodeId::Dynamic(node))?;
-                                checker
-                                    .attribute_nodes
-                                    .get(&checker.module.class_root(node))
-                            })
-                            .copied()
-                    };
-                    let (marker, a, b) = match (known(a), known(b)) {
-                        (Some(marker), _) => (marker, a, b),
-                        (None, Some(marker)) => (marker, a, b),
-                        // A frame may name the **exprs** that carry the slot: the slot is
-                        // the expr's attribute position.
-                        (None, None) => P::Attr::ORDER.iter().find_map(|marker| {
-                            let slot = |node: NodeId| {
-                                checker
-                                    .slot_attribute(
-                                        AnyNodeId::Dynamic(node),
-                                        marker.order_index() as u32,
-                                    )
-                                    .and_then(|node| node.dynamic())
-                            };
-                            let (left, right) = (slot(a)?, slot(b)?);
-                            // One shared default slot states no position of its own.
-                            if left == right {
-                                return None;
-                            }
-                            known(left)
-                                .or_else(|| known(right))
-                                .map(|_| (*marker, left, right))
-                        })?,
-                    };
-                    Some((marker, a, b))
-                });
-            let Some((marker, a, b)) = pair else {
+            // An unknown source states no order, so it is never pardoned.
+            let (order, pair, roots, attribute, value_a, value_b) = {
+                let error = &checker.module.unify_errors[index];
+                (
+                    error.operand_order,
+                    error.clash.unwrap_or((error.a, error.b)),
+                    (error.root_a, error.root_b),
+                    error.clash_attribute,
+                    error.value_a,
+                    error.value_b,
+                )
+            };
+            let found_first = match order {
+                OperandOrder::Unknown => continue,
+                OperandOrder::FoundFirst => true,
+                OperandOrder::RequirementFirst => false,
+            };
+            // The attribute is the frame's, else the one a side names.
+            let marker = attribute
+                .and_then(|canonical| {
+                    P::Attr::ORDER
+                        .iter()
+                        .find(|marker| marker.order_index() as u32 == canonical)
+                        .copied()
+                })
+                // The operands the compare framed are the positions it compared; the
+                // descent's own pair is only the items inside them.
+                .or_else(|| checker.attribute_pair(roots.0, roots.1).map(|pair| pair.0))
+                .or_else(|| checker.attribute_pair(pair.0, pair.1).map(|pair| pair.0));
+            let Some(marker) = marker else {
                 continue;
             };
-            // A checker-side unify states the found side first; an apply the requirement.
-            let checker_side = checker.diary.iter().any(|entry| {
-                entry
-                    .errors
-                    .as_ref()
-                    .is_some_and(|range| range.contains(&index))
-            });
-            let (declared, value) = if checker_side { (b, a) } else { (a, b) };
+            // The order judges the recorded numbers, else the compared positions.
+            let (declared, value) = match found_first {
+                true => (value_b, value_a),
+                false => (value_a, value_b),
+            };
+            let (declared, value) = match (declared, value) {
+                (Some(declared), Some(value)) => {
+                    (checker.value_node(declared), checker.value_node(value))
+                }
+                _ => match found_first {
+                    true => (pair.1, pair.0),
+                    false => (pair.0, pair.1),
+                },
+            };
             let admitted = checker
                 .attribute_extension(&marker)
                 .is_some_and(|ext| ext.is_subtype(&checker, declared, value));
@@ -1349,6 +1330,64 @@ where
 
     /// The attribute a read states, when it states one: the marker and the slot
     /// the element's own attribute expr is.
+    ///
+    /// # Invariant
+    /// The slot is the element's **attribute expr**, not the element: a reader of
+    /// the slot compares its value position, so returning the element would put the
+    /// term's value where a perspective belongs. The marker travels with it because
+    /// a slot read as a claim needs the attribute it claims.
+    /// The attribute a compare's two operands are judged by, with the pair it states.
+    ///
+    /// # Invariant
+    /// The marker is never guessed: it is the one a side **names**, and two sides that
+    /// name different attributes answer nothing. A side names its own slot, its class's,
+    /// or — through the class a **default** slot owns — the canonical attribute that
+    /// default is. The pair is the operands themselves: their value position is the
+    /// number an order compares.
+    pub(super) fn attribute_pair(&self, x: NodeId, y: NodeId) -> Option<(P::Attr, NodeId, NodeId)> {
+        let known = |node: NodeId| -> Option<P::Attr> {
+            if let Some(marker) = self.attribute_nodes.get(&node).copied() {
+                return Some(marker);
+            }
+            self.module.node_value(AnyNodeId::Dynamic(node))?;
+            let root = self.module.class_root(node);
+            // A class a default slot owns names that default's attribute.
+            self.attribute_nodes.get(&root).copied().or_else(|| {
+                P::Attr::ORDER
+                    .iter()
+                    .find(|marker| {
+                        self.module.default_attribute(marker.order_index() as u32)
+                            == Some(AnyNodeId::Dynamic(root))
+                    })
+                    .copied()
+            })
+        };
+        // A side may name its attribute one level in: the slot its layout gives.
+        let named = |node: NodeId| -> Option<P::Attr> {
+            if let Some(marker) = known(node) {
+                return Some(marker);
+            }
+            P::Attr::ORDER.iter().find_map(|marker| {
+                let canonical = marker.order_index() as u32;
+                let slot = self
+                    .slot_attribute(AnyNodeId::Dynamic(node), canonical)?
+                    .dynamic()?;
+                if Some(AnyNodeId::Dynamic(slot)) == self.module.default_attribute(canonical) {
+                    return None;
+                }
+                known(slot)
+            })
+        };
+        let (left, right) = (named(x), named(y));
+        let marker = match (left, right) {
+            (Some(left), Some(right)) if left != right => return None,
+            (Some(marker), _) | (None, Some(marker)) => marker,
+            (None, None) => return None,
+        };
+        (x != y).then_some((marker, x, y))
+    }
+
+    /// The attribute a read states, when it states one: the marker and the slot.
     ///
     /// # Invariant
     /// The slot is the element's **attribute expr**, not the element: a reader of

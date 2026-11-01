@@ -10,7 +10,7 @@ use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
 
 pub use crate::assert::{AssertError, PendingAssert};
-pub use crate::equality::{UnifyError, UnifyStep};
+pub use crate::equality::{OperandOrder, UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
 pub use crate::loop_conversion::{

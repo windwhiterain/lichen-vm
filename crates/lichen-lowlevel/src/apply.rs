@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     AnyFunctionId, AnyNodeId, ApplyError, BlockId, BudgetExhausted, LowOperator, LowValue, Module,
-    NodeId, Program,
+    NodeId, OperandOrder, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -119,6 +119,11 @@ impl<P: Program> Module<P> {
                     let recorded = self.unify_errors.len();
                     self.unify_ref(left.node, right.node);
                     if self.unify_errors.len() > recorded {
+                        // The parameter states the requirement, the argument provides:
+                        // the order the checker judges by is this one.
+                        for error in &mut self.unify_errors[recorded..] {
+                            error.operand_order = OperandOrder::RequirementFirst;
+                        }
                         failing = (
                             left.node.dynamic().unwrap_or(cloned_param),
                             right.node.dynamic().unwrap_or(cloned_param),

@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId, OperandOrder};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{ExprId, Loc, LocPath, LocStep};
@@ -28,9 +28,15 @@ where
     /// has judged it undefined, so its graph is not built behind the refusal
     /// (`refused_expr`).
     pub fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) -> bool {
+        let recorded = self.module.unify_errors.len();
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
             return true;
+        }
+        // The checker states the found side first, so an attribute's order may judge
+        // this error (`UnifyError::operand_order`).
+        for error in &mut self.module.unify_errors[recorded..] {
+            error.operand_order = OperandOrder::FoundFirst;
         }
         self.record_unify(a, b, loc, kind, None, errors);
         false
@@ -87,9 +93,13 @@ where
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
         self.compute_operands(a, b);
+        let recorded = self.module.unify_errors.len();
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
             return;
+        }
+        for error in &mut self.module.unify_errors[recorded..] {
+            error.operand_order = OperandOrder::FoundFirst;
         }
         if is_subtype(self, a, b) {
             self.module.unify_errors.truncate(errors.start);
