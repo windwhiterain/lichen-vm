@@ -969,3 +969,27 @@ stayed 13).
 **Traps reconfirmed**: `AttrExt::unify_slots` at the instantiation (235/6, apply
 errors `expected 32, found 32`), and a "descend while the value is an array" reader
 that walks into a buffer's struct value.
+
+## Round 45: the innermost pair is not in the error
+
+Committed `60cc18e3`. Compute **240/1**; engines 136/0, 164/0, 276/0; comments and
+fmt clean.
+
+The pardon pass now tries the error's clashing pair (`UnifyError::a`/`b`) before its
+roots, and `check_instantiation` registers each field's attribute slot on **both**
+sides, so a descended attribute failure is recognisable. Measured, and insufficient
+on its own: the array compare records the failure at the **frames**, not at the items —
+for the write call's refused compare `error.a == error.root_a` and both are the two
+records (`layout 0`), so the pair the order would need (32 against 0) never appears in
+the error.
+
+**So the next change is in the lowlevel**, and it is small: where the array-item unify
+records a conflict (`equality.rs::record_error`, whose `ra`/`rb` are the framed
+operands), record the **item** pair that clashed — the two item nodes at the failing
+position — keeping `root_a`/`root_b` as they are. With that, the pardon's pair-first
+lookup finds the registered attribute slots and `is_subtype(declared, value)` decides
+`0` under `# warp` for the caller that provided it.
+
+Measured along the way: registering the module's **default** attribute node as that
+attribute's (so a compare against a default is judged by the order) changes nothing by
+itself, and was reverted; `AttrExt::unify_slots` at the instantiation is still 235/6.
