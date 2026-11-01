@@ -846,17 +846,23 @@ where
         let mut pardoned = Vec::new();
         for index in 0..checker.module.unify_errors.len() {
             let error = &checker.module.unify_errors[index];
-            let attribute = checker
-                .attribute_nodes
-                .get(&error.root_a)
-                .or_else(|| checker.attribute_nodes.get(&error.root_b))
-                .copied();
-            let Some(marker) = attribute else {
+            // A compare may descend: the clashing pair is tried before the roots.
+            let pair = [(error.a, error.b), (error.root_a, error.root_b)]
+                .into_iter()
+                .find_map(|(a, b)| {
+                    let marker = checker
+                        .attribute_nodes
+                        .get(&a)
+                        .or_else(|| checker.attribute_nodes.get(&b))
+                        .copied()?;
+                    Some((marker, a, b))
+                });
+            let Some((marker, a, b)) = pair else {
                 continue;
             };
             let admitted = checker
                 .attribute_extension(&marker)
-                .is_some_and(|ext| ext.is_subtype(&checker, error.root_a, error.root_b));
+                .is_some_and(|ext| ext.is_subtype(&checker, a, b));
             if admitted {
                 pardoned.push(index);
             }

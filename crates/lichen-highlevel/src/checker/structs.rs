@@ -821,6 +821,23 @@ where
             table,
         );
         if valid {
+            // A field's attribute slot is that attribute's on both sides.
+            for (position, argument) in ordered.iter().enumerate() {
+                let Some(field) = fields.get(position).copied() else {
+                    continue;
+                };
+                for marker in P::Attr::ORDER {
+                    let canonical = marker.order_index() as u32;
+                    for term in [field, vals[*argument]] {
+                        if let Some(slot) = self
+                            .slot_attribute(AnyNodeId::Dynamic(term), canonical)
+                            .and_then(|node| node.dynamic())
+                        {
+                            self.attribute_nodes.insert(slot, *marker);
+                        }
+                    }
+                }
+            }
             // Each argument is matched against the clone's own field.
             for (position, argument) in ordered.iter().enumerate() {
                 let Some(field) = fields.get(position) else {
