@@ -722,3 +722,16 @@ not substitute one member for another.
 perspective with its two defects (the instantiation's attribute order, round 36's
 second attempt recorded; and this certificate hole). Engines 164/0, 136/0, 276/0;
 gpu's four SPIR-V failures pre-existing; comments and fmt clean.
+
+**And carrying it universally at the freeze is too broad (measured).** A
+`Module::class_operation` reader plus using it in `freeze.rs` (an undecided member
+takes its class's operation) gives **229 / 12**: every undecided member then looks
+like a computation, so `jit_conditional_then`/`else`, `jit_inline_lichen_function`,
+`jit_closes_over_constant`, `a_refused_call_argument_shape_says_why` and
+`a_float_argument_to_an_int_parameter_is_refused_by_class` and six more break.
+Reverted. Two measured limits for whoever takes it next: substituting a class
+representative recurses (round 37), and copying the class's operation onto every
+member over-claims. What is left is a *narrow* carrier — the operation the
+certificate needs is the one on the return expr's attribute **reference**, so the
+carrier must be the class's operation **for the members of a returned expr's
+attribute position**, not for a class in general.
