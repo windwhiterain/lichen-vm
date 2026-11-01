@@ -147,7 +147,9 @@ where
             // every caller the requirement admits.
             self.state[parameter].attr = Some(declared);
         }
+
         let ret = self.check_expr(r#return);
+
         // Complete only an unasserted identity return whose class is inside this function's scope.
         let scope = self.module.function_scope(function);
         let identity_return = self.module.expr_value_half(ret) == Some(value_cell);
@@ -175,12 +177,14 @@ where
         // The return's type cell, stored so a type-level clone-on-unify reads
         // the codomain without forcing `r#return`.
         self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
-        // The body states what it returns; the declaration carries the claim.
+        // The body claims what it returns; the declaration carries the claim.
         if let Some(slot) = self.state[r#return].attr
             && let Some(marker) = self.attribute_markers.get(&r#return).copied()
         {
             self.module.functions[function].return_attribute =
                 Some((marker.order_index() as u32, slot));
+        } else if let Some(claim) = self.body_claims.get(&function).copied() {
+            self.module.functions[function].return_attribute = Some(claim);
         }
         // The return may belong to a nested closure's scope, but the entry
         // point must be this function's member.

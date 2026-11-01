@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, NodeId};
 use lichen_utils::extend::AsEnum;
 
+use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 
@@ -308,6 +309,12 @@ where
             self.state[e].attr = Some(stated);
             if let Some(marker) = self.attribute_markers.get(&expected).copied() {
                 self.attribute_markers.insert(e, marker);
+                // The function whose body is being checked claims it, whatever shape
+                // the block takes (`Checker::body_claims`).
+                if let Some(function) = self.current_function() {
+                    self.body_claims
+                        .insert(function, (marker.order_index() as u32, stated));
+                }
             }
         }
         actual_term

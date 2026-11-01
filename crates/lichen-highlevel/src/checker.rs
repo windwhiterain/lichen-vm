@@ -184,6 +184,8 @@ where
     /// A return attribute is recorded with its **marker**, and the slot node alone
     /// cannot name one, so the setter records it here.
     attribute_markers: HashMap<ExprId, P::Attr>,
+    /// Each function's **last stated claim**: the statement attribute a body wrote.
+    body_claims: HashMap<FunctionId, (u32, NodeId)>,
     /// The attribute each expr's **attribute slot node** belongs to.
     ///
     /// # Invariant
@@ -622,6 +624,7 @@ where
             merged_tails: HashMap::new(),
             deferred_requirements: HashMap::new(),
             attribute_markers: HashMap::new(),
+            body_claims: HashMap::new(),
             attribute_nodes: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,
