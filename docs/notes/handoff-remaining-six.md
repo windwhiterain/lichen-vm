@@ -1095,3 +1095,11 @@ position, a shared match names none, no match names none.
 Measured: compute 240/0, highlevel 136/0 plus 3 lib unit tests, lowlevel 167/0,
 language 276/0, gpu 90/4 with the four pre-existing SPIR-V failures; comments and fmt
 clean.
+
+**Approved** (`fix_reviewer`, round 48 review): `sole_default` is the required shape,
+the three pins cover unique/shared/no match, and `operand_order`, `clash`, the
+two-sided marker rejection and the probe deletion are accepted. One non-semantic
+cleanup requested and done in `48d8e078`: `attribute_pair` is `pub(super)` again — the
+pin tests the private `sole_default`, so no public surface is needed. Final numbers:
+compute 240/0, highlevel 136/0 plus 3 lib unit tests, lowlevel 167/0, language 276/0,
+gpu 90/4 with the four pre-existing SPIR-V failures; comments and fmt clean.
