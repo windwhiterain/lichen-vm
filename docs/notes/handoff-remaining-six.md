@@ -767,3 +767,33 @@ stated return attribute (`Function::return_attribute`, `StaticFunction`'s mirror
 the format bump) rather than the applied clone's expression. That is the one route
 left for the last red test's certificate half; its order-gate half keeps round 36's
 constraint (retain the whole-expr unify, do not re-implement the comparison).
+
+## Round 39: what the annotation actually settles for `perspective_of x.to`
+
+Three attempts this round, all reverted; the state is unchanged (compute 240/1).
+
+1. **Spell `write`'s return as the annotated expression** (`{…; r = (Buf _) # …; (r # …)}`)
+   — measured: no change, both programs still report the declared `32` on the
+   positive case. So the spelling of the prelude is not the lever.
+2. **`certificate_field` reads the argument expr's value half before its operation**
+   (the reference's argument is an expr, so its `Index` lives in element 0) — inert
+   on its own.
+3. **A computed attribute's slot is its own expression, not the applied return slot**
+   (`check_ann`: `Apply`/`NativeCall` → `annotation_value_slot`; otherwise
+   `reference_slot` → `applied_attribute_slot` → `annotation_value_slot`) — with (2)
+   the certificate becomes the argument's meet (`expected 0, found 1`) instead of
+   the declared `32`; neither is the caller's field.
+
+**The blocking reading.** With (3), the slot the annotation settles is an **expr
+array (layout 1) whose value half is a bare, operation-less cell** — measured
+`slot=… class=Some(Array layout 1)` and `slot_value_node(slot)` a node with
+`own=None class=None value_op=None`. `certificate_field` requires
+`node_operation(certificate)` and gets `None`, so it returns `None` and the call
+site takes the meet. So the reference expression (`perspective_of x.to`) is not what
+the annotation's slot holds in either spelling; the only two candidates measured
+are the *declared field slot* (32) and the *applied return slot* (a hole).
+
+**Next measurement (single subject)**: print the annotation value's `ExprKind` by
+name (not its discriminant) and `state[pe].term`'s own value in `check_ann` for the
+write body, to identify which expression the slot comes from; the round established
+that none of the three selection routes yields a node with a walkable operation.
