@@ -1002,3 +1002,36 @@ own frame). Whoever takes round 45's next step should first print, for the refus
 apply, which `unify_ref`/`unify_inner` path records the error (a `DBG` on
 `record_value_error` and `record_error` naming their caller), instead of assuming the
 array descent.
+
+## Round 46: the last red test is green — the pardon reaches the clashing position
+
+Committed `79c68eb7`. **All six remaining tests are green**: compute
+**241 passed / 0 failed**, highlevel 136/0, lowlevel 164/0, language 276/0, gpu 90/4
+with the four pre-existing SPIR-V validation failures; comments and fmt clean.
+
+`perspective_requirements::a_write_returns_the_input_buffer_perspective` now compiles
+its positive program and refuses its negative one with `expected 0, found 32`. Three
+changes were needed **together** (each measured insufficient alone):
+
+1. **The lowlevel names the item pair.** `unify_array_items`'s descend rewrites the
+   error's `a`/`b` to the item nodes it clashed at (when they still name the roots),
+   so a failure one descent down (the record's `.to` slot inside a value compare) is
+   visible to a reader that judges by rule. Measured before this: the error's `a`
+   equalled `root_a` — the two records — and no order could reach the slots.
+2. **The pardon pass reads the pair, then the roots**, resolves a frame that names
+   the *exprs* carrying the slot (`slot_attribute` by each canonical index, skipping a
+   shared default pair), and picks the direction by the error's origin: a checker-side
+   unify (`diary` has the index) states the **found** side first, an apply states the
+   **requirement** first — `is_subtype(declared, value)` either way. Getting this
+   wrong was measured: the direction as `(a, b)` alone pardoned
+   `an_imported_requirement_judges_like_an_inline_one`'s required refusal.
+3. **The slots are registered as their attribute's**: the module's default slots at
+   construction and each instantiation's field attribute slots, so the pair is
+   recognisable.
+
+Traps reconfirmed on the way: `class_root` panics on a released node (`invalid SlotMap
+key`) — guard with `node_value` first; and a `slot_attribute` read falls back to the
+default slot, so two identical slots must never be judged.
+
+**What remains is none of the six.** The write perspective was the last one; the
+sections above record how each was closed.
