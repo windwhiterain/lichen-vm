@@ -32,19 +32,22 @@ third state that is neither `Any` nor a plain hole — an **open position**.
 
 > Attribute positions pair by their **canonical index** — an array's layout names
 > which canonical attribute each position carries — never by dense slot order.
-> When two expressions are unified, an attribute position is:
+> In all three cases below, the attribute positions themselves **do not join a
+> class**; "decided" adopts the stated expression without a class union. When two
+> expressions are unified, an attribute position is:
 >
 > - **compared**, when both sides state an attribute there: the attribute's own
 >   order decides (for the perspective, `requirement ⊑ provider`, `declared |
 >   provided`), with the **actual** as the provider and the **expected** as the
->   requirement; neither slot joins the other's class;
+>   requirement;
 > - **decided**, when exactly one side states one: that side's attribute
->   *expression* becomes the value's claim. In a statement `actual = expected`,
->   the expected (annotated) side states it, and the actual takes it;
-> - **left alone**, when neither side states one: no write, and **no class join**.
->   Such a position is **open**, not undecided: it carries no claim, and it must be
->   distinguishable from both `@any` and a plain hole, because a reader treats only
->   a *stated* position as a certificate (§3).
+>   *expression* becomes the value's claim, adopted without a class union. In a
+>   statement `actual = expected`, the expected (annotated) side states it, and the
+>   actual takes it;
+> - **left alone**, when neither side states one: no write, no class union.
+>   Such a position is **open**: it is *marked undecided*, not a plain hole, and it
+>   carries no claim, because a reader treats only a *stated* position as a
+>   certificate (§3).
 
 `@any` keeps §Any's exception unchanged; this clause governs only positions that
 are neither stated nor `@any`. Cross table:
@@ -68,13 +71,26 @@ kept beside it.
 `stated_element_slot` does the same. If the open state is undecided, every
 unstated position would become a certificate. So:
 
-> A reader treats a slot as **stated** when it holds a value, or holds an operation
-> whose value is still to be resolved (a reference/lazy certificate). An **open**
-> position is undecided *and declares itself open on the expression*; it is not a
-> certificate. A bare hole is never a claim.
+> A reader reads three states, never two:
+>
+> - **stated** — a decided value that is not `@any`, or an operation whose value is
+>   still to be resolved (a reference / lazy certificate);
+> - **open** — *marked undecided* on the expression: not a certificate;
+> - **no claim** — a plain hole, or the wildcard `@any`. `@any`'s unify behaviour
+>   stays entirely §Any's; it is only excluded from being read as a certificate.
 
-The distinction cannot be "skip every hole" — that deletes the lazy certificate
-the `write` shape needs.
+"Skip every hole" is not the rule: it deletes the lazy certificate the `write`
+shape needs. And "a plain hole is not a claim" is what keeps a certificate from
+being invented where the body states nothing.
+
+**The marker's carrier is not yet decided.** An open position must be
+distinguishable from a plain hole, and no existing representation says which is
+which: an expr's attribute layout names canonical positions, not which of them are
+open. Candidates are (a) an entry in the expression's attribute layout registry, or
+(b) a checker-side table beside `Module::struct_identity_items`. (a) is persisted and
+would bump `ARTIFACT_FORMAT_VERSION`; (b) is not persisted, so a loaded artifact
+would lose it. This must be settled before implementation, and §6's "no persisted
+shape changes" is therefore a **goal**, not a guarantee.
 
 ## 4. Templates and clones: one rule, one boundary
 
@@ -97,7 +113,8 @@ Measured at the tip (`89b325ee`) with `zz_attribute_certificate_probe`; the
 | 1 | `g := x => {r := x; r = (r # 32)}`<br>`(g 0) # 64` | the statement's unify is **accepted and `r` carries 32**, so the program is refused `expected 64, found 32` | refused `expected 64, found 32` — but only because `adopt_stated_attributes` erases the wildcard first; without it, admitted |
 | 2 | `f := (x : Int # 32) => x`<br>`f (0 # 64)` | accepted (`32 \| 64`) | **accepted** |
 | 3 | `f := (x : Int # 64) => x`<br>`f (0 # 32)` | refused `expected 64, found 32` | **refused** `expected 64, found 32` |
-| 4 | `id := x => x + 1`<br>`(id 0) # 32` | a callee that states nothing hands **no** certificate, so the demand is the slot | **accepted** — the control against every call suddenly gaining a certificate |
+| 4 | `id := x => x + 1`<br>`(id 0) # 32` | *sanity only* — a callee that states nothing hands no certificate | **accepted**; but this row does **not** discriminate: the correct path and the misreading both land on the argument's top (`0`) |
+| 4b | `id := x => x + 1`<br>`((id # 1) 0) # 32` | the reader gate: with no certificate the call's provider is the callee's own claim, so it should refuse `expected 32, found 1` | **accepted** — it does not discriminate either, and that is a **new finding**: the annotation on the callee's reference never reaches the call's provider, so the provider is the argument's `0`. See §7 |
 | 5 | two expressions that state nothing, unified (e.g. `p := {.a @any : Int}` / `k := (x = p) => x` / `k (p{.a 1})`) | no class coupling; both stay open | couples once the wildcard is a hole: **107/134** |
 
 Row 5's number is a suite reading, and its mechanism (a full-width unify joining
@@ -112,21 +129,32 @@ rule is a declaration of intent there.
 
 The open state becomes representable instead of the wildcard fill; the erasure
 (`clear_wildcard`, `adopt_stated_attributes`) is withdrawn; the two remaining
-perspective tests get their certificate path. No persisted shape changes.
-Re-measure after the change, **both directions and both paths**:
+perspective tests get their certificate path. Persisted shape changes **only if**
+§3's carrier is option (a); with a checker-side table (b) nothing persisted moves,
+at the cost of a loaded artifact losing the marker. Re-measure after the change,
+**both directions and both paths**:
 
 - template pinning, dynamic **and** frozen: `f (5 # 8)` then `f (5 # 2)`, and the
   reverse order `2 → 8`;
-- the markerless parameter (`id (5 # 1)` answers `# 1`) and row 4's silent callee;
+- the markerless parameter (`id (5 # 1)` answers `# 1`) and row 4/4b's silent callee;
 - `attributes.md` §Behaviour's compound rows and §"Annotation over an existing
   attribute";
 - the whole compute and engine suites.
 
-## 7. Separate slice: the pardon pass
+## 7. Separate slice: two deviations the rows exposed
 
-`Checker::build` pardons **any** failed unify whose root is registered in
-`Checker::attribute_nodes`, via `ext.is_subtype(root_a, root_b)` — the opposite
-direction from the printed acceptance table. Registering an annotation's
+**The pardon pass.** `Checker::build` pardons **any** failed unify whose root is
+registered in `Checker::attribute_nodes`, via `ext.is_subtype(root_a, root_b)` — the
+opposite direction from the printed acceptance table. Registering an annotation's
 constraint slot there made a `32` against `1` failure vanish outright. Until that
 pass's direction and root reach are settled, **no v15 implementation may route
 through a new `attribute_nodes` entry**, and the pass gets its own measurement.
+
+**A callee's own claim never reaches the call's provider (measured, row 4b).**
+`((id # 1) 0) # 32` is admitted, at the tip, while the design says a call's provider
+is its own certified attribute or the meet of what it is made of — `gcd(1, 0) = 1`,
+which `# 32` must refuse. So either the annotation on a callee's *reference* is
+dropped before the provider combine, or the combine for an apply does not reach the
+function operand. This is not part of v15's sentence, but it is the row the reader
+gate was supposed to be guarded by, so it needs its own reading before §5 row 4b
+can serve as a gate.

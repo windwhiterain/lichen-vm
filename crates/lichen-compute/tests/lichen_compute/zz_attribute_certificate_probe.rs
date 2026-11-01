@@ -54,6 +54,13 @@ fn probe_the_directed_attribute_unify() {
             "a silent callee hands no certificate",
             "id := x => x + 1\n(id 0) # 32\n",
         );
+        // The discriminating control: the callee's own claim is `1` and the argument
+        // is the top, so a silent callee refuses with `1`. A call that wrongly took
+        // an open position as a certificate would fall back to the argument and admit.
+        show(
+            "a silent callee's provider is the function, not the argument",
+            "id := x => x + 1\n((id # 1) 0) # 32\n",
+        );
     });
 }
 
