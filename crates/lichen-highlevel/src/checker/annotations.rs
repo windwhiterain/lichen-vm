@@ -1,7 +1,9 @@
 //! The `# p` / `? doc` annotation rules and the slot algebra — the merge,
 //! a value's slot, and the *missing* slot.
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+
+use lichen_utils::extend::AsEnum;
 
 use std::collections::HashSet;
 
@@ -47,6 +49,60 @@ where
         marker: &P::Attr,
     ) -> Option<&'static dyn crate::attr::AttrExt<P>> {
         self.attr_ext.as_ref().map(|registry| registry(marker))
+    }
+
+    /// Whether a slot already holds a decided value.
+    pub(super) fn attribute_is_decided(&self, slot: NodeId) -> bool {
+        self.module
+            .node_value(AnyNodeId::Dynamic(slot))
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            .is_some()
+    }
+
+    /// A slot's value as a node of this module: a frozen slot's number is re-stored.
+    ///
+    /// # Invariant
+    /// Exactly one level of a **live** slot is opened — its element 0 is the value,
+    /// whatever that value's own shape is. Only a frozen element is unwrapped
+    /// further, because there the arena holds the nested slot rather than a number;
+    /// an undecided slot is returned unchanged so a unify can still bind it.
+    pub(super) fn live_slot_value(&mut self, slot: NodeId) -> NodeId {
+        let Some(LowValue::Array(array)) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(slot))
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        else {
+            return slot;
+        };
+        // SAFETY: `array` is `slot`'s payload, read just above from a live node.
+        let Some(item) = unsafe { array.items() }.first().map(|item| item.node) else {
+            return slot;
+        };
+        match item {
+            AnyNodeId::Dynamic(node) => node,
+            AnyNodeId::Static(_) => self.frozen_slot_value(item).unwrap_or(slot),
+        }
+    }
+
+    /// A frozen slot's number, re-stored as this module's node; `None` when the
+    /// walk finds no number.
+    fn frozen_slot_value(&mut self, mut node: AnyNodeId) -> Option<NodeId> {
+        for _ in 0..4 {
+            let value = self.module.node_value(node)?;
+            match AsEnum::<LowValue>::as_enum(&value) {
+                // A nested slot: the value sits at its element 0.
+                Some(LowValue::Array(array)) => {
+                    // SAFETY: the payload of `node`, read just above.
+                    let next = unsafe { array.items() }.first().map(|item| item.node)?;
+                    if next == node {
+                        return None;
+                    }
+                    node = next;
+                }
+                _ => return Some(self.value_node(value)),
+            }
+        }
+        None
     }
 
     /// Records the [`DiagKind::NoAttributeExtension`] guard at `loc` and
@@ -487,6 +543,9 @@ where
             let Some(ext) = self.attribute_extension(&marker) else {
                 continue;
             };
+            // A frozen requirement's number lives elsewhere: read it here.
+            let value_slot = self.live_slot_value(value_slot);
+            let type_slot = self.live_slot_value(type_slot);
             ext.unify_slots(self, value_slot, type_slot, loc.clone());
         }
     }

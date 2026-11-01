@@ -169,6 +169,24 @@ impl<P: Program> Module<P> {
         self.refine_class_low_type(node, shape)
     }
 
+    /// The first member of `node`'s class that holds an **operation**, if any.
+    ///
+    /// # Invariant
+    /// A class's members share one value but not one operation: the node a class
+    /// was merged *through* is the one that states what the class computes, and a
+    /// reader of the operation must name that member rather than the hole it filled
+    /// (`docs/notes/handoff-remaining-six.md`, round 37).
+    pub fn class_operation_owner(&self, node: NodeId) -> Option<NodeId> {
+        let mut member = Some(self.class_root(node));
+        while let Some(current) = member {
+            if self.nodes[current].operation.is_some() {
+                return Some(current);
+            }
+            member = self.nodes[current].meta().next();
+        }
+        None
+    }
+
     /// The union-find representative of `node`, without path compression; a read.
     pub fn class_root(&self, node: NodeId) -> NodeId {
         let mut root = node;

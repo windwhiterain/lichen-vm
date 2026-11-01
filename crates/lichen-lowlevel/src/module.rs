@@ -73,6 +73,7 @@ impl<P: Program> Module<P> {
             struct_identity_items: HashSet::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),
+            applied_claims: HashMap::new(),
             clone_parameters: HashMap::new(),
             parameter_images: HashMap::new(),
             pending_projections: HashMap::new(),

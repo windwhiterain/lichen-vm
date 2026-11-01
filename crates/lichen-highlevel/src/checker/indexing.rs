@@ -75,7 +75,10 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
-        self.state[e].attr = self.stated_element_slot(element);
+        if let Some((marker, slot)) = self.stated_element_attribute(element) {
+            self.state[e].attr = Some(slot);
+            self.attribute_markers.insert(e, marker);
+        }
         expr
     }
 

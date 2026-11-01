@@ -235,10 +235,10 @@ impl<P: Program> Module<P> {
         node: NodeId,
     ) {
         let module = self.static_module(function.module);
-        let Some(r#return) = module
+        let Some((r#return, claim)) = module
             .functions
             .get(function.index.0)
-            .map(|entry| entry.r#return)
+            .map(|entry| (entry.r#return, entry.return_attribute))
         else {
             return;
         };
@@ -268,6 +268,19 @@ impl<P: Program> Module<P> {
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
         let applied = self.static_return_type_apply(r#return, &mut ctx);
+        // The claim shares the apply's remap: its reference names this clone.
+        if let Some((index, local)) = claim {
+            let frozen = self.static_module(function.module);
+            let slot = self.clone_static_signature_node(
+                &frozen,
+                local,
+                block,
+                &mut ctx.remap,
+                function.index,
+                &mut ctx.rule,
+            );
+            self.applied_claims.insert(node, (index, slot));
+        }
         self.applied_parameters.insert(node, parameter);
         // Bind the argument's values without joining its class, so a caller's
         // class stays inside its function.
@@ -393,33 +406,6 @@ impl<P: Program> Module<P> {
             function.index,
             &mut rule,
         ))
-    }
-
-    /// The **attribute a frozen body states about its return**, copied per call.
-    ///
-    /// # Invariant
-    /// The claim is the declaration's, so it is read from `StaticFunction` and
-    /// materialised for this call: a per-call read may not resurrect the answer the
-    /// prelude computed, which is what the applied clone holds.
-    pub fn materialize_static_return_attribute(
-        &mut self,
-        function: StaticFunctionRef,
-        block: BlockId,
-    ) -> Option<(u32, NodeId)> {
-        let module = self.static_module(function.module);
-        let entry = module.functions.get(function.index.0)?;
-        let (index, slot) = entry.return_attribute?;
-        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        let mut rule = FrozenClassRule::new();
-        let slot = self.clone_static_signature_node(
-            &module,
-            slot,
-            block,
-            &mut remap,
-            function.index,
-            &mut rule,
-        );
-        Some((index, slot))
     }
 
     /// The frozen signature copied into `block`, its frozen classes preserved.

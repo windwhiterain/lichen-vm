@@ -1281,14 +1281,16 @@ where
         self.module.array_attribute(&value, canonical)
     }
 
-    /// The attribute slot a read states, when it states one.
+    /// The attribute a read states, when it states one: the marker and the slot
+    /// the element's own attribute expr is.
     ///
     /// # Invariant
     /// The slot is the element's **attribute expr**, not the element: a reader of
     /// the slot compares its value position, so returning the element would put the
-    /// term's value where a perspective belongs.
-    pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
-        P::Attr::ORDER.iter().find_map(|marker| {
+    /// term's value where a perspective belongs. The marker travels with it because
+    /// a slot read as a claim needs the attribute it claims.
+    pub(super) fn stated_element_attribute(&self, slot: NodeId) -> Option<(P::Attr, NodeId)> {
+        P::Attr::ORDER.iter().find_map(|&marker| {
             let node =
                 self.slot_attribute(AnyNodeId::Dynamic(slot), marker.order_index() as u32)?;
             let stated = self
@@ -1299,7 +1301,7 @@ where
             if !stated {
                 return None;
             }
-            node.dynamic()
+            node.dynamic().map(|node| (marker, node))
         })
     }
 

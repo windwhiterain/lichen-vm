@@ -1082,6 +1082,12 @@ pub struct Module<P: Program> {
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
+    /// The attribute a callee's body claims, materialised for one apply.
+    ///
+    /// # Invariant
+    /// The claim is copied through the apply's **own** clone, so a reference it
+    /// carries names that call's parameter image and never a fresh copy's cell.
+    pub applied_claims: HashMap<NodeId, (u32, NodeId)>,
     /// The call identity a clone carries, as `(formal parameter, actual image)`.
     ///
     /// # Invariant

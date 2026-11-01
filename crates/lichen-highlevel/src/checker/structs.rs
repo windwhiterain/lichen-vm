@@ -6,6 +6,7 @@ use lichen_lowlevel::{
 
 use lichen_utils::extend::AsEnum;
 
+use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
@@ -80,7 +81,10 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
-        self.state[e].attr = self.stated_element_slot(element);
+        if let Some((marker, slot)) = self.stated_element_attribute(element) {
+            self.state[e].attr = Some(slot);
+            self.attribute_markers.insert(e, marker);
+        }
         expr
     }
 
@@ -263,7 +267,10 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         // The element's attributes are the read's: the slot is the field's own.
-        self.state[e].attr = self.stated_element_slot(element);
+        if let Some((marker, slot)) = self.stated_element_attribute(element) {
+            self.state[e].attr = Some(slot);
+            self.attribute_markers.insert(e, marker);
+        }
         expr
     }
 
@@ -879,12 +886,23 @@ where
                         };
                         let expected = self.module.as_dynamic(expected, self.current_block);
                         let actual = self.module.as_dynamic(actual, self.current_block);
-                        self.check_unify(
-                            actual,
-                            expected,
-                            self.loc(argument_expr, position),
-                            DiagKind::Annotation,
-                        );
+                        let loc = self.loc(argument_expr, position);
+                        // A decided pair of attribute slots is judged by their order.
+                        if let Some(ext) = position
+                            .checked_sub(shape::EXPR_ATTR_BASE)
+                            .and_then(|index| P::Attr::ORDER.get(index).copied())
+                            .and_then(|marker| self.attribute_extension(&marker))
+                        {
+                            let actual_slot = self.live_slot_value(actual);
+                            let expected_slot = self.live_slot_value(expected);
+                            if self.attribute_is_decided(actual_slot)
+                                && self.attribute_is_decided(expected_slot)
+                                && ext.is_subtype(&*self, expected_slot, actual_slot)
+                            {
+                                continue;
+                            }
+                        }
+                        self.check_unify(actual, expected, loc, DiagKind::Annotation);
                     }
                 }
             }

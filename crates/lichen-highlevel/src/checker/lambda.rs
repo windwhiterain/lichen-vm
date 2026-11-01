@@ -181,6 +181,8 @@ where
         if let Some(slot) = self.state[r#return].attr
             && let Some(marker) = self.attribute_markers.get(&r#return).copied()
         {
+            // The claim may be a member that holds none of the class's operation.
+            let slot = self.module.class_operation_owner(slot).unwrap_or(slot);
             self.module.functions[function].return_attribute =
                 Some((marker.order_index() as u32, slot));
         } else if let Some(claim) = self.body_claims.get(&function).copied() {
@@ -581,9 +583,7 @@ where
         // The callee declaration states the call attribute: read it, not the answer.
         let declared_certificate = match callee {
             Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].return_attribute,
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .materialize_static_return_attribute(sref, self.current_block),
+            Some(AnyFunctionId::Static(_sref)) => self.module.applied_claims.get(&apply).copied(),
             None => None,
         };
         let certificate = match returns_parameter {
@@ -604,47 +604,32 @@ where
             && let Some(ext) = self.attribute_extension(&marker)
         {
             let value = slot_value_node(&*self, slot);
-            // A decidable certificate is decided here; an undecided one is a hole.
+            // A claim naming a parameter field is the **caller's** field (spec §3).
+            let field = self
+                .module
+                .applied_parameters
+                .get(&apply)
+                .copied()
+                .and_then(|parameter| {
+                    self.certificate_field(slot, parameter, argument)
+                        .or_else(|| self.certificate_field(value, parameter, argument))
+                });
+            // A claim naming no field answers with its own slot.
             let decided = self
                 .attribute_value(slot)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
-            match decided {
-                // A hole: the result follows a field the clone's reference names, or
-                // the argument's whole provided slot.
-                None => {
-                    // The reference is on the slot first: its value half is the answer.
-                    let mut field = self
-                        .module
-                        .applied_parameters
-                        .get(&apply)
-                        .copied()
-                        .and_then(|parameter| {
-                            self.certificate_field(slot, parameter, argument)
-                                .or_else(|| self.certificate_field(value, parameter, argument))
-                        });
-                    // The apply's own parameter clone is the one that bound the
-                    // argument's value, and the certificate's class may name it.
-                    if field.is_none()
-                        && let Some(parameter) = self.module.applied_parameters.get(&apply).copied()
-                    {
-                        field = self.certificate_field(value, parameter, argument);
-                    }
-                    let provided = match field {
-                        Some(field) => self.provided_slot(field, &marker, ext),
-                        None => self.provided_slot(argument, &marker, ext),
-                    };
-                    self.state[e].attr = Some(provided);
-                    self.merged_tails.insert(e, vec![marker]);
-                }
-                // A stated certificate is copied: the call carries its own decided slot.
-                Some(decided) => {
+            let provided = match (field, decided) {
+                (Some(field), _) => self.provided_slot(field, &marker, ext),
+                (None, None) => self.provided_slot(argument, &marker, ext),
+                (None, Some(decided)) => {
                     let fresh_value = self.value_node(P::Value::from(decided));
                     let fresh = self.expr_of(fresh_value, self.int_type);
-                    self.state[e].attr = Some(fresh);
-                    self.merged_tails.insert(e, vec![marker]);
                     self.node_edges.insert(fresh, self.loc(e, 2));
+                    fresh
                 }
-            }
+            };
+            self.state[e].attr = Some(provided);
+            self.merged_tails.insert(e, vec![marker]);
         }
         node
     }
