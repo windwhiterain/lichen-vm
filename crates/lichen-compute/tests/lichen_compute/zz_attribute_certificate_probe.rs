@@ -54,8 +54,7 @@ fn probe_the_directed_attribute_unify() {
             "a silent callee hands no certificate",
             "id := x => x + 1\n(id 0) # 32\n",
         );
-        // Measured: admitted, where the provider meet `gcd(1, 0) = 1` would refuse —
-        // so a callee's own claim does not reach the call's provider yet.
+        // Admitted, where `gcd(1, 0) = 1` would refuse: the callee's claim is lost.
         show(
             "a silent callee's provider is the function, not the argument",
             "id := x => x + 1\n((id # 1) 0) # 32\n",
