@@ -499,3 +499,52 @@ needs the instantiation to consult the attribute's order.
 Next work is therefore on those two, and the erasure is parked: not needed by the
 statement family, needed by one unrelated test, and neither removed nor extended
 until that test's path is measured.
+
+## Round 33: the round-31 refutation was itself wrong, and two frozen readings
+
+**Correcting round 31.** Its three "refuted" claims were based on a patch that
+never applied: the `adopt_stated_attributes` call was edited with a scripted
+replace that silently did not match, so the "removal" measurement ran the
+unchanged binary. Re-measured with the edit verified against `git diff`:
+
+- With adoption **disabled**, `g := x => {r := x; r = (r # 32)}` / `(g 0) # 64` is
+  **admitted** (`ok=true`).
+- With adoption **enabled** (the tip), it is refused `expected 64, found 32`.
+
+So round 28's original account was right and round 31's refutation of it was
+wrong: the erasure *is* what carries a statement's claim into the returned value's
+expression — it empties the wildcard so the statement's unify takes the annotated
+slot, and the applied clone then carries it.
+
+- Round 31's other reading — "the annotated side's expression also carries `Any`" —
+  is **invalid for this program**: that dump belongs to another compilation. Do not
+  cite it.
+- Round 31's "what carries 32 is unresolved" stands, but its hypothesis space
+  narrows to: the erasure empties the position, the statement's unify writes the
+  annotated slot, and the clone carries it. Round 32's directional-wildcard rule
+  (`unify_inner`: only a **left** `Any` against an **undecided right** joins; a
+  right `Any` does nothing) is the rule that makes the emptied position writable.
+
+**A pure callee resolver resolves the frozen binding and is safe, but the
+signature it hands out is malformed.** `Module::static_function_of_callee` applied
+to the callee's **value half** resolves a program's call into the frozen package:
+`compute.launch` resolves to `Static(ModuleKey(1), StaticFunctionId(10))`, with no
+evaluation and none of the run-stamp side effects the evaluate route had. Measured
+suite effect: **239/3**, the six `compute::jit_cross_kernel_*` tests restored to
+their earlier failure (`expected TypeFunction, found Struct` at
+`compute.launch k1 6`). Reading the materialised parameter expr of that resolved
+function:
+
+- its five items are `[value array, type array, hole, hole, hole]`;
+- the **type slot** holds an array of **layout 1** whose element 0 is
+  `TypeValue(TypeStruct)` and whose element 1 is another expr array.
+
+A type value is `[shape, kind]` — two items, no attribute tail — so a *type slot*
+carrying a full-width layout-1 array is a slot/expr confusion in the frozen
+signature, and it is the first thing to check for the `jit_cross_kernel_*` family.
+The resolver change was reverted, not landed: it must not go in while it turns six
+tests red.
+
+**State**: tip `f5cb630b`; compute **240/2**, lowlevel 164/0, highlevel 136/0,
+language 276/0; comments and fmt gates clean. The two red tests are still the warp
+certificate and the write perspective, both gated on the frozen callee path.
