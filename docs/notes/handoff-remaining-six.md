@@ -397,3 +397,63 @@ two measurements above show each alone collapses something. So the change is a
 both sides state nothing, or the checker must carry the claim in a place the
 lowlevel unify can write without the erasure. Do not re-run route 1 or route 3
 without a new fact — they are measured.
+
+## Round 31: the statement-attribute explanation was wrong; proposal v15 withdrawn
+
+The user's question — "normalize unifies `@any` last, and `x`'s perspective was
+already unified with 32, so how could `Any` be written there?" — broke the
+explanation this round had been building on. What follows separates what is
+**measured** from what was **refuted** from what is **still unresolved**. Proposal
+v15 and its README index are deleted; its premise does not hold. `clear_wildcard`
+is untouched: only its irrelevance to the statement-return program is shown, not
+its global unnecessity.
+
+### Measured facts
+
+- **The normalize's `Any` is not the attribute's.** `check_lambda` writes it to the
+  **parameter's value cell**, *after* the body is checked, and only when
+  `identity_return && class_value(cell).is_none()`. It cannot reach an attribute
+  position.
+- **The attribute `Any` is minted at the expr's birth** (`slot_expr`:
+  `items.push(self.any())`), and the statement's unify does not overwrite it.
+- **The annotated side's expr also carries `Any`.** Measured on
+  `g := x => {r := x; r = (r # 32)}`: the expr for `(r # 32)` is five items whose
+  positions 2–4 are `NodeId(135/136/137)`, all `own=Some(LowValue(Any))`. The
+  settled slot exists only in `Checker::state[annotated].attr` (`Some(NodeId(448))`
+  for that program).
+- **`adopt_stated_attributes` is not what makes the statement program refuse.**
+  With the call removed, `(g 0) # 64` still refuses `expected 64, found 32`.
+- **It is load-bearing elsewhere**: removing it gives compute **238/3**, the extra
+  failure being `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`.
+- Still-valid readings from rounds 30: unstated positions as undecided gives
+  **107/134** (broad, and value-exprs-only); the declaration route
+  (`Function::return_attribute`) and the re-point route both give **238/3**.
+- Base suite unchanged: compute **240/2** (240 = 239 + the probe's passing test),
+  long-level 164/0, highlevel 136/0, language 276/0; comments and fmt gates clean.
+
+### Refuted — do not repeat these
+
+- "The wildcard swallows the statement's `# 32`, and clearing it lets the
+  statement's unify write the slot in." **Refuted**: removing the clearing changes
+  nothing for that program.
+- "The annotated side carries the settled slot; only the actual side is a
+  wildcard." **Refuted**: both carry `Any` (measured above).
+- "The erasure is what the statement case needs." **Refuted** for the statement
+  case; it is needed for one other test, whose path is not yet identified.
+
+### Unresolved — the next two measurements
+
+1. **What carries `32` to the call's certificate.** The certificate slot exists
+   and `attribute_value` yields 32 on the applied expr's attribute position, but
+   the route is untraced. Hypothesis: `check_ann`'s provider unify
+   (`ext.unify_slots(provider, slot)`) puts the provider's class in the same class
+   as the constraint slot, which holds 32, and the returned expr's position shares
+   that class. Read `state[.].attr`, the slot's class, and `attribute_value` at the
+   certificate branch to pin it.
+2. **Why `adopt_stated_attributes` is load-bearing for
+   `a_bodys_requirement_refuses_…`.** Identify which unify needs the cleared
+   wildcard, and whether that need is the same defect or a different one.
+
+No proposal is written until both are measured. The rule question ("an attribute
+position's unify rule") may still be real, but v15's premise — the erasure being
+what carries a statement's claim — is dead.
