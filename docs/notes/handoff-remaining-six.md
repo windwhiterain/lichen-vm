@@ -290,3 +290,47 @@ through the extension — has not been measured since.
 **Landed:** `adopt_stated_attributes`, `clear_wildcard`, the `attribute_value`
 walk, `ApplyError`'s failing position, the attribute-mismatch diagnostic and its
 renderer, the test-data fix, and the probe.
+
+## Round 29: the callee is one evaluation away, and that is not safe yet
+
+The frozen callee's gap is now measured end to end. `compute.write` and
+`compute.mma` resolve to **nothing** at check time, and the reason is narrow: the
+callee's expr value half is a **field read that was never evaluated**. Measured
+(`DBG_CALLEE` on `check_app`):
+
+```
+expr=NodeId(1147) own=Some(array layout 1) half=NodeId(1135) half_own=None
+  half_class=None half_op=Some(LowOperator(Index))
+```
+
+An `Index` node over the frozen export, no value. Evaluating it answers the
+function:
+
+```
+after evaluate: Some(Static(StaticFunctionRef { module: ModuleKey(1), index: StaticFunctionId(6) }))
+                value=Some(Function(Static(..)))
+```
+
+So the missing piece is one `evaluate_node_deep` on the callee's value half before
+`function_apply_function`, and four calls in the write program resolved that way.
+
+**It is not safe to apply yet.** Doing exactly that takes the suite to
+**233 / 8**: the six `compute::jit_cross_kernel_*` tests turn red with
+`expected TypeFunction, found Struct` at the `compute.launch k1 6` argument. That
+sentence is the signature check running for the first time on those programs, and
+`TypeFunction` is `jit`'s parameter type, not `launch`'s — so the resolved
+**index** is not the binding the read named, one position off in the export's
+field order. The next round's single subject is that mapping: validate the
+resolved function against the frozen binding's *name* (`compute.launch` must be
+the frozen `launch`, whose parameter's type is `K`'s struct), then the same
+`evaluate` becomes the callee fix, and with it the last two perspective tests have
+their certificate (`mma`'s stated `# warp`, `write`'s field reference).
+
+Two cautions for whoever picks it up:
+
+- The evaluation must stay **conditional on the resolve failing**, and it must not
+  become a general "evaluate every callee": the six regressions above are what
+  happens when a wrongly resolved callee changes which signature is checked.
+- The level of the bug is the **read**, not the freeze: `write`'s frozen return
+  expr already carries the reference now (round 28's fix), so nothing else gates
+  the certificate.
