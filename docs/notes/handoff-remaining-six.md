@@ -735,3 +735,35 @@ member over-claims. What is left is a *narrow* carrier — the operation the
 certificate needs is the one on the return expr's attribute **reference**, so the
 carrier must be the class's operation **for the members of a returned expr's
 attribute position**, not for a class in general.
+
+## Round 38: the reference is not in the frozen graph at all
+
+Two more attempts, both measured and reverted; the state is unchanged (compute
+240/1, tree clean).
+
+**A frozen-side carrier cannot work.** `class_operation_owner` — the first class
+member with an operation, used only for a return expr's attribute positions in
+`static_return_type_apply` — finds **no owner**: measured `own_op=false
+undecided=true owner=None` for the write family's attribute items. The reason is
+structural: the adoption empties the actual's wildcard and the statement's unify
+merges the item's **class** with the reference node, whose value is undecided and
+whose operation is the only content. The freeze's root set is built from values and
+operations, so a value-less class member drags **no** reference into the arena — the
+reference node is simply not in the frozen module, and no lookup can find it.
+
+**Dropping `reference_slot` from `check_ann`'s certificate selection is also wrong.**
+With `applied_attribute_slot`/`annotation_value_slot` only, both write programs
+report `expected 0, found 1` — the certificate falls back to the argument's meet,
+because `certificate_field` receives the (still unresolved) reference through the
+applied clone's attribute item, which is the bare hole again. So `reference_slot`'s
+declared field slot (32) is what the negative program happens to match, and the meet
+is what the fallback gives; neither is the caller's field.
+
+**Conclusion, and the direction it fixes.** The field case cannot be served from a
+frozen return expr whose attribute position is a value-less class member. The
+certificate for such a callee must come from the **checker side** — the declaration's
+stored slot, replayed per call — which means the artifact has to carry a function's
+stated return attribute (`Function::return_attribute`, `StaticFunction`'s mirror and
+the format bump) rather than the applied clone's expression. That is the one route
+left for the last red test's certificate half; its order-gate half keeps round 36's
+constraint (retain the whole-expr unify, do not re-implement the comparison).
