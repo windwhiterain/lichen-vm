@@ -1,6 +1,6 @@
-# Proposal v15.1: the unify rule for an expression's attribute positions
+# Proposal v15.3: the unify rule for an expression's attribute positions
 
-> Status: proposal (v15.1, revised per review) — needs the maintainer's ruling.
+> Status: proposal (v15.3, revised per two reviews) — needs the maintainer's ruling.
 > Points at: `docs/language-spec.md` §Lowlevel, §Any, §Annotation, §Clone;
 > `crates/lichen-highlevel/src/checker.rs` (`slot_expr`, `stated_attributes`,
 > `stated_element_slot`, `Checker::build`'s pardon pass), `checker/annotations.rs`
@@ -83,14 +83,22 @@ unstated position would become a certificate. So:
 shape needs. And "a plain hole is not a claim" is what keeps a certificate from
 being invented where the body states nothing.
 
-**The marker's carrier is not yet decided.** An open position must be
-distinguishable from a plain hole, and no existing representation says which is
-which: an expr's attribute layout names canonical positions, not which of them are
-open. Candidates are (a) an entry in the expression's attribute layout registry, or
-(b) a checker-side table beside `Module::struct_identity_items`. (a) is persisted and
-would bump `ARTIFACT_FORMAT_VERSION`; (b) is not persisted, so a loaded artifact
-would lose it. This must be settled before implementation, and §6's "no persisted
-shape changes" is therefore a **goal**, not a guarantee.
+**The marker's carrier.** An open position must be distinguishable from a plain
+hole, and no existing representation says which is which: an expr's attribute
+layout names canonical positions, not which of them are open. Two candidates,
+and only one survives:
+
+- **(a) persisted** — an entry in the expression's attribute layout registry (or
+  any artifact-side field). Bumps `ARTIFACT_FORMAT_VERSION`.
+- **(b) checker-side only** — a table beside `Module::struct_identity_items`.
+  **Excluded**: a loaded artifact would lose the marker, so open would decay into
+  a plain hole, and neither the no-join rule nor this reader rule could tell them
+  apart — which breaks the frozen/clone contract in §4.
+
+So the frozen path's requirement is explicit: the marker must be **persisted or
+deterministically rebuildable from the artifact**, and (b) is not an alternative
+unless a rebuild exists. §6's "no persisted shape changes" is therefore a
+**goal**, not a guarantee — with (a) the format moves.
 
 ## 4. Templates and clones: one rule, one boundary
 
@@ -113,9 +121,16 @@ Measured at the tip (`89b325ee`) with `zz_attribute_certificate_probe`; the
 | 1 | `g := x => {r := x; r = (r # 32)}`<br>`(g 0) # 64` | the statement's unify is **accepted and `r` carries 32**, so the program is refused `expected 64, found 32` | refused `expected 64, found 32` — but only because `adopt_stated_attributes` erases the wildcard first; without it, admitted |
 | 2 | `f := (x : Int # 32) => x`<br>`f (0 # 64)` | accepted (`32 \| 64`) | **accepted** |
 | 3 | `f := (x : Int # 64) => x`<br>`f (0 # 32)` | refused `expected 64, found 32` | **refused** `expected 64, found 32` |
-| 4 | `id := x => x + 1`<br>`(id 0) # 32` | *sanity only* — a callee that states nothing hands no certificate | **accepted**; but this row does **not** discriminate: the correct path and the misreading both land on the argument's top (`0`) |
-| 4b | `id := x => x + 1`<br>`((id # 1) 0) # 32` | the reader gate: with no certificate the call's provider is the callee's own claim, so it should refuse `expected 32, found 1` | **accepted** — it does not discriminate either, and that is a **new finding**: the annotation on the callee's reference never reaches the call's provider, so the provider is the argument's `0`. See §7 |
+| 4 | `id := x => x + 1`<br>`(id 0) # 32` | a silent callee hands no certificate under the new rule | **accepted** at the tip — not discriminating today |
+| 4b | `id := x => x + 1`<br>`((id # 1) 0) # 32` | under the new rule, no certificate means the provider combine applies: `gcd(1, 0) = 1`, refused `expected 32, found 1` | **accepted** — mechanism now resolved, §7 |
+| 4c | `pair := x => (x, x)`<br>`((pair # 1) (0 # 64)) # 32` | under the new rule, the same combine: `gcd(1, 64) = 1`, refused | **accepted** — the discriminator: "fallback to the argument" gives `64` and admits, so the tip is taking the fallback |
 | 5 | two expressions that state nothing, unified (e.g. `p := {.a @any : Int}` / `k := (x = p) => x` / `k (p{.a 1})`) | no class coupling; both stay open | couples once the wildcard is a hole: **107/134** |
+
+Rows 4–4c are **regression controls for the new rule, not readings of the current
+reader**: at the tip a call's certificate always falls back to the argument, so
+"no claim" and "the argument's claim" are the same value there and no program can
+separate them today. Row 4c's stating argument (`0 # 64`) is what makes the two
+future outcomes differ (`1` versus `64`).
 
 Row 5's number is a suite reading, and its mechanism (a full-width unify joining
 the positions) is the reason the clause is about class joining. The "both stated
@@ -150,11 +165,15 @@ constraint slot there made a `32` against `1` failure vanish outright. Until tha
 pass's direction and root reach are settled, **no v15 implementation may route
 through a new `attribute_nodes` entry**, and the pass gets its own measurement.
 
-**A callee's own claim never reaches the call's provider (measured, row 4b).**
-`((id # 1) 0) # 32` is admitted, at the tip, while the design says a call's provider
-is its own certified attribute or the meet of what it is made of — `gcd(1, 0) = 1`,
-which `# 32` must refuse. So either the annotation on a callee's *reference* is
-dropped before the provider combine, or the combine for an apply does not reach the
-function operand. This is not part of v15's sentence, but it is the row the reader
-gate was supposed to be guarded by, so it needs its own reading before §5 row 4b
-can serve as a gate.
+**Why a call can never separate a claim from "no claim" today (resolved, rows
+4–4c).** `provided_slot` returns immediately when `state[call].attr` is `Some`, and
+`check_app`'s certificate fallback writes the **argument-derived** slot there for a
+callee that states nothing. So the provider's `Apply` combine
+(`persp_combine_children`: `[function, argument]`) is never consulted with the
+callee's own annotation, and both candidate mechanisms ("an annotation was lost" /
+"the combine skips the function") collapse into one: the shortcut fires first. Rows
+4b and 4c are consistent with that single reading, and row 4c's stating argument
+is what will tell the two *future* outcomes apart (`1` versus `64`). Not a defect
+claim: under the design this fallback is the silent callee's intended path. The
+rows become meaningful only after §2's rule lands, when a silent callee can hand no
+claim at all.

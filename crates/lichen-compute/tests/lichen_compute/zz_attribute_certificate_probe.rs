@@ -12,7 +12,7 @@ use lichen_language::Report;
 
 /// Every diagnostic, with the facts the checker recorded.
 fn print(label: &str, report: &Report<LangProgram>) {
-    println!("=== {label}: ok={} ===", report.ok());
+    eprintln!("=== {label}: ok={} ===", report.ok());
     for (index, diagnostic) in report.diagnostics.iter().enumerate() {
         println!(
             "  [{index}] span={:?} stage={:?} msg={}",
@@ -58,6 +58,11 @@ fn probe_the_directed_attribute_unify() {
         show(
             "a silent callee's provider is the function, not the argument",
             "id := x => x + 1\n((id # 1) 0) # 32\n",
+        );
+        // The discriminator for the future rule: fallback gives `64` and admits.
+        show(
+            "a compound-return callee's provider is the function, not the argument",
+            "pair := x => (x, x)\n((pair # 1) (0 # 64)) # 32\n",
         );
     });
 }
