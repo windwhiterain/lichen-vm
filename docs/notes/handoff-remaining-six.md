@@ -882,3 +882,48 @@ correct even before the last link works.
 for the `write` body only, every child expr's kind by name in order (the block's
 statements), so the shape of a source `name = expr # attr` line is identified instead
 of inferred. Then the recorder can be attached where that shape's claim is decided.
+
+## Round 43: the instantiation's order is fixed; the claim still reads 32
+
+Committed `434fc907`. Compute **240/1** — the write test is down to **one**
+diagnostic: `(w # 0)` gets `expected 0, found 32`, i.e. the certificate reading the
+declared `.to` requirement. Engines 136/0, 164/0, 276/0; comments and fmt clean.
+
+**Defect (a) is fixed, and the route matters.** The failing site was not a
+`unify_slots` call — it is the instantiation's *undecided* branch per-position
+`check_unify` (`structs.rs`, `check_instantiation`), which compared the provided
+`# 0` against the stated `# warp` by equality and reported `kind=Annotation` at the
+argument's attribute slot. Two measured constraints:
+
+- **Check-only, never a unify.** Routing the pair through `AttrExt::unify_slots`
+  (positionally, or guardedly by each side's layout) gives **235 / 6**:
+  `fan_out_merge`/`fuse_licence` then fail at the *apply* with
+  `expected 32, found 32` — the slot unify joins the argument's slot class with the
+  frozen requirement's, and the apply-time parameter check reads the joined class's
+  array value where a number belongs. `AttrExt::is_subtype` on the two numbers
+  writes nothing and is green.
+- **The frozen side must be read as a number, and only the number.** `live_slot_value`
+  opens exactly one level of a *live* slot (its element 0 is the value, whatever
+  shape that value has) and unwraps the *static* chain only, re-storing the number
+  as this module's node. A single "descend while the value is an array" loop walks
+  into a buffer's struct value and answers an array (`expected 32, found 32` again);
+  the positional item index is not the canonical attribute index either, so reading
+  the pair through `slot_attribute` by position does not apply here.
+
+**Defect (b) is unchanged in outcome but its carrier now exists.** Measured with the
+probe and `DBG_C`/`DBG_F` (reverted): the call site finds
+`declared=Some((0, slot))` and `claims=Some((0, slot))` with
+`params=Some(clone)`, `certificate_field` is entered for the claim, and the claim
+slot it receives still has **no operation** — round 37's finding stands after the
+claim is materialised through the apply's own remap (`Module::applied_claims`) and
+after recording the class's operation owner (`Module::class_operation_owner`). So
+the answer stays the declared 32.
+
+What the carrier needs next, precisely: the claim node whose operation is
+`perspective_of x.to` must (1) exist in the frozen module, (2) be the node
+`StaticFunction::return_attribute` names, and (3) survive
+`clone_static_signature_node` through the apply's remap with its operation. The
+round-37/38 traps still apply: substituting a class representative recurses, and
+copying a class's operation onto every member over-claims (229/12). **A capability
+claim is a hypothesis until measured** — round 43 measured that neither the
+per-apply claim nor the operation-owner lookup supplies (1).
