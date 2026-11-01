@@ -35,8 +35,7 @@ fn show(label: &str, source: &str) {
 #[test]
 fn probe_the_directed_attribute_unify() {
     let _ = std::panic::catch_unwind(|| {
-        // Both sides state an attribute: the actual is the provider, the parameter
-        // the requirement, so `requirement | provider` decides.
+        // Both stated: the actual is the provider, the parameter the requirement.
         show(
             "64 provided under 32 required",
             "f := (x : Int # 32) => x\nf (0 # 64)\n",
