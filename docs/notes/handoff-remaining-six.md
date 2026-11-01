@@ -674,3 +674,16 @@ narrow and independent; `[0]` is what a previous round's `unify_field` attempt
 addressed, and its regression (`an_imported_requirement_judges_like_an_inline_one`)
 came from the helper not reading a **static** field expr — worth re-checking now
 that frozen signatures resolve.
+
+**The instantiation's attribute order: a second attempt, and its constraint.**
+Written and measured, then reverted: split the field unify into value/type (strict)
+and attribute positions (through the extension, reading each side's *carried* slot
+by own value or class, so a materialised frozen field is read too). Result:
+**239/2** — `an_imported_requirement_judges_like_an_inline_one` lost its attribute
+refusal and reported `expected Struct, found Struct` instead of `expected 32, found
+1`. So for the imported case the **strict value/type split is what breaks it**, not
+the attribute reader: the declared field's own type slot is the thing the whole-expr
+unify was enforcing the attribute order through. Any further attempt must keep the
+whole-expr unify for value+type and take the attribute order *without* re-implementing
+the type comparison — e.g. run the whole-expr unify and retain only an attribute
+failure whose order holds, rather than splitting the positions.
