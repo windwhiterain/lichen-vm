@@ -546,6 +546,12 @@ fn closure<P: Program>(
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
+    // A stated return attribute is a root of its own: it claims, it is not a value.
+    for function in module.functions.values() {
+        if let Some((_, slot)) = function.return_attribute {
+            work.push(slot);
+        }
+    }
     if let Some(AnyHandle::Dynamic(handle)) = module.default_attributes {
         // SAFETY: `Module::alloc_array` put it in a block arena of `module`, which
         // this walk borrows.
