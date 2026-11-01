@@ -993,3 +993,12 @@ lookup finds the registered attribute slots and `is_subtype(declared, value)` de
 Measured along the way: registering the module's **default** attribute node as that
 attribute's (so a compare against a default is judged by the order) changes nothing by
 itself, and was reverted; `AttrExt::unify_slots` at the instantiation is still 235/6.
+
+**Measured and reverted**: patching `unify_array_items`'s descend to rename the
+recorded error's `a`/`b` to the item pair (when it still names the roots) changes
+nothing for the write call — so that compare does not go through that path at all
+(it fails before a per-item conflict is recorded, or its error comes from the apply's
+own frame). Whoever takes round 45's next step should first print, for the refused
+apply, which `unify_ref`/`unify_inner` path records the error (a `DBG` on
+`record_value_error` and `record_error` naming their caller), instead of assuming the
+array descent.
