@@ -33,6 +33,32 @@ fn show(label: &str, source: &str) {
 }
 
 #[test]
+fn probe_the_directed_attribute_unify() {
+    let _ = std::panic::catch_unwind(|| {
+        // Both sides state an attribute: the actual is the provider, the parameter
+        // the requirement, so `requirement | provider` decides.
+        show(
+            "64 provided under 32 required",
+            "f := (x : Int # 32) => x\nf (0 # 64)\n",
+        );
+        show(
+            "32 provided under 64 required",
+            "f := (x : Int # 64) => x\nf (0 # 32)\n",
+        );
+        // A statement decides a template's open position: `r` should carry 32.
+        show(
+            "statement states the return",
+            "g := x => {r := x; r = (r # 32)}\n(g 0) # 64\n",
+        );
+        // A callee that states nothing hands no certificate: the demand is the slot.
+        show(
+            "a silent callee hands no certificate",
+            "id := x => x + 1\n(id 0) # 32\n",
+        );
+    });
+}
+
+#[test]
 fn probe_the_field_reference_certificate() {
     let _ = std::panic::catch_unwind(|| {
         // The write's shape, inline: the statement names the field's own slot.

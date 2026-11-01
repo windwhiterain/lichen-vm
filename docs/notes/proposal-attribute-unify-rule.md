@@ -1,90 +1,132 @@
-# Proposal v15: the unify rule for an expression's attribute positions
+# Proposal v15.1: the unify rule for an expression's attribute positions
 
-> Status: proposal — needs a review, then the maintainer's ruling.
-> Points at: `docs/language-spec.md` §Lowlevel, §Any, §Annotation;
+> Status: proposal (v15.1, revised per review) — needs the maintainer's ruling.
+> Points at: `docs/language-spec.md` §Lowlevel, §Any, §Annotation, §Clone;
 > `crates/lichen-highlevel/src/checker.rs` (`slot_expr`, `stated_attributes`,
-> `Checker::build`'s pardon pass), `checker/annotations.rs`
+> `stated_element_slot`, `Checker::build`'s pardon pass), `checker/annotations.rs`
 > (`adopt_stated_attributes`, `clear_wildcard`), `checker/templates.rs`
-> (`check_unify_expr`), `docs/notes/handoff-remaining-six.md` rounds 28–30.
+> (`check_unify_expr`), `docs/notes/attributes.md`, `docs/notes/array-attribute-view.md`,
+> `docs/notes/handoff-remaining-six.md` rounds 28–30.
 
-## The gap
+## 1. The gap
 
 The SPEC states what an **annotation** does to its own slot (§Annotation), what
 `@any` means under unify (§Any: always succeeds, merges only when the other side is
-undecided), and that a class shares one value (§Lowlevel). It never states the rule
-for an expression's attribute positions when two expressions are unified. Every
-implementation choice for that rule so far is a deviation or a workaround:
+undecided), that a class shares one value (§Lowlevel), and how a clone decides
+scope (§Clone). It never states the rule for **two expressions' attribute
+positions meeting under unify**. Every implementation choice so far is a deviation
+or a workaround, and each was measured:
 
-| representation of an unstated attribute position | where it lives | why it is wrong |
-|---|---|---|
-| the wildcard `Any` | `slot_expr`'s `self.any()` | decoupled, but a statement can never decide it — the whole defect |
-| undecided (`@raw None`) | §Undecided's own form | decidable, but it joins the other side's class, and unrelated values become one |
-| empty it on demand | `Module::clear_wildcard` + `adopt_stated_attributes` | works, but adds a second writer of an occupied slot (`write_node_value`'s invariant) and cannot tell "not stated" from explicit `@any` |
+| representation of an unstated attribute position | why it is insufficient |
+|---|---|
+| the wildcard `Any` (`slot_expr`'s `self.any()`) | decoupled, but no statement can decide it — this is the defect |
+| undecided, `@raw None` (§Undecided's own form) | decidable, but it joins the other side's class: **107/134** with `compute.parallel: a definition cycle …`, and the same **107/134** restricted to value exprs, so the coupling is intrinsic to full-width exprs, not to type values |
+| empty it on demand (`Module::clear_wildcard` + `adopt_stated_attributes`) | works, but adds a second writer of an occupied slot (`write_node_value`'s invariant) and cannot tell "not stated" from explicit `@any` |
+| carry it on the declaration (`Function::return_attribute`, read first by `check_app`) | **238/3** — the body's own lowlevel unify cannot see a checker-side fact |
+| re-point the value's expr instead of erasing (no lowlevel writer) | **238/3**, the same regression |
 
-## The sentence proposed
+So no choice of *value* is right: the missing piece is a **rule**, and it needs a
+third state that is neither `Any` nor a plain hole — an **open position**.
 
-Append to §Lowlevel (after the class rule):
+## 2. The sentence proposed (appended to §Lowlevel)
 
-> Two expressions' attribute positions do not join a class. An attribute position
-> is **compared** when both sides state something there, and **decided** when one
-> side states something and the other states nothing; when neither states
-> anything it stays undecided and couples nothing.
+> Attribute positions pair by their **canonical index** — an array's layout names
+> which canonical attribute each position carries — never by dense slot order.
+> When two expressions are unified, an attribute position is:
+>
+> - **compared**, when both sides state an attribute there: the attribute's own
+>   order decides (for the perspective, `requirement ⊑ provider`, `declared |
+>   provided`), with the **actual** as the provider and the **expected** as the
+>   requirement; neither slot joins the other's class;
+> - **decided**, when exactly one side states one: that side's attribute
+>   *expression* becomes the value's claim. In a statement `actual = expected`,
+>   the expected (annotated) side states it, and the actual takes it;
+> - **left alone**, when neither side states one: no write, and **no class join**.
+>   Such a position is **open**, not undecided: it carries no claim, and it must be
+>   distinguishable from both `@any` and a plain hole, because a reader treats only
+>   a *stated* position as a certificate (§3).
 
-The three clauses in their measured form:
+`@any` keeps §Any's exception unchanged; this clause governs only positions that
+are neither stated nor `@any`. Cross table:
 
-| # | example | expected | actual |
+| left \ right | stated | open | `@any` |
 |---|---|---|---|
-| 1 | `g := x => {r := x; r = (r # 32)}`<br>`(g 0) # 64` | admitted — undecided against `32` is the ordinary unify write, no erasure | admitted today **only because** `adopt_stated_attributes` empties the wildcard |
-| 2 | `a := (1 # 4)`<br>`b := (2 # 6)`<br>`c := (a, b)`<br>`(c(0) + c(1)) # 5` | refused `expected 5, found 2` (the meet of `4` and `6`, via the combine) | refused — the control, unchanged by this proposal |
-| 3 | two expressions that state nothing, unified: `p := {.a @any : Int}`<br>`k := (x = p) => x`<br>`k (p{.a 1})` | no class coupling: `p`'s and `x`'s attribute positions stay unstated | couples once the wildcard is a hole — measured across the suite as **107 / 134** with `compute.parallel: a definition cycle: NodeId(…) is lowered while it is already being lowered` |
+| **stated** | compared by the order | the open side takes the stated expression | §Any: success, no merge |
+| **open** | the open side takes the stated expression | *left alone*, no class join | §Any |
+| **`@any`** | §Any | §Any | §Any |
 
-Row 3 is why the sentence is about **joining a class**, not about which value
-fills the position: nothing in the SPEC's vocabulary expresses "unstated and
-decidable but non-joining", so no choice of value can be right.
+This **supersedes** `attributes.md` §"An attribute slot is unified like any other
+slot" — the recorded verdict "no skip, no second dispatch" is exactly what a
+`no class join` clause contradicts. On approval that paragraph and
+`array-attribute-view.md`'s §"The isomorphism" must be rewritten to this rule, not
+kept beside it.
 
-## Why a value cannot fix it (measured twice)
+## 3. The reader rule (part of the same change, not optional)
 
-- Filling every unstated position with a hole instead of `Any`: **107 / 134**, with
-  definition cycles, because a full-width expr unifies all its positions.
-- The same, restricted to **value** exprs (type values keep the wildcard):
-  **107 / 134** — so type values are not the cause; the coupling is intrinsic to
-  full-width value exprs.
-- Carrying the claim on the declaration instead (`Function::return_attribute`,
-  read first by `check_app`): **238 / 3** — the body-requirement test regresses,
-  because the *lowlevel* unify that the body needs cannot see a checker-side fact.
-- Re-pointing the value's expr at a new one (no lowlevel writer at all): **238 / 3**,
-  the same regression.
+"States something" must be defined for **readers**, and today it is not:
+`Checker::stated_attributes` skips only `Any` and treats a bare hole as stated, and
+`stated_element_slot` does the same. If the open state is undecided, every
+unstated position would become a certificate. So:
 
-## Rejected alternatives
+> A reader treats a slot as **stated** when it holds a value, or holds an operation
+> whose value is still to be resolved (a reference/lazy certificate). An **open**
+> position is undecided *and declares itself open on the expression*; it is not a
+> certificate. A bare hole is never a claim.
 
-- **Enshrine the wildcard and keep erasing.** Makes the deviation the contract,
-  and needs `write_node_value`'s invariant restated to license a second writer.
-- **Carry the certificate only on the declaration.** Cannot serve a body whose
-  claim is a *statement*: the applied clone must materialise the claim for a
-  field reference, and measured a call site otherwise reads the argument's meet —
-  frozen `compute.write` prints `expected 0, found 1` where `.to` states `32`,
-  while the same shape inline with a dynamic callee prints `expected 0, found 32`.
+The distinction cannot be "skip every hole" — that deletes the lazy certificate
+the `write` shape needs.
 
-## What the ruling must also settle
+## 4. Templates and clones: one rule, one boundary
 
-Whether the rule applies to the **template's** own positions or only to a
-**clone's**. `attributes.md` records that a template must not be pinned by a call
-(`f (5 # 8)` then `f (5 # 2)` used to answer `expected 8, found 2`); the per-clone
-open position may be bound. The sentence must say which.
+The rule is **uniform**; it is not split into "templates" and "clones":
 
-## Impact if approved
+> A definition-time statement may decide a **template's** open position — that is
+> what `r = (r # 32)` is. An **apply** binds only the per-call clone's position,
+> never the template's own parameter position.
 
-The wildcard fill can become the SPEC's undecided form, the erasure
-(`clear_wildcard`, `adopt_stated_attributes`) is withdrawn, and the two remaining
-perspective tests have their certificate path. No persisted shape changes. Re-measure
-after the change: the markerless-parameter family (`id (5 # 1)` answers `# 1`), the
-template-pinning family (`f (5 # 8)` then `f (5 # 2)`), the compound-annotation rows
-in `attributes.md` §Behaviour, and the whole compute/engine suites.
+Not pinning a template is therefore §Clone's instantiation boundary, not a second
+scope on attribute unify.
 
-## Side finding, a separate slice
+## 5. Measured rows
 
-`Checker::build`'s post-pass pardons **any** failed unify whose root is registered
-in `Checker::attribute_nodes`, via `ext.is_subtype(root_a, root_b)`. Registering an
-annotation's constraint slot there made a `32` against `1` failure vanish outright.
-That pass's direction and reach deserve their own measurement; it is not part of
-this proposal, but no future `attribute_nodes` entry is safe until it is settled.
+Measured at the tip (`89b325ee`) with `zz_attribute_certificate_probe`; the
+"expected" column is what the sentence above requires.
+
+| # | example | expected | measured actual |
+|---|---|---|---|
+| 1 | `g := x => {r := x; r = (r # 32)}`<br>`(g 0) # 64` | the statement's unify is **accepted and `r` carries 32**, so the program is refused `expected 64, found 32` | refused `expected 64, found 32` — but only because `adopt_stated_attributes` erases the wildcard first; without it, admitted |
+| 2 | `f := (x : Int # 32) => x`<br>`f (0 # 64)` | accepted (`32 \| 64`) | **accepted** |
+| 3 | `f := (x : Int # 64) => x`<br>`f (0 # 32)` | refused `expected 64, found 32` | **refused** `expected 64, found 32` |
+| 4 | `id := x => x + 1`<br>`(id 0) # 32` | a callee that states nothing hands **no** certificate, so the demand is the slot | **accepted** — the control against every call suddenly gaining a certificate |
+| 5 | two expressions that state nothing, unified (e.g. `p := {.a @any : Int}` / `k := (x = p) => x` / `k (p{.a 1})`) | no class coupling; both stay open | couples once the wildcard is a hole: **107/134** |
+
+Row 5's number is a suite reading, and its mechanism (a full-width unify joining
+the positions) is the reason the clause is about class joining. The "both stated
+also do not join a class" half of the rule is **contractual, not yet measured**: no
+program writes one side after a unify, so the observable is that a later
+contradicting unify is judged against the requirement (row 3) instead of being
+silenced — which the current class-joining implementation can also produce, so the
+rule is a declaration of intent there.
+
+## 6. Impact if approved
+
+The open state becomes representable instead of the wildcard fill; the erasure
+(`clear_wildcard`, `adopt_stated_attributes`) is withdrawn; the two remaining
+perspective tests get their certificate path. No persisted shape changes.
+Re-measure after the change, **both directions and both paths**:
+
+- template pinning, dynamic **and** frozen: `f (5 # 8)` then `f (5 # 2)`, and the
+  reverse order `2 → 8`;
+- the markerless parameter (`id (5 # 1)` answers `# 1`) and row 4's silent callee;
+- `attributes.md` §Behaviour's compound rows and §"Annotation over an existing
+  attribute";
+- the whole compute and engine suites.
+
+## 7. Separate slice: the pardon pass
+
+`Checker::build` pardons **any** failed unify whose root is registered in
+`Checker::attribute_nodes`, via `ext.is_subtype(root_a, root_b)` — the opposite
+direction from the printed acceptance table. Registering an annotation's
+constraint slot there made a `32` against `1` failure vanish outright. Until that
+pass's direction and root reach are settled, **no v15 implementation may route
+through a new `attribute_nodes` entry**, and the pass gets its own measurement.
