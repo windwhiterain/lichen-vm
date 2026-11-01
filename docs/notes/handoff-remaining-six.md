@@ -797,3 +797,34 @@ are the *declared field slot* (32) and the *applied return slot* (a hole).
 name (not its discriminant) and `state[pe].term`'s own value in `check_ann` for the
 write body, to identify which expression the slot comes from; the round established
 that none of the three selection routes yields a node with a walkable operation.
+
+## Round 40: the declaration carrier is in, and the exact last gap
+
+The user approved the artifact route; the plumbing is landed (`4f7c8dba`), neutral on
+every suite (compute 240/1, lowlevel 164/0, highlevel 136/0, language 276/0 — the
+artifact round-trip is covered by the persist tests at format **31**):
+
+- `Function::return_attribute: Option<(u32, NodeId)>`, recorded by `check_lambda` from
+  the body's value; `check_ann` records the slot's **marker** in
+  `Checker::attribute_markers` (its `own_tail` is empty — measured round 32 — so the
+  marker has to come from the loop variable at the `constraint_slot` assignment), and
+  `check_unify_expr` inherits both onto a statement.
+- `StaticFunction::return_attribute: Option<(u32, LocalNodeId)>`, filled by the freeze
+  through `node_map`; written and read by the artifact (tag + u32 + node, version 31).
+- `Module::materialize_static_return_attribute` copies the frozen slot per call;
+  `check_app` prefers the declaration's claim over the applied clone's expression, and
+  the hole branch looks for a reference on the **slot** before its value half.
+
+**The last gap, measured.** The claim reaches *a* frozen function but not the one the
+call resolves to: `DBG record` shows `Perspective` markers recorded for dynamic
+functions **22, 23, 24**, and the frozen table holds `return_attribute=Some` for
+static **21**; the probe's `compute.write` call resolves to
+`Static(ModuleKey(1), StaticFunctionId(28))`, whose entry is `None`. So
+`declared_certificate` is `None` and the certificate still comes from the applied
+clone (the declared `32`).
+
+**Next measurement (single subject)**: the static index the export's `write` binding
+names, against the index that carries the claim. If they differ, the freeze's
+function mapping (`function_map`: dynamic id → static position) and the recorded
+`return_attribute` disagree — i.e. the claim is attached to the wrong static entry —
+and the fix belongs to that mapping, not to the carrier.
