@@ -10,9 +10,29 @@ use super::common;
 use lichen_compute::language::LangProgram;
 use lichen_language::Report;
 
+/// The head `perspective_requirements` builds: a three-element buffer from a kernel.
+fn head() -> String {
+    r#"
+---
+  order = "30"
+  compute = import "compute.lichen"
+---
+Out := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Fill := {.n @any : Int}
+fill := (c = Fill) => {
+  i := compute.range c.n
+  d := compute.buf (compute.BufParam{.type Int, .length c.n})
+  ((Out){.b (compute.write ((compute.Write _){.to d, .at i, .value (i + 1)}))})
+}
+filler := compute.parallel fill "cpu" Out
+b := (compute.plrun filler ((Fill){.n 3}) : Struct)
+"#
+    .to_string()
+}
+
 /// Every diagnostic, with the facts the checker recorded.
 fn print(label: &str, report: &Report<LangProgram>) {
-    eprintln!("=== {label}: ok={} ===", report.ok());
+    println!("=== {label}: ok={} ===", report.ok());
     for (index, diagnostic) in report.diagnostics.iter().enumerate() {
         println!(
             "  [{index}] span={:?} stage={:?} msg={}",
@@ -33,52 +53,20 @@ fn show(label: &str, source: &str) {
 }
 
 #[test]
-fn probe_the_directed_attribute_unify() {
+fn probe_the_write_perspective() {
     let _ = std::panic::catch_unwind(|| {
-        // Both stated: the actual is the provider, the parameter the requirement.
+        let head = head();
         show(
-            "64 provided under 32 required",
-            "f := (x : Int # 32) => x\nf (0 # 64)\n",
+            "write positive",
+            &format!(
+                "{head}\nw := compute.write ((compute.Write _){{.to (b.b # 0), .at (0 # 1), .value (0 # 1)}})\n(w # 0)\n"
+            ),
         );
         show(
-            "32 provided under 64 required",
-            "f := (x : Int # 64) => x\nf (0 # 32)\n",
-        );
-        // A statement decides a template's open position: `r` should carry 32.
-        show(
-            "statement states the return",
-            "g := x => {r := x; r = (r # 32)}\n(g 0) # 64\n",
-        );
-        // A callee that states nothing hands no certificate: the demand is the slot.
-        show(
-            "a silent callee hands no certificate",
-            "id := x => x + 1\n(id 0) # 32\n",
-        );
-        // Admitted: an argument-derived certificate short-circuits the combine.
-        show(
-            "a silent callee's provider is the function, not the argument",
-            "id := x => x + 1\n((id # 1) 0) # 32\n",
-        );
-        // The discriminator for the future rule: fallback gives `64` and admits.
-        show(
-            "a compound-return callee's provider is the function, not the argument",
-            "pair := x => (x, x)\n((pair # 1) (0 # 64)) # 32\n",
-        );
-    });
-}
-
-#[test]
-fn probe_the_field_reference_certificate() {
-    let _ = std::panic::catch_unwind(|| {
-        // The write's shape, inline: the statement names the field's own slot.
-        show(
-            "inline field reference",
-            "---\n  compute = import \"compute.lichen\"\n---\nT := {.to @any : Int}\nw := (x = T) => {r := x.to; r = (r # (compute.perspective_of x.to))}\n(w (T{.to (0 # 32)})) # 0\n",
-        );
-        // The same call, demanded at the field's own perspective.
-        show(
-            "inline field reference admitted",
-            "---\n  compute = import \"compute.lichen\"\n---\nT := {.to @any : Int}\nw := (x = T) => {r := x.to; r = (r # (compute.perspective_of x.to))}\n(w (T{.to (0 # 32)})) # 32\n",
+            "write negative",
+            &format!(
+                "{head}\nw := compute.write ((compute.Write _){{.to (b.b # compute.warp), .at (0 # 1), .value (0 # 1)}})\n(w # 0)\n"
+            ),
         );
     });
 }

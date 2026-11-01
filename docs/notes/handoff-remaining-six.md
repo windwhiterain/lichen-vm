@@ -636,3 +636,41 @@ so a materialised copy of the universe can never satisfy the function-type
 predicate. A structural fallback (a self-describing `[TypeType, Type]` node) is
 faithful to SPEC §Type and measured neutral on the suite, but nothing exercised it
 once the guard above turned out to be the real blocker, so it is not landed.
+
+## Round 36: the frozen callee resolves — compute is 241 / 1
+
+**Fixed** (`b34828fa`): a program's call into an imported package now has a callee.
+`Module::static_function_of_callee` — which existed for exactly this projection and
+had no caller — resolves the callee's value half without evaluating anything, so
+the signature path (parameter requirement, `applied_exprs`, certificate) runs for
+frozen calls. Two consequences had to be handled in the same change, both measured:
+
+- a **resolved** callee is a function whatever its reference type says: a frozen
+  export member reads as the export's own struct, so `is_function_type` answered
+  false and the type-side apply was skipped;
+- a frozen callee states its **signature**, not the call's own type cell. Pushing
+  `compute.jit`'s frozen result (`K`, a struct) into the call's type made the
+  checker refuse the legitimate cross-kernel call `k0 x`, which the compute layer
+  applies by fusing — the six `jit_cross_kernel_*` tests are that measurement.
+
+Measured: compute **240/2 → 241/1**. The cooperative product's warp test now refuses
+`# 64` with `expected 64, found 32` (the certificate reads `mma`'s stated `# warp`),
+and the six `jit_cross_kernel_*` tests are green. lowlevel 164/0, highlevel 136/0,
+language 276/0, gpu 90/4 (the four SPIR-V validation failures are the pre-existing
+ones). Comments and fmt gates clean.
+
+**The last red test, `a_write_returns_the_input_buffer_perspective`, is now two
+precise defects** (`zz_attribute_certificate_probe` prints both programs):
+
+| program | diagnostic | meaning |
+|---|---|---|
+| positive, `.to (b.b # 0)` + `(w # 0)` | `[0] expected 32, found 0`, kind `Annotation`, at the instantiation; `[1] expected 0, found 32`, kind `Attribute`, at `(w # 0)` | `[0]` is the instantiation's field unify comparing the numbers without the order; `[1]` is the certificate reading the **declared** `.to` requirement (`# warp` = 32) instead of the caller's provided slot (`# 0`) |
+| negative, `.to (b.b # compute.warp)` | `[0] expected 0, found 32` | the expected sentence, and it cannot distinguish the two readings because declaration and caller agree here |
+
+So the remaining work is exactly: (a) the instantiation's attribute positions through
+the attribute's order, and (b) `certificate_field` resolving the field to the
+**caller's** field expression, not the declaration's requirement slot. Both are
+narrow and independent; `[0]` is what a previous round's `unify_field` attempt
+addressed, and its regression (`an_imported_requirement_judges_like_an_inline_one`)
+came from the helper not reading a **static** field expr — worth re-checking now
+that frozen signatures resolve.
