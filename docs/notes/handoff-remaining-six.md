@@ -596,3 +596,43 @@ parameter and return type per index, and identify each index by shape (a functio
 parameter is the function marker; `launch`'s `k = K` is the struct marker). That
 separates "wrong ref" from "wrong frozen return type", and only then is a fix
 landable.
+
+## Round 35: the resolver is right; the vocabulary's callable `K` is the wall
+
+Measured with the pure resolver (`static_function_of_callee` on the callee's value
+half) plus prints, then reverted. The tree is clean at `a7e92cc6`, compute 240/2.
+
+**The mapping is correct.** The export is a 30-item array of bindings, so
+`compute.jit` is at position 10 and `compute.launch` at 11; the artifact's binding
+value names the function, and the resolved refs and their declared return types are
+right:
+
+| call | resolved | declared return type, element 0 |
+|---|---|---|
+| `compute.jit (…)` (twice) | `StaticFunctionId(7)` | `TypeValue(TypeStruct)` — `jit` returns `K{…}`, a struct ✓ |
+| `compute.launch` | `StaticFunctionId(10)` | `TypeValue(TypeFunction)` — `launch` returns `a => …` ✓ |
+
+**So the six `jit_cross_kernel_*` failures are not a resolver defect.** With the
+resolver, `compute.jit`'s result type becomes known (`K`, a struct), and the guard
+in `check_app` — "a decided non-function callee is refused" — then fires on
+`k1 := compute.jit ((x : Int) => k0 x)`, whose body applies the jitted value
+`k0` to `x`. The program is legitimate in this vocabulary: `K{…}` is exactly what
+`compute.launch` and `compute.call` apply, so a `K` value **is callable** even
+though its type is a struct. The baseline passes only because the callee's type is
+undecided (`compute.jit` does not resolve), so `type_is_concrete` is false and the
+guard never runs — an accident, not a guarantee.
+
+**Consequence for the plan.** The resolver is a prerequisite for both red tests
+(the frozen certificate path), and it cannot land before the checker learns that a
+vocabulary may declare a struct-typed value callable. That is a `NativeCall`/
+extension question (`checker/native_call.rs`), not a shape question: the guard must
+consult the vocabulary rather than infer callability from the `Function` template
+alone.
+
+Also measured and reverted as not needed yet: `shape::is_universe_any` recognises a
+**static** universe by content (`is_static_universe`: type marker in the value slot,
+the same static node in the type slot) but a **dynamic** one only by equality class,
+so a materialised copy of the universe can never satisfy the function-type
+predicate. A structural fallback (a self-describing `[TypeType, Type]` node) is
+faithful to SPEC §Type and measured neutral on the suite, but nothing exercised it
+once the guard above turned out to be the real blocker, so it is not landed.
