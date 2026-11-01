@@ -1072,3 +1072,26 @@ positive and negative programs are covered permanently by
 **Outstanding from the review**: a focused regression for each of the three
 boundaries. Those are new tests, and tests are written only with the maintainer's
 permission.
+
+## Round 48: the default fallback guessed; it now names nothing shared
+
+Second review round: the blocking item was that `attribute_pair`'s default-owner
+fallback used `P::Attr::ORDER.iter().find(...)`, and since **every** canonical default
+position holds one node, the first attribute always matched — the same "one of them
+wins" shape, moved from last to first. Committed `4a863e8b`.
+
+`sole_default(&matches)` answers a canonical position only when **exactly one** default
+is the class in question; a shared match answers none. Measured consequence: the write
+perspective test stays green **without** that path ever matching more than one
+attribute, so the pardon resolves through the attribute a compared position names
+(the instantiation registers its fields' slots). The earlier reading — "remove the
+default rule and the test goes red" — held only for the intermediate state without
+that slot naming; it does not justify the guess.
+
+Pinned by three unit tests in the lib binary
+(`crates/lichen-highlevel/src/checker/attribute_defaults.rs`): one match names its
+position, a shared match names none, no match names none.
+
+Measured: compute 240/0, highlevel 136/0 plus 3 lib unit tests, lowlevel 167/0,
+language 276/0, gpu 90/4 with the four pre-existing SPIR-V failures; comments and fmt
+clean.
