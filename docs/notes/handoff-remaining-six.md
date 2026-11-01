@@ -1035,3 +1035,40 @@ default slot, so two identical slots must never be judged.
 
 **What remains is none of the six.** The write perspective was the last one; the
 sections above record how each was closed.
+
+## Round 47: review asked for three boundaries; all three were real
+
+`fix_reviewer` reviewed round 46 and requested changes. Committed `39e01285`;
+compute **240/0** (241 minus the deleted probe test), highlevel 136/0, lowlevel 164/0,
+language 276/0, gpu 90/4 with the four pre-existing SPIR-V failures; comments and fmt
+clean.
+
+1. **The default-slot registration was wrong and is gone.** `install_constants` puts
+   the *same* `any_value` node in every canonical default position, so registering it
+   in the single-value node-to-marker map kept only the last attribute — in the current
+   order that is Refinement, not Perspective. The marker now comes from the frame's
+   canonical index (`UnifyError::clash_attribute`), from the attribute a compared
+   position names, or from the class a default slot owns (that class names *which*
+   canonical default it is). Measured on the way: without that class rule the write
+   test goes red again, so the default slot does have to be recognisable — just not by
+   its node.
+2. **Direction is recorded, not inferred.** `UnifyError::operand_order` is written where
+   the error is produced: `FoundFirst` in `check_unify`/`check_unify_relaxed`,
+   `RequirementFirst` in `apply_parameter_check`, `Unknown` everywhere else — and an
+   unknown error is never pardoned. The `diary`-based inference is gone.
+3. **The clash is named only on the errors that child produced** (`clash` is a
+   dedicated field; `a`/`b` keep the diagnostic contract; the length is taken before the
+   child call). A child that fails without recording never rewrites an older error.
+
+Also measured while doing (2): the *positions a compare framed* are the roots, not the
+descent's item pair — resolving the marker from the roots is what keeps
+`language::perspective::*` and `struct_element_attributes::*` green (six tests failed
+before that ordering).
+
+The probe `zz_attribute_certificate_probe` is deleted with its declaration; the
+positive and negative programs are covered permanently by
+`perspective_requirements::a_write_returns_the_input_buffer_perspective`.
+
+**Outstanding from the review**: a focused regression for each of the three
+boundaries. Those are new tests, and tests are written only with the maintainer's
+permission.
