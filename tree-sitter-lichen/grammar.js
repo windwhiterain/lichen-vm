@@ -11,6 +11,12 @@
 // glued delimiter `token.immediate`; a spaced delimiter is a fresh atom and so
 // an argument of `application`.
 //
+// The formal reference (`x'`) is the same kind of glued suffix: the prime mark
+// is written against the name it marks, so the grammar spells it
+// `token.immediate` too, and `x '` is not a spelling at all.  It is a suffix
+// on a **name** and nothing else — the parameter side of a `=>` is an
+// ordinary expression, and only a primed name in it declares a parameter.
+//
 // The value templates (`docs/notes/value-templates.md`): `Tuple`, `Array` and
 // `Struct` are the builtin templates, `[template, length]` is an array
 // template, `template[…]` is an array instance, `{.a e}` a struct value and
@@ -120,8 +126,11 @@ module.exports = grammar({
       $.application,
     ),
 
-    // `param => body` (right-assoc).  The parameter is a full expression, so
-    // a typed param `x : T => e` reads the `: T` annotation as the parameter.
+    // `param => body` (right-assoc).  The parameter side is a **full
+    // expression**, so the domain the argument is checked against is
+    // whatever that expression says — a typed param `x' : T => e` reads the
+    // `: T` annotation as part of the domain, and `f x => e` has `(f x)` as
+    // the parameter side, because application binds tighter than `=>`.
     lambda: $ => prec.right(PREC.lambda, seq(
       field('parameter', $.expression),
       '=>',
@@ -204,6 +213,7 @@ module.exports = grammar({
 
     _base: $ => choice(
       $.identifier,
+      $.formal,
       $.integer,
       $.float,
       $.string_literal,
@@ -264,6 +274,13 @@ module.exports = grammar({
 
     // -- atoms & literals --------------------------------------------------
     identifier: $ => /[A-Za-z_][A-Za-z0-9_]*/,
+    // `x'` — the **formal reference**: the prime mark is a suffix on a name
+    // and it is written against it, so the mark is `token.immediate` and
+    // `x '` is not a spelling at all.  It is a suffix on a **name** and
+    // nothing else: the parameter side of a `=>` is an ordinary expression,
+    // and only a primed name in it declares a parameter
+    // (`docs/language-spec.md` §Syntax, sugar).
+    formal: $ => seq(field('name', $.identifier), token.immediate("'")),
     integer: $ => /[0-9]+/,
     float: $ => /[0-9]+\.[0-9]+/,
     string_literal: $ => /"[^"]*"?/,

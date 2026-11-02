@@ -27,6 +27,11 @@
 ; bindings / definitions
 (binding name: (identifier) @variable)
 
+; the formal reference `x'` — the prime mark is a suffix on the name, and it
+; is what says the name is a parameter (`docs/language-spec.md` §Syntax).
+; The name itself is an ordinary identifier and is coloured above.
+(formal "'" @operator)
+
 ; keyword-like tokens (anonymous)
 "if" @keyword
 "then" @keyword

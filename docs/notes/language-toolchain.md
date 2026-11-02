@@ -355,7 +355,7 @@ A rendered diagnostic is exactly:
 error: unresolved name 'y'
   --> 1:6
    |
- 1 | x => y
+ 1 | x' => y
    |      ^
 ```
 
@@ -491,12 +491,12 @@ than a second scan, so the text and the `(line, col)` name the same line.
 
 ### The lowering
 
-- **A lambda has exactly one binder, so "free variable" is a positional fact.**
-  `x => body` is the only lambda form, and the resolver pushes exactly one binder
-  per lambda (`ExprKind::Parameter` per `Expr::Lambda` in `compile.rs`). A "free
-  variable" is therefore not a closure-capture fact but simply a name the body
-  reads that is not the parameter — which is what makes `s` in `(s : ParS) => { … }`
-  a *parameter* and `doubler`/`data` free ones.
+- **A formal is one binder, so "free variable" is a positional fact.**
+  `x' => body` declares the formal `x`, and the resolver pushes one binder per
+  **primed name** in the parameter side (`ExprKind::Parameter` per formal in
+  `compile.rs`). A "free variable" is therefore not a closure-capture fact but
+  simply a name the body reads that is not a formal — which is what makes `s`
+  in `(s' : ParS) => { … }` a *formal* and `doubler`/`data` free ones.
 - **A deferred named instantiation's supplying key is all-or-nothing (a known
   limit).** It carries a type only when **every** argument's type is decided. One
   undecided argument (say `.y _`) drops the type from every key in the call, so a

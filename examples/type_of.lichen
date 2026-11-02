@@ -5,6 +5,6 @@
 ---
 Any2 := [@any, 2]
 f := std.type_of
-g := x => std.type_of x
+g := x' => std.type_of x
 n := 5 : std.type_of (1)
 (std.type_of (1), f Int, g 2, std.type_of Any2[1, 2], std.type_of Type, n)

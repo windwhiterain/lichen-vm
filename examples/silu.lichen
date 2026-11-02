@@ -15,7 +15,7 @@
 Gate := {.g (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 SiluA := {.a (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParA := {.n @any : Int, .in (Gate)}
-silu_raw := (k = ParA) => {
+silu_raw := (k' = ParA) => {
   i := compute.range k.n
   g := (compute.read ((compute.Read _){.from k.in.g, .at i}) : Float)
   b_a := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -25,7 +25,7 @@ silu := compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" (SiluA)
 UpIn := {.a (compute.Buf (compute.BufParam{.type Float, .length 4})), .u (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParB := {.n @any : Int, .in (UpIn)}
-up_raw := (k = ParB) => {
+up_raw := (k' = ParB) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.a, .at i}) : Float)
   u := (compute.read ((compute.Read _){.from k.in.u, .at i}) : Float)
@@ -35,7 +35,7 @@ up_raw := (k = ParB) => {
 up := compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 gBuf := {.g (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_g_raw := (c = Fill) => {
+fill_g_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 1 then 1.0 else 0.0) + (if i == 2 then (0.0 - 1.0) else 0.0) + (if i == 3 then 2.0 else 0.0)
@@ -44,7 +44,7 @@ fill_g_raw := (c = Fill) => {
 fill_g := compute.parallel fill_g_raw "cpu" (gBuf)
 g := (compute.plrun fill_g (Fill{.n 4}) = gBuf).g
 uBuf := {.u (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_u_raw := (c = Fill) => {
+fill_u_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 2 then 0.5 else 0.0) + (if i == 3 then 4.0 else 0.0)

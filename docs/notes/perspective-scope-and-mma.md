@@ -29,7 +29,7 @@ The acceptance table is [attributes](attributes.md) §"Behaviour"; the enforceme
   false `# 64` claim a check-time refusal, and a read's is its operands' meet
   (`docs/notes/attributes.md` §"The whole-argument default");
 - a lane-group requirement is spellable in the shipping vocabulary:
-  `f = (x : Int # compute.warp) => x` answers `expected 32, found 1` for a lane value,
+  `f = (x' : Int # compute.warp) => x` answers `expected 32, found 1` for a lane value,
   and accepts a uniform value or a `# 64` claim (`compute.warp = 32`, the backend's
   `SUBGROUP_WIDTH`).
 
@@ -95,7 +95,7 @@ the operands would be wrong — a fragment is lane-varying — which is why
 
 ## 4. The kernel-config annotation, measured
 
-`even_raw = (k : ParA # 4) => …`, where `ParA = compute.P (compute.KT Float)(…)`.
+`even_raw = (k' : ParA # 4) => …`, where `ParA = compute.P (compute.KT Float)(…)`.
 **Re-measured at `c3eefe04`**, on the same shape the first round used:
 
 | program | reading at `c3eefe04` |
@@ -122,7 +122,7 @@ instrumentation then: the annotation provider path, the element-expr and type-at
 reconciliations, and the frozen-parameter tail check did not fire; disabling the frozen
 return-attribute propagation did not change it; `check_unify` and `check_unify_relaxed`
 never saw the failing expr. A computed type with a perspective worked in the bare language
-(`A = T 5; f = (s : A # 4) => s.n`), so "computed type + perspective" was not the trigger
+(`A = T 5; f = (s' : A # 4) => s.n`), so "computed type + perspective" was not the trigger
 — the apply's expr unify was, and the isomorphism removed that arm
 (`apply_parameter_check` now compares the value and the type only, and the order is the
 checker's).
@@ -180,7 +180,7 @@ scope reading stays parked with the kernel-type merge, and no operator needs it.
   buffer reads. A write **certifies its result** `# warp` — the pending write is a
   description of a warp-uniform segment — so chaining `write` keeps the target's
   uniformity and a read of a write's result still reaches the op's own named refusal.
-  `Mma` states the same requirement on its three fields (`Mma = T => struct{.s string,
+  `Mma` states the same requirement on its three fields (`Mma = T' => struct{.s string,
   .a (Buf T) # warp, …}`), and the vocabulary's types are all type functions for that
   reason. Measured on the way there: a **direct** package struct type's field slots are
   rebuilt by the import with fresh cells, so their attribute positions freeze undecided —

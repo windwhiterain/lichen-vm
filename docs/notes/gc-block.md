@@ -43,7 +43,7 @@ block with its own bump arena, and the whole of it goes when the expression has
 decided its value. The place it pays is a scope that runs more than once:
 
 ```lichen
-f = n => @gc { a = n + 1; b = a * 2; b }   -- each call gets its own scope
+f = n' => @gc { a = n + 1; b = a * 2; b }   -- each call gets its own scope
 ```
 
 and a call site that allocates a lot the caller does not want to keep:
@@ -157,8 +157,8 @@ Two builds, each against its own unmarked twin:
 |---|---|---|
 | `let a = 2` `let b = 3` `a + b` | 24 | 1 |
 | `x = @gc { a = 2; b = 3; a + b }` `x` | 24 | 1 |
-| `f = n => n + 1` `x = f 41` `x` | 52 | 2 |
-| `f = n => n + 1` `x = @gc f 41` `x` | 43 | 2 |
+| `f = n' => n + 1` `x = f 41` `x` | 52 | 2 |
+| `f = n' => n + 1` `x = @gc f 41` `x` | 43 | 2 |
 
 So `@gc` over a **block** frees the block record and its arena and **no nodes**,
 and `@gc` over a **call** frees the nine nodes the answer's class does not reach

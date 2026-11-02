@@ -74,7 +74,7 @@ The fresh `table()` is a different object from the stored one, so it is a
 different key. A function, on the other hand, is found by its identity:
 
 ```lichen
-f := x => x
+f := x' => x
 t := table(f ==> 1)
 t <== f
 ```

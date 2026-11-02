@@ -281,12 +281,12 @@ need a node-local producer for `r`.
   - **Shape A — any value the language computes, not only a literal.** The control with `half = 2` above
     and `.n (half * 2)` answers **`[2.0, 4.0, 6.0, 8.0]`** — the literal's own answer, because the
     expression's value *is* `4`, which is the claim in itself. **The row that separates the two** is
-    `n = (x => x + 1) 2` with `.n n`, which answers **`[2.0, 4.0, 6.0]`**: three lanes, an answer no
+    `n = (x' => x + 1) 2` with `.n n`, which answers **`[2.0, 4.0, 6.0]`**: three lanes, an answer no
     spelling of a literal `4` produces. **So the leaf is read at its own value, not at its source text** —
     which is the same sentence `scalar_leaf_classes` already states about a leaf's *class*, one step
     further along.
   - **Shape B — a value the recursion computes (the crux).** The body writes its own lane index, so the
-    answer's **length is the extent**. `drive = s => if s(0) == 2 then s else { got = (compute.plrun idx
+    answer's **length is the extent**. `drive = s' => if s(0) == 2 then s else { got = (compute.plrun idx
     ((Arg)(.n (s(0) * 2 + 2), .cap 1, .t 1, .I In(.a src))) : Out)  drive (s(0) + 1, got) }`, seeded
     `drive (0, Out(.z src))`, answers **`[0.0, 1.0, 2.0, 3.0]`**: step zero asked for 2 lanes and step one
     for 4, and the state the loop returns is step one's. **This is the direct refutation of the wall**,
@@ -295,12 +295,12 @@ need a node-local producer for `r`.
     special case of the other.
 
     ```text
-      idx_raw = (k : Par) => {
+      idx_raw = (k' : Par) => {
         i = compute.range k.n
         compute.write ((compute.Write _)(.to k.out.z, .at i, .value (int2float i ~ "element")))
       }
       src = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
-      drive = s => if s(0) == 2 then s else {
+      drive = s' => if s(0) == 2 then s else {
         got = (compute.plrun idx ((Arg)(.n (s(0) * 2 + 2), .cap 1, .t 1, .I In(.a src))) : Out)
         drive (s(0) + 1, got) }
       final = drive (0, Out(.z src))
@@ -329,13 +329,13 @@ need a node-local producer for `r`.
     but has to be undone at the boundary.
 
     ```text
-      score_raw = (k : ParS) => {
+      score_raw = (k' : ParS) => {
         i = compute.range k.n
         a = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim)))
         b = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim + 1)))
         compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((a + b) ~ "element")))
       }
-      masked_score_raw = (k : ParM) => {                       # ParM adds a third leaf, .used
+      masked_score_raw = (k' : ParM) => {                       # ParM adds a third leaf, .used
         i = compute.range k.n
         a = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim)))
         b = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim + 1)))
@@ -344,11 +344,11 @@ need a node-local producer for `r`.
         mine = if live then (a + b) else held
         compute.write ((compute.Write _)(.to k.out.s, .at i, .value (mine ~ "element")))
       }
-      following = s => if s(0) == 3 then s else {             # .n s(1): the extent follows
+      following = s' => if s(0) == 3 then s else {             # .n s(1): the extent follows
         grown = (compute.plrun append ((ArgK)(.n 12, .dim 2, .t s(1), .I KVIn(.k s(2), .nk nk))) : KVOut)
         scored = (compute.plrun score ((ArgS)(.n s(1), .dim 2, .I SIn(.k grown.k))) : SOut)
         following (s(0) + 1, s(1) + 1, grown.k, scored.s) }
-      masked = s => if s(0) == 3 then s else {                 # .n 6: fixed, and the tail masked
+      masked = s' => if s(0) == 3 then s else {                 # .n 6: fixed, and the tail masked
         grown = (compute.plrun append ((ArgK)(.n 12, .dim 2, .t s(1), .I KVIn(.k s(2), .nk nk))) : KVOut)
         scored = (compute.plrun masked_score ((ArgM)(.n 6, .dim 2, .used s(1), .I MIn(.k grown.k))) : MOut)
         masked (s(0) + 1, s(1) + 1, grown.k, scored.s) }

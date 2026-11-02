@@ -80,6 +80,7 @@ atom      := primary postfix*
 primary   := int | float | string | 'Int' | 'Float' | 'string' | 'Type'
            | 'Tuple' | 'Array' | 'Struct'
            | '_' | '@any' | name
+           | name "'"                -- a formal reference
            | '$' name '(' args ')' | '(' expr ')' | '(' tuple ')'
            | '[' array-template ']' | 'table' '(' exprs ')' | 'set' '(' args ')'
            | '{' block '}' | '{' struct-template '}' | 'if' expr 'then' expr 'else' expr
@@ -90,6 +91,12 @@ postfix   := glued '[' expr ']'        -- array read, or array instance
 element   := ['@shallow' ['(' n ')']] glued-expr
 expr      := expr '==>' expr
 ```
+
+The prime is a **suffix on a name** and it is written against it: `x'` is
+the formal reference `x`, and `x '` is not a spelling. A prime declares a
+parameter, and only on the **parameter side** of a `=>`; the lambda binds
+the bare name in its body. A name on the parameter side without a prime is
+an expression of the enclosing scope.
 
 The compound forms, in one place:
 

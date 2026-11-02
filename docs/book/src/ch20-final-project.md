@@ -40,9 +40,9 @@ data in, not a shape the floor reads.
 Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .in Row}
-row_sum_raw := (k = ParS) => {
+row_sum_raw := (k' = ParS) => {
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
   b_s := compute.buf (compute.BufParam{.type Float, .length k.n})
   (Sums{.s (compute.write ((compute.Write _){.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity"))}))})
 }
@@ -50,7 +50,7 @@ row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") 
 Moments := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Centred := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParC := {.n @any : Int, .in Moments}
-centre_raw := (k = ParC) => {
+centre_raw := (k' = ParC) => {
   i := compute.range k.n
   m := (compute.read ((compute.Read _){.from k.in.s, .at 0}) : Float) / int2float k.n
   x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
@@ -59,7 +59,7 @@ centre_raw := (k = ParC) => {
 }
 centre := compute.parallel (centre_raw ~ "claim:Reduction(element)") "cpu" Centred
 Fill := {.n @any : Int}
-fill_raw := (c = Fill) => {
+fill_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := 1.0 + int2float i
@@ -74,7 +74,7 @@ compute.collect out.y : Array
 
 **This program does not run today**, for the reason Chapter 17 states: the
 compute surface has not caught up with the template model, so the kernel's
-read of `k.in.x` is refused with `expected Struct, found ?a => Struct` before
+read of `k.in.x` is refused with `expected Struct, found' ?a => Struct` before
 the parallel lowering can place it. The arithmetic it is written to do is
 exact: the row is `1, 2, 3, 4`, whose mean is `2.5`, so the values it
 writes are `-1.5`, `-0.5`, `0.5`, `1.5`, every one of them exact in
@@ -95,7 +95,7 @@ reduction's result type.
 **The reduction.** The interesting line is the `@loop` fold (abridged):
 
 ```text
-@loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read …) ~ "combine"))
+@loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read …) ~ "combine"))
 ```
 
 `s(0)` is the remaining count and `s(1)` the accumulator — the fold's

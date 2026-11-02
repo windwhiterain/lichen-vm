@@ -40,7 +40,7 @@ sugar:
 ```sytax
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-`'a` => `a = _; a`
+`a'` => `{a = _; a}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -48,6 +48,10 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.
+
+> A prime is a **suffix** on a name and it is written against it: `a'` is the formal reference `a`, and `a '` is not a spelling at all.
+> A prime belongs to the parameter side of a lambda — the expression on the left of a `=>` — and there it declares the parameter the name stands for.
+> A name on the parameter side without a prime is an ordinary expression of the enclosing scope, and a prime anywhere else is refused.
 
 ## Lowlevel
 
@@ -175,6 +179,10 @@ Nodes inside same class can be classified by tag.
 
 Function is an expression with a specified undecided expression as parameter.
 
+The parameter side is an ordinary expression (`lambda := expr => expr`), and the argument is unified with its value — the **domain**.
+A name written on the parameter side without a prime is an expression of the enclosing scope; a name with a prime is a **formal reference**, and it declares a parameter of this function, which binds that name in its body.
+Several primed names on one parameter side are leaves of one parameter expression, not several parameters, and one name primed twice is one parameter.
+
 Polymorphism at every application: @clone its expression, unify the argument with cloned parameter.
 
 ```sytax
@@ -201,7 +209,7 @@ Clone an node with `Any` value produce an undecide node with `None` value if its
 Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
 
 ```sytax
-`'x => {...; expr}` => `'x => {...; return expr; @any = x;}`
+`x' => {...; expr}` => `x' => {...; return expr; @any = x;}`
 ```
 
 ## Struct

@@ -97,7 +97,7 @@ rulings below are why it has this shape; they are not a second statement of it.
    site: it needs a ruling, not an implementation detail.
 7. **The check is determined at normalize, not at the apply.** The maintainer's
    ruling: *"normalize时函数类型检查就应当确定。旧的依赖lazy的检查方式要被淘汰了。"*
-   The example that settled it — `g = c => c(.a 1, .b 2)` — passes today only because
+   The example that settled it — `g = c' => c(.a 1, .b 2)` — passes today only because
    the checker builds a **lazy** reorder and resolves it at the apply; `c`'s **name
    table is undetermined during the normalize**, so the fields cannot be checked
    there. Under this ruling that is not a check the checker may defer: an
@@ -110,7 +110,7 @@ rulings below are why it has this shape; they are not a second statement of it.
    are the reason: a deferred check is absent, not late.
 
    What this does **not** retire, so a reader does not over-generalize: a **read** is
-   not a check. `f = x => x.a` is legal and answers at the read (measured: `f 5` is
+   not a check. `f = x' => x.a` is legal and answers at the read (measured: `f 5` is
    `this value is not a container — it has no element to read` at run), because a read
    produces a value and the language states what it does with a wrong container; only
    when the container is **decided** wrong does the checker refuse it

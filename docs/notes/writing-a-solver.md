@@ -56,7 +56,7 @@ walks the row itself:
 
 ```
 r = compute.range c.n
-@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read (… .at (r * c.kdim + (s(0) - 1)))) ~ "combine" ~ "element"))
+@loop fold = s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read (… .at (r * c.kdim + (s(0) - 1)))) ~ "combine" ~ "element"))
 compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 ```
 
@@ -127,7 +127,7 @@ and an operator asked before its operand is decided is never asked again, so the
 
 ```
 seed = (compute.plrun k ((Arg)(…)) : Out).y
-@loop march = ((s => if s(0) == 0 then s(1) else
+@loop march = ((s' => if s(0) == 0 then s(1) else
     march (s(0) - 1, (compute.plrun k ((Arg)(… .I In(.x s(1)))) : Out).y))
   : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (steps, seed)

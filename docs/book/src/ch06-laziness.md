@@ -51,15 +51,15 @@ program. So a read that is written where a value is needed is checked
 there, even when the value would never be used:
 
 ```lichen
-f := x => ([@any : Int, 3])[5]
+f := x' => ([@any : Int, 3])[5]
 ```
 
 ```text
 error: index 5 out of bounds (array length 3)
-  --> 1:29
+  --> 1:30
    |
- 1 | f := x => ([@any : Int, 3])[5]
-   |                             ^
+ 1 | f := x' => ([@any : Int, 3])[5]
+   |                              ^
 ```
 
 The index is checked even though `f` is never applied and its body is
@@ -97,7 +97,7 @@ value stays lazy in the checker's evaluation:
 
 ```lichen
 T := [@any, 2]
-nats := n => T[n, @shallow nats (n + 1)]
+nats := n' => T[n, @shallow nats (n + 1)]
 ns := nats 0
 (ns[1][0], ns[1][1][0], ns[1][1][1][0], ns[1][1][1][1][0])
 ```
@@ -116,7 +116,7 @@ unfolds the element, and stops on its budget:
 
 ```lichen
 T := [@any, 2]
-nats := n => T[n, nats (n + 1)]
+nats := n' => T[n, nats (n + 1)]
 ns := nats 0
 ns[1][0]
 ```
@@ -223,8 +223,8 @@ a scope of its own, so that the nodes it builds can be released once its
 value has been read:
 
 ```lichen
-add := x => y => x + y
-double := n => @gc { a := n + 1
+add := x' => y' => x + y
+double := n' => @gc { a := n + 1
                    b := add a a
                    b }
 T := [@any : Int, 2]
@@ -276,7 +276,7 @@ scope leaves a dangling reference. The mechanism's note is
 ## Exercises
 
 1. Write an infinite stream of squares and read its first four values.
-2. Explain why `(1 / 0, 2)(1)` is `2` but `f := x => ([@any : Int, 3])[5]`
+2. Explain why `(1 / 0, 2)(1)` is `2` but `f := x' => ([@any : Int, 3])[5]`
    fails the build.
 3. What does `(1 / 0) + 1` print, and why is that not an error?
 4. Wrap a block in `@gc` and describe what the marker lets the program do

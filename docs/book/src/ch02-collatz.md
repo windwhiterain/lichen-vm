@@ -11,7 +11,7 @@ nobody knows whether that is true, but it has been checked for an
 enormous range of numbers. The program will count the steps.
 
 ```lichen
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 27
 ```
 
@@ -23,9 +23,9 @@ The program takes 111 steps to get from 27 to 1. Let's take it apart.
 
 ## A binding of a function
 
-`collatz := n => …` binds the name `collatz` to a function of one
+`collatz := n' => …` binds the name `collatz` to a function of one
 parameter, `n`. There is no `fn` keyword, no return type, and no separate
-function declaration: a function is an expression (`n => e`), and binding
+function declaration: a function is an expression (`n' => e`), and binding
 it to a name is all it takes.
 
 `n` is a normal name in the body. The body is everything after `=>`, up
@@ -91,7 +91,7 @@ contributes `0` steps.
 Try a few values:
 
 ```lichen
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 (collatz 1, collatz 6, collatz 7)
 ```
 
@@ -107,7 +107,7 @@ Counting is one thing; the sequence's **peak** is another. `peak n` is
 the largest value the sequence reaches on its way to 1:
 
 ```lichen
-peak := n => if n == 1 then 1 else max n (peak (n / 2, 3 * n + 1)(n % 2))
+peak := n' => if n == 1 then 1 else max n (peak (n / 2, 3 * n + 1)(n % 2))
 peak 27
 ```
 
@@ -133,7 +133,7 @@ reports each differently.
 **A type error.** Call `collatz` with a string:
 
 ```lichen
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz "twenty-seven"
 ```
 
@@ -175,7 +175,7 @@ Chapter 14 covers assertions and the rest of the diagnostic vocabulary.
 **Non-termination.** `collatz 0` never reaches `1`, so it never finishes:
 
 ```lichen
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 0
 ```
 
@@ -200,7 +200,7 @@ The program printed `111: Int`: the count is an `Int`. The function's own
 answer is a function value, and its two halves say so:
 
 ```lichen
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz
 ```
 
@@ -219,7 +219,7 @@ An annotated function states its signature up front — the parameter's
 type on the parameter, and the result's type on the body:
 
 ```lichen
-collatz := (n : Int) => ((if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)) : Int)
+collatz := (n' : Int) => ((if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)) : Int)
 collatz
 ```
 
@@ -245,7 +245,7 @@ with a header:
   output = "111: Int"
   doc = "Count the Collatz steps from 27 to 1."
 ---
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 27
 ```
 
@@ -255,7 +255,7 @@ comments. Chapter 16 shows the suite and how to add to it.
 
 ## Summary
 
-- A function is a value: `n => e`, bound with `:=`.
+- A function is a value: `n' => e`, bound with `:=`.
 - A comparison yields `0` or `1`; `if` is the lazy read of one element of
   a two-element tuple, so only the taken branch runs.
 - `(a, b)` builds a tuple, `(k)` reads position `k` of it, and `n / 2` is
@@ -274,5 +274,5 @@ comments. Chapter 16 shows the suite and how to add to it.
    `(2, 1)(1 == 0)` prints the same thing.
 4. Write a program that prints `collatz` itself, and read both halves of
    its output.
-5. Give `peak` an annotated parameter and result — `(n : Int) => (… : Int)` —
+5. Give `peak` an annotated parameter and result — `(n' : Int) => (… : Int)` —
    and confirm the output does not change.

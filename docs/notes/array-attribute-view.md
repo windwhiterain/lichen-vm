@@ -25,7 +25,7 @@ session:
   when the expression is a type (`[shape, kind]`, two items), so a five-wide expr
   breaks every type-level function (`expected raw[raw[…]], TypeStruct, …`), and
   the expr readers that assumed 2..=3 elements silently returned nothing
-  (`f = x => x; f 1` answered `?a: ?a`).
+  (`f = x' => x; f 1` answered `?a: ?a`).
 - The *runtime* expr unify deliberately excludes the attribute positions
   (`apply_parameter_check` unifies slots 0..2), so a caller's attribute values
   never reach a callee's cells — the asymmetry with the type slot that makes
@@ -98,7 +98,7 @@ Concretely:
    `LowValue::Array` arms) wires attributes by canonical index through each
    array's layout, a side that omits an index meeting the default. Behaviour
    change: a caller's attributes flow into the callee's cells, so
-   `perspective_of = x => {p = _; x # p; p}` (`type_of`'s shape) starts to work.
+   `perspective_of = x' => {p = _; x # p; p}` (`type_of`'s shape) starts to work.
 4. The artifact carries the registry and the default — **landed with stage 1**
    (`ARTIFACT_FORMAT_VERSION` 15; `StaticModule` copies both, and the default's
    items count as roots, so a freeze cannot produce an artifact whose default
@@ -144,9 +144,9 @@ Concretely:
 The `type_of`-shaped function is the spelling:
 
 ```lichen
-perspective_of = x => {p = _; x # p; p}
-read  = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
-write = (x : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
+perspective_of = x' => {p = _; x # p; p}
+read  = (x' : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
+write = (x' : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
 ```
 
 Two fixes made it work, neither a name match:

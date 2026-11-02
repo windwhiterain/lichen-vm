@@ -26,12 +26,12 @@ reproductions are one shape — a call whose *result* the enclosing body goes on
 use, where the callee's body is materialized inside the caller's body:
 
 ```lichen
-id = x => x
-f  = x => id x
+id := x' => x
+f  = x' => id x
 f 1                     -- read `parameterized: ?a`, should read `1: Int`
 
-add    = x => y => x + y
-double = x => add x x
+add    = x' => y' => x + y
+double = x' => add x x
 double 5                -- read `parameterized`, should read `10`
 ```
 
@@ -188,7 +188,7 @@ class.
   walk that mints a closure from its template. A class owned outside the
   walk's scope — and outside the applied function's — is therefore
   **referenced**, not cloned, which is the rule the user's `@clone` examples
-  ask for (`x => @clone y => x+1` references `x`; `x => @clone y => y+1`
+  ask for (`x' => @clone y' => x+1` references `x`; `x' => @clone y' => y+1`
   clones `y`).
 - **A closure's capture belongs to the applied function's walk.** The closure's
   own scope is too narrow for a capture owned by the function being applied
@@ -197,7 +197,7 @@ class.
   closure's own template. The enclosing pass's parameter check then binds that
   one image, and the closure body reads it. Without the second scope test a
   capture referenced only inside the closure stayed the template's cell and
-  was never bound: `mk := n => x => x + n; (mk 1) 2` answered `none`, and
+  was never bound: `mk := n' => x' => x + n; (mk 1) 2` answered `none`, and
   `language::gc_block::a_closure_released_from_a_scope_is_still_callable` and
   `a_gc_block_calls_a_curried_binding_per_element` failed. With it the whole
   language integration suite passes (275/275).
@@ -333,7 +333,7 @@ generation rule, not a checker constraint that follows it.
   freezes it non-undecided in a static module, so a solved artifact bakes the
   identity in rather than recomputing it at load time (the identity pinning itself
   is [function-type-merge.md](function-type-merge.md)'s subject).
-- The declared parameter attribute (`x # n => e`) is a **template** constraint: the
+- The declared parameter attribute (`x' # n => e`) is a **template** constraint: the
   apply's check compares each argument's attribute against the declared value node
   (`Checker::function_param_attr`, then the attribute's `AttrExt::unify_slots`).
   The live attribute cell in the parameter expr is deliberately left **undecided**:
@@ -424,7 +424,7 @@ generation rule, not a checker constraint that follows it.
 
 ## 7. Repeated calls to one function
 
-`f := x => x + 1; (f 1, f 2)` used to bind the first argument into the frozen
+`f := x' => x + 1; (f 1, f 2)` used to bind the first argument into the frozen
 `add` parameter and then check the second call against it. The class union came
 from `materialize_static_return_apply`: it bound the materialized signature's
 parameter to the argument with `unify_parameter_slots`, so the caller's classes

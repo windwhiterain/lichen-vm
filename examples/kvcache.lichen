@@ -116,7 +116,7 @@
 KVIn := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8})), .nk (compute.Buf (compute.BufParam{.type Float, .length 2})), .nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 KVOut := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Par := {.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .in (KVIn)}
-append_raw := (k = Par) => {
+append_raw := (k' = Par) => {
   column := compute.row k
   position := compute.col k
   slot := position * k.dim + column
@@ -134,7 +134,7 @@ append_raw := (k = Par) => {
 append := compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" (KVOut)
 Fill := {.n @any : Int}
 kbufBuf := {.kbuf (compute.Buf (compute.BufParam{.type Float, .length 8}))}
-fill_kbuf_raw := (c = Fill) => {
+fill_kbuf_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
@@ -143,7 +143,7 @@ fill_kbuf_raw := (c = Fill) => {
 fill_kbuf := compute.parallel fill_kbuf_raw "cpu" (kbufBuf)
 kbuf := (compute.plrun fill_kbuf (Fill{.n 8}) : Struct).kbuf
 vbufBuf := {.vbuf (compute.Buf (compute.BufParam{.type Float, .length 8}))}
-fill_vbuf_raw := (c = Fill) => {
+fill_vbuf_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 5.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 7.0 else 0.0) + (if i == 3 then 8.0 else 0.0)
@@ -152,7 +152,7 @@ fill_vbuf_raw := (c = Fill) => {
 fill_vbuf := compute.parallel fill_vbuf_raw "cpu" (vbufBuf)
 vbuf := (compute.plrun fill_vbuf (Fill{.n 8}) : Struct).vbuf
 nkBuf := {.nk (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_nk_raw := (c = Fill) => {
+fill_nk_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := (if i == 0 then 100.0 else 0.0) + (if i == 1 then 200.0 else 0.0)
@@ -161,7 +161,7 @@ fill_nk_raw := (c = Fill) => {
 fill_nk := compute.parallel fill_nk_raw "cpu" (nkBuf)
 nk := (compute.plrun fill_nk (Fill{.n 2}) : Struct).nk
 nvBuf := {.nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_nv_raw := (c = Fill) => {
+fill_nv_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := (if i == 0 then 300.0 else 0.0) + (if i == 1 then 400.0 else 0.0)

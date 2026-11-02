@@ -20,8 +20,10 @@ discard binding and not a parameter.
 - `_ : Int` — a typed *value* hole: it checks, the type slot binds to `Int`, and
   the value stays underdetermined (an empty slot).
 - `f _`, `(1, _)` — a value hole the context unifies.
-- `_ = 5` and `_ => e` — **parse errors**: `_` cannot be bound and cannot be a
-  parameter.
+- `_ = 5` — a **parse error**: `_` cannot be bound.
+- `_ => e` — a lambda whose parameter side is a hole, so it declares **no**
+  parameter: a parameter is a *primed* name (`x'`), and a placeholder is not a
+  name and cannot take a prime.
 
 ## How it works
 
@@ -50,3 +52,8 @@ do not affect the compiler. See
 [tree-sitter-generated-files](tree-sitter-generated-files.md) and
 [zed-extension-testing](zed-extension-testing.md) for how the generated grammar
 is built and verified.
+
+The formal reference has its own node too: `x'` is a `formal` whose `name` is
+an ordinary `identifier` and whose prime mark is an anonymous `'` token, and
+the queries colour the mark (`(formal "'" @operator)`).  The mark is
+`token.immediate`, so a spaced `x '` is not a spelling at all.

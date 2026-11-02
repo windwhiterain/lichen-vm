@@ -27,7 +27,7 @@
 Turn := {.position (compute.Buf (compute.BufParam{.type Float, .length 4})), .inverse_frequency (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParC := {.n @any : Int, .in (Turn)}
-cos_raw := (k = ParC) => {
+cos_raw := (k' = ParC) => {
   i := compute.range k.n
   angle := (compute.read ((compute.Read _){.from k.in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from k.in.inverse_frequency, .at i}) : Float)
   b_c := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -36,7 +36,7 @@ cos_raw := (k = ParC) => {
 cosine := compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu" (OutC)
 OutS := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .in (Turn)}
-sin_raw := (k = ParS) => {
+sin_raw := (k' = ParS) => {
   i := compute.range k.n
   angle := (compute.read ((compute.Read _){.from k.in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from k.in.inverse_frequency, .at i}) : Float)
   b_s := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -46,7 +46,7 @@ sine := compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" (OutS)
 Expr := {.x (compute.Buf (compute.BufParam{.type Float, .length 8})), .c (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 ParR := {.n @any : Int, .in (Expr)}
-rotate_raw := (k = ParR) => {
+rotate_raw := (k' = ParR) => {
   j := compute.range k.n
   odd := j % 2
   expr := (j - odd) / 2
@@ -62,7 +62,7 @@ rotate_raw := (k = ParR) => {
 rotate := compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 positionBuf := {.position (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_position_raw := (c = Fill) => {
+fill_position_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 1 then 1.0 else 0.0) + (if i == 2 then 2.0 else 0.0) + (if i == 3 then 3.0 else 0.0)
@@ -71,7 +71,7 @@ fill_position_raw := (c = Fill) => {
 fill_position := compute.parallel fill_position_raw "cpu" (positionBuf)
 position := (compute.plrun fill_position (Fill{.n 4}) : Struct).position
 inverse_frequencyBuf := {.inverse_frequency (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_inverse_frequency_raw := (c = Fill) => {
+fill_inverse_frequency_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0)
@@ -80,7 +80,7 @@ fill_inverse_frequency_raw := (c = Fill) => {
 fill_inverse_frequency := compute.parallel fill_inverse_frequency_raw "cpu" (inverse_frequencyBuf)
 inverse_frequency := (compute.plrun fill_inverse_frequency (Fill{.n 4}) : Struct).inverse_frequency
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 8}))}
-fill_x_raw := (c = Fill) => {
+fill_x_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)

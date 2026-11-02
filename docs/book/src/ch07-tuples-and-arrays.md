@@ -120,7 +120,7 @@ parameter is the same rule applied to the parameter:
 
 ```lichen
 T := (@any : Int, @any : Int)
-addpair := (p = T) => p(0) + p(1)
+addpair := (p' = T) => p(0) + p(1)
 addpair (1, 2)
 ```
 
@@ -266,7 +266,7 @@ A tuple of arrays and an array of tuples are different *values*, and
 `type_of` (Chapter 5) prints their layouts without ambiguity:
 
 ```lichen
-type_of := x => {t := _; x: t; t}
+type_of := x' => {t := _; x: t; t}
 (type_of ((1, 2), "a"), type_of [@any : Tuple, 2])
 ```
 
@@ -298,7 +298,7 @@ stored. A function returning a tuple is how a function returns several
 answers:
 
 ```lichen
-f := x => (x, x + 1)
+f := x' => (x, x + 1)
 f 1
 ```
 
@@ -310,7 +310,7 @@ and a function returning an array is the same shape with a homogeneous
 result:
 
 ```lichen
-f := x => [@any : Int, 3]
+f := x' => [@any : Int, 3]
 f 7
 ```
 
@@ -347,7 +347,7 @@ shape is in the value, and the value is what the elements are read from.
    a tuple, and read the tuple's components.
 2. Explain why `(1, 2)[0]` and a tuple read on an array are both refused,
    and why the diagnostics name different layouts.
-3. Write `sum3 = t => t(0) + t(1) + t(2)` and apply it to `(1, 2, 3)`.
+3. Write `sum3 := t' => t(0) + t(1) + t(2)` and apply it to `(1, 2, 3)`.
    What does the type of `t` need to be for the answer to be decided?
 4. Write an array of arrays and read an element from the second row.
 5. Write a tuple template, match two different values against it, and

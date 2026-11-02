@@ -8,5 +8,5 @@ Nothing carries the `raw` mark."
   output = "6: Int"
 ---
 Pair := (@any : Int, @any : Int)
-gcd := (p = Pair) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+gcd := (p' = Pair) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)

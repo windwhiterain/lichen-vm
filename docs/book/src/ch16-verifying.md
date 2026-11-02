@@ -16,7 +16,7 @@ An example's `---…---` header always carries the same three entries:
   output = "111: Int"
   doc = "Count the Collatz steps from 27 to 1."
 ---
-collatz := n => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
+collatz := n' => if n == 1 then 0 else 1 + collatz (n / 2, 3 * n + 1)(n % 2)
 collatz 27
 ```
 
@@ -84,8 +84,8 @@ An example may be a directory. The directory's own program is `_.lichen`,
 and the directory's `order` places the whole group:
 
 ```lichen math.lichen
-succ := x => x + 1
-add := (x : Int) => (y : Int) => x + y
+succ := x' => x + 1
+add := (x' : Int) => (y' : Int) => x + y
 ```
 
 ```lichen _.lichen
@@ -121,7 +121,7 @@ The suite checks the answer a program prints. A fact a program must hold
 (Chapter 11), so an internal invariant is checked by the program itself:
 
 ```lichen
-f := x => { @assert (x > 0); x * 2 }
+f := x' => { @assert (x > 0); x * 2 }
 (f 1, f 5)
 ```
 

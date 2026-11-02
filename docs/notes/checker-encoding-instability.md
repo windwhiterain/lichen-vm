@@ -75,9 +75,9 @@ it is not.
 
 | Program | Before | After |
 |---|---|---|
-| `Par = struct{.n Int, .alpha Float}; (x : Par) => x.alpha + x.alpha` | `expected Int, found Float` (both operands) | `1.0: Float` |
-| `(x : tuple{Int, Float}) => x(1) + x(1)` | `expected Int, found Float` | `1.0: Float` |
-| `Outer = struct{.in Inner}; (x : Outer) => x.in.a + x.in.a` | `expected Int, found Float` | `1.0: Float` |
+| `Par = struct{.n Int, .alpha Float}; (x' : Par) => x.alpha + x.alpha` | `expected Int, found Float` (both operands) | `1.0: Float` |
+| `(x' : tuple{Int, Float}) => x(1) + x(1)` | `expected Int, found Float` | `1.0: Float` |
+| `Outer = struct{.in Inner}; (x' : Outer) => x.in.a + x.in.a` | `expected Int, found Float` | `1.0: Float` |
 | the same three with one concrete `Float` operand (`x.alpha * 2.0`) | already worked | unchanged |
 
 The last row is why this is the *class* question and not the unify: a unify

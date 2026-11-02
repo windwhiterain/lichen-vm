@@ -75,7 +75,7 @@ tuple's type is `Tuple`, every array's is `Array`, and every struct's is
 `Struct`:
 
 ```lichen
-type_of := x => {t := _; x: t; t}
+type_of := x' => {t := _; x: t; t}
 (type_of (1, 2), type_of [@any : Int, 2], type_of {.x @any : Int})
 ```
 
@@ -114,7 +114,7 @@ The identity function has an open parameter, and each application can
 decide it differently:
 
 ```lichen
-id := x => x
+id := x' => x
 (id 5, id Int)
 ```
 
@@ -149,7 +149,7 @@ An expression whose type is not decided yet has an **open cell**, printed
 class and share one name:
 
 ```lichen
-f := x => x
+f := x' => x
 f
 ```
 
@@ -212,7 +212,7 @@ unify with `T`; the value is `e`'s value and the type is `T`'s. So an
 annotation can *state* a type that the program did not otherwise decide:
 
 ```lichen
-inc := (x : Int) => x + 1
+inc := (x' : Int) => x + 1
 inc
 ```
 
@@ -255,7 +255,7 @@ value's type needs no builtin. It is a function built from the two pieces
 this chapter introduced — the placeholder and the annotation:
 
 ```lichen
-type_of := x => {t := _; x: t; t}
+type_of := x' => {t := _; x: t; t}
 (type_of (1), type_of Int, type_of [@any : Int, 2])
 ```
 
@@ -339,7 +339,7 @@ expr.
 1. Write `type_of` from the chapter and read the types of `5`, `Float`,
    `(1, 2)`, `[@any : Int, 2][1, 2]`, and `Type`.
 2. Explain why `(1 : Type)` is refused, in terms of the chain of types.
-3. Write `expr_up = x => (x, x)` and read its type with `type_of`. Which
+3. Write `expr_up := x' => (x, x)` and read its type with `type_of`. Which
    cell names appear in the printed type, and why?
 4. Explain why a `raw`-marked answer is a defect rather than a result, and
    name the annotation that removes one.

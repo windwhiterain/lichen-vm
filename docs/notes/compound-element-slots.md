@@ -28,7 +28,7 @@ A written compound type is one node that many values are checked against, so its
 slots must not bind. A plain placeholder (`struct<_:Int>`) does bind: the cell is
 one cell, the first value unified against it is written into its class, and every
 later use reads that value — which is why the alternative was a type lambda
-(`type = _x => struct<_:Int>; (type _)`) instantiated per use. `Any` is the
+(`type = _x' => struct<_:Int>; (type _)`) instantiated per use. `Any` is the
 constant that removes that burden:
 
 - **Directional unification.** `Any` unifies with anything. Only a **left** `Any`
@@ -86,7 +86,7 @@ position, and no value can know how many attributes a written type will spell.
 Decisions that shape this layout:
 
 - **A value's element value slot is `@any`.** The type is the compound's
-  *shape*, so `[(1, 2), (3, 4)]` and `f = x => (x, 1); [f 1, f 2]` stay legal
+  *shape*, so `[(1, 2), (3, 4)]` and `f = x' => (x, 1); [f 1, f 2]` stay legal
   (measured before the change as `array<<Int, Int>, 2>`), and one written type
   stays shareable across values that differ. The function precedent answers the
   same question the same way: a function's type carries its return's *type*, never
@@ -184,7 +184,7 @@ is now the same slot list, with three consequences worth recording:
 - **A deferred callee's field list is read lazily**, one
   `Index(Index(shape, i), 1)` per position, which is what makes a *correct*
   deferred positional instantiation check at all
-  (`f = s => s(1, 2); f S` reads `(1, 2)`). The lazy named reorder's lookup key
+  (`f = s' => s(1, 2); f S` reads `(1, 2)`). The lazy named reorder's lookup key
   reads the same position, or its keys never match the supply table's.
 - **The deferred refusal is reported at the instantiation**, with the check's own
   kind, instead of through the apply's argument unify — the requirement it states

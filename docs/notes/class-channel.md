@@ -459,7 +459,7 @@ and left every member's own slot as it was.  Deleting the carrier turned the
 merge into a second, unconditional write site, and that is the whole of both
 regressions.
 
-**What was measured.**  `((n => ([1, 2, 3] : array{Int, n})) 5)` must fail to
+**What was measured.**  `((n' => ([1, 2, 3] : array{Int, n})) 5)` must fail to
 compile: the annotation pins the parameter `n` to 3, and applying 5 clashes at
 the apply.  Green at `4be9180`, red from `03ed3e2` + `dde4011`.  One node dump at
 the apply and one `evaluate_node` trace per tree (instrumented identically):
@@ -682,10 +682,10 @@ get its own inferred type rather than sharing one lambda application).
 whose `_` cells the first instantiation specializes —
 
 ```lichen
-Read  = _x => struct{.from _, .at _}
-Write = _x => struct{.to _, .at _, .value _}
-read  = (x : Read _)  => $read(x.from, x.at)
-write = (x : Write _) => $write(x.to, x.at, x.value)
+Read  = _x' => struct{.from _, .at _}
+Write = _x' => struct{.to _, .at _, .value _}
+read  = (x' : Read _)  => $read(x.from, x.at)
+write = (x' : Write _) => $write(x.to, x.at, x.value)
 ```
 
 with call sites `compute.read ((compute.Read _)(.from buf, .at i))` and
@@ -740,7 +740,7 @@ answered.
 there is nothing left for the lowering to decide —
 
 ```lichen
-annotated = compute.jit ((y : Int) => y + y)
+annotated = compute.jit ((y' : Int) => y + y)
 annotated
 ```
 
@@ -760,10 +760,10 @@ must be explicitly specialized** — a kernel is lowered for one class and compi
 before any apply, so the parameter's type is where the language says which class
 this artifact is for, and a body that left its class open is refused by name
 ([`UNDECIDED_DOMAIN`]: "the kernel parameter's class is not decided when the
-kernel is compiled … annotate the parameter").  Measured: `compute.jit (y => y +
-y)` is refused, `compute.jit (y : Int => y + y)` is `(raw Kernel, raw
+kernel is compiled … annotate the parameter").  Measured: `compute.jit (y' => y +
+y)` is refused, `compute.jit (y' : Int => y + y)` is `(raw Kernel, raw
 parameterized): struct{.native raw[?a, ?b], .sig Int -> Int}` and launches `3 + 3 = 6`, and the
-function itself stays polymorphic for its other uses (`f = y => y + y; k =
+function itself stays polymorphic for its other uses (`f = y' => y + y; k =
 compute.jit f; f 1.5` is `3.0: Float` — the refusal does not touch the class).
 `open_class_of` and `compile_fragment`'s `open_class` parameter are **deleted**;
 the seed is the parameter's own type and nothing else.
@@ -780,9 +780,9 @@ measured on this tree:
   `InDomain` out of `module.functions[fid].asserts`, and after the routing the
   jitted function's assert list is **empty** while the only `InDomain` in the
   program is inside frozen module `158` (the `core` prelude): the *callee's*
-  refinement (`add = operands => { operands : array{(_ ! in_num), 2}; … }`) is
+  refinement (`add = operands' => { operands : array{(_ ! in_num), 2}; … }`) is
   what confines the class now, and it is enforced by the apply, in the callee's
-  own module.  So `compute.jit (y => y + y)` is refused with `UNDECIDED_DOMAIN`
+  own module.  So `compute.jit (y' => y + y)` is refused with `UNDECIDED_DOMAIN`
   again — the parallel path is unaffected only because the ABI seeds every scalar
   leaf `USize`.  **This is the one red target of the two §5 named that is a
   *typing* question rather than a printer's**, and the answer taken is §5.1's:
@@ -806,7 +806,7 @@ measured on this tree:
 disagreed.**  A body lowered from a template is made of parameter reads the
 low-type pass cannot transfer through, so `node_class` declined and fell back to
 the integer default while the *emission* used the operands' class.  Measured on
-the routed shapes: `compute.jit (x : Float => x * x)` declared
+the routed shapes: `compute.jit (x' : Float => x * x)` declared
 `result_classes = [Int]` over a body of `[LocalGet(0), LocalGet(0), Bin(Float,
 Mul)]`, which the wasm validator refused ("expected i64, found f32"), and the
 float index function of `a_varying_float_element_is_seeded_from_the_index` wrote
@@ -871,7 +871,7 @@ launch's read of them must resolve (3).
 makes any statement of it possible:**
 
 - an annotation written *inside* a wrapper body reaches the argument
-  (`pin = g => {t = type_of g; h = g : Int -> Int; t}`, then `pin f; f 1.5`) is
+  (`pin = g' => {t = type_of g; h = g : Int -> Int; t}`, then `pin f; f 1.5`) is
   refused — "expected Int, found Float": the applied parameter's cells are one
   class with the argument's, so a class written there *is* the parameter cell the
   handoff forbids writing;

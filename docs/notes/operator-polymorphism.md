@@ -38,12 +38,12 @@ a concretely `Float` operand selected `Float`, and every other operand — an
 what killed polymorphism:
 
 ```lichen
-add = x => y => x + y   -- used to be Int -> Int -> Int
+add = x' => y' => x + y   -- used to be Int -> Int -> Int
 add 1.5 2.5             -- used to fail: expected Int, found Float
 ```
 
 The language's let-polymorphism is structural — an apply clones the parameter
-cells fresh — so `x => x` is polymorphic precisely because nothing ever binds its
+cells fresh — so `x' => x` is polymorphic precisely because nothing ever binds its
 type cell. The operator pin bound it early. The goal: `+ - * /` are polymorphic
 over the two scalar classes in a type-system-standard way, **every instantiated
 use is class-concrete**, and a wrong-class use is a check error.
@@ -99,15 +99,15 @@ a concrete attribute.
 The attribute's slot holds **exactly one function**, an ordinary lichen value:
 
 ```text
-x : Int ! (v => v > 3)   ≡   [x, Int, v => v > 3]
+x : Int ! (v' => v > 3)   ≡   [x, Int, v' => v > 3]
                              └────┬────────┘ └──┬──┘
                           the expr's value,     the refinement slot
                           type, and tail
 ```
 
 One function is enough because a conjunction is one function written with `*`
-(`0 * 1 = 0`): `x : Int ! (v => v > 3) ! (v => v < 10)` is
-`v => (v > 3) * (v < 10)`.
+(`0 * 1 = 0`): `x : Int ! (v' => v > 3) ! (v' => v < 10)` is
+`v' => (v > 3) * (v < 10)`.
 
 | | `Perspective` | `Doc` | refinement |
 |---|---|---|---|
@@ -156,9 +156,9 @@ as it stands:
   for a value.
 - The entry is registered on the enclosing function, so the **apply clone
   re-checks the instantiated condition per call**: the refinement follows the
-  argument without the checker. A parameter refinement is a general desugar,
-  `x ! p => e` to `x => { x ! p; e }`, which is why it needs no IR field and gets
-  per-application re-checking for free.
+  argument without the checker. A parameter refinement is an ordinary
+  annotation on the parameter side — `x' ! p => e` — and the apply clone
+  re-checks it per call, which is why it needs no IR field of its own.
 - `AssertError`'s `{condition, template, value}` carries the provenance a
   diagnostic needs, and the assert freezes with the function, so a persisted
   callee's refinement survives without the checker.
@@ -184,7 +184,7 @@ being the language's keyword sigil, as in `@loop`), so the two are never
 confusable. `!` is the language's own "this must evaluate to `1`" mark — the
 refinement *is* an assert about the value — and it needs no new lexer token. The
 right side is one operand at the `->` level, like `#`/`?`, so the predicate is
-written explicitly: `e : T ! (x => x > 3)`.
+written explicitly: `e : T ! (x' => x > 3)`.
 
 The refinement is an **attribute** on the type, so it is *shown* wherever the
 annotated value is printed (`! in_num` beside the type — the spelling is §8.1) and
@@ -259,8 +259,8 @@ class — instead of to the operand's value. That is what makes a class contract
 expressible with no type read:
 
 ```lichen
-in_num = t => t @in Num          -- t is a *type value*
-add    = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
+in_num = t' => t @in Num          -- t is a *type value*
+add    = operands' => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 ```
 
 The prelude's contract takes **one argument — the operand group, a 2-wide
@@ -326,7 +326,7 @@ conditional reads that cell; a dynamic condition makes the tuple read's type
 desugar in place, inside a kernel:
 
 ```lichen
-k = compute.jit (x => if x <= 3 then 10 else 20)
+k = compute.jit (x' => if x <= 3 then 10 else 20)
 compute.launch k 2          -- rendered `10: ?a`; `if` renders `10: Int`
 ```
 
@@ -376,8 +376,8 @@ The contract's end state, as the prelude writes it:
 
 ```lichen
 Num     = set(Int, Float)
-in_num  = t => t @in Num
-add     = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
+in_num  = t' => t @in Num
+add     = operands' => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 ```
 
 | program | with the contract |
@@ -393,7 +393,7 @@ independently — that *is* let-polymorphism — so `add [1, 1.5]` is refused by
 array's element tie rather than by a pinned class, and §8.4 records which channel
 refuses a cross-class use under the split-leaf end state.
 
-**`compute.jit (y => y + y)`.** The parameter's type cell is open, so the domain
+**`compute.jit (y' => y + y)`.** The parameter's type cell is open, so the domain
 is undecided — but the refinement names the **set**, whose candidates are data.
 The kernel reads them and takes the default class, `Int`. Two things make that
 sound rather than merely test-preserving:
@@ -406,7 +406,7 @@ sound rather than merely test-preserving:
 - Therefore the default must be written where the kernel's signature is built (or
   `.I`/`.O` built from the classes actually compiled). Writing it into the
   parameter cell at `jit` is *unsound*: that cell is shared while the kernel is
-  not, and `f = y => y + y; k = compute.jit f; f 1.5` must keep working.
+  not, and `f = y' => y + y; k = compute.jit f; f 1.5` must keep working.
 
 With the class concrete the dispatch selects one leaf and it lowers to the
 machine binop — byte-identical kernels, no new optimizer.
@@ -514,7 +514,7 @@ about, or still open.
    to `raw[Int, Type]` where `tuple{Int, Int}` was meant. The open class behind the
    mark is [type-of-in-std](type-of-in-std.md)'s defect.
 
-   **Re-measured, and the mark cannot be collapsed.** `add = x => y => x + y`
+   **Re-measured, and the mark cannot be collapsed.** `add = x' => y' => x + y`
    prints `raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` in `Mode::Check` and
    `Mode::Evaluate` alike, and every arrow in it is already read: a throwaway probe
    over 19 lambda shapes (run on `dev@9d59dd01` and not kept) renders every lambda
@@ -603,7 +603,7 @@ language 275, highlevel 136, compute 237/0/1.
    nothing (honest: a function value has no source form). **What this does not
    reach**: the contract's `?a ! in_num -> ?a` is a *type* string, and a
    refinement is not in the type — it is the attribute of the *parameter
-   expression* inside the lambda, so `f = x : _ ! in_num => x` prints `Int -> Int`
+   expression* inside the lambda, so `f = x' : _ ! in_num => x` prints `Int -> Int`
    with no refinement. Showing it there needs the *lambda's* own rendering.
 2. **`Num`'s home**: a std binding (the `type_of` precedent) or a keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a value-level
@@ -613,7 +613,7 @@ language 275, highlevel 136, compute 237/0/1.
    itself. The end state's answer — the selected leaf's concrete parameter type,
    refused by the ordinary apply — is an *apply-time* refusal
    (`DiagKind::Runtime`), where today it is a check error at the argument. That is
-   the same channel `f = x => x + 1; f Type` already uses, so it is the language's
+   the same channel `f = x' => x + 1; f Type` already uses, so it is the language's
    existing answer to a per-call mismatch, but it is a visible change of diagnostic
    kind and position.
 5. *(Closed — landed.)* **The refinement's diagnostic flavour.** A refinement's

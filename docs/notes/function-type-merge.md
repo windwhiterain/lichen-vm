@@ -49,7 +49,7 @@
   `shape::is_function_type_any`.
 - There is **no separate signature concept**: a function is unified with the
   template **directly**. The current spelling of a template is
-  `_x : Int => _: Int`; the constraint is that unify, with `=` or `<:`.
+  `_x' : Int => _: Int`; the constraint is that unify, with `=` or `<:`.
   `unify_function_signatures` still compares two functions' parameter and
   return cells, and `Module::function_signature` reads a known function's
   signature.
@@ -113,8 +113,8 @@ under the new meaning (`docs/notes/artifact-cache.md`).
 **There is no thin arrow.** `A -> B` is not a token in the language, and the
 written-arrow form is retired. A signature is stated by a **function
 template**: a real function value written where a function would be, such as
-`_x : Int => _: Int` — the parameter with its annotation, `=>`, and the
-result. A constraint on a function is the ordinary unify, `f = (x : Int =>
+`_x' : Int => _: Int` — the parameter with its annotation, `=>`, and the
+result. A constraint on a function is the ordinary unify, `f = (x' : Int =>
 _: Int)`, so a function is constrained by the same rule as every other
 requirement: the actual's **signature** is unified with the template's, and the
 actual's own body is kept
@@ -159,15 +159,55 @@ Two consequences, and both are deliberate:
   `Function::return_type` — the return's *type* cell, because `r#return` may be
   an unevaluated operation node whose own slots do not name the type. An apply
   clones those two cells fresh per call and never binds the template, so a
-  function's signature is let-polymorphic: `f := x => x` accepts `1` and `1.5`
+  function's signature is let-polymorphic: `f := x' => x` accepts `1` and `1.5`
   in turn, and an annotation checks a clone rather than specialising the
   template. — **still true:** the signature lives in the function's own cells,
   and the type carries none of it.
 
 The template's *return* position is an ordinary expression, which is how the
-placeholder spells "a result of this type": `_x : Int => _: Int` states a
+placeholder spells "a result of this type": `_x' : Int => _: Int` states a
 function of one `Int` whose result is a hole of type `Int`. The hole is filled
 by the actual function the match supplies.
+
+## The parameter side is an expression
+
+**A lambda's parameter side is an ordinary expression, and a prime declares
+the formal.** This is the user's ruling, and it replaces the old convention
+where the name before `=>` *was* the parameter and the parameter's own type
+or template was written as a special form of that name.
+
+- A lambda is `expr => expr`. The left side is an ordinary expression, and
+  an application **clones the whole parameter expression once** and unifies
+  the one argument with the clone's root — the domain is the parameter
+  expression's value.
+- **A postfix prime on a name declares the formal.** `x'` stands for the
+  grouped expression `{x = _; x}`: the formal unified with a fresh
+  placeholder, and the formal itself as the value. The lambda binds the
+  **bare** name `x` in its body, so the body writes `x` and the parameter
+  side writes `x'`.
+- **The prime is a suffix and it is glued.** `x'` is the formal reference
+  `x`; `x '` is not a spelling at all, and the lexer refuses it.
+- **Only a primed name declares a parameter.** A name on the parameter side
+  without a prime is an ordinary expression of the enclosing scope, so the
+  side may read a template, a type, or any other value from where it was
+  written: `(p' = T)` is a formal unified with the outer template `T`, and
+  `(x' : Int)` is a formal whose type the annotation states.
+- **Several primed names on one parameter side are leaves of one parameter
+  expression**, not an implicit currying: the function still takes one
+  argument, and the argument is the whole expression.
+- **One name primed twice is one formal**: its occurrences and its body
+  share it.
+- **A prime outside a parameter side is refused**, rather than bound by an
+  enclosing lambda.
+
+The ordinary annotations stay in the expression — `x' : Int => x` is a
+lambda whose parameter side is the annotation over the formal — so a
+parameter's type and attribute channels are read where they were written
+rather than by a special form of the lambda.
+
+**There is no `x => e` binder convention.** The old spelling is not kept for
+compatibility: `x => e` is a lambda whose parameter side is the name `x`,
+read from the enclosing scope, and it declares no parameter at all.
 
 
 `Type` is the **terminal** of the chain, not a supertype: there is no subtyping
@@ -304,7 +344,7 @@ of one expression applied to one argument, and they must unify.
   measured, with its reproductions, in
   [the kernel parameter's class](kernel-parameter-class.md). The arrow form
   itself has since been **retired from the language**: a frozen module now
-  states a signature with a **function template** (`_x : Int => _: Int`) and
+  states a signature with a **function template** (`_x' : Int => _: Int`) and
   unifies it with plain `=`, so there is no written arrow left to be frozen.
 - **The function arm is a second implementation of the array rule.** It descends
   with a fresh `path` and `steps`, has no early break, and records a failed child

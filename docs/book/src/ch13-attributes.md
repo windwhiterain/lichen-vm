@@ -48,7 +48,7 @@ checks one when a value meets a declaration.
 A function's parameter may declare a perspective it requires:
 
 ```lichen
-f := (x # 8) => x
+f := (x' # 8) => x
 f (5 # 4)
 ```
 
@@ -65,7 +65,7 @@ accepts an argument whose perspective is a **multiple** of it — a value
 uniform over `n` is also uniform over any divisor of `n`:
 
 ```lichen
-f := (x # 4) => x
+f := (x' # 4) => x
 f (5 # 8)
 ```
 
@@ -79,7 +79,7 @@ requirement of `0` — the "uniform everywhere" claim — accepts only an
 argument that makes the same claim.
 
 ```lichen
-f := (x # 0) => x
+f := (x' # 0) => x
 f (5 # 8)
 ```
 
@@ -95,7 +95,7 @@ A parameter that declares **no** perspective declares no requirement, so
 it accepts any argument — annotated or not:
 
 ```lichen
-f := x => x
+f := x' => x
 f (5 # 8)
 ```
 
@@ -232,7 +232,7 @@ the compiler walks them positionally.
 1. Print `(5 # 8)` and explain both halves.
 2. Write a function whose parameter requires `# 4`, and call it with `# 8`
    and with `# 3`. Which call holds?
-3. Explain why `f := x => x; f (5 # 8)` holds, and what declaration would
+3. Explain why `f := x' => x; f (5 # 8)` holds, and what declaration would
    make it fail.
 4. Check that `((5 # 8) # 4)` holds and `((5 # 4) # 8)` does not, and state
    the divisibility test each one performs.

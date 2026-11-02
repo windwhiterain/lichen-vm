@@ -30,8 +30,8 @@ A buffer is not a bare extension value the type system special-cases. It is a
 **struct wrapper**, the same shape a kernel has:
 
 ```lichen
-K   = _x => struct{.native _, .I _, .O _}       # a kernel: the artifact + its signature
-Buf = T => struct{.native _, .element T}        # a buffer: the payload + its element type
+K   = _x' => struct{.native _, .I _, .O _}       # a kernel: the artifact + its signature
+Buf = T' => struct{.native _, .element T}        # a buffer: the payload + its element type
 ```
 
 The type level **allows anything under `I` and `O`, at any depth**: a buffer is
@@ -53,15 +53,15 @@ nothing has to declare a kind beside it.
 ## The prelude algebra
 
 ```lichen
-Buf     = T => struct{.native _, .element T}
-Read    = T => struct{.from (Buf T), .at Int}
-Write   = T => struct{.to (Buf T), .at Int, .value T}
-WriteAtomic = T => struct{.to (Buf T), .at Int, .value T}
-read    = (x : (Read _))  => $read(x.from, x.at)
-write   = (x : (Write _)) => $write(x.to, x.at, x.value)
-write_atomic = (x : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
-collect = (b : (Buf _))   => $collect(b)
-parallel = f => b: string => o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
+Buf     = T' => struct{.native _, .element T}
+Read    = T' => struct{.from (Buf T), .at Int}
+Write   = T' => struct{.to (Buf T), .at Int, .value T}
+WriteAtomic = T' => struct{.to (Buf T), .at Int, .value T}
+read    = (x' : (Read _))  => $read(x.from, x.at)
+write   = (x' : (Write _)) => $write(x.to, x.at, x.value)
+write_atomic = (x' : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
+collect = (b' : (Buf _))   => $collect(b)
+parallel = f' => b': string => o': _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
 ```
 
 - **`write` is disjoint by contract; `write_atomic` accumulates.** A lane's `write` names its own
@@ -97,7 +97,7 @@ parallel = f => b: string => o: _ => {I = _; O = _; f: I -> O; (K _)(.native $pa
   the body states its element class *and* its count. The `DP` is the type's other argument,
   and it is what distinguishes the paper's cases — `grid[1]` for a host-bound buffer
   (`ptr(T, N)`), `block[1]` for a slice (`shared(T, N)`), `view(T, N, DP)` with the argument
-  written — so `Shared = T => struct{.native _, .element T, .n Int}` is not a second
+  written — so `Shared = T' => struct{.native _, .element T, .n Int}` is not a second
   nominal: it is this one type at `block[1]`. Where a slice *lives* — registers or shared
   within that scope — is a **placement** and not part of its identity, which is why the
   name of one space was the wrong name for the thing
@@ -123,7 +123,7 @@ Three consequences, and they are the decisions the model rests on:
   group is what it names.** A parallel body **produces no value**: it
   dispatches writes, and the result is the structure the author declared
   under `.out`. The wrapper therefore takes the output type as its third
-  argument — `parallel = f => b: string => o: _ => … (.O o)` — instead of
+  argument — `parallel = f' => b': string => o': _ => … (.O o)` — instead of
   reading it off the kernel type's fields, which hold type values and have no
   value to take the element from (the ruling of [undecided-reads](undecided-reads.md)
   §5). Setting `.O` to the body's codomain is what left `k.O` bound to the
@@ -214,7 +214,7 @@ into an output `Buf`.
 In  = struct{.a Int}
 Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
-g = (k : Par) => {
+g = (k' : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
@@ -513,7 +513,7 @@ annotates the run's result accordingly
   through a stored table: the slots are numbered depth-first in field order.
 - **The unannotated parameter is still supported, and one test depends on it.**
   `build_graph` falls back to the flat ceiling when a recorded body's parameter
-  is not a named struct, which is what an unannotated `step = ins => …` gets — so
+  is not a named struct, which is what an unannotated `step = ins' => …` gets — so
   a body that reads `ins(0)` still records and runs. That form is not leftover
   spelling: the named struct types the count (`.n Int`), so a closed-over buffer
   in the count position becomes a *type* error and the graph's own count filter
@@ -540,7 +540,7 @@ Two things the author still writes, and one defect the empty group exposed:
   and `struct{}()`) is refused with
   `expected raw[Int, struct{}#0], found raw[Int, struct{}#2]` — three
   occurrences, three nominal types.
-- **The empty instance is still an argument**, because `A = I => struct{.n Int,
+- **The empty instance is still an argument**, because `A = I' => struct{.n Int,
   .I I}` keeps the field.
 - **A graph step's parameter with an empty group before a later role path loses
   the whole value, silently.** With `GArg = struct{.n Int, .in In1, .out Out1}`
@@ -627,7 +627,7 @@ position also names the operation that fills it
 
 **A wrapper's parameter cell is filled by normalizing the wrapper, never by an
 apply.** `f`'s parameter type states the argument's type, so a wrapper
-`g = (a => f a)` must have its parameter type cell filled by *normalizing* `g` — no
+`g = (a' => f a)` must have its parameter type cell filled by *normalizing* `g` — no
 apply and no run-time inference. The compute wrapper is the same cell: the source
-`k1 = jit (x => launch k0 (x,1))` fails with "the kernel parameter's class is not
+`k1 = jit (x' => launch k0 (x,1))` fails with "the kernel parameter's class is not
 decided".

@@ -3,6 +3,6 @@
   output = "(1, 2, 3): Tuple"
 ---
 Any2 := [@any, 2]
-f := (x : Int) => Any2[x, @shallow f (x + 1)]
+f := (x' : Int) => Any2[x, @shallow f (x + 1)]
 inf := f 0
 (inf[1][0], inf[1][1][0], inf[1][1][1][0])

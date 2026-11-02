@@ -18,9 +18,9 @@
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Maxs := {.m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParM := {.n @any : Int, .in (Row)}
-rowmax_raw := (k = ParM) => {
+rowmax_raw := (k' = ParM) => {
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
   b_m := compute.buf (compute.BufParam{.type Float, .length k.n})
   Maxs{.m (compute.write ((compute.Write _){.to b_m, .at i, .value fold (k.n + 0, ((0.0 - 1.0) / 0.0) ~ "identity")}))}
 }
@@ -28,10 +28,10 @@ rowmax := compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "c
 Soft := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParY := {.n @any : Int, .in (Soft)}
-softmax_raw := (k = ParY) => {
+softmax_raw := (k' = ParY) => {
   i := compute.range k.n
   m := (compute.read ((compute.Read _){.from k.in.m, .at 0}) : Float)
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float) - m) ~ "element")) ~ "combine"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float) - m) ~ "element")) ~ "combine"))
   total := fold (k.n + 0, 0.0 ~ "identity")
   here := exp ((compute.read ((compute.Read _){.from k.in.x, .at i}) : Float) - m)
   b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -40,7 +40,7 @@ softmax_raw := (k = ParY) => {
 softmax := compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_x_raw := (c = Fill) => {
+fill_x_raw := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
