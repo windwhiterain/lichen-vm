@@ -100,5 +100,5 @@ languages = ["Lichen"]
 # same `rev`.
 [grammars.lichen]
 repository = "https://github.com/windwhiterain/lichen-vm"
-rev = "f07c758afc1229ba6ffe47691b893313c2415c69"
+rev = "980271bd4f2b425a9f9475bc96e586990b63b11d"
 path = "tree-sitter-lichen"
