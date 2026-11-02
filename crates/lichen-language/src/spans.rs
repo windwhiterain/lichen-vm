@@ -24,6 +24,7 @@ pub(crate) fn shift_expr(
         | Expr::Str(_, span)
         | Expr::TypeConst(_, span)
         | Expr::Name(_, span, _)
+        | Expr::Formal { span, .. }
         | Expr::Placeholder(span)
         | Expr::Any(span) => shift(span, old_starts, new_starts, delta),
         // A recovered-error region: the mask is a **byte** range (what a diff
@@ -34,20 +35,13 @@ pub(crate) fn shift_expr(
             shift(start, old_starts, new_starts, delta);
         }
         Expr::Lambda {
-            parameter_span,
-            parameter_type,
-            parameter_perspective,
+            parameter,
             r#return,
             span,
             ..
         } => {
-            shift(parameter_span, old_starts, new_starts, delta);
             shift(span, old_starts, new_starts, delta);
-            for optional in [parameter_type, parameter_perspective] {
-                if let Some(inner) = optional {
-                    shift_expr(inner, old_starts, new_starts, delta);
-                }
-            }
+            shift_expr(parameter, old_starts, new_starts, delta);
             shift_expr(r#return, old_starts, new_starts, delta);
         }
         Expr::Apply {

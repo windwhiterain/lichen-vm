@@ -21,14 +21,14 @@ const SINGLE: &str = r#"
 --- compute = import "compute.lichen" ---
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf _)}
-Par1 := _x => compute.P compute.KT{.I In1, .O Out1}
+Par1 := _x' => compute.P compute.KT{.I In1, .O Out1}
 f1 := (k = (Par1 _)) => {
   i := compute.range k.n
   compute.write ((compute.Write _){.to k.out.z, .at i, .value i + 10})
 }
 k1 := compute.parallel f1 "gpu" Out1
 GArg := {.n @any : Int, .in In1}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}})
 }
 built := compute.graph step
@@ -39,14 +39,14 @@ const SINGLE_COLLECT: &str = r#"
 --- compute = import "compute.lichen" ---
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf _)}
-Par1 := _x => compute.P compute.KT{.I In1, .O Out1}
+Par1 := _x' => compute.P compute.KT{.I In1, .O Out1}
 f1 := (k = (Par1 _)) => {
   i := compute.range k.n
   compute.write ((compute.Write _){.to k.out.z, .at i, .value i + 10})
 }
 k1 := compute.parallel f1 "gpu" Out1
 GArg := {.n @any : Int, .in In1}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}})
 }
 built := compute.graph step
@@ -57,7 +57,7 @@ const ONE_BUFFER: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -65,7 +65,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b}})
 }
 built := compute.graph step
@@ -76,7 +76,7 @@ const ONE_BUFFER_COLLECT: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -84,7 +84,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b}})
 }
 built := compute.graph step
@@ -96,7 +96,7 @@ const EXAMPLE_SINGLE: &str = r#"
 --- compute = import "compute.lichen" ---
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf _)}
-Par1 := _x => compute.P compute.KT{.I In1, .O Out1}
+Par1 := _x' => compute.P compute.KT{.I In1, .O Out1}
 f1 := (k = (Par1 _)) => {
   i := compute.range k.n
   compute.write ((compute.Write _){.to k.out.z, .at i, .value i + 10})
@@ -104,7 +104,7 @@ f1 := (k = (Par1 _)) => {
 k1 := compute.parallel f1 "gpu" Out1
 In2  := {.b (compute.Buf _)}
 Out2 := {.w (compute.Buf _)}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -112,7 +112,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In1}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   first := (compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}}) : Struct)
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.z}})
 }
@@ -123,7 +123,7 @@ const ONE_BUFFER_CLAIM: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -131,7 +131,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel (f2 ~ "claim:Elementwise(element)") "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b}})
 }
 built := compute.graph step
@@ -142,7 +142,7 @@ const ARG_BUFFER_TWICE: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -150,7 +150,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   first := (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b}}) : Struct)
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.w}})
 }
@@ -162,7 +162,7 @@ const ONE_BUFFER_ANNOTATED: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -170,7 +170,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b}}) : Struct
 }
 built := compute.graph step
@@ -183,13 +183,13 @@ InG  := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (comp
 OutG := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par  := {.n @any : Int, .kdim @any : Int, .in InG, .out OutG}
 ArgK := {.n @any : Int, .kdim @any : Int, .I InG}
-gemv_raw := (k = Par) => {
+gemv_raw := (k' = Par) => {
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))})
 }
 kg := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutG
-step := (g = Par) => (compute.plrun kg ((ArgK){.n g.n, .kdim g.kdim, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
+step := (g' = Par) => (compute.plrun kg ((ArgK){.n g.n, .kdim g.kdim, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
 built := compute.graph step
 w := (compute.buffer ([@any : Float, 12][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 x := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -202,13 +202,13 @@ InG  := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (comp
 OutG := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par  := {.n @any : Int, .in InG, .out OutG}
 ArgK := {.n @any : Int, .I InG}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := ((compute.read ((compute.Read _){.from k.in.w, .at (i * 3 + 0)}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at 0}) : Float)) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * 3 + 1)}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at 1}) : Float)) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * 3 + 2)}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at 2}) : Float))
   compute.write ((compute.Write _){.to k.out.y, .at i, .value y})
 }
 kg := compute.parallel f "gpu" OutG
-step := (g = Par) => (compute.plrun kg ((ArgK){.n g.n, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
+step := (g' = Par) => (compute.plrun kg ((ArgK){.n g.n, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
 built := compute.graph step
 w := (compute.buffer ([@any : Float, 12][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 x := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -219,7 +219,7 @@ const TWO_BUFFERS_ANNOTATED: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Int, .length _}})), .c (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Int, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   x := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -228,7 +228,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => {
+step := (s' = GArg) => {
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b, .c s.in.c}}) : Struct
 }
 built := compute.graph step
@@ -240,7 +240,7 @@ const TWO_BUFFERS_FLOAT: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Float, .length _}})), .c (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   x := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Float)
@@ -249,7 +249,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b, .c s.in.c}}) : Struct)
+step := (s' = GArg) => (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b, .c s.in.c}}) : Struct)
 built := compute.graph step
 p := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 q := (compute.buffer ([@any : Float, 3][10.0, 20.0, 30.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -259,7 +259,7 @@ const GEMV_P_A: &str = r#"
 --- compute = import "compute.lichen" ---
 InG  := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 OutG := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-Par  := _x => compute.P compute.KT{.I InG, .O OutG}
+Par  := _x' => compute.P compute.KT{.I InG, .O OutG}
 f := (k = (Par _)) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.w, .at i}) : Float)
@@ -268,7 +268,7 @@ f := (k = (Par _)) => {
 }
 kg := compute.parallel f "gpu" OutG
 GArg := {.n @any : Int, .in InG}
-step := (g = GArg) => (compute.plrun kg ((compute.A _){.n g.n, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
+step := (g' = GArg) => (compute.plrun kg ((compute.A _){.n g.n, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
 built := compute.graph step
 w := (compute.buffer ([@any : Float, 4][1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 x := (compute.buffer ([@any : Float, 4][1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -279,7 +279,7 @@ const TWO_BUFFERS_FIELD: &str = r#"
 --- compute = import "compute.lichen" ---
 In2  := {.b (compute.Buf (compute.BufParam{{.type Float, .length _}})), .c (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Out2 := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
-Par2 := _x => compute.P compute.KT{.I In2, .O Out2}
+Par2 := _x' => compute.P compute.KT{.I In2, .O Out2}
 f2 := (k = (Par2 _)) => {
   i := compute.range k.n
   x := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Float)
@@ -288,7 +288,7 @@ f2 := (k = (Par2 _)) => {
 }
 k2 := compute.parallel f2 "gpu" Out2
 GArg := {.n @any : Int, .in In2}
-step := (s = GArg) => (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b, .c s.in.c}}) : Struct)
+step := (s' = GArg) => (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b s.in.b, .c s.in.c}}) : Struct)
 built := compute.graph step
 p := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 q := (compute.buffer ([@any : Float, 3][10.0, 20.0, 30.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -297,7 +297,7 @@ compute.collect out.w
 "#;
 const GRAPH_OF_A_CONSTANT: &str = r#"
 --- compute = import "compute.lichen" ---
-step := (n : Int) => n + 1
+step := (n' : Int) => n + 1
 built := compute.graph step
 built
 "#;

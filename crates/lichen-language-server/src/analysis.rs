@@ -207,6 +207,34 @@ pub struct Doc<P: LangProgramShape> {
     pub diagnostics: Vec<Diag<P>>,
 }
 
+/// The formal references a parameter side declares: the name and the span of
+/// each.
+///
+/// # Invariant
+///
+/// Only the **own** formals are candidates: a nested lambda's parameter side
+/// declares that lambda's formals, so the walk stops at a `Lambda`. One name
+/// is one formal, so a repeated formal is listed once.
+fn lambda_formals(side: &Expr) -> Vec<(String, Span)> {
+    let mut out: Vec<(String, Span)> = Vec::new();
+    let mut stack = vec![side];
+    while let Some(current) = stack.pop() {
+        if let Expr::Formal { name, span, .. } = current {
+            if !out.iter().any(|(declared, _)| declared == name) {
+                out.push((name.clone(), *span));
+            }
+            continue;
+        }
+        if matches!(current, Expr::Lambda { .. }) {
+            continue;
+        }
+        for (_, node) in lichen_language::path::children(current) {
+            stack.push(node.expr());
+        }
+    }
+    out
+}
+
 impl<P: LangProgramShape> Deref for Doc<P> {
     type Target = DocIndex;
 
@@ -1490,6 +1518,9 @@ fn classify_token_kind(
         | TokenKind::Pipe
         | TokenKind::Caret
         | TokenKind::Dot
+        // `'` marks a formal reference; the name it follows carries the
+        // parameter's own classification.
+        | TokenKind::Prime
         | TokenKind::Tilde => Some((SemanticTokenType::OPERATOR, Vec::new())),
         // Delimiters, separators, Glue and Eof carry no semantic color.
         TokenKind::LParen
@@ -1558,26 +1589,22 @@ impl<'a> NameClass<'a> {
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Lambda {
-                parameter_span,
-                parameter_type,
-                parameter_perspective,
+                parameter,
                 r#return,
                 ..
             } => {
+                self.expr(parameter);
+                self.expr(r#return);
+            }
+            // `x'` — the formal reference: the parameter's own declaration.
+            Expr::Formal { span, .. } => {
                 self.map.insert(
-                    *parameter_span,
+                    *span,
                     (
                         SemanticTokenType::PARAMETER,
                         vec![SemanticTokenModifier::DECLARATION],
                     ),
                 );
-                if let Some(t) = parameter_type {
-                    self.expr(t);
-                }
-                if let Some(p) = parameter_perspective {
-                    self.expr(p);
-                }
-                self.expr(r#return);
             }
             Expr::Apply {
                 function, argument, ..
@@ -1888,24 +1915,21 @@ impl Walk {
             }
             Expr::Lambda {
                 parameter,
-                parameter_span,
-                parameter_type,
-                parameter_perspective,
                 r#return,
                 ..
             } => {
+                // Resolve the side outward; only its formals enter the body scope.
+                self.expr(parameter);
                 let base = self.scopes.len();
                 self.scopes.push(HashMap::new());
-                self.enter(parameter, *parameter_span);
-                if let Some(t) = parameter_type {
-                    self.expr(t);
-                }
-                if let Some(p) = parameter_perspective {
-                    self.expr(p);
+                for (name, span) in lambda_formals(parameter) {
+                    self.enter(&name, span);
                 }
                 self.expr(r#return);
                 self.scopes.truncate(base);
             }
+            // A formal reference declares a name; it reads no other name.
+            Expr::Formal { .. } => {}
             Expr::Apply {
                 function, argument, ..
             } => {
@@ -2231,24 +2255,21 @@ impl<'a> ScopeCapture<'a> {
             | Expr::Name(..) => {}
             Expr::Lambda {
                 parameter,
-                parameter_span,
-                parameter_type,
-                parameter_perspective,
                 r#return,
                 ..
             } => {
+                // Resolve the side outward; only its formals enter the body scope.
+                self.expr(parameter);
                 let base = self.scopes.len();
                 self.scopes.push(HashMap::new());
-                self.enter(parameter, *parameter_span);
-                if let Some(t) = parameter_type {
-                    self.expr(t);
-                }
-                if let Some(p) = parameter_perspective {
-                    self.expr(p);
+                for (name, span) in lambda_formals(parameter) {
+                    self.enter(&name, span);
                 }
                 self.expr(r#return);
                 self.scopes.truncate(base);
             }
+            // A formal reference declares a name; it reads no other name.
+            Expr::Formal { .. } => {}
             Expr::Apply {
                 function, argument, ..
             } => {

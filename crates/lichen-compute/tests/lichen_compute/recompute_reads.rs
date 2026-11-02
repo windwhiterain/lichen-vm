@@ -44,7 +44,7 @@ fn program() -> String {
 In  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {ELEMENTS}}}))}}
 OutE := {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParE := {{.n @any : Int, .in In}}
-scale_raw := (k = ParE) => {{
+scale_raw := (k' = ParE) => {{
   i := compute.range k.n
   e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((OutE){{.e (compute.write ((compute.Write _){{.to e, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
@@ -53,7 +53,7 @@ scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {ELEMENTS}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := {{.n @any : Int, .in In2}}
-expr_raw := (k = Par2) => {{
+expr_raw := (k' = Par2) => {{
   i := compute.range k.n
   left := (compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float)
   right := (compute.read ((compute.Read _){{.from k.in.p, .at i + 1}}) : Float)
@@ -62,7 +62,7 @@ expr_raw := (k = Par2) => {{
 }}
 expr := compute.parallel (expr_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg := {{.n @any : Int, .in In}}
-step := (s = GArg) => {{
+step := (s' = GArg) => {{
   first := (compute.plrun scale ((compute.A _){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   compute.plrun expr ((compute.A _){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}})
 }}
@@ -102,7 +102,7 @@ fn fill(elements: usize) -> String {
     format!(
         r#"
 Fill := {{.n @any : Int}}
-fill_raw := (c = Fill) => {{
+fill_raw := (c' = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {elements}}})
   ((In){{.d (compute.write ((compute.Write _){{.to y, .at i, .value {table}}}))}})

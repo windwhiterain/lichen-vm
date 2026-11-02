@@ -21,20 +21,15 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Name(..)
+            | Expr::Formal { .. }
             | Expr::Placeholder(..)
             | Expr::Any(..) => {}
             Expr::Lambda {
-                parameter_type,
-                parameter_perspective,
+                parameter,
                 r#return,
                 ..
             } => {
-                if let Some(t) = parameter_type {
-                    walk_expr(t, out);
-                }
-                if let Some(p) = parameter_perspective {
-                    walk_expr(p, out);
-                }
+                walk_expr(parameter, out);
                 walk_expr(r#return, out);
             }
             Expr::Apply {

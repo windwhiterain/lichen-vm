@@ -567,8 +567,6 @@ fn let_bound_functions_are_polymorphic() {
         outer_lam,
         ExprKind::Function {
             parameter: b1,
-            parameter_type: None,
-            parameter_attribute: None,
             r#return: inner,
             parent: None,
             looping: false,

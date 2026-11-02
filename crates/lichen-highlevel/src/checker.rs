@@ -169,9 +169,15 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
-    /// The enclosing lambdas' parameters, innermost last: an attribute naming
-    /// one of their fields is a **reference**.
-    current_parameters: Vec<ExprId>,
+    /// The enclosing lambdas' formal parameters, innermost last: an attribute
+    /// naming one of their fields is a **reference**.
+    ///
+    /// # Invariant
+    ///
+    /// One entry per enclosing lambda, holding that lambda's own formal
+    /// leaves: a parameter side may declare several, and they are one
+    /// parameter expression, not several functions.
+    current_parameters: Vec<Vec<ExprId>>,
     /// Placeholder callees for which constructor recovery succeeded.
     placeholder_constructors: std::collections::HashSet<ExprId>,
     /// The `@gc` expressions this build compiled.
@@ -1213,7 +1219,12 @@ where
     /// The rooted test behind [`Self::is_loop_state`]: the state parameter
     /// itself, or a read whose container is one.
     fn loop_state_rooted(&self, e: ExprId, parameter: ExprId) -> bool {
-        if e == parameter {
+        if e == parameter
+            || self
+                .current_parameters
+                .last()
+                .is_some_and(|formals| formals.contains(&e))
+        {
             return true;
         }
         let container = match self.ir[e].kind {
@@ -1619,7 +1630,7 @@ where
             ExprKind::NativeCall { args, .. } => args,
             ExprKind::Prefix { operands, .. } => operands,
             ExprKind::Literal(_)
-            | ExprKind::Parameter
+            | ExprKind::Formal
             | ExprKind::Function { .. }
             | ExprKind::Apply { .. }
             | ExprKind::BinOp { .. }
@@ -1741,31 +1752,24 @@ where
                 self.state[e].ty = Some(built.ty);
                 expr
             }
-            ExprKind::Parameter => {
+            ExprKind::Formal => {
                 // The function compiled its parameter expr before the body.
                 //
                 // Invariant: this use resolves to that expr.
                 let binding = self.lookup(e);
                 self.state[e].term = Some(binding.term);
                 self.state[e].ty = Some(binding.ty);
+                // The formal's **value** is the slot's own value half, not a
+                // peel of it: the domain the argument fills is that cell.
+                self.state[e].val = self.module.expr_value_half(binding.term);
                 binding.term
             }
             ExprKind::Function {
                 parameter,
-                parameter_type,
-                parameter_attribute,
                 r#return,
                 parent,
                 looping,
-            } => self.check_lam(
-                e,
-                parent,
-                parameter_type,
-                parameter_attribute,
-                parameter,
-                r#return,
-                looping,
-            ),
+            } => self.check_lam(e, parent, parameter, r#return, looping),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {
                 operator,

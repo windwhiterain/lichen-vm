@@ -604,11 +604,12 @@ where
             };
             // **`Index(param_expr, k)` is the expr's value half, not a path step**, and the
             // cursor stops on the expr.
-            if self
-                .params
-                .iter()
-                .any(|slot| self.module.class_root(slot.expr) == self.module.class_root(*target))
-            {
+            if self.params.iter().any(|slot| {
+                self.module.class_root(slot.expr) == self.module.class_root(*target)
+                    || self.module.field_sources.get(target).is_some_and(|source| {
+                        self.module.class_root(slot.expr) == self.module.class_root(*source)
+                    })
+            }) {
                 cursor = *target;
                 break;
             }
@@ -660,6 +661,31 @@ where
             cursor = *target;
         }
         let root = self.module.class_root(cursor);
+        // A placeholder follows directed provenance to its domain leaf, never a computation.
+        let alias_index = if positions.is_empty() {
+            let leaves = self.domain_leaves()?;
+            let mut alias = cursor;
+            let mut found = None;
+            for _ in 0..8 {
+                if let Some(index) = leaves
+                    .iter()
+                    .position(|leaf| self.module.class_root(*leaf) == self.module.class_root(alias))
+                {
+                    found = Some(index);
+                    break;
+                }
+                let Some(source) = self.module.field_sources.get(&alias).copied() else {
+                    break;
+                };
+                if source == alias {
+                    break;
+                }
+                alias = source;
+            }
+            found
+        } else {
+            None
+        };
         let on_a_slot = self.params.iter().any(|slot| {
             root == self.module.class_root(slot.expr) || root == self.module.class_root(slot.value)
         });
@@ -682,15 +708,10 @@ where
                         .any(|leaf| self.module.class_root(*leaf) == root)
                 })
                 .unwrap_or(false);
-        if !(on_a_slot || on_a_leaf) {
+        if !(on_a_slot || on_a_leaf || alias_index.is_some()) {
             return Ok(None);
         }
-        if positions.is_empty()
-            && let Some(index) = self
-                .domain_leaves()?
-                .iter()
-                .position(|leaf| self.module.class_root(*leaf) == root)
-        {
+        if let Some(index) = alias_index {
             return Ok(Some(index));
         }
         // **The slot is the path flattened**, summing each skipped element's arity; the
@@ -747,6 +768,22 @@ where
 
     /// The domain's leaves, flattened — the ABI's argument list.
     fn domain_leaves(&self) -> Result<Vec<NodeId>, String> {
+        if let Some(roles) = self.params.first().and_then(|slot| slot.roles.as_ref()) {
+            let mut leaves = Vec::with_capacity(roles.scalars.len());
+            for path in &roles.scalars {
+                let Some(leaf) = super::value_at_path(self.module, self.domain, path)
+                    .and_then(|node| node.dynamic())
+                else {
+                    return self.domain_leaves_from_value();
+                };
+                leaves.push(leaf);
+            }
+            return Ok(leaves);
+        }
+        self.domain_leaves_from_value()
+    }
+
+    fn domain_leaves_from_value(&self) -> Result<Vec<NodeId>, String> {
         let mut path = Vec::new();
         let mut leaves = Vec::new();
         super::domain_value_leaves_of(
@@ -1454,6 +1491,18 @@ where
         found
     }
 
+    fn apply_argument(&self, operand: NodeId) -> Option<(NodeId, NodeId)> {
+        let argument = self
+            .module
+            .operand_items(operand)
+            .ok()?
+            .get(1)?
+            .node
+            .dynamic()?;
+        let value = self.module.expr_value_half(argument).unwrap_or(argument);
+        Some((argument, value))
+    }
+
     fn routed_operator(
         &mut self,
         node: NodeId,
@@ -1476,41 +1525,34 @@ where
             AnyFunctionId::Static(function) => self
                 .module
                 .static_function_compute_operator(function)
-                .map(|(operator, _)| operator),
+                .map(|(operator, _)| operator)
+                .or_else(|| {
+                    self.module
+                        .static_function_native_compute_operator(
+                            function,
+                            shape::STRUCT_VALUE_FIELD_BASE,
+                            |operator| AsEnum::<ComputeOperator>::as_enum(operator).is_some(),
+                        )
+                        .map(|(operator, _)| operator)
+                }),
             AnyFunctionId::Dynamic(function) => self.dynamic_compute_operator(function),
         };
         let Some(operator) = operator else {
             return Ok(None);
         };
         // The operator's operands are the call site's argument's value half.
-        let Some(argument) = self
-            .module
-            .operand_items(operand)
-            .ok()
-            .and_then(|items| items.get(1))
-            .map(|item| item.node)
-            .and_then(|item| item.dynamic())
-        else {
+        let Some((_argument, value)) = self.apply_argument(operand) else {
             return Ok(None);
         };
-        let value = self.module.expr_value_half(argument).unwrap_or(argument);
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
             return self.compute_operator(node, compute_op, value).map(Some);
         }
         if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operator)
             && let Some(bin) = kernel_bin(ty_op)
         {
-            let Some(argument) = self
-                .module
-                .operand_items(operand)
-                .ok()
-                .and_then(|items| items.get(1))
-                .map(|item| item.node)
-                .and_then(|item| item.dynamic())
-            else {
+            let Some((argument, value)) = self.apply_argument(operand) else {
                 return Ok(None);
             };
-            let value = self.module.expr_value_half(argument).unwrap_or(argument);
             let elements = super::operand_nodes_of(
                 self.module,
                 value,
@@ -2462,7 +2504,8 @@ where
         };
         // The buffer operand comes through the wrapper's slot-read
         // destructuring, so resolve it to the actual buffer node.
-        let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(*buffer))?;
+        let raw = *buffer;
+        let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(raw))?;
         let pos = parallel_buffer_pos(self.module, self.params, buffer)?.ok_or_else(|| {
             let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
                 Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),

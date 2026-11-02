@@ -21,7 +21,8 @@ fn a_checked_literal_is_readable() {
 
 #[test]
 fn every_expression_describes_its_slots() {
-    let mut analysis = Analysis::compile("------\nf = (y : Int) => y + 1\nf 5").expect("it checks");
+    let mut analysis =
+        Analysis::compile("------\nf = (y' : Int) => y + 1\nf 5").expect("it checks");
     analysis.evaluate();
     let expressions: Vec<_> = analysis.expressions().collect();
     assert!(expressions.len() > 3, "the program has expressions");

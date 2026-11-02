@@ -217,8 +217,21 @@ impl<P: Program> Module<P> {
             if (current != parameter_image && current != parameter_value) || path.is_empty() {
                 continue;
             }
+            let value_projection = match (path.first(), current) {
+                (Some(0), root) if root == parameter_image => path.len() % 2 == 1,
+                (Some(0), root) if root == parameter_value => path.len() % 2 == 0,
+                _ => false,
+            };
             path.reverse();
-            let mut supplied = argument;
+            let mut supplied = if current == parameter_value {
+                argument
+                    .dynamic()
+                    .and_then(|argument| self.expr_value_half(argument))
+                    .map(AnyNodeId::Dynamic)
+                    .unwrap_or(argument)
+            } else {
+                argument
+            };
             let mut resolved = true;
             for position in &path {
                 let Some(items) = (unsafe { self.array_items_of(supplied) }) else {
@@ -230,6 +243,12 @@ impl<P: Program> Module<P> {
                     break;
                 };
                 supplied = item.node;
+            }
+            if resolved
+                && value_projection
+                && let Some(supplied) = supplied.dynamic()
+            {
+                self.field_sources.insert(candidate, supplied);
             }
             if resolved
                 && supplied != argument

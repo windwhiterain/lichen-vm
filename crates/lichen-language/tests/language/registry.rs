@@ -45,7 +45,7 @@ fn imports_an_integer_package() {
 #[test]
 fn imports_and_applies_a_function_package() {
     let dir = temp_dir("function");
-    write(&dir, "f.lichen", "x => x + 1\n");
+    write(&dir, "f.lichen", "x' => x + 1\n");
     let main = "---f = import \"f.lichen\"---f 41\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, root_ty) = common::run_at(main, Some(&dir), &mut store);
@@ -68,11 +68,11 @@ fn transitive_imports_apply_across_modules() {
     // Materializing middle's template carries its refs into inner's
     // module verbatim, across middle's freeze.
     let dir = temp_dir("transitive");
-    write(&dir, "inner.lichen", "x => x + 1\n");
+    write(&dir, "inner.lichen", "x' => x + 1\n");
     write(
         &dir,
         "middle.lichen",
-        "---inc = import \"inner.lichen\"---x => inc x\n",
+        "---inc = import \"inner.lichen\"---x' => inc x\n",
     );
     let main = "---f = import \"middle.lichen\"---f 41\n";
     let mut store = PackageStore::<LangProgram>::new();
@@ -226,7 +226,7 @@ fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
     // The report invariant — a failed build always carries a diagnostic —
     // supplies the unattributed one instead.
     let dir = temp_dir("imported-assert");
-    write(&dir, "pkg.lichen", "x => @assert (x == 1)\n");
+    write(&dir, "pkg.lichen", "x' => @assert (x == 1)\n");
     let main = "---f = import \"pkg.lichen\"---f 2\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
@@ -241,7 +241,7 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
     // The failure belongs to `b`'s own build, so it reaches the importer
     // through the package-load seam.
     let dir = temp_dir("dependency-unattributed");
-    write(&dir, "c.lichen", "x => @assert (x == 1)\n");
+    write(&dir, "c.lichen", "x' => @assert (x == 1)\n");
     write(&dir, "b.lichen", "---f = import \"c.lichen\"---f 2\n");
     let main = "---x = import \"b.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
@@ -275,7 +275,7 @@ fn two_importers_share_one_package_through_one_store() {
     // The package freezes once, and both importers resolve its refs through
     // the same registry key.
     let dir = temp_dir("shared");
-    write(&dir, "pkg.lichen", "x => x + 1\n");
+    write(&dir, "pkg.lichen", "x' => x + 1\n");
     let mut store = PackageStore::<LangProgram>::new();
     let (_, first, _) = common::run_at(
         "---f = import \"pkg.lichen\"---f 41\n",

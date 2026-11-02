@@ -20,7 +20,7 @@ const SOURCE: &str = r#"---
 InA  := {.a @any : Int}
 OutA := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParA := {.n @any : Int, .in InA}
-adder := compute.parallel ((k = ParA) => {
+adder := compute.parallel ((k' = ParA) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
@@ -28,7 +28,7 @@ adder := compute.parallel ((k = ParA) => {
 InB  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 OutB := {.w (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParB := {.n @any : Int, .in InB}
-doubler := compute.parallel ((k = ParB) => {
+doubler := compute.parallel ((k' = ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})

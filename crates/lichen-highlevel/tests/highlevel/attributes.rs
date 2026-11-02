@@ -107,14 +107,14 @@ fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
     let w: Writer<Tag> = Writer::new();
     let f = w.binding("f");
     let x = w.param("x");
-    w.ir_mut().set_schema(x, Schema { tail: vec![Tag] });
     let declared = w.int("declared", 4);
+    // The parameter side is an annotation whose schema names the attribute.
+    let side = w.annotate_with("parameter side", x, None, &[declared]);
+    w.ir_mut().set_schema(side, Schema { tail: vec![Tag] });
     w.fill(
         f,
         ExprKind::Function {
-            parameter: x,
-            parameter_type: None,
-            parameter_attribute: Some(declared),
+            parameter: side,
             r#return: x,
             parent: None,
             looping: false,

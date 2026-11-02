@@ -243,7 +243,7 @@ fn a_burst_of_edits_runs_the_frontend_once() {
 #[test]
 fn an_edit_to_an_imported_file_refreshes_the_answer() {
     let dir = temp_dir("dep");
-    write(&dir, "math.lichen", "succ := x => x + 1\n");
+    write(&dir, "math.lichen", "succ := x' => x + 1\n");
     let main = write(
         &dir,
         "main.lichen",
@@ -271,7 +271,7 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
     );
 
     // Only the import changes; the document the editor holds is untouched.
-    write(&dir, "math.lichen", "succ := x => x + 1\nextra := 7\n");
+    write(&dir, "math.lichen", "succ := x' => x + 1\nextra := 7\n");
 
     let after = server.request(3, &completion(&uri, 3, 3, 5));
     assert!(

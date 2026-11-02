@@ -75,14 +75,14 @@ Out := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 Par := {{.n @any : Int, .in In}}
 Arg := {{.n @any : Int, .I In}}
 GA  := {{.n @any : Int, .in In}}
-reduction := (k = Par) => {{
+reduction := (k' = Par) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at s(0) - 1}}) : Float)) ~ "combine" ~ "accumulator"))
   ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (i + 1, 0.0 ~ "identity")}}))}})
 }}
 kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step := (s = GA) => {{
+step := (s' = GA) => {{
   compute.plrun kernel ((Arg){{.n s.n, .I In{{.b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
@@ -108,7 +108,7 @@ fn filled() -> String {
         r#"
 Data := {{.b (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 Fill := {{.n @any : Int}}
-fill := (c = Fill) => {{
+fill := (c' = Fill) => {{
   i := compute.range c.n
   b := compute.buf (compute.BufParam{{.type Float, .length {count}}})
   ((Data){{.b (compute.write ((compute.Write _){{.to b, .at i, .value (int2float i + 1.0)}}))}})

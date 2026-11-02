@@ -22,8 +22,6 @@ where
         &mut self,
         e: ExprId,
         parent_expr: Option<ExprId>,
-        parameter_type: Option<ExprId>,
-        parameter_attribute: Option<ExprId>,
         parameter: ExprId,
         r#return: ExprId,
         looping: bool,
@@ -48,37 +46,50 @@ where
             self.module
                 .mark_looping(function, crate::shape::EXPR_VALUE_SLOT);
         }
-        // The parameter's value position is unconstrained: the call supplies it.
-        let value_cell = self.fresh_cell();
-        let type_cell = self.fresh_cell();
-        // The parameter *is* the expr `[value, type]`, its cells in scope so the
-        // clone yields fresh ones per call.
-
-        // A `x # n` parameter adds a third slot, itself a `[value, type]` expr.
-        let attr_cell = parameter_attribute.is_some().then(|| {
+        // Predeclare each formal leaf's slot so body reads resolve to it.
+        let formals = self.formal_leaves(parameter);
+        let mut scope: HashMap<ExprId, Binding> = HashMap::new();
+        for formal in &formals {
+            // The formal's value position is unconstrained: the call supplies it.
             let value_cell = self.fresh_cell();
             let type_cell = self.fresh_cell();
-            (
-                value_cell,
-                type_cell,
-                self.slot_expr(return_block, value_cell, type_cell),
-            )
-        });
-        let mut parameter_attr_slot = None;
-        let param = match attr_cell {
-            Some((_, _, attr)) => {
-                self.state[parameter].attr = Some(attr);
-                let marker = self.ir.schema(parameter).tail[0];
-                parameter_attr_slot = Some(attr);
-                self.attribute_expr(return_block, value_cell, type_cell, &marker, attr)
+            // The formal *is* the expr `[value, type]`, its cells in scope so the
+            // clone yields fresh ones per call.
+            let slot = self.slot_expr(return_block, value_cell, type_cell);
+            scope.insert(
+                *formal,
+                Binding {
+                    term: slot,
+                    ty: type_cell,
+                },
+            );
+            self.state[*formal].term = Some(slot);
+            self.state[*formal].ty = Some(type_cell);
+        }
+        // Push one frame even when the side declares no formal.
+        self.scopes.push(scope);
+        // Check the arbitrary parameter expression; its value is the domain.
+        self.check_expr(parameter);
+        let domain = self.state[parameter]
+            .term
+            .expect("the parameter side is compiled");
+        // Register the domain even when it names an outer-scope value.
+        self.module.register_in_function(function, domain);
+        self.module.finish_function(function, domain, domain);
+        let domain_value = self.module.expr_value_half(domain).unwrap_or(domain);
+        // Propagate a root attribute only when the domain is that formal itself.
+        for formal in &formals {
+            if self.state[*formal]
+                .term
+                .and_then(|term| self.module.expr_value_half(term))
+                == Some(domain_value)
+            {
+                self.state[*formal].attr = self.state[parameter].attr;
+                if let Some(marker) = self.attribute_markers.get(&parameter).copied() {
+                    self.attribute_markers.insert(*formal, marker);
+                }
             }
-            None => self.slot_expr(return_block, value_cell, type_cell),
-        };
-        // Both entry points are already registered in this function's scope;
-        // the clone walk requires `parameter` to be one.
-        self.module.finish_function(function, param, param);
-        self.state[parameter].term = Some(param);
-        self.state[parameter].ty = Some(type_cell);
+        }
         // The expr is registered before the body, so a self-reference
         // resolves to it instead of re-entering this check.
 
@@ -92,74 +103,22 @@ where
         self.state[e].term = Some(expr);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(ty_cell);
-        self.scopes.push(HashMap::from([(
-            parameter,
-            Binding {
-                term: param,
-                ty: type_cell,
-            },
-        )]));
-        self.current_parameters.push(parameter);
-        // The parameter's annotated type is unified into its type slot
-        // before the body, so an in-body reader sees it.
-        if let Some(parameter_type) = parameter_type {
-            self.check_expr(parameter_type);
-            // The type the annotation names: a type expression's term,
-            // unless it carries attributes — then its denotation.
-            let denotation = self.type_denotation(parameter_type, Some(parameter));
-            // A written type is decided before the body, so a body's read can
-            // state its requirement from it.
-            self.module.evaluate_node_deep(denotation, None);
-            self.check_unify(
-                type_cell,
-                denotation,
-                self.loc(parameter_type, 1),
-                DiagKind::Annotation,
-            );
-        }
-        // Invariant: the attribute cell stays undecided — a bound declared
-        // value would be baked by the deep pass.
-        if let Some(parameter_attribute) = parameter_attribute {
-            // The attribute is compiled in body scope, like the type, so `n` may
-            // reference the parameter itself.
-            self.check_expr(parameter_attribute);
-            // The declared value: the annotation expression's `[value, type]`
-            // term expr.
-            let declared = self.state[parameter_attribute]
-                .term
-                .expect("an attribute expr is compiled");
-            // The parameter's schema tail[0] names the attribute; the apply's
-            // check resolves its `AttrExt` from this marker.
-            let marker = self.ir.schema(parameter).tail[0];
-            // A parameter annotation reads an attribute too: a build with no
-            // extension reports it here, so the apply declines.
-            if self.attribute_extension(&marker).is_none() {
-                self.no_attr_ext_guard(self.loc(e, 2));
-            }
-            // The expr states the requirement, as its type slot states its type.
-            let loc = self.loc(parameter_attribute, 0);
-            if let (Some(slot), Some(ext)) =
-                (parameter_attr_slot, self.attribute_extension(&marker))
-            {
-                ext.unify_slots(self, slot, declared, loc);
-            }
-            // The body sees the parameter's **declared** slot: the check is for
-            // every caller the requirement admits.
-            self.state[parameter].attr = Some(declared);
-        }
+        self.current_parameters.push(formals);
 
         let ret = self.check_expr(r#return);
 
         // Complete only an unasserted identity return whose class is inside this function's scope.
         let scope = self.module.function_scope(function);
-        let identity_return = self.module.expr_value_half(ret) == Some(value_cell);
-        for cell in [value_cell] {
+        // The identity is the **domain**: a body that returns the parameter
+        // hands the call the argument.
+        let identity_return = self.module.expr_value_half(ret) == Some(domain_value);
+        for cell in [domain_value] {
             let inside = scope
                 .as_ref()
                 .is_some_and(|scope| self.module.class_inside_scope(cell, scope));
             if inside
                 && identity_return
-                && parameter_attribute.is_none()
+                && domain == ret
                 && self.module.functions[function].asserts.is_empty()
                 && self.module.class_value(cell).is_none()
             {
@@ -173,7 +132,7 @@ where
         // The value node pre-exists — the self-reference applied it during the
         // body — and fills in now with the function id.
         self.module.functions[function].r#return = ret;
-        self.module.functions[function].parameter = param;
+        self.module.functions[function].parameter = domain;
         // The return's type cell, stored so a type-level clone-on-unify reads
         // the codomain without forcing `r#return`.
         self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
@@ -220,6 +179,42 @@ where
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(function_type);
         expr
+    }
+
+    /// The formal parameter leaves the parameter side declares.
+    ///
+    /// # Invariant
+    ///
+    /// Only the **own** leaves are candidates: a nested function's parameter
+    /// side belongs to that function, so the walk stops at a `Function` node,
+    /// and an **outer** formal the side captures is already declared by the
+    /// lambda that owns it, so only a fresh leaf is this one's. One name is
+    /// one leaf, so a repeated formal is listed once.
+    pub(super) fn formal_leaves(&self, parameter: ExprId) -> Vec<ExprId> {
+        let mut seen: std::collections::HashSet<ExprId> = std::collections::HashSet::new();
+        let mut found: Vec<ExprId> = Vec::new();
+        let mut stack = vec![parameter];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            match self.ir[current].kind {
+                // A nested function's own parameter side and body are its own.
+                ExprKind::Function { .. } => continue,
+                // An already-declared outer formal is not this lambda's leaf.
+                ExprKind::Formal => {
+                    if self.state[current].term.is_none() {
+                        found.push(current);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            stack.extend(self.ir.children(current));
+        }
+        // The leaves in the order the parameter side names them.
+        found.sort_unstable_by_key(|id| id.0);
+        found
     }
 
     /// The argument's field a certificate names: an `Index` of the bound

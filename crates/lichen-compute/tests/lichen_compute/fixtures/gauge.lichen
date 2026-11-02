@@ -1,4 +1,4 @@
 Gauge := {.v @any : Int # 32}
-strict := (g = Gauge) => g.v
-Choose := _p => {.v @any : Int # _p}
-pick := (g = (Choose _)) => g.v
+strict := (g' = Gauge) => g.v
+Choose := _p' => {.v @any : Int # _p}
+pick := (g' = (Choose _)) => g.v

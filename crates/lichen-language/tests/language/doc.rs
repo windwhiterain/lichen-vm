@@ -23,7 +23,7 @@ fn a_doc_annotation_evaluates_cleanly() {
 #[test]
 fn a_doc_argument_to_a_plain_function_is_accepted() {
     let (_, value, _) = common::evaluate(&format!(
-        "{DOC}f := x => x\nf (7 ? Doc{{.name \"seven\", .description \"x\"}})"
+        "{DOC}f := x' => x\nf (7 ? Doc{{.name \"seven\", .description \"x\"}})"
     ));
     assert_eq!(common::usize_of(&value), 7);
 }
@@ -76,7 +76,7 @@ fn two_differing_docs_in_one_array_do_not_conflict() {
 fn a_perspective_and_a_doc_coexist_on_one_expression() {
     assert!(
         compile(&format!(
-            "{DOC}f := x # 4 => x\nf (5 # 4 ? Doc{{.name \"five\", .description \"a\"}})"
+            "{DOC}f := x' # 4 => x\nf (5 # 4 ? Doc{{.name \"five\", .description \"a\"}})"
         ))
         .ok(),
         "a matching perspective with a doc must check"
@@ -130,7 +130,7 @@ fn a_broader_perspective_requirement_does_not_weaken_a_doc() {
 fn a_doc_does_not_weaken_a_perspective_mismatch() {
     assert!(
         !compile(&format!(
-            "{DOC}f := x # 4 => x\nf (5 # 2 ? Doc{{.name \"five\", .description \"a\"}})"
+            "{DOC}f := x' # 4 => x\nf (5 # 2 ? Doc{{.name \"five\", .description \"a\"}})"
         ))
         .ok(),
         "the perspective constraint must still reject a mismatched argument"

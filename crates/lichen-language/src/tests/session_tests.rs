@@ -108,7 +108,7 @@ fn the_checker_skips_an_error_block_no_type_error() {
 fn growing_an_error_block_reuses_the_established_build() {
     // Busy typing: growing the error block changes only the mask, so the build
     // is reused.
-    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x' => a + x\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused, "the first compile is a fresh build");
     assert!(r0.ok(), "the clean program checks");
@@ -143,7 +143,7 @@ fn growing_an_error_block_reuses_the_established_build() {
 
 #[test]
 fn changing_clean_content_invalidates_the_cache() {
-    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x' => a + x\nf 2\n");
     let r0 = sess.compile();
     let sig0 = r0.key;
 
@@ -159,7 +159,7 @@ fn changing_clean_content_invalidates_the_cache() {
 fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
     // Every keystroke inside a single masked error block grows only the mask, so
     // the established program is reused.
-    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x' => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("fix1 := (1");
     let r0 = sess.compile();
@@ -181,7 +181,7 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
 fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
     // A long unresolved name is a name-resolution-only delta: extending it
     // changes nothing the lowering or check consume.
-    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x' => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("v"); // first character: a new (unresolved) name leaf appears.
     let r1 = sess.compile();
@@ -216,11 +216,11 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
 fn renaming_a_binding_consistently_reuses() {
     // The signature signs the resolution, not the spelling, so a consistent
     // rename reuses the established build.
-    let mut sess = BufferSession::<LangProgram>::new("f := x => x + 1\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("f := x' => x + 1\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused);
     let sig = r0.key;
-    sess.replace(0..sess.len(), "g := x => x + 1\ng 2\n");
+    sess.replace(0..sess.len(), "g := x' => x + 1\ng 2\n");
     let r1 = sess.compile();
     assert_eq!(
         r1.key, sig,
@@ -272,17 +272,17 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
     // fresh session's after each edit.
     let cases: &[&[&str]] = &[
         // The source after each successive edit of the base program.
-        &["a := 1\nz := 3\nf := x => a + x\nf 2\n"],
-        &["a := 1\nf := x => a + x\nf 2\nzzz"],
-        &["a := 99\nf := x => a + x\nf 2\n"],
+        &["a := 1\nz := 3\nf := x' => a + x\nf 2\n"],
+        &["a := 1\nf := x' => a + x\nf 2\nzzz"],
+        &["a := 99\nf := x' => a + x\nf 2\n"],
         // A trailing binding makes the program a record program (a module): the
         // splice must reproduce the whole-program parse.
-        &["a := 1\nf := x => a + x\nf 2\nner := 2"],
-        &["a := 1\nf := x => a + x\nf 2"],
-        &["a := 1\nf := x => a\nf 2\n"],
+        &["a := 1\nf := x' => a + x\nf 2\nner := 2"],
+        &["a := 1\nf := x' => a + x\nf 2"],
+        &["a := 1\nf := x' => a\nf 2\n"],
     ];
     for edit in cases {
-        let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x => a + x\nf 2\n");
+        let mut sess = BufferSession::<LangProgram>::new("a := 1\nf := x' => a + x\nf 2\n");
         let _ = sess.compile();
         for (i, target) in edit.iter().enumerate() {
             // Apply the edit by replacing the whole source with the target.
@@ -366,38 +366,38 @@ fn assert_splice_equals_full_parse(old: &str, new: &str) {
 #[test]
 fn the_window_splice_reproduces_a_full_parse() {
     // Edits the splice must handle without a whole-buffer fallback.
-    let base = "a := 1\nf := x => a + x\nf 2\n";
-    assert_splice_equals_full_parse(base, "a := 1\nf := x => a + x\nf 22\n");
-    assert_splice_equals_full_parse(base, "a := 1\nf := x => a + 1\nf 2\n");
-    assert_splice_equals_full_parse(base, "a := 1\nf := x => a + x\nf 3\n");
-    assert_splice_equals_full_parse(base, "g := 1\nf := x => a + x\nf 2\n");
-    assert_splice_equals_full_parse(base, "a := 1\nf := x => a + x\nf 2\nner");
-    assert_splice_equals_full_parse(base, "a := 1\nz := 3\nf := x => a + x\nf 2\n");
+    let base = "a := 1\nf := x' => a + x\nf 2\n";
+    assert_splice_equals_full_parse(base, "a := 1\nf := x' => a + x\nf 22\n");
+    assert_splice_equals_full_parse(base, "a := 1\nf := x' => a + 1\nf 2\n");
+    assert_splice_equals_full_parse(base, "a := 1\nf := x' => a + x\nf 3\n");
+    assert_splice_equals_full_parse(base, "g := 1\nf := x' => a + x\nf 2\n");
+    assert_splice_equals_full_parse(base, "a := 1\nf := x' => a + x\nf 2\nner");
+    assert_splice_equals_full_parse(base, "a := 1\nz := 3\nf := x' => a + x\nf 2\n");
 }
 
 #[test]
 fn a_splice_ending_in_a_binding_is_a_record_program() {
     // A program whose last statement is a binding is a record program (a module).
-    let old = "a := 1\nf := x => a + x\nf 2\n";
-    let new = "a := 1\nf := x => a + x\nner := (2";
+    let old = "a := 1\nf := x' => a + x\nf 2\n";
+    let new = "a := 1\nf := x' => a + x\nner := (2";
     assert_splice_equals_full_parse(old, new);
     // An append *after* a tail expression (a tail program gains a trailing
     // binding, becoming a record program).
-    let new2 = "a := 1\nf := x => a + x\nf 2\nner := (2";
+    let new2 = "a := 1\nf := x' => a + x\nf 2\nner := (2";
     assert_splice_equals_full_parse(old, new2);
 }
 
 #[test]
 fn the_resolved_content_key_tracks_resolution_not_spelling() {
     // The key is name-free and exact: a rename leaves it, a value change moves it.
-    let base = content_key_of("f := x => x + 1\nf 2\n");
+    let base = content_key_of("f := x' => x + 1\nf 2\n");
     assert_eq!(
-        content_key_of("g := x => x + 1\ng 2\n"),
+        content_key_of("g := x' => x + 1\ng 2\n"),
         base,
         "a rename reuses"
     );
     assert_ne!(
-        content_key_of("f := x => x + 2\nf 2\n"),
+        content_key_of("f := x' => x + 2\nf 2\n"),
         base,
         "a value edit rebuilds"
     );

@@ -798,135 +798,15 @@ fn expression<'a, Er: GrammarError<'a>>(
                     // consumes a malformed chain's extra arrows, still diagnosed.
                     .fold(None, first_body),
             )
-            .validate(|(first, body), me, emit| {
+            .validate(|(first, body), me, _emit| {
                 let Some(body) = body else {
                     return first;
                 };
-                match first {
-                    Expr::Name(parameter, span, _) => Expr::Lambda {
-                        parameter,
-                        parameter_span: span,
-                        parameter_binder: None,
-                        parameter_type: None,
-                        parameter_perspective: None,
-                        r#return: Box::new(body),
-                        span,
-                    },
-                    Expr::Annotation {
-                        value,
-                        r#type,
-                        perspective,
-                        refinement,
-                        span,
-                        ..
-                    } => match *value {
-                        Expr::Name(parameter, parameter_span, _) => {
-                            // A parameter refinement desugars to `x => { x ! p; e }`
-                            // (`docs/notes/operator-polymorphism.md` §3).
-                            let r#return = match refinement {
-                                None => Box::new(body),
-                                Some(refinement) => {
-                                    let parameter_value =
-                                        Expr::Name(parameter.clone(), parameter_span, None);
-                                    Box::new(Expr::Block {
-                                        statements: vec![Stmt::Expr(Expr::Annotation {
-                                            value: Box::new(parameter_value),
-                                            r#type: None,
-                                            perspective: None,
-                                            refinement: Some(refinement),
-                                            doc: None,
-                                            marks: Vec::new(),
-                                            span: parameter_span,
-                                        })],
-                                        expr: Box::new(body),
-                                        span,
-                                    })
-                                }
-                            };
-                            Expr::Lambda {
-                                parameter,
-                                parameter_span,
-                                parameter_binder: None,
-                                parameter_type: r#type,
-                                parameter_perspective: perspective,
-                                r#return,
-                                span,
-                            }
-                        }
-                        value => {
-                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
-                            value
-                        }
-                    },
-                    Expr::Unify {
-                        actual,
-                        expected,
-                        span,
-                    } => match *actual {
-                        Expr::Name(parameter, parameter_span, _) => {
-                            let parameter_value =
-                                Expr::Name(parameter.clone(), parameter_span, None);
-                            let r#return = Box::new(Expr::Block {
-                                statements: vec![Stmt::Expr(Expr::Unify {
-                                    actual: Box::new(parameter_value),
-                                    expected,
-                                    span,
-                                })],
-                                expr: Box::new(body),
-                                span,
-                            });
-                            Expr::Lambda {
-                                parameter,
-                                parameter_span,
-                                parameter_binder: None,
-                                parameter_type: None,
-                                parameter_perspective: None,
-                                r#return,
-                                span,
-                            }
-                        }
-                        value => {
-                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
-                            value
-                        }
-                    },
-                    Expr::TemplateUnify {
-                        actual,
-                        template,
-                        span,
-                    } => match *actual {
-                        Expr::Name(parameter, parameter_span, _) => {
-                            // Desugar into a body statement, not a parameter channel.
-                            let parameter_value =
-                                Expr::Name(parameter.clone(), parameter_span, None);
-                            let r#return = Box::new(Expr::Block {
-                                statements: vec![Stmt::Expr(Expr::TemplateUnify {
-                                    actual: Box::new(parameter_value),
-                                    template,
-                                    span,
-                                })],
-                                expr: Box::new(body),
-                                span,
-                            });
-                            Expr::Lambda {
-                                parameter,
-                                parameter_span,
-                                parameter_binder: None,
-                                parameter_type: None,
-                                parameter_perspective: None,
-                                r#return,
-                                span,
-                            }
-                        }
-                        value => {
-                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
-                            value
-                        }
-                    },
-                    other => {
-                        emit.emit(Er::message(me.span(), "expected a name before '=>'"));
-                        other
-                    }
+                // Only a formal declares; other side names use the enclosing scope.
+                Expr::Lambda {
+                    parameter: Box::new(first),
+                    r#return: Box::new(body),
+                    span: span_at(tokens, me.span().start),
                 }
             })
             .boxed()
@@ -1225,7 +1105,21 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             // `@any` is a literal, not a keyword: it is a value, so it parses
             // wherever an atom can.
             token(TokenKind::Any).map(|t| Expr::Any(t.span)),
-            name().map(|(n, span)| Expr::Name(n, span, None)),
+            name()
+                .then(token(TokenKind::Prime).or_not())
+                .map(|((n, span), prime)| {
+                    if prime.is_some() {
+                        // `x'` — the formal reference: the hole a lambda's
+                        // argument fills, and the name the lambda binds.
+                        Expr::Formal {
+                            name: n,
+                            span,
+                            binder: None,
+                        }
+                    } else {
+                        Expr::Name(n, span, None)
+                    }
+                }),
             // One precedence below the atom, so a comma belonging to an
             // enclosing list is never taken by a nested literal's element.
             native_call(tokens, expr.clone()),

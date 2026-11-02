@@ -245,9 +245,16 @@ where
                 .map(|_| self.instantiate_requirement(expected_term, 0))
                 .unwrap_or(expected_term)
         };
-        // Constrain a function's signature, preserving its body; other templates
-        // constrain the whole value layout.
-        let actual_value = self.value_of(actual);
+        // A formal's unify reads its slot identity directly; other values keep
+        // the lazy read required by the lowering contract.
+        let direct = self.formal_actual(actual);
+        let actual_value = if direct {
+            self.module
+                .expr_value_half(actual_term)
+                .expect("a formal's expr has a value half")
+        } else {
+            self.value_of(actual)
+        };
         let actual_value_is_decided = self.actual_value_is_decided(actual_value);
         let expected_states_requirement =
             self.expected_states_requirement(expected_term, expected_ty);
@@ -268,7 +275,7 @@ where
                 }
             }
             self.state[e].term = Some(actual_term);
-            self.state[e].val = self.state[actual].val;
+            self.state[e].val = direct.then_some(actual_value).or(self.state[actual].val);
             self.state[e].ty = self.state[actual].ty;
             return actual_term;
         }
@@ -300,7 +307,7 @@ where
         // The unify's own value is the actual's: the expected side states what
         // the actual must be, not what it is.
         self.state[e].term = Some(actual_term);
-        self.state[e].val = self.state[actual].val;
+        self.state[e].val = direct.then_some(actual_value).or(self.state[actual].val);
         self.state[e].ty = self.state[actual].ty;
         // A statement states the actual attribute: its annotated side names it.
         if self.state[actual].attr.is_none()
@@ -381,8 +388,11 @@ where
             if !seen.insert(current) {
                 continue;
             }
-            if matches!(self.ir[current].kind, ExprKind::Parameter)
-                && self.current_parameters.contains(&current)
+            if matches!(self.ir[current].kind, ExprKind::Formal)
+                && self
+                    .current_parameters
+                    .iter()
+                    .any(|formals| formals.contains(&current))
             {
                 found.push(current);
             }

@@ -34,17 +34,17 @@ fn program(denominator: &str) -> String {
 Row  := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Sums := {{.s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParS := {{.n @any : Int, .in Row}}
-sumsq_raw := (k = ParS) => {{
+sumsq_raw := (k' = ParS) => {{
   i := compute.range k.n
   sums := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
   ((Sums){{.s (compute.write ((compute.Write _){{.to sums, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
 sumsq := compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sums
 Scale := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutY  := {{.y (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParY  := {{.n @any : Int, .in Scale}}
-rescale_raw := (k = ParY) => {{
+rescale_raw := (k' = ParY) => {{
   i := compute.range k.n
   x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
   w := (compute.read ((compute.Read _){{.from k.in.w, .at i}}) : Float)
@@ -55,7 +55,7 @@ rescale_raw := (k = ParY) => {{
 rescale := compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg := {{.n @any : Int, .in All}}
 All  := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
-step := (s = GArg) => {{
+step := (s' = GArg) => {{
   first := (compute.plrun sumsq ((compute.A _){{.n s.n, .I Row{{.x s.in.x}}}}) : Struct)
   compute.plrun rescale ((compute.A _){{.n s.n, .I Scale{{.x s.in.x, .w s.in.w, .s first.s}}}})
 }}

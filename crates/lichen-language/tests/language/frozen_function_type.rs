@@ -22,7 +22,7 @@ fn render_imported_wrapper(module_source: &str, program: &str) -> String {
 #[test]
 fn a_function_template_in_a_frozen_module_is_a_function() {
     let out = render_imported_wrapper(
-        "wrap := f => {I := _x => _; f = (i = (I _) => _); I}",
+        "wrap := f' => {I := _x' => _; f = (i' = (I _) => _); I}",
         "---\nw = import \"wrap.lichen\"\n---\nw.wrap",
     );
     assert!(out.contains("=>"), "the wrapper is a function: {out:?}");
@@ -34,7 +34,7 @@ fn a_function_template_in_a_frozen_module_is_a_function() {
 
     let mut store = PackageStore::<LangProgram>::new();
     let out = lichen_language::run::evaluate_raw(
-        "apply := x = (x : Int => _: Int) => x 1\napply (y : Int => y + y)",
+        "apply := x' = (x' : Int => _: Int) => x 1\napply (y' : Int => y + y)",
         None,
         &mut store,
     )
@@ -45,8 +45,8 @@ fn a_function_template_in_a_frozen_module_is_a_function() {
     );
 
     let out = render_imported_wrapper(
-        "wrap := f => {f = (x => _); f 1}",
-        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y)",
+        "wrap := f' => {f = (x' => _); f 1}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y' : Int => y + y)",
     );
     assert_eq!(
         out, "2: Int",
@@ -54,20 +54,20 @@ fn a_function_template_in_a_frozen_module_is_a_function() {
     );
 
     let out = render_imported_wrapper(
-        "wrap := f => {O := f 1; r := f 1; r = O}",
-        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y)",
+        "wrap := f' => {O := f 1; r := f 1; r = O}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y' : Int => y + y)",
     );
     assert_eq!(out, "2: Int", "an applied result is a reusable template");
 
     let out = render_imported_wrapper(
-        "K := {.native @any, .I @any, .O @any}\nlaunch := k = K => r => {r = k.O}\nwrap := f => x => {I := _x => _; f = (i = (I _) => _); x = (I _); O := f (I _); r := f x; launch (K{.native _, .I I, .O O}) r}",
-        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y) 1",
+        "K := {.native @any, .I @any, .O @any}\nlaunch := k' = K => r' => {r = k.O}\nwrap := f' => x' => {I := _x' => _; f = (i' = (I _) => _); x = (I _); O := f (I _); r := f x; launch (K{.native _, .I I, .O O}) r}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y' : Int => y + y) 1",
     );
     assert_eq!(out, "2: Int", "a struct field carries the output template");
 
     let out = render_imported_wrapper(
-        "wrap := f => x => {I := _x => _; f = (i = (I _) => _); x = (I _); O := f (I _); r := f x; r = O}",
-        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y : Int => y + y) 1",
+        "wrap := f' => x' => {I := _x' => _; f = (i' = (I _) => _); x = (I _); O := f (I _); r := f x; r = O}",
+        "---\nw = import \"wrap.lichen\"\n---\nw.wrap (y' : Int => y + y) 1",
     );
     assert_eq!(
         out, "2: Int",

@@ -56,6 +56,8 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         lambda_depth: 0,
         call_head: None,
         binding_edges: Vec::new(),
+        formals: Vec::new(),
+        formal_bases: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
     // The program is one scope, never popped, so every later statement (and the
@@ -98,6 +100,18 @@ struct Resolver {
     call_head: Option<u32>,
     /// One edge per value read: the binding whose value is being resolved, then the binding it reads.
     binding_edges: Vec<(BinderId, BinderId)>,
+    /// The formals the parameter side being resolved declares, as
+    /// `(name, binder)`.
+    ///
+    /// # Invariant
+    ///
+    /// A lambda takes the formals its own parameter side declared and leaves the
+    /// rest to the enclosing lambda, so a nested closure's formals never reach
+    /// the outer one. One name is one formal: its occurrences and its body
+    /// share the binder.
+    formals: Vec<(String, BinderId)>,
+    /// The base of each active parameter side.
+    formal_bases: Vec<usize>,
 }
 
 /// A block-wide binding whose value is being resolved right now.
@@ -358,26 +372,60 @@ impl Resolver {
             }
             Expr::Lambda {
                 parameter,
-                parameter_binder,
-                parameter_type,
-                parameter_perspective,
                 r#return,
                 ..
             } => {
-                let id = self.next_binder;
-                self.next_binder += 1;
-                *parameter_binder = Some(id);
-                self.scopes.push(HashMap::from([(parameter.clone(), id)]));
-                if let Some(t) = parameter_type {
-                    self.resolve_expr(t);
-                }
-                if let Some(p) = parameter_perspective {
-                    self.resolve_expr(p);
+                // Resolve the side in the enclosing scope; only `x'` declares here.
+                self.formal_bases.push(self.formals.len());
+                self.resolve_expr(parameter);
+                let base = self.formal_bases.pop().unwrap_or(self.formals.len());
+                let formals = self.formals.split_off(base);
+                // The declared formals are the lambda's own names: they shadow
+                // the enclosing ones in the body.
+                let frame: HashMap<String, BinderId> = formals.into_iter().collect();
+                let declared = !frame.is_empty();
+                if declared {
+                    self.scopes.push(frame);
                 }
                 self.lambda_depth += 1;
+                // Suspend outer bases: a body is outside every parameter side.
+                let bases = std::mem::take(&mut self.formal_bases);
                 self.resolve_expr(r#return);
+                self.formal_bases = bases;
                 self.lambda_depth -= 1;
-                self.scopes.pop();
+                if declared {
+                    self.scopes.pop();
+                }
+            }
+            // `x'` — a formal reference: the hole the argument fills, and the
+            // name the lambda binds in its body.
+            Expr::Formal { name, span, binder } => {
+                let Some(base) = self.formal_bases.last().copied() else {
+                    // A prime outside a parameter side names no parameter: the
+                    // lambda that would own it does not exist.
+                    *binder = None;
+                    self.diagnostics.push(Diag::new(
+                        Stage::Resolve,
+                        *span,
+                        formal_outside_parameter_side(name),
+                    ));
+                    return;
+                };
+                // Reuse one binder for repeated occurrences of the same name.
+                let existing = self.formals[base..]
+                    .iter()
+                    .find(|(declared, _)| declared == name)
+                    .map(|(_, id)| *id);
+                let id = match existing {
+                    Some(id) => id,
+                    None => {
+                        let id = self.next_binder;
+                        self.next_binder += 1;
+                        self.formals.push((name.clone(), id));
+                        id
+                    }
+                };
+                *binder = Some(id);
             }
             Expr::Apply {
                 function, argument, ..
@@ -625,6 +673,21 @@ fn binding_cycle(name: &str) -> String {
     )
 }
 
+/// The formal-outside-a-parameter-side refusal.
+///
+/// # Invariant
+///
+/// A formal reference names a parameter of the lambda whose parameter side
+/// declares it, so a prime outside every parameter side has no lambda to
+/// belong to and is refused rather than bound by an enclosing one.
+fn formal_outside_parameter_side(name: &str) -> String {
+    format!(
+        "`{name}'` is a formal reference, and a formal reference belongs to the \
+         parameter side of the function that declares it: write it on the left of \
+         `=>`, or drop the mark and use the name as an ordinary reference."
+    )
+}
+
 /// The self-reference refusal, measured in docs/notes/self-referential-binding-overflow.md §11.
 fn self_referential_binding(name: &str) -> String {
     format!(
@@ -633,6 +696,6 @@ fn self_referential_binding(name: &str) -> String {
          the value would be its own input. Write the rebinding with `let`, which compiles the \
          value before the name enters scope, so `let {name} = …` reads the **outer** `{name}` and \
          binds a new one — recursion is spelled the same way, with the reference under a `=>` \
-         parameter (`f = n => … f (n - 1)`), which is a call rather than a self-reference."
+         parameter (`f = n' => … f (n - 1)`), which is a call rather than a self-reference."
     )
 }

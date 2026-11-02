@@ -173,7 +173,7 @@ where
             ExprKind::Annotation { .. } => Vec::new(),
             // Leaf kinds; an `ErrorBlock` carries no children to combine.
             ExprKind::Literal(_)
-            | ExprKind::Parameter
+            | ExprKind::Formal
             | ExprKind::Placeholder
             | ExprKind::ErrorBlock
             | ExprKind::Static { .. } => Vec::new(),
@@ -351,7 +351,9 @@ where
         let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
             return None;
         };
-        let parameter = self.current_parameters.last().copied()?;
+        let parameter = self.current_parameters.last()?.iter().copied().find(|formal| {
+            matches!(self.ir[argument].kind, ExprKind::NamedField { container, .. } if container == *formal)
+        })?;
         match self.ir[argument].kind {
             ExprKind::NamedField { container, .. } if container == parameter => {
                 let record = self.state[argument].term?;
@@ -448,7 +450,7 @@ where
         }
         // **A parameter's requirement is replayed at the apply**: the cell is a
         // hole (`docs/notes/array-attribute-view.md`).
-        if matches!(self.ir[argument].kind, ExprKind::Parameter)
+        if matches!(self.ir[argument].kind, ExprKind::Formal)
             && let Some(function) = self.current_function()
         {
             self.deferred_requirements

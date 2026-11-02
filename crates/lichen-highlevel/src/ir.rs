@@ -134,7 +134,7 @@ impl From<PrefixOp> for TypeOperator {
 ///
 /// # Invariant
 /// References are pre-resolved: a use of a parameter *is* the
-/// [`ExprKind::Parameter`]'s own `ExprId`, so the IR carries no name strings.
+/// [`ExprKind::Formal`]'s own `ExprId`, so the IR carries no name strings.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ExprId(pub u32);
 
@@ -362,9 +362,16 @@ pub enum ExprKind<L> {
     /// The literal builds its value and type nodes through the curated
     /// [`Ctx`](crate::program::Ctx), never raw lowlevel nodes.
     Literal(L),
-    /// A function parameter, or a `let`-bound name.
-    Parameter,
-    /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
+    /// A **formal reference**: the hole a lambda's argument fills, and the
+    /// name the lambda binds in its body (`x'`).
+    ///
+    /// # Invariant
+    ///
+    /// A formal leaf is the **only** thing a parameter side declares: the
+    /// leaves it holds are this function's own formals, so a check that
+    /// predeclares them must read this kind and no other.
+    Formal,
+    /// `{ parameter, return }` — one arbitrary parameter expression and body.
     ///
     /// # Invariant
     /// `parent` is the enclosing function's IR node — it keeps sibling template
@@ -372,20 +379,8 @@ pub enum ExprKind<L> {
     /// rides here because the node is allocated after its body. `None` for a
     /// top-level function.
     Function {
+        /// The parameter side: the domain the argument is unified with.
         parameter: ExprId,
-        /// The annotated parameter's type (`x : T => e`), compiled *in body scope*.
-        ///
-        /// # Invariant
-        /// The parameter's type slot still performs the argument check at each apply,
-        /// so compiling in body scope changes what the body sees, not what is checked.
-        parameter_type: Option<ExprId>,
-        /// The annotated parameter's attribute (`x # n => e`), compiled in body
-        /// scope like `parameter_type`.
-        ///
-        /// # Invariant
-        /// This is the optimization for the `x # n => e` → `x => { x # n; e }` desugar:
-        /// an unannotated body statement would otherwise materialize a block.
-        parameter_attribute: Option<ExprId>,
         r#return: ExprId,
         parent: Option<ExprId>,
         /// The `@loop` marker, carried from the source binding onto the `Function` node
@@ -613,20 +608,16 @@ impl<L> ExprKind<L> {
         let mut push = |id: ExprId| out.push(id);
         match self {
             ExprKind::Literal(_)
-            | ExprKind::Parameter
+            | ExprKind::Formal
             | ExprKind::Placeholder
             | ExprKind::ErrorBlock
             | ExprKind::Static { .. } => {}
             ExprKind::Function {
                 parameter,
-                parameter_type,
-                parameter_attribute,
                 r#return,
                 ..
             } => {
                 push(*parameter);
-                push_opt(parameter_type, &mut push);
-                push_opt(parameter_attribute, &mut push);
                 push(*r#return);
             }
             ExprKind::Apply { function, argument } => {
@@ -707,7 +698,7 @@ impl<L> ExprKind<L> {
         };
         match self {
             ExprKind::Literal(_)
-            | ExprKind::Parameter
+            | ExprKind::Formal
             | ExprKind::Placeholder
             | ExprKind::ErrorBlock
             | ExprKind::Static { .. }
@@ -721,19 +712,11 @@ impl<L> ExprKind<L> {
             | ExprKind::Prefix { .. } => {}
             ExprKind::Function {
                 parameter,
-                parameter_type,
-                parameter_attribute,
                 r#return,
                 parent,
                 ..
             } => {
                 fix(parameter);
-                if let Some(parameter_type) = parameter_type {
-                    fix(parameter_type);
-                }
-                if let Some(parameter_attribute) = parameter_attribute {
-                    fix(parameter_attribute);
-                }
                 if let Some(parent) = parent {
                     fix(parent);
                 }

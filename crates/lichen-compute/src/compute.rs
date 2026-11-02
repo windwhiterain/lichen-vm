@@ -5552,13 +5552,13 @@ where
                 None => return Ok(None),
             },
         }
+        current = target_node;
         // The innermost read's target is the parameter's value; **the test is the equality
         // class**.
         if module.class_root(target_node) == module.class_root(param_value_of(module, param_expr)?)
         {
             break;
         }
-        current = target_node;
     }
     if steps.is_empty() {
         return Ok(None);
@@ -7046,7 +7046,7 @@ where
     }
     // A replay answers with its source call's node; a body call always appends one.
     let operator = module.current_operator_node();
-    let origin = operator.and_then(|operator| module.node_origin(operator));
+    let origin = operator.and_then(|operator| replay_origin(module, operator));
     let replay = operator.is_some_and(|operator| module.node_owner(operator).is_none());
     let placed = match graph::record_dispatch(
         fragment, backend, extent, &scalars, &inputs, origin, replay,
@@ -7140,6 +7140,20 @@ where
         Some(root) => module.node_value(AnyNodeId::Dynamic(root)),
         None => None,
     }
+}
+
+fn replay_origin<P>(module: &Module<P>, operator: NodeId) -> Option<NodeId>
+where
+    P: Program,
+{
+    let mut current = module.node_origin(operator)?;
+    for _ in 0..16 {
+        match module.node_origin(current) {
+            Some(origin) if origin != current => current = origin,
+            _ => break,
+        }
+    }
+    Some(current)
 }
 
 /// Record the actual placeholder each constant projection of a graph function's parameter reads.

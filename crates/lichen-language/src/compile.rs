@@ -507,34 +507,16 @@ impl Compiler {
             // A recovered parse error: an opaque [`ExprKind::ErrorBlock`], not a `_`.
             Expr::Err { start, .. } => self.alloc(ExprKind::ErrorBlock, start),
             Expr::Lambda {
-                parameter: _,
-                parameter_span,
-                parameter_binder,
-                parameter_type,
-                parameter_perspective,
+                parameter,
                 r#return,
                 span,
+                ..
             } => {
                 let parent = self.fn_parents.last().copied();
                 // Reserved before the parameter and body compile (see `Self::fn_parents`).
                 let function_id = self.alloc(ExprKind::Placeholder, span);
-                let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
-                // A `x # n` parameter carries the perspective tail in its static schema.
-                if parameter_perspective.is_some() {
-                    self.ir.set_schema(
-                        parameter_id,
-                        Schema {
-                            tail: vec![LangAttr::Perspective(Perspective)],
-                        },
-                    );
-                }
-                // The parameter is the binder the body and its own annotation resolve to.
-                let binder = parameter_binder.expect("a resolved lambda parameter");
-                self.set_binder(binder, parameter_id);
-                // The type and attribute compile in scope too: either may name the parameter.
-                let parameter_type = parameter_type.as_ref().map(|t| self.compile_expr(t));
-                let parameter_attribute =
-                    parameter_perspective.as_ref().map(|p| self.compile_expr(p));
+                // Compile the parameter at the lambda's own parent level.
+                let side = self.compile_expr(parameter);
                 // Pushed for the body only (see `Self::fn_parents`).
                 let body = {
                     self.fn_parents.push(function_id);
@@ -545,9 +527,7 @@ impl Compiler {
                 self.ir.set_kind(
                     function_id,
                     ExprKind::Function {
-                        parameter: parameter_id,
-                        parameter_type,
-                        parameter_attribute,
+                        parameter: side,
                         r#return: body,
                         parent,
                         // Stamped by the binding that owns this lambda, at its transplant.
@@ -555,6 +535,28 @@ impl Compiler {
                     },
                 );
                 function_id
+            }
+            // `x'` is `{ x = _; x }`: the unify's value is the shared formal.
+            Expr::Formal { span, binder, .. } => {
+                let Some(binder) = *binder else {
+                    // A refused formal lowers to the same inert `ErrorBlock` an
+                    // unresolved name does.
+                    return self.alloc(ExprKind::ErrorBlock, span);
+                };
+                // One name is one formal: its occurrences share the node, so a
+                // repeated `x'` is one parameter and not two.
+                let formal = match self.binder_to_expr.get(binder).copied().flatten() {
+                    Some(existing) => existing,
+                    None => {
+                        let formal = self.alloc(ExprKind::Formal, span);
+                        self.set_binder(binder, formal);
+                        formal
+                    }
+                };
+                // `x = _`: the formal unified with a fresh placeholder, and the
+                // formal itself as the expression's value.
+                let placeholder = self.alloc(ExprKind::Placeholder, span);
+                self.alloc_unify(formal, placeholder, span)
             }
             Expr::Apply {
                 function,

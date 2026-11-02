@@ -33,19 +33,19 @@ fn fold_over(combine: &str, identity: &str) -> String {
 In  := {.b (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Float, .length COUNT}))}
 Par := {.n @any : Int, .in In}
-reduction := (k = Par) => {
+reduction := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Float, .length k.n})
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, COMBINE ~ "combine")
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value fold (i + 1, IDENTITY ~ "identity")}))})
 }
 kernel := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
-step := (s = Par) => {
+step := (s' = Par) => {
   compute.plrun kernel ((compute.A _){.n s.n, .I In{.b s.in.b}}) : Struct
 }
 built := compute.graph step
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Float, .length COUNT})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value (int2float i + 1.0)}))})

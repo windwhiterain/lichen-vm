@@ -142,22 +142,18 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             }
         }
         Expr::Lambda {
-            parameter_binder,
-            parameter_type,
-            parameter_perspective,
+            parameter,
             r#return,
             ..
         } => {
-            if let Some(binder) = parameter_binder {
+            walk(parameter, deps);
+            walk(r#return, deps);
+        }
+        // A formal reference declares the binder the lambda binds in its body.
+        Expr::Formal { binder, .. } => {
+            if let Some(binder) = binder {
                 deps.declares.push(*binder);
             }
-            if let Some(ty) = parameter_type {
-                walk(ty, deps);
-            }
-            if let Some(perspective) = parameter_perspective {
-                walk(perspective, deps);
-            }
-            walk(r#return, deps);
         }
         Expr::Apply {
             function, argument, ..

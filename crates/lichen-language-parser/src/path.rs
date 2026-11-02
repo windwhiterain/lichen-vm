@@ -92,22 +92,17 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
         | Expr::Str(..)
         | Expr::TypeConst(..)
         | Expr::Name(..)
+        | Expr::Formal { .. }
         | Expr::Placeholder(..)
         | Expr::Any(..)
         | Expr::Err { .. } => {}
         Expr::Lambda {
-            parameter_type,
-            parameter_perspective,
+            parameter,
             r#return,
             ..
         } => {
-            if let Some(ty) = parameter_type {
-                push_index(&mut out, 0, ty);
-            }
-            if let Some(perspective) = parameter_perspective {
-                push_index(&mut out, 1, perspective);
-            }
-            push_index(&mut out, 2, r#return);
+            push_index(&mut out, 0, parameter);
+            push_index(&mut out, 1, r#return);
         }
         Expr::Apply {
             function, argument, ..

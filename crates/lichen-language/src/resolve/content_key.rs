@@ -232,19 +232,22 @@ impl KeyWriter<'_> {
             // position-only.
             Expr::Err { .. } => self.u(4),
             Expr::Lambda {
-                parameter_binder,
-                parameter_type,
-                parameter_perspective,
+                parameter,
                 r#return,
                 ..
             } => {
                 self.u(5);
-                self.opt_binder(parameter_binder);
-                self.opt_expr(parameter_type);
-                self.u(6);
-                self.opt_expr(parameter_perspective);
+                // The **complete** parameter side: its formals' names and
+                // binders are part of it, so a changed formal changes the key.
+                self.expr(parameter);
                 self.u(7);
                 self.expr(r#return);
+            }
+            // A formal reference: its name and its binder.
+            Expr::Formal { name, binder, .. } => {
+                self.u(40);
+                self.str(name);
+                self.opt_binder(binder);
             }
             Expr::Apply {
                 function, argument, ..

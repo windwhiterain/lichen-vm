@@ -45,9 +45,10 @@ fn wrapped(ir: &IR<LangAttr>) -> ExprId {
 }
 
 #[test]
-fn a_use_is_the_binders_own_id() {
-    // x => x — the body's use is the parameter itself.
-    let ir = compile_ok("x => x");
+fn a_use_is_the_formals_own_id() {
+    // x' => x — the body's use is the formal itself, and the parameter side
+    // is the formal's grouped expression.
+    let ir = compile_ok("x' => x");
     let ExprKind::Function {
         parameter,
         r#return,
@@ -56,14 +57,20 @@ fn a_use_is_the_binders_own_id() {
     else {
         panic!("expected a function")
     };
-    assert_eq!(r#return, parameter, "the use is the parameter's own id");
-    assert!(matches!(kind(&ir, parameter), ExprKind::Parameter));
+    assert!(
+        matches!(kind(&ir, r#return), ExprKind::Formal),
+        "the use is the formal's own id"
+    );
+    assert!(
+        matches!(kind(&ir, parameter), ExprKind::Unify { .. }),
+        "the parameter side is the formal's grouped expression"
+    );
 }
 
 #[test]
 fn let_is_just_application() {
     // (x => x) 5 — a desugared binding needs no special form.
-    let ir = compile_ok("(x => x) 5");
+    let ir = compile_ok("(x' => x) 5");
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
         panic!("expected an apply")
     };
@@ -76,8 +83,8 @@ fn let_is_just_application() {
 
 #[test]
 fn shadowing_resolves_to_the_inner_binder() {
-    // x => (x => x) — the inner use refers to the inner parameter.
-    let ir = compile_ok("x => (x => x)");
+    // x' => (x' => x) — the inner use refers to the inner formal.
+    let ir = compile_ok("x' => (x' => x)");
     let ExprKind::Function {
         r#return: outer_body,
         ..
@@ -85,20 +92,18 @@ fn shadowing_resolves_to_the_inner_binder() {
     else {
         panic!("expected a function")
     };
-    let ExprKind::Function {
-        parameter: inner,
-        r#return,
-        ..
-    } = kind(&ir, outer_body)
-    else {
+    let ExprKind::Function { r#return, .. } = kind(&ir, outer_body) else {
         panic!("expected the inner function")
     };
-    assert_eq!(r#return, inner, "the use resolves to the inner binder");
+    assert!(
+        matches!(kind(&ir, r#return), ExprKind::Formal),
+        "the use resolves to the inner formal"
+    );
 }
 
 #[test]
 fn every_expression_carries_a_span() {
-    let tokens = lex("x => x").tokens;
+    let tokens = lex("x' => x").tokens;
     let mut ast = parse(&tokens).program;
     let (ir, spans, _) = compile(&mut ast);
     assert_eq!(spans.len(), ir.expr.len(), "one span entry per expression");
@@ -110,10 +115,10 @@ fn every_expression_carries_a_span() {
 
 #[test]
 fn an_unresolved_name_is_a_resolve_diagnostic() {
-    let err = compile_err("x => y");
+    let err = compile_err("x' => y");
     assert_eq!(err.stage, Stage::Resolve);
     assert_eq!(err.message, "unresolved name 'y'");
-    assert_eq!(err.span, Some((1, 6)));
+    assert_eq!(err.span, Some((1, 7)));
 }
 
 #[test]
@@ -130,7 +135,7 @@ fn an_unresolved_name_near_an_in_scope_name_suggests_it() {
 #[test]
 fn a_type_position_underscore_compiles_to_a_placeholder() {
     // x => x : _ — the annotation's type is the placeholder kind.
-    let ir = compile_ok("x => x : _");
+    let ir = compile_ok("x' => x : _");
     let ExprKind::Function { r#return, .. } = kind(&ir, ir.root) else {
         panic!("expected a function")
     };
@@ -172,18 +177,16 @@ fn a_block_compiles_to_its_final_expression() {
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // The same holds through a lambda body: x => {y := x; y} is the
-    // identity function, whose return is the parameter itself.
-    let ir = compile_ok("x => {y := x; y}");
-    let ExprKind::Function {
-        parameter,
-        r#return,
-        ..
-    } = kind(&ir, ir.root)
-    else {
+    // The same holds through a lambda body: x' => {y := x; y} is the
+    // identity function, whose return is the formal itself.
+    let ir = compile_ok("x' => {y := x; y}");
+    let ExprKind::Function { r#return, .. } = kind(&ir, ir.root) else {
         panic!("expected a function")
     };
-    assert_eq!(r#return, parameter, "the block is the parameter's own id");
+    assert!(
+        matches!(kind(&ir, r#return), ExprKind::Formal),
+        "the block's final expression is the formal's own id"
+    );
 }
 
 #[test]
@@ -241,29 +244,36 @@ fn a_statement_expression_is_a_statement_root() {
 }
 
 #[test]
-fn an_annotated_parameter_rides_the_function() {
-    // x : Int => x — the annotation is the parameter's in-scope type.
-    let ir = compile_ok("x : Int => x");
+fn an_annotated_parameter_side_rides_the_function() {
+    // x' : Int => x — the annotation is on the parameter side, and it is an
+    // ordinary annotation over the formal.
+    let ir = compile_ok("x' : Int => x");
     let ExprKind::Function {
         parameter,
-        parameter_type,
         r#return,
         ..
     } = kind(&ir, ir.root)
     else {
         panic!("expected a function")
     };
-    assert_eq!(r#return, parameter, "the identity's body is the parameter");
+    let ExprKind::Annotation { value, r#type, .. } = kind(&ir, parameter) else {
+        panic!("expected an annotated parameter side")
+    };
+    let ExprKind::Unify { actual, .. } = kind(&ir, value) else {
+        panic!("expected the formal's grouped expression")
+    };
+    assert!(
+        matches!(kind(&ir, actual), ExprKind::Formal),
+        "the annotation is over the formal"
+    );
     assert!(matches!(
-        kind(&ir, parameter_type.expect("the annotated type")),
+        kind(&ir, r#type.expect("the annotated type")),
         ExprKind::Literal(HighProgramLiteral::IntType(IntTypeLit))
     ));
-    // An unannotated lambda carries no parameter type.
-    let ir = compile_ok("x => x");
-    let ExprKind::Function { parameter_type, .. } = kind(&ir, ir.root) else {
-        panic!("expected a function")
-    };
-    assert!(parameter_type.is_none());
+    assert!(
+        matches!(kind(&ir, r#return), ExprKind::Formal),
+        "the identity's body is the formal"
+    );
 }
 
 #[test]
@@ -280,17 +290,17 @@ fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
 #[test]
 fn type_of_is_an_ordinary_binding() {
     // No `type_of` form: the standard library defines it as a plain lambda.
-    let ir = compile_ok("type_of := x => {t := _; x: t; t}\ntype_of");
-    let ExprKind::Function { parameter_type, .. } = kind(&ir, ir.root) else {
-        panic!("the standard library's type_of is an ordinary lambda")
-    };
-    assert!(parameter_type.is_none(), "its parameter is generic");
+    let ir = compile_ok("type_of := x' => {t := _; x: t; t}\ntype_of");
+    assert!(
+        matches!(kind(&ir, ir.root), ExprKind::Function { .. }),
+        "the standard library's type_of is an ordinary lambda"
+    );
 }
 
 #[test]
 fn a_type_of_use_is_an_ordinary_application() {
     // A spaced paren is an argument; the adjacent `type_of(1)` is a slot read.
-    let source = "type_of := x => {t := _; x: t; t}\n";
+    let source = "type_of := x' => {t := _; x: t; t}\n";
     let ir = compile_ok(&format!("{source}type_of (1)"));
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
         panic!("expected an apply")

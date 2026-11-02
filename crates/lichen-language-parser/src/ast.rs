@@ -111,16 +111,35 @@ pub enum Expr {
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).
     Any(Span),
-    /// `x => e`, optionally annotated (`x : T => e`, `x # n => e`).
+    /// `e => e` — a lambda over an arbitrary parameter expression.
+    ///
+    /// # Invariant
+    ///
+    /// The parameter side is an ordinary expression: a name in it is an
+    /// outer-scope reference, and only a formal reference (`x'`) declares a
+    /// parameter of this lambda.
     Lambda {
-        parameter: String,
-        parameter_span: Span,
-        /// The parameter's own `BinderId`; unset by the parser.
-        parameter_binder: Option<BinderId>,
-        parameter_type: Option<Box<Expr>>,
-        parameter_perspective: Option<Box<Expr>>,
+        /// The parameter side: the domain the argument is unified with.
+        parameter: Box<Expr>,
         r#return: Box<Expr>,
         span: Span,
+    },
+    /// `x'` — a **formal reference**: the hole a lambda's argument fills, and
+    /// the name the lambda binds in its body.
+    ///
+    /// # Invariant
+    ///
+    /// A formal reference is the only way a lambda declares a parameter: the
+    /// parameter side's other names are outer-scope expressions
+    /// (`docs/language-spec.md` §Syntax). Its meaning is the grouped
+    /// expression `x = _; x` — the formal unified with a fresh placeholder,
+    /// yielding the formal itself (`docs/language-spec.md` §Syntax, sugar).
+    Formal {
+        /// The parameter's name; the lambda binds it in its body.
+        name: String,
+        span: Span,
+        /// The formal's own `BinderId`; unset by the parser.
+        binder: Option<BinderId>,
     },
     /// `f x` — application; a glued `(` is a read, not an argument (see
     /// [`Expr::FieldRead`]).
@@ -379,6 +398,7 @@ impl Expr {
             Expr::Placeholder(s) => *s,
             Expr::Any(s) => *s,
             Expr::Lambda { span, .. } => *span,
+            Expr::Formal { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
             Expr::Unify { span, .. } => *span,
             Expr::TemplateUnify { span, .. } => *span,

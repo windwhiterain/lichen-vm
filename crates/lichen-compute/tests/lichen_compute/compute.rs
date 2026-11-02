@@ -39,7 +39,7 @@ fn parallel_rejects_an_unknown_backend_name() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
@@ -70,7 +70,7 @@ fn parallel_rejects_a_non_string_backend() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
@@ -94,7 +94,7 @@ fn jit_then_launch_scalar() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x => x + 1)
+k := compute.jit (x' => x + 1)
 compute.launch k 5
 "#);
     assert_eq!(
@@ -115,7 +115,7 @@ fn jit_multi_op_signature() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x => x + 1 + 2)
+k := compute.jit (x' => x + 1 + 2)
 compute.launch k 5
 "#);
     assert_eq!(
@@ -154,7 +154,7 @@ fn launch_rejects_a_non_kernel() {
 ---
   compute = import "compute.lichen"
 ---
-compute.launch (x => x + 1) 5
+compute.launch (x' => x + 1) 5
 "#,
     );
     assert!(
@@ -170,7 +170,7 @@ fn jit_multi_arg_tuple() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
 compute.launch k (5, 3)
 "#);
     assert_eq!(
@@ -190,7 +190,7 @@ fn jit_multi_arg_ternary() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = (@any : Int, @any : Int, @any : Int) => p(0) + p(1) + p(2))
+k := compute.jit (p' = (@any : Int, @any : Int, @any : Int) => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
 "#);
     assert_eq!(
@@ -210,7 +210,7 @@ fn jit_multi_arg_sub() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0) - p(1))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0) - p(1))
 compute.launch k (10, 3)
 "#);
     assert_eq!(common::usize_of(&value), 7, "tuple subtraction produced 7");
@@ -228,7 +228,7 @@ fn launch_rejects_wrong_arity() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
 compute.launch k 5
 "#,
     );
@@ -246,7 +246,7 @@ fn jit_closes_over_constant() {
   compute = import "compute.lichen"
 ---
 a := 42
-k := compute.jit (x => x + a)
+k := compute.jit (x' => x + a)
 compute.launch k 1
 "#);
     assert_eq!(
@@ -268,7 +268,7 @@ fn jit_multi_arg_all_ops() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = (@any : Int, @any : Int) => (p(0) + p(1)) - (p(0) <= p(1)))
+k := compute.jit (p' = (@any : Int, @any : Int) => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
 "#);
     assert_eq!(common::usize_of(&value), 8, "mixed-op tuple produced 8");
@@ -284,12 +284,12 @@ fn jit_lowers_the_arithmetic_comparison_and_bitwise_operators() {
     // behind another's result.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k1 := compute.jit (x => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
-k2 := compute.jit (p = (@any : Int, @any : Int) => p(0) > p(1))
-k3 := compute.jit (p = (@any : Int, @any : Int) => p(0) >= p(1))
-k4 := compute.jit (p = (@any : Int, @any : Int) => p(0) != p(1))
-k5 := compute.jit (p = (@any : Int, @any : Int) => (p(0) < p(1)) | (p(0) == p(1)))
-k6 := compute.jit (p = (@any : Int, @any : Int) => (p(0) > p(1)) ^ (p(0) == p(1)))
+k1 := compute.jit (x' => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
+k2 := compute.jit (p' = (@any : Int, @any : Int) => p(0) > p(1))
+k3 := compute.jit (p' = (@any : Int, @any : Int) => p(0) >= p(1))
+k4 := compute.jit (p' = (@any : Int, @any : Int) => p(0) != p(1))
+k5 := compute.jit (p' = (@any : Int, @any : Int) => (p(0) < p(1)) | (p(0) == p(1)))
+k6 := compute.jit (p' = (@any : Int, @any : Int) => (p(0) > p(1)) ^ (p(0) == p(1)))
 (compute.launch k1 4, compute.launch k2 (5, 3), compute.launch k3 (3, 3), compute.launch k4 (5, 3), compute.launch k5 (5, 5), compute.launch k6 (5, 5))
 "#);
     let elements = common::array_values(&module, &value);
@@ -325,7 +325,7 @@ fn jit_conditional_then() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x => if x <= 3 then 10 else 20)
+k := compute.jit (x' => if x <= 3 then 10 else 20)
 compute.launch k 2
 "#);
     assert_eq!(
@@ -345,7 +345,7 @@ fn jit_conditional_else() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x => if x <= 3 then 10 else 20)
+k := compute.jit (x' => if x <= 3 then 10 else 20)
 compute.launch k 5
 "#);
     assert_eq!(
@@ -366,7 +366,7 @@ fn jit_nested_tuple_domain() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (p = ((@any : Int, @any : Int), @any : Int) => p(0)(0) + p(0)(1) + p(1))
+k := compute.jit (p' = ((@any : Int, @any : Int), @any : Int) => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
     // A scalar kernel runs in the wasm interpreter, so the answer is the program's own.
@@ -388,8 +388,8 @@ fn jit_cross_kernel_call() {
 ---
   compute = import "compute.lichen"
 ---
-k0 := compute.jit ((y : Int) => y + 1)
-k1 := compute.jit ((x : Int) => k0 x)
+k0 := compute.jit ((y' : Int) => y + 1)
+k1 := compute.jit ((x' : Int) => k0 x)
 compute.launch k1 6
 "#);
     assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
@@ -408,8 +408,8 @@ fn jit_an_operator_inside_a_cross_kernel_argument_is_emitted() {
 ---
   compute = import "compute.lichen"
 ---
-k0 := compute.jit ((y : Int) => y + 1)
-k1 := compute.jit ((x : Int) => k0 (x + 1))
+k0 := compute.jit ((y' : Int) => y + 1)
+k1 := compute.jit ((x' : Int) => k0 (x + 1))
 compute.launch k1 5
 "#);
     assert_eq!(common::usize_of(&value), 7, "k0 (x + 1) with x = 5");
@@ -421,8 +421,8 @@ fn jit_cross_kernel_subexpr() {
     // call:   launch k1 5 = k0(5) + 1 = 7.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (y : Int => y + 1)
-k1 := compute.jit (x : Int => k0 (x) + 1)
+k0 := compute.jit (y' : Int => y + 1)
+k1 := compute.jit (x' : Int => k0 (x) + 1)
 compute.launch k1 5
 "#);
     assert_eq!(common::usize_of(&value), 7, "subexpr produced 7");
@@ -434,8 +434,8 @@ fn jit_inline_lichen_function() {
     // graph.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-helper := y => y + 2
-k := compute.jit (x => helper x + 1)
+helper := y' => y + 2
+k := compute.jit (x' => helper x + 1)
 compute.launch k 5
 "#);
     assert_eq!(common::usize_of(&value), 8, "inline produced 8");
@@ -447,8 +447,8 @@ fn jit_cross_kernel_wrapper() {
     // cell.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit ((y : Int) => y + 1)
-k1 := compute.jit ((x : Int) => compute.launch k0 x)
+k0 := compute.jit ((y' : Int) => y + 1)
+k1 := compute.jit ((x' : Int) => compute.launch k0 x)
 compute.launch k1 6
 "#);
     assert_eq!(common::usize_of(&value), 7, "wrapper produced 7");
@@ -459,8 +459,8 @@ fn jit_cross_kernel_tuple_argument() {
     // A bare kernel apply states no signature, so the caller's `x` is annotated.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
-k1 := compute.jit (x : Int => k0 (x, 1))
+k0 := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
+k1 := compute.jit (x' : Int => k0 (x, 1))
 compute.launch k1 5
 "#);
     assert_eq!(
@@ -475,8 +475,8 @@ fn jit_cross_kernel_passes_the_parameter_through() {
     // A whole-parameter read passes through as the callee's own locals.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) - p(1))
-k1 := compute.jit (q = (@any : Int, @any : Int) => k0 q)
+k0 := compute.jit (p' = (@any : Int, @any : Int) => p(0) - p(1))
+k1 := compute.jit (q' = (@any : Int, @any : Int) => k0 q)
 compute.launch k1 (9, 4)
 "#);
     assert_eq!(
@@ -492,8 +492,8 @@ fn jit_cross_kernel_passes_a_sub_tuple_through() {
     // locals from the read's start.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p = ((@any : Int, @any : Int), @any : Int) => p(0)(0) - p(0)(1) + p(1))
-k1 := compute.jit (r = (@any : Int, ((@any : Int, @any : Int), @any : Int)) => k0 r(1))
+k0 := compute.jit (p' = ((@any : Int, @any : Int), @any : Int) => p(0)(0) - p(0)(1) + p(1))
+k1 := compute.jit (r' = (@any : Int, ((@any : Int, @any : Int), @any : Int)) => k0 r(1))
 compute.launch k1 (100, ((9, 4), 5))
 "#);
     assert_eq!(
@@ -509,8 +509,8 @@ fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     //   launch k1 5 = k0(5, 1) = 6.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
-k1 := compute.jit (x : Int => compute.launch k0 (x, 1))
+k0 := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
+k1 := compute.jit (x' : Int => compute.launch k0 (x, 1))
 compute.launch k1 5
 "#);
     assert_eq!(
@@ -525,9 +525,9 @@ fn jit_inline_nested_function() {
     // The deep pass reduces a nested inline call through to the leaf arithmetic.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-a := y => y + 1
-b := y => a y + 1
-k := compute.jit (x => b x + 1)
+a := y' => y + 1
+b := y' => a y + 1
+k := compute.jit (x' => b x + 1)
 compute.launch k 5
 "#);
     assert_eq!(common::usize_of(&value), 8, "nested inline produced 8");
@@ -539,7 +539,7 @@ fn a_kernel_value_and_type_render_by_name() {
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (y : Int => y + y)
+k := compute.jit (y' : Int => y + y)
 k
 "#,
     );
@@ -554,7 +554,7 @@ fn jit_tuple_codomain_returns_several_values() {
     // The mirror of the multi-arity domain: one wasm stack slot per leaf.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(1)))
+k := compute.jit (p' = (@any : Int, @any : Int) => (p(0), p(1)))
 compute.launch k (5, 3)
 "#);
     let elements = common::array_values(&module, &value);
@@ -567,7 +567,7 @@ fn jit_tuple_codomain_computes_each_leaf() {
     // Each leaf is its own scalar body, so a leaf read from the wrong stack slot shows.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(0) + p(1)))
+k := compute.jit (p' = (@any : Int, @any : Int) => (p(0), p(0) + p(1)))
 compute.launch k (5, 3)
 "#);
     let elements = common::array_values(&module, &value);
@@ -580,7 +580,7 @@ fn jit_tuple_codomain_elements_are_indexable() {
     // The returned tuple is an ordinary array value; a read addresses a leaf.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => (p(0) + 10, p(1) + 100))
+k := compute.jit (p' = (@any : Int, @any : Int) => (p(0) + 10, p(1) + 100))
 r := (compute.launch k (2, 3) = (@any : Int, @any : Int))
 (r(0), r(1))
 "#);
@@ -598,7 +598,7 @@ fn jit_three_value_codomain_returns_three_values() {
     // A distinct wasm signature from the two-value one, keyed on the arity *expr*.
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x : Int => (x, x + 1, x + 2))
+k := compute.jit (x' : Int => (x, x + 1, x + 2))
 compute.launch k 7
 "#);
     let elements = common::array_values(&module, &value);
@@ -613,7 +613,7 @@ fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // as `k.O`.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => (p(0) - p(1), p(0) + p(1)))
+k := compute.jit (p' = (@any : Int, @any : Int) => (p(0) - p(1), p(0) + p(1)))
 compute.call k (10, 4)
 "#);
     assert_eq!(
@@ -635,8 +635,8 @@ fn jit_refuses_a_cross_kernel_call_to_a_multi_value_kernel() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k0 := compute.jit (p = (@any : Int, @any : Int) => (p(0), p(1)))
-k1 := compute.jit (q = (@any : Int, @any : Int) => compute.launch k0 q)
+k0 := compute.jit (p' = (@any : Int, @any : Int) => (p(0), p(1)))
+k1 := compute.jit (q' = (@any : Int, @any : Int) => compute.launch k0 q)
 compute.launch k1 (5, 3)
 "#,
     );
@@ -662,7 +662,7 @@ fn a_tuple_domain_kernel_type_renders_as_a_function() {
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
 k
 "#,
     );
@@ -710,7 +710,7 @@ fn parallel_range_write_is_map() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
@@ -742,7 +742,7 @@ fn parallel_read_input_buffer() {
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par1 := {.n @any : Int, .in In1}
-f1 := (k = Par1) => {
+f1 := (k' = Par1) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out1){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
@@ -752,7 +752,7 @@ inbuf := (compute.plrun k1 ((compute.A _){.n 3, .I In1{.a 0}}) : Struct)
 In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par2 := {.n @any : Int, .in In2}
-f2 := (k = Par2) => {
+f2 := (k' = Par2) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -779,7 +779,7 @@ fn parallel_write_only_collects_whole_buffer() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + 1}))})
@@ -806,7 +806,7 @@ fn a_refused_plrun_count_says_why() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value i + i}))})
@@ -837,7 +837,7 @@ fn a_runtime_scalar_reaches_the_body_beside_the_extent() {
 In0  := {.a @any : Int}
 Out0 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par0 := {.n @any : Int, .in In0}
-g := (k = Par0) => {
+g := (k' = Par0) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out0){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
@@ -848,7 +848,7 @@ In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .alpha @any : Float, .in In}
 Host := {.n @any : Int, .alpha @any : Float, .I In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -886,7 +886,7 @@ fn a_scalar_leaf_of_the_wrong_class_is_refused_by_name() {
 In0  := {.a @any : Int}
 Out0 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par0 := {.n @any : Int, .in In0}
-g := (k = Par0) => {
+g := (k' = Par0) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out0){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
@@ -897,7 +897,7 @@ In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .alpha @any : Float, .in In}
 Host := {.n @any : Int, .alpha @any, .I In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -924,7 +924,7 @@ fn a_refused_call_argument_element_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x = (@any : Int, @any : Int) => x(0))
+k := compute.jit (x' = (@any : Int, @any : Int) => x(0))
 compute.call k (1, (2, "three"))
 "#,
     );
@@ -953,7 +953,7 @@ fn a_refused_call_argument_shape_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x => x + 1)
+k := compute.jit (x' => x + 1)
 compute.call k "hello"
 "#,
     );
@@ -976,7 +976,7 @@ fn a_refused_call_run_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0) + p(1))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0) + p(1))
 compute.call k (1, 2, 3)
 "#,
     );
@@ -1004,7 +1004,7 @@ fn parallel_multi_output_writes_every_output_in_one_pass() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1031,7 +1031,7 @@ fn parallel_multi_output_collects_each_output() {
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par1 := {.n @any : Int, .in In1}
-f1 := (k = Par1) => {
+f1 := (k' = Par1) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out1){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
@@ -1041,7 +1041,7 @@ inbuf := (compute.plrun k1 ((compute.A _){.n 3, .I In1{.a 0}}) : Struct)
 In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3})), .x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par2 := {.n @any : Int, .in In2}
-f2 := (k = Par2) => {
+f2 := (k' = Par2) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1069,7 +1069,7 @@ fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4})), .y (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1095,7 +1095,7 @@ outs := (compute.plrun k ((compute.A _){.n 4, .I In{.a 0}}) : Struct)
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1129,7 +1129,7 @@ fn a_parallel_run_over_the_threshold_covers_every_index() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 4096})), .y (compute.Buf (compute.BufParam{.type Int, .length 4096}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1181,7 +1181,7 @@ fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-g := (k = Par) => {
+g := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
@@ -1191,7 +1191,7 @@ inbuf := (compute.plrun kg ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
 In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par2 := {.n @any : Int, .in In2}
-f := (k = Par2) => {
+f := (k' = Par2) => {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1221,7 +1221,7 @@ fn a_write_inside_a_conditional_is_refused() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1254,7 +1254,7 @@ fn an_output_position_that_is_not_a_buffer_is_refused() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1295,7 +1295,7 @@ fn a_program_value_where_a_buffer_belongs_is_refused() {
 In  := {.a (compute.Buf (compute.BufParam{.type Int, .length 8}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 8}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 1}))})
@@ -1332,7 +1332,7 @@ fn a_kernel_reads_the_input_buffer_it_names() {
 In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4})), .c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.c, .at i}) : Int)
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1341,12 +1341,12 @@ f := (k = Par) => {
 OutB := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Fill := {.n @any : Int}
-fb := (c = Fill) => {
+fb := (c' = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
   ((OutB){.b (compute.write ((compute.Write _){.to y, .at i, .value 1}))})
 }
-fc := (c = Fill) => {
+fc := (c' = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
   ((OutC){.c (compute.write ((compute.Write _){.to y, .at i, .value 2}))})
@@ -1379,13 +1379,13 @@ In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value 0}))})
 }
 data := (compute.plrun (compute.parallel fill "cpu" Out) ((Fill){.n 4}) : Struct)
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   w := compute.write ((compute.Write _){.to z, .at i, .value i + 7})
@@ -1416,7 +1416,7 @@ fn a_float_domain_is_permitted_at_every_position_the_walk_reaches() {
     // The parameter itself: a real float kernel, compiled, run and read back.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x : Float => x + 1.0)
+k := compute.jit (x' : Float => x + 1.0)
 compute.launch k 1.5
 "#);
     assert_eq!(
@@ -1433,7 +1433,7 @@ compute.launch k 1.5
     // the body's.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Float) => p(0))
+k := compute.jit (p' = (@any : Int, @any : Float) => p(0))
 compute.launch k (1, 1.5)
 "#);
     assert_eq!(
@@ -1450,7 +1450,7 @@ compute.launch k (1, 1.5)
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0))
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0))
 compute.launch k (1, ([@any : Float, 3][1.5, 2.5, 3.5] : Array))
 "#,
     );
@@ -1470,8 +1470,8 @@ compute.launch k (1, ([@any : Float, 3][1.5, 2.5, 3.5] : Array))
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (p = (@any : Int, @any : Int) => p(0))
-compute.launch k (1, y => 1.0)
+k := compute.jit (p' = (@any : Int, @any : Int) => p(0))
+compute.launch k (1, y' => 1.0)
 "#,
     );
     assert_eq!(
@@ -1491,7 +1491,7 @@ fn a_float_argument_to_an_int_parameter_is_refused_by_class() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k := compute.jit (x => x + 1)
+k := compute.jit (x' => x + 1)
 compute.call k 1.5
 "#,
     );
@@ -1543,7 +1543,7 @@ fn a_jit_kernel_crosses_the_two_classes_both_ways() {
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x : Int => int2float x)
+k := compute.jit (x' : Int => int2float x)
 compute.launch k 5
 "#,
             CrossedScalar::Float(5.0),
@@ -1553,7 +1553,7 @@ compute.launch k 5
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x : Float => float2int x)
+k := compute.jit (x' : Float => float2int x)
 compute.launch k 5.7
 "#,
             CrossedScalar::Int(5),
@@ -1563,7 +1563,7 @@ compute.launch k 5.7
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x : Float => int2float (x > 1.0))
+k := compute.jit (x' : Float => int2float (x > 1.0))
 compute.launch k 5.0
 "#,
             CrossedScalar::Float(1.0),
@@ -1573,7 +1573,7 @@ compute.launch k 5.0
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x : Int => x + float2int 3.7)
+k := compute.jit (x' : Int => x + float2int 3.7)
 compute.launch k 5
 "#,
             CrossedScalar::Int(8),
@@ -1583,7 +1583,7 @@ compute.launch k 5
 ---
   compute = import "compute.lichen"
 ---
-k := compute.jit (x : Float => int2float (float2int (x + 0.5)))
+k := compute.jit (x' : Float => int2float (float2int (x + 0.5)))
 compute.launch k 3.0
 "#,
             CrossedScalar::Float(3.0),
@@ -1634,7 +1634,7 @@ fn a_write_to_another_output_than_its_position_exchanges_the_outputs() {
 In  := {.a @any : Int}
 Out := {.x (compute.Buf (compute.BufParam{.type Int, .length 3})), .y (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   x := compute.buf (compute.BufParam{.type Int, .length k.n})
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -1676,13 +1676,13 @@ In  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length c.n})
   ((Out){.z (compute.write ((compute.Write _){.to y, .at i, .value 0}))})
 }
 data := (compute.plrun (compute.parallel fill "cpu" Out) ((Fill){.n 4}) : Struct)
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to k.in.b, .at i, .value i}))})
@@ -1721,7 +1721,7 @@ fn a_write_naming_a_writes_result_is_refused() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   w := compute.write ((compute.Write _){.to z, .at i, .value i + 7})
@@ -1761,7 +1761,7 @@ fn a_statement_write_is_dropped_and_the_codowns_write_fills_the_output() {
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   compute.write ((compute.Write _){.to z, .at i, .value i + 7})
@@ -1785,7 +1785,7 @@ compute.collect outs.z : Array
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par := {.n @any : Int, .in In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   compute.write ((compute.Write _){.to z, .at i, .value i + 7})

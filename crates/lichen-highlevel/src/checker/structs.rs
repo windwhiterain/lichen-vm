@@ -624,6 +624,15 @@ where
         ))
     }
 
+    pub(super) fn formal_actual(&self, e: ExprId) -> bool {
+        match self.ir[e].kind {
+            ExprKind::Formal => true,
+            ExprKind::Unify { actual, .. } => self.formal_actual(actual),
+            ExprKind::Annotation { value, .. } => self.formal_actual(value),
+            _ => false,
+        }
+    }
+
     /// Record a template parameter's field sources in `<:`.
     ///
     /// # Invariant
@@ -636,7 +645,32 @@ where
         actual: ExprId,
         actual_value: NodeId,
     ) {
-        if !matches!(self.ir[actual].kind, ExprKind::Parameter) {
+        if !self.formal_actual(actual) {
+            return;
+        }
+        // A formal placeholder and its value half point to the lazy read.
+        if matches!(self.ir[expected].kind, ExprKind::Placeholder) {
+            let expected = self.state[expected]
+                .term
+                .expect("the placeholder is compiled");
+            self.module
+                .field_sources
+                .entry(expected)
+                .or_insert(actual_value);
+            if let Some(actual) = self.state[actual]
+                .term
+                .and_then(|term| self.module.expr_value_half(term))
+            {
+                self.module
+                    .field_sources
+                    .entry(actual)
+                    .or_insert(actual_value);
+            }
+            let actual_term = self.state[actual].term.expect("the actual is compiled");
+            self.module
+                .field_sources
+                .entry(actual_term)
+                .or_insert(actual_value);
             return;
         }
         let ExprKind::Apply {

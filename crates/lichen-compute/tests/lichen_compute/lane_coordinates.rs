@@ -23,13 +23,13 @@ Par := {.n @any : Int, .cols @any : Int, .stride @any : Int, .in In}
 Host := {.n @any : Int, .cols @any : Int, .stride @any : Int, .I In}
 Data := {.d (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   ((Data){.d (compute.write ((compute.Write _){.to d, .at i, .value (int2float i + 1.0)}))})
 }
 filler := compute.parallel fill "cpu" Data
-body := (k = Par) => {
+body := (k' = Par) => {
   i := compute.range k.n
   r := compute.row k
   c := compute.col k
@@ -57,13 +57,13 @@ Par := {.n @any : Int, .in In}
 Host := {.n @any : Int, .I In}
 Data := {.d (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   ((Data){.d (compute.write ((compute.Write _){.to d, .at i, .value (int2float i + 1.0)}))})
 }
 filler := compute.parallel fill "cpu" Data
-body := (k = Par) => {
+body := (k' = Par) => {
   i := compute.range k.n
   r := compute.row k
   z := compute.buf (compute.BufParam{.type Float, .length k.n})

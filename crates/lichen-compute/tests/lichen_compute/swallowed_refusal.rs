@@ -15,7 +15,7 @@ const MISPLACED_WRITE: &str = r#"
 Data := {.d (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Out := {.e (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c' = Fill) => {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   ((Data){.d (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
@@ -25,7 +25,7 @@ data := (compute.plrun filler ((Fill){.n 3}) : Struct)
 In  := {.k (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Par := {.n @any : Int, .in In}
 Arg := {.n @any : Int, .I In}
-f := (k = Par) => {
+f := (k' = Par) => {
   i := compute.range k.n
   ((Out){.e (compute.write ((compute.Write _){.to k.in.k, .at i, .value (99.0 : Float)}))})
 }

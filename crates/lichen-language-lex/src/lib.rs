@@ -159,6 +159,14 @@ pub enum TokenKind {
     Caret,
     /// '.' -- a named field read `a.b`.
     Dot,
+    /// `'` -- the formal-reference mark: `x'` names the formal parameter `x`.
+    ///
+    /// # Invariant
+    ///
+    /// The mark is a **suffix**: the lexer emits it only when it is adjacent to
+    /// the token it follows, so `x'` is a formal reference and `x '` is not a
+    /// spelling at all.
+    Prime,
     /// '('.
     LParen,
     /// ')'.
@@ -256,6 +264,7 @@ impl TokenKind {
             TokenKind::Pipe => "'|'",
             TokenKind::Caret => "'^'",
             TokenKind::Dot => "'.'",
+            TokenKind::Prime => "a formal reference mark",
             TokenKind::LParen => "'('",
             TokenKind::RParen => "')'",
             TokenKind::LBracket => "'['",
@@ -293,6 +302,10 @@ pub struct Lexed {
     pub tokens: Vec<Token>,
     pub errors: Vec<LexDiag>,
 }
+
+/// The formal-reference mark must be adjacent to the token it follows.
+const PRIME_NOT_ADJACENT: &str =
+    "a formal reference mark follows the name it marks: write `x'` with no space between them";
 
 /// The token kinds logos recognizes; payloads are read from the matched slice.
 // Same reason as `TokenKind`: the float payload is `f32`, not `Eq`.
@@ -414,6 +427,10 @@ enum RawToken {
     Caret,
     #[token(".")]
     Dot,
+    /// `'` -- the formal-reference mark; the lexer admits it only adjacent to
+    /// the token it follows.
+    #[token("'")]
+    Prime,
     #[token("(")]
     LParen,
     #[token(")")]
@@ -485,6 +502,14 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                         span: lc,
                         range: (start, start),
                     });
+                }
+                if raw == RawToken::Prime && prev_end != Some(start) {
+                    errors.push(LexDiag {
+                        span: Some(lc),
+                        message: PRIME_NOT_ADJACENT.to_string(),
+                    });
+                    prev_end = Some(end);
+                    continue;
                 }
                 match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
                     Some(kind) => {
@@ -605,6 +630,14 @@ pub fn lex_resume(
                         break 'lex;
                     }
                     tokens.push(g);
+                }
+                if raw == RawToken::Prime && prev_end != Some(start_abs) {
+                    errors.push(LexDiag {
+                        span: Some(lc),
+                        message: PRIME_NOT_ADJACENT.to_string(),
+                    });
+                    prev_end = Some(end_abs);
+                    continue;
                 }
                 match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
                     Some(kind) => {
@@ -846,6 +879,7 @@ fn raw_to_kind(
         RawToken::Pipe => Some(TokenKind::Pipe),
         RawToken::Caret => Some(TokenKind::Caret),
         RawToken::Dot => Some(TokenKind::Dot),
+        RawToken::Prime => Some(TokenKind::Prime),
         RawToken::LParen => Some(TokenKind::LParen),
         RawToken::RParen => Some(TokenKind::RParen),
         RawToken::LBracket => Some(TokenKind::LBracket),

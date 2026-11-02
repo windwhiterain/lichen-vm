@@ -55,15 +55,15 @@ fn a_lazy_binding_reports_type_but_no_value() {
     // `paradox` is referenced only in an unselected `if` branch: its value
     // stays deferred, so the snapshot reports `None`.
     let source = "U := Type
-D := (x => x) Type
-sb := A => r => a => z => r (z A r) a
-le := i => x => x (A => r => a => i (sb A r a))
-induct := i => x => (p : (le i x) => _ : (i x))
-WF := z => if 1 then 5 else induct (z U le)
-I := x => (d : D => _ : Int)
-omega := i => y => y WF (x => y (sb U le x))
-lemma := x => p => q => q I p (i => q (y => i (sb U le y)))
-lemma2 := x => (x I lemma) (i => x (y => i (sb U le y)))
+D := (x' => x) Type
+sb := A' => r' => a' => z' => r (z A r) a
+le := i' => x' => x (A' => r' => a' => i (sb A r a))
+induct := i' => x' => (p' : (le i x) => _ : (i x))
+WF := z' => if 1 then 5 else induct (z U le)
+I := x' => (d' : D => _ : Int)
+omega := i' => y' => y WF (x' => y (sb U le x))
+lemma := x' => p' => q' => q I p (i' => q (y' => i (sb U le y)))
+lemma2 := x' => (x I lemma) (i' => x (y' => i (sb U le y)))
 paradox := lemma2 omega
 if 0 then (paradox : Int) else 5";
     let doc = ShipsDoc::new(source);
@@ -145,7 +145,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_cache(source, Some(&dir), None, &native_packages());
 
-    // `jit` at line 5 (0-based): "k_double := compute.jit (y : Int => y + y)" —
+    // `jit` at line 5 (0-based): "k_double := compute.jit (y' : Int => y + y)" —
     // char 20.
     let (hover, _range) = doc
         .hover_at(Position {

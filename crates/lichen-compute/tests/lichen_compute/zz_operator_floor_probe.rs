@@ -25,13 +25,13 @@ InG  := {.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (comp
 OutG := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par  := {.n @any : Int, .kdim @any : Int, .in InG, .out OutG}
 ArgK := {.n @any : Int, .kdim @any : Int, .I InG}
-gemv_raw := (k = Par) => {
+gemv_raw := (k' = Par) => {
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))})
 }
 kg := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutG
-step := (g = Par) => (compute.plrun kg ((ArgK){.n g.n, .kdim g.kdim, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
+step := (g' = Par) => (compute.plrun kg ((ArgK){.n g.n, .kdim g.kdim, .I InG{.w g.in.w, .x g.in.x}}) : Struct)
 built := compute.graph step
 w := (compute.buffer ([@any : Float, 12][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 x := (compute.buffer ([@any : Float, 3][1.0, 2.0, 3.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -50,7 +50,7 @@ XIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 XOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
 XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
-ring_raw := (c = XPar) => {
+ring_raw := (c' = XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   left := if i == 0 then ((compute.read ((compute.Read _){.from c.in.x, .at (c.n - 1)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float))
@@ -58,7 +58,7 @@ ring_raw := (c = XPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
 }
 ks := compute.parallel ring_raw "gpu" XOut
-step := (s = XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
+step := (s' = XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
 built := compute.graph step
 x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 compute.collect (compute.graphrun built (6, 0.25, x))
@@ -75,7 +75,7 @@ XIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 XOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
 XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
-step_raw := (c = XPar) => {
+step_raw := (c' = XPar) => {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   left := (compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float)
@@ -83,7 +83,7 @@ step_raw := (c = XPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))})
 }
 ks := compute.parallel step_raw "gpu" XOut
-step := (s = XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
+step := (s' = XPar) => (compute.plrun ks ((XArg){.n s.n, .alpha s.alpha, .I XIn{.x s.in.x}}) : Struct)
 built := compute.graph step
 x := (compute.buffer ([@any : Float, 6][4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 compute.collect (compute.graphrun built (6, 0.25, x))
@@ -96,7 +96,7 @@ GIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 GOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 GPar := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .in GIn, .out GOut}
 GArg := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .I GIn}
-grid_raw := (c = GPar) => {
+grid_raw := (c' = GPar) => {
   i := compute.range c.n
   row := compute.row c
   col := compute.col c
@@ -108,7 +108,7 @@ grid_raw := (c = GPar) => {
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))})
 }
 kg := compute.parallel grid_raw "gpu" GOut
-step := (s = GPar) => (compute.plrun kg ((GArg){.n s.n, .cols s.cols, .alpha s.alpha, .I GIn{.x s.in.x}}) : Struct)
+step := (s' = GPar) => (compute.plrun kg ((GArg){.n s.n, .cols s.cols, .alpha s.alpha, .I GIn{.x s.in.x}}) : Struct)
 built := compute.graph step
 plane := (compute.buffer ([@any : Float, 9][0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 compute.collect (compute.graphrun built (9, 3, 0.25, plane))
@@ -148,7 +148,7 @@ y := (compute.plrun gemv ((GArg){{.n {capacity}, .kdim {dim}, .I GIn{{.w fresh.k
     } else {
         format!(
             r#"SArg := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .m @any : Int, .in DIn}}
-step := (s = SArg) => {{{{
+step := (s' = SArg) => {{{{
   fresh := (compute.plrun append ((KArg){{.n s.n, .cap s.cap, .dim s.dim, .t s.t, .I DIn{{.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .q s.in.q}}}}) : Struct)
   compute.plrun gemv ((GArg){{.n s.m, .kdim s.dim, .I GIn{{.w fresh.k, .x s.in.q}}}}) : Struct
 }}}}
@@ -163,7 +163,7 @@ DIn   := {{.k (compute.Buf (compute.BufParam{{.type Float, .length _}})), .v (co
 KVOut := {{.k (compute.Buf (compute.BufParam{{.type Float, .length _}})), .v (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 KPar  := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .in DIn, .out KVOut}}
 KArg  := {{.n @any : Int, .cap @any : Int, .dim @any : Int, .t @any : Int, .I DIn}}
-append_raw := (k = KPar) => {{
+append_raw := (k' = KPar) => {{
   column := compute.row k
   position := compute.col k
   slot := position * k.dim + column
@@ -179,9 +179,9 @@ GIn  := {{.w (compute.Buf (compute.BufParam{{.type Float, .length _}})), .x (com
 GOut := {{.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 GPar := {{.n @any : Int, .kdim @any : Int, .in GIn, .out GOut}}
 GArg := {{.n @any : Int, .kdim @any : Int, .I GIn}}
-gemv_raw := (k = GPar) => {{
+gemv_raw := (k' = GPar) => {{
   i := compute.range k.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at (s(0) - 1)}}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.w, .at (i * k.kdim + (s(0) - 1))}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at (s(0) - 1)}}) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){{.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))}})
 }}
 gemv := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" GOut
@@ -210,13 +210,13 @@ FIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}})), .w (comp
 FOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 FPar := {.n @any : Int, .taps @any : Int, .in FIn, .out FOut}
 FArg := {.n @any : Int, .taps @any : Int, .I FIn}
-filter_raw := (c = FPar) => {
+filter_raw := (c' = FPar) => {
   i := compute.range c.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from c.in.x, .at (i - (s(0) - 1))}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from c.in.x, .at (i - (s(0) - 1))}) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
 kf := compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "gpu" FOut
-smooth := (s = FPar) => (compute.plrun kf ((FArg){.n s.n, .taps s.taps, .I FIn{.x s.in.x, .w s.in.w}}) : Struct)
+smooth := (s' = FPar) => (compute.plrun kf ((FArg){.n s.n, .taps s.taps, .I FIn{.x s.in.x, .w s.in.w}}) : Struct)
 built := compute.graph smooth
 x := (compute.buffer ([@any : Float, 6][1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 w := (compute.buffer ([@any : Float, 3][1.0, 2.0, 1.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
@@ -230,13 +230,13 @@ RIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 ROut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 RPar := {.n @any : Int, .kdim @any : Int, .in RIn, .out ROut}
 RArg := {.n @any : Int, .kdim @any : Int, .I RIn}
-rowsum_raw := (c = RPar) => {
+rowsum_raw := (c' = RPar) => {
   r := compute.range c.n
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){.from c.in.x, .at (r * c.kdim + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){.from c.in.x, .at (r * c.kdim + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))})
 }
 kr := compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" ROut
-sums := (s = RPar) => (compute.plrun kr ((RArg){.n s.n, .kdim s.kdim, .I RIn{.x s.in.x}}) : Struct)
+sums := (s' = RPar) => (compute.plrun kr ((RArg){.n s.n, .kdim s.kdim, .I RIn{.x s.in.x}}) : Struct)
 built := compute.graph sums
 x := (compute.buffer ([@any : Float, 8][1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 compute.collect (compute.graphrun built (2, 4, x))
@@ -249,13 +249,13 @@ SIn  := {.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 SOut := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 SPar := {.n @any : Int, .k @any : Float, .in SIn, .out SOut}
 SArg := {.n @any : Int, .k @any : Float, .I SIn}
-scale_raw := (c = SPar) => {
+scale_raw := (c' = SPar) => {
   i := compute.range c.n
   x := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (x * c.k)})
 }
 ks := compute.parallel scale_raw "gpu" SOut
-twice := (s = SPar) => (compute.plrun ks ((SArg){.n s.n, .k s.k, .I SIn{.x s.in.x}}) : Struct)
+twice := (s' = SPar) => (compute.plrun ks ((SArg){.n s.n, .k s.k, .I SIn{.x s.in.x}}) : Struct)
 built := compute.graph twice
 x := (compute.buffer ([@any : Float, 4][1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf (compute.BufParam{{.type Float, .length _}})))
 compute.collect (compute.graphrun built (4, 2.0, x))

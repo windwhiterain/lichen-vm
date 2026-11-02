@@ -228,9 +228,46 @@ impl<P: Program> Module<P> {
         let key = function.module;
         let module = self.static_module(key);
         let function = module.functions.get(function.index.0)?;
+        self.static_compute_operator_from(key, function.r#return, |_| true)
+    }
+
+    /// The compute operator defining a frozen function's returned native value.
+    ///
+    /// # Invariant
+    /// A returned struct contributes only the selected field's value graph and equality class;
+    /// a direct native result contributes its own value graph and class. Multiple accepted
+    /// computations still answer `None`, and a field's type or siblings are never candidates.
+    pub fn static_function_native_compute_operator(
+        &self,
+        function: StaticFunctionRef,
+        field: usize,
+        accepted: impl Fn(&P::Operator) -> bool + Copy,
+    ) -> Option<(P::Operator, StaticNodeId)> {
+        let key = function.module;
+        let module = self.static_module(key);
+        let function = module.functions.get(function.index.0)?;
+        let returned =
+            static_array_item(&module, key, function.r#return, 0).unwrap_or(function.r#return);
+        if let Some(field) = static_array_item(&module, key, returned, field) {
+            let value = static_array_item(&module, key, field, 0).unwrap_or(field);
+            let found = self.static_compute_operator_from(key, value, accepted);
+            if found.is_some() {
+                return found;
+            }
+        }
+        self.static_compute_operator_from(key, returned, accepted)
+    }
+
+    fn static_compute_operator_from(
+        &self,
+        key: ModuleKey,
+        start: LocalNodeId,
+        accepted: impl Fn(&P::Operator) -> bool + Copy,
+    ) -> Option<(P::Operator, StaticNodeId)> {
+        let module = self.static_module(key);
         let mut found: Option<(P::Operator, LocalNodeId)> = None;
         // Each entry says whether the node was reached as a read's position.
-        let mut pending = vec![(function.r#return, false)];
+        let mut pending = vec![(start, false)];
         // A node first met as a position and later as a computation is a
         // computation, so the walk visits it twice.
         let mut seen: HashMap<LocalNodeId, bool> = HashMap::new();
@@ -252,6 +289,7 @@ impl<P: Program> Module<P> {
                 );
                 if !position
                     && (low.is_none() || matches!(low, Some(crate::LowOperator::External { .. })))
+                    && accepted(&operation.operator)
                 {
                     // **An operand-less call is no compute operator**: a nominal id reads none.
                     if let Some(operand) = operation.operand
@@ -501,6 +539,38 @@ fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNod
         module: module.key,
         index: node,
     })
+}
+
+fn static_array_item<P: Program>(
+    module: &StaticModule<P>,
+    key: ModuleKey,
+    node: LocalNodeId,
+    slot: usize,
+) -> Option<LocalNodeId> {
+    for candidate in std::iter::once(node).chain(static_class_members(module, node)) {
+        let Some(array) = module
+            .nodes
+            .get(candidate.index)
+            .and_then(|node| node.value)
+            .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(&value))
+            .and_then(|value| match value {
+                crate::LowValue::Array(array) => Some(array),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        // SAFETY: the array belongs to the live frozen module being read.
+        let Some(item) = unsafe { array.items() }.get(slot) else {
+            continue;
+        };
+        if let crate::AnyNodeId::Static(inner) = item.node
+            && inner.module == key
+        {
+            return Some(inner.index);
+        }
+    }
+    None
 }
 
 /// The cells in a frozen equality class, including its representative.

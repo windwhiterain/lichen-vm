@@ -46,7 +46,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// `name` — an identifier's use. The name is the expression's own, so a
     /// diagnostic naming it reads as the source did.
     pub fn param(&self, name: &str) -> ExprId {
-        self.named(name, ExprKind::Parameter)
+        self.named(name, ExprKind::Formal)
     }
 
     /// `name = _` — a block-wide binding's reserved id, filled in by
@@ -81,13 +81,13 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = \p. body`.
     pub fn lam(&self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
-        self.lam_typed(name, parameter, None, body, false)
+        self.function(name, parameter, body, false)
     }
 
     /// `name = \p @loop. body` — the marker is **permission**, so the build
     /// still decides whether a loop is emitted.
     pub fn lam_looping(&self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
-        self.lam_typed(name, parameter, None, body, true)
+        self.function(name, parameter, body, true)
     }
 
     /// Stamp a [`Self::binding`]'s reserved id with its lambda, so a recursion
@@ -107,8 +107,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
             reserved,
             ExprKind::Function {
                 parameter,
-                parameter_type: None,
-                parameter_attribute: None,
                 r#return: body,
                 parent: None,
                 looping,
@@ -117,7 +115,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         reserved
     }
 
-    /// [`Self::close_binding`] with the parameter's annotated type.
+    /// Close a binding whose parameter side carries a type annotation.
     pub fn close_binding_typed(
         &self,
         reserved: ExprId,
@@ -126,12 +124,11 @@ impl<A: AttrSpec, L> Writer<A, L> {
         body: ExprId,
         looping: bool,
     ) -> ExprId {
+        let side = self.annotate("parameter side", parameter, parameter_type);
         self.fill(
             reserved,
             ExprKind::Function {
-                parameter,
-                parameter_type: Some(parameter_type),
-                parameter_attribute: None,
+                parameter: side,
                 r#return: body,
                 parent: None,
                 looping,
@@ -140,7 +137,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         reserved
     }
 
-    /// `name = \p : T. body` — the annotated parameter's type.
+    /// `name = \p : T. body` — a typed parameter-side annotation.
     pub fn lam_typed(
         &self,
         name: &str,
@@ -149,16 +146,19 @@ impl<A: AttrSpec, L> Writer<A, L> {
         body: ExprId,
         looping: bool,
     ) -> ExprId {
-        self.function(name, parameter, parameter_type, None, body, looping)
+        let side = match parameter_type {
+            Some(ty) => self.annotate("parameter side", parameter, ty),
+            None => parameter,
+        };
+        self.function(name, side, body, looping)
     }
 
-    /// `name = \p # a. body` — the `x # n => e` spelling, which the frontend
-    /// keeps rather than desugaring into a block.
+    /// `name = \p # a. body` — the `x' # a` spelling, an ordinary annotation
+    /// over the formal.
     ///
     /// # Invariant
-    /// The slot is the optimization for that desugar: an unannotated body
-    /// statement would materialize a block, so a test about the node shape must
-    /// reach for this rather than for [`Self::lam`].
+    /// The attribute's marker rides the **annotation's** schema, so a test that
+    /// reads the attribute stamps that node rather than the formal.
     pub fn lam_attributed(
         &self,
         name: &str,
@@ -166,34 +166,17 @@ impl<A: AttrSpec, L> Writer<A, L> {
         parameter_attribute: ExprId,
         body: ExprId,
     ) -> ExprId {
-        self.function(
-            name,
-            parameter,
-            None,
-            Some(parameter_attribute),
-            body,
-            false,
-        )
+        let side = self.annotate_with("parameter side", parameter, None, &[parameter_attribute]);
+        self.function(name, side, body, false)
     }
 
     /// The one place a lambda's kind is written, so the three spellings above
     /// cannot disagree about a field.
-    #[allow(clippy::too_many_arguments)]
-    fn function(
-        &self,
-        name: &str,
-        parameter: ExprId,
-        parameter_type: Option<ExprId>,
-        parameter_attribute: Option<ExprId>,
-        body: ExprId,
-        looping: bool,
-    ) -> ExprId {
+    fn function(&self, name: &str, parameter: ExprId, body: ExprId, looping: bool) -> ExprId {
         self.named(
             name,
             ExprKind::Function {
                 parameter,
-                parameter_type,
-                parameter_attribute,
                 r#return: body,
                 parent: None,
                 looping,
@@ -219,8 +202,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
             inner_name,
             ExprKind::Function {
                 parameter: inner_b,
-                parameter_type: None,
-                parameter_attribute: None,
                 r#return: inner_body,
                 parent: Some(reserved),
                 looping: false,
@@ -230,8 +211,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
             reserved,
             ExprKind::Function {
                 parameter: outer_b,
-                parameter_type: None,
-                parameter_attribute: None,
                 r#return: inner_expr,
                 parent: None,
                 looping: false,

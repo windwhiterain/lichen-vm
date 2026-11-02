@@ -22,12 +22,12 @@ fn program() -> String {
 AIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
 AOut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 APar := {.n @any : Int, .cols @any : Int, .taps @any : Int, .in AIn, .out AOut}
-sum_raw := (c = APar) => {
+sum_raw := (c' = APar) => {
   i := compute.range c.n
   row := compute.row c
   col := compute.col c
   rows := (c.n / c.cols)
-  @loop fold := s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + int2float (min (max (row + (s(0) - 1) / 3 - 1) 0) (rows - 1) * c.cols + (min (max (col + (s(0) - 1) % 3 - 1) 0) (c.cols - 1)))) ~ "combine" ~ "element"))
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + int2float (min (max (row + (s(0) - 1) / 3 - 1) 0) (rows - 1) * c.cols + (min (max (col + (s(0) - 1) % 3 - 1) 0) (c.cols - 1)))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))})
 }
 sums := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" AOut
@@ -47,7 +47,7 @@ fn terms(expression: &str) -> String {
 TIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
 TOut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 TPar := {.n @any : Int, .cols @any : Int, .in TIn, .out TOut}
-term_raw := (c = TPar) => {
+term_raw := (c' = TPar) => {
   i := compute.range c.n
   row := compute.row c
   col := compute.col c
