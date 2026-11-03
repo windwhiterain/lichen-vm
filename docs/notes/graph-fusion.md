@@ -1247,7 +1247,7 @@ the two-pass form over random inputs. The bridge is in
 three arguments directly: `crates/lichen-compute/examples/fusion_schema.rs` reads a producer's
 `combine`/`identity` and a consumer's `element` out of a derived schema and
 prints the rolling update — §7's `g = exp(d - r)` between a max and a sum comes
-out as `'r = max(d, r)`, `'t = t * exp(r - 'r) + exp(d - 'r)`, the online softmax,
+out as `r' = max(d, r)`, `t' = t * exp(r - r') + exp(d - r')`, the online softmax,
 with no `exp` written anywhere in the engine. What the schema cannot yet supply
 is the *check*: `UnverifiableInstance` is still §9's missing row, so a claimed
 combine is believed. Split-K (step 5) is untouched.
@@ -1281,7 +1281,7 @@ o      = <second contraction>        ~ "claim:Reduction(combine,identity)"
   lands *inside* `c`, unread and unopposed), `'g(m)(c) = exp(c − m)`,
   inverse `ln`, giving `h(x, m_old, m_new) = x · exp(m_old − m_new)` — which
   distributes over `+` trivially. The emitted rolling state `(m, s)` with
-  `'m = max(m, x)`, `'s = s · exp(m − 'm) + exp(x + alibi·i − 'm)` **is Flash
+  `m' = max(m, x)`, `s' = s · exp(m − m') + exp(x + alibi·i − m')` **is Flash
   Attention v1's online softmax, derived** — and derived *through* the custom
   slope, the case that kills every operator-graph pattern matcher.
 - The second contraction chains the same way against the rescale, extending

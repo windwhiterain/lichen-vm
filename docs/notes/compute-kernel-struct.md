@@ -420,7 +420,6 @@ buffers, scalars and mixed groups all nest to any depth, and `tests/lichen_compu
 **The repair is a temporary measure.** The name→position fold belongs after the apply clone, once for
 every reader, not in one reader at compile time — see `specialize-normalize.md`.
 
-
 ## Formal-field shape lookup
 
 `standing_struct_value` peels only an open supplied cell. Its reverse index is

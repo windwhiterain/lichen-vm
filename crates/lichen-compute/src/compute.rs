@@ -928,7 +928,7 @@ pub enum ComputeOperator {
     Graph,
     /// `[graph, arguments]` — run a graph over its source function's values.
     GraphRun,
-    /// `[backend, a, b, c]` — the cooperative matrix product `'c = a·b + c`.
+    /// `[backend, a, b, c]` — the cooperative matrix product `c' = a·b + c`.
     ///
     /// # Invariant
     /// `a`/`b` hold signed bytes and `c` signed words, row-major, over the shape
