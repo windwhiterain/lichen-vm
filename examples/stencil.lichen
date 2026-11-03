@@ -82,26 +82,26 @@ XIn := {.x (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 XOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 XPar := {.n @any : Int, .alpha @any : Float, .in (XIn)}
 XArg := {.n @any : Int, .alpha @any : Float, .I (XIn)}
-stencil_raw := (c' = XPar) => {
-  i := compute.range c.n
-  centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
-  left := (compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float)
-  right := (compute.read ((compute.Read _){.from c.in.x, .at (i + 1)}) : Float)
-  b_y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))}))}
+stencil_raw := XPar{.'n : Int, .'alpha : Float, .'in} => {
+  i := compute.range n
+  centre := (compute.read ((compute.Read _){.from in.x, .at i}) : Float)
+  left := (compute.read ((compute.Read _){.from in.x, .at (i - 1)}) : Float)
+  right := (compute.read ((compute.Read _){.from in.x, .at (i + 1)}) : Float)
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
+  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + alpha * ((left + right) - 2.0 * centre))}))}
 }
 stencil := compute.parallel stencil_raw "cpu" (XOut)
-ring_raw := (c' = XPar) => {
-  i := compute.range c.n
-  centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
-  left_base := (compute.read ((compute.Read _){.from c.in.x, .at ((max i 1) - 1)}) : Float)
-  left_wrap := (compute.read ((compute.Read _){.from c.in.x, .at (c.n - 1)}) : Float)
+ring_raw := XPar{.'n : Int, .'alpha : Float, .'in} => {
+  i := compute.range n
+  centre := (compute.read ((compute.Read _){.from in.x, .at i}) : Float)
+  left_base := (compute.read ((compute.Read _){.from in.x, .at ((max i 1) - 1)}) : Float)
+  left_wrap := (compute.read ((compute.Read _){.from in.x, .at (n - 1)}) : Float)
   left := left_base + ((left_wrap - left_base) * (if i == 0 then 1.0 else 0.0))
-  right_base := (compute.read ((compute.Read _){.from c.in.x, .at ((min i (c.n - 2)) + 1)}) : Float)
-  right_wrap := (compute.read ((compute.Read _){.from c.in.x, .at 0}) : Float)
-  right := right_base + ((right_wrap - right_base) * (if i == (c.n - 1) then 1.0 else 0.0))
-  b_y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))}))}
+  right_base := (compute.read ((compute.Read _){.from in.x, .at ((min i (n - 2)) + 1)}) : Float)
+  right_wrap := (compute.read ((compute.Read _){.from in.x, .at 0}) : Float)
+  right := right_base + ((right_wrap - right_base) * (if i == (n - 1) then 1.0 else 0.0))
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
+  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + alpha * ((left + right) - 2.0 * centre))}))}
 }
 ring := compute.parallel ring_raw "cpu" (XOut)
 Fill := {.n @any : Int}

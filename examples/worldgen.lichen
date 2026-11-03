@@ -64,12 +64,12 @@ noise := compute.parallel noise_raw "cpu" (OutField)
 
 PMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .in (InField2)}
 AMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .I (InField2)}
-mix_raw := (p' = PMix) => {
-  i := compute.range p.n
-  a := (compute.read ((compute.Read _){.from p.in.a, .at i}) : Float)
-  b := (compute.read ((compute.Read _){.from p.in.b, .at i}) : Float)
-  b_f := compute.buf (compute.BufParam{.type Float, .length p.n})
-  OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value (a + ((b - a) * p.w))}))}
+mix_raw := PMix{.'n : Int, .'cols : Int, .'w : Float, .'in} => {
+  i := compute.range n
+  a := (compute.read ((compute.Read _){.from in.a, .at i}) : Float)
+  b := (compute.read ((compute.Read _){.from in.b, .at i}) : Float)
+  b_f := compute.buf (compute.BufParam{.type Float, .length n})
+  OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value (a + ((b - a) * w))}))}
 }
 mix := compute.parallel mix_raw "cpu" (OutField)
 
@@ -93,12 +93,12 @@ smooth := compute.parallel smooth_raw "cpu" (OutField)
 
 PBiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .in (InLand)}
 ABiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .I (InLand)}
-biome_raw := (p' = PBiome) => {
-  i := compute.range p.n
-  e := (compute.read ((compute.Read _){.from p.in.height, .at i}) : Float)
-  m := (compute.read ((compute.Read _){.from p.in.moisture, .at i}) : Float)
-  b := if e < p.sea then 0 else (if e < p.ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
-  b_ids := compute.buf (compute.BufParam{.type Int, .length p.n})
+biome_raw := PBiome{.'n : Int, .'cols : Int, .'sea : Float, .'ridge : Float, .'in} => {
+  i := compute.range n
+  e := (compute.read ((compute.Read _){.from in.height, .at i}) : Float)
+  m := (compute.read ((compute.Read _){.from in.moisture, .at i}) : Float)
+  b := if e < sea then 0 else (if e < ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
+  b_ids := compute.buf (compute.BufParam{.type Int, .length n})
   OutIds{.ids (compute.write ((compute.Write _){.to b_ids, .at i, .value b}))}
 }
 biome := compute.parallel biome_raw "cpu" (OutIds)

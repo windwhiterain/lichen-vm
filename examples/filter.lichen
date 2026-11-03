@@ -40,11 +40,11 @@
 FIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length 6})), .w (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 FOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 FPar := {.n @any : Int, .taps @any : Int, .in (FIn)}
-filter_raw := (c' = FPar) => {
-  i := compute.range c.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from c.in.x, .at (i - (s(0) - 1))}) : Float))) ~ "combine" ~ "element"))
-  b_y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  (FOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}))})
+filter_raw := FPar{.'n : Int, .'taps : Int, .'in} => {
+  i := compute.range n
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.w, .at (s(0) - 1)}) : Float) * (compute.read ((compute.Read _){.from in.x, .at (i - (s(0) - 1))}) : Float))) ~ "combine" ~ "element"))
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
+  (FOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (taps, 0.0 ~ "identity"))}))})
 }
 filter := compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (FOut)
 Fill := {.n @any : Int}

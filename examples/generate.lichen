@@ -209,11 +209,11 @@ Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 20})), .x (compu
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .kdim @any : Int, .in (Gin)}
 ArgS := {.n @any : Int, .kdim @any : Int, .I (Gin)}
-logits_raw := (k' = ParS) => {
-  i := compute.range k.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
-  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Gout{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))}))})
+logits_raw := ParS{.'n : Int, .'kdim : Int, .'in} => {
+  i := compute.range n
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.w, .at (i * kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
+  (Gout{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (kdim, 0.0 ~ "identity"))}))})
 }
 logits := compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Gout)
 Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}

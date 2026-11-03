@@ -27,36 +27,36 @@
 Turn := {.position (compute.Buf (compute.BufParam{.type Float, .length 4})), .inverse_frequency (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParC := {.n @any : Int, .in (Turn)}
-cos_raw := (k' = ParC) => {
-  i := compute.range k.n
-  angle := (compute.read ((compute.Read _){.from k.in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from k.in.inverse_frequency, .at i}) : Float)
-  b_c := compute.buf (compute.BufParam{.type Float, .length k.n})
+cos_raw := ParC{.'n : Int, .'in} => {
+  i := compute.range n
+  angle := (compute.read ((compute.Read _){.from in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from in.inverse_frequency, .at i}) : Float)
+  b_c := compute.buf (compute.BufParam{.type Float, .length n})
   OutC{.c (compute.write ((compute.Write _){.to b_c, .at i, .value (cos angle ~ "element")}))}
 }
 cosine := compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu" (OutC)
 OutS := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .in (Turn)}
-sin_raw := (k' = ParS) => {
-  i := compute.range k.n
-  angle := (compute.read ((compute.Read _){.from k.in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from k.in.inverse_frequency, .at i}) : Float)
-  b_s := compute.buf (compute.BufParam{.type Float, .length k.n})
+sin_raw := ParS{.'n : Int, .'in} => {
+  i := compute.range n
+  angle := (compute.read ((compute.Read _){.from in.position, .at i}) : Float) * (compute.read ((compute.Read _){.from in.inverse_frequency, .at i}) : Float)
+  b_s := compute.buf (compute.BufParam{.type Float, .length n})
   OutS{.s (compute.write ((compute.Write _){.to b_s, .at i, .value (sin angle ~ "element")}))}
 }
 sine := compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" (OutS)
 Expr := {.x (compute.Buf (compute.BufParam{.type Float, .length 8})), .c (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 ParR := {.n @any : Int, .in (Expr)}
-rotate_raw := (k' = ParR) => {
-  j := compute.range k.n
+rotate_raw := ParR{.'n : Int, .'in} => {
+  j := compute.range n
   odd := j % 2
   expr := (j - odd) / 2
   partner := j + 1 - 2 * odd
-  c := (compute.read ((compute.Read _){.from k.in.c, .at expr}) : Float)
-  s := (compute.read ((compute.Read _){.from k.in.s, .at expr}) : Float)
-  here := (compute.read ((compute.Read _){.from k.in.x, .at j}) : Float)
-  other := (compute.read ((compute.Read _){.from k.in.x, .at partner}) : Float)
+  c := (compute.read ((compute.Read _){.from in.c, .at expr}) : Float)
+  s := (compute.read ((compute.Read _){.from in.s, .at expr}) : Float)
+  here := (compute.read ((compute.Read _){.from in.x, .at j}) : Float)
+  other := (compute.read ((compute.Read _){.from in.x, .at partner}) : Float)
   turned := here * c - (1.0 - 2.0 * int2float odd) * other * s
-  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
   OutY{.y (compute.write ((compute.Write _){.to b_y, .at j, .value (turned ~ "element")}))}
 }
 rotate := compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu" (OutY)

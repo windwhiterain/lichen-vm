@@ -123,30 +123,30 @@ Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
 Pick := {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Par0 := {.n @any : Int, .w @any : Int, .in (Row)}
 Arg0 := {.n @any : Int, .w @any : Int, .I (Row)}
-rank0_raw := (k' = Par0) => {
-  lane := compute.range k.n
-  base := lane * k.w
-  @loop fold := s' => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from k.in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from k.in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  b_p := compute.buf (compute.BufParam{.type Float, .length k.n})
-  Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))}
+rank0_raw := Par0{.'n : Int, .'w : Int, .'in} => {
+  lane := compute.range n
+  base := lane * w
+  @loop fold := s' => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  b_p := compute.buf (compute.BufParam{.type Float, .length n})
+  Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))}
 }
 rank0 := compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu" (Pick)
 Sel1 := {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Cat1 := {.p (compute.Buf (compute.BufParam{.type Float, .length 10}))}
 Par1 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel1)}
 Arg1 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel1)}
-rank1_raw := (k' = Par1) => {
-  lane := compute.range k.n
-  rank := lane / k.rows
-  row := lane % k.rows
-  base := row * k.w
-  low := float2int ((compute.read ((compute.Read _){.from k.in.q, .at row}) : Float))
+rank1_raw := Par1{.'n : Int, .'w : Int, .'rows : Int, .'ranks : Int, .'in} => {
+  lane := compute.range n
+  rank := lane / rows
+  row := lane % rows
+  base := row * w
+  low := float2int ((compute.read ((compute.Read _){.from in.q, .at row}) : Float))
   @loop fold := s' => if s(0) == 0 then s(2) else { i := s(0) - 1
-    ri := float2int ((compute.read ((compute.Read _){.from k.in.x, .at (base + i)}) : Float))
+    ri := float2int ((compute.read ((compute.Read _){.from in.x, .at (base + i)}) : Float))
     hit := (1 * (ri >= s(1))) * (1 * (i != low))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
-  mine := if rank == 0 then low else (fold (k.w, 0, 0))
-  b_p := compute.buf (compute.BufParam{.type Float, .length k.n})
+  mine := if rank == 0 then low else (fold (w, 0, 0))
+  b_p := compute.buf (compute.BufParam{.type Float, .length n})
   Cat1{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float mine ~ "element")}))}
 }
 rank1 := compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu" (Cat1)
@@ -154,21 +154,21 @@ Sel2 := {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compu
 Cat2 := {.p (compute.Buf (compute.BufParam{.type Float, .length 15})), .t (compute.Buf (compute.BufParam{.type Float, .length 15}))}
 Par2 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel2)}
 Arg2 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel2)}
-rank2_raw := (k' = Par2) => {
-  lane := compute.range k.n
-  rank := lane / k.rows
-  row := lane % k.rows
-  base := row * k.w
-  low := float2int ((compute.read ((compute.Read _){.from k.in.q, .at row}) : Float))
-  mid := float2int ((compute.read ((compute.Read _){.from k.in.q, .at (k.rows + row)}) : Float))
+rank2_raw := Par2{.'n : Int, .'w : Int, .'rows : Int, .'ranks : Int, .'in} => {
+  lane := compute.range n
+  rank := lane / rows
+  row := lane % rows
+  base := row * w
+  low := float2int ((compute.read ((compute.Read _){.from in.q, .at row}) : Float))
+  mid := float2int ((compute.read ((compute.Read _){.from in.q, .at (rows + row)}) : Float))
   @loop fold := s' => if s(0) == 0 then s(2) else { i := s(0) - 1
-    ri := float2int ((compute.read ((compute.Read _){.from k.in.x, .at (base + i)}) : Float))
+    ri := float2int ((compute.read ((compute.Read _){.from in.x, .at (base + i)}) : Float))
     hit := (1 * (ri >= s(1))) * (1 * (i != low)) * (1 * (i != mid))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
-  mine := if rank == 0 then low else (if rank == 1 then mid else (fold (k.w, 0, 0)))
-  b_p := compute.buf (compute.BufParam{.type Float, .length k.n})
-  b_t := compute.buf (compute.BufParam{.type Float, .length k.n})
-  Cat2{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float mine ~ "element")})), .t (compute.write ((compute.Write _){.to b_t, .at (row * k.ranks + rank), .value (int2float mine ~ "element")}))}
+  mine := if rank == 0 then low else (if rank == 1 then mid else (fold (w, 0, 0)))
+  b_p := compute.buf (compute.BufParam{.type Float, .length n})
+  b_t := compute.buf (compute.BufParam{.type Float, .length n})
+  Cat2{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float mine ~ "element")})), .t (compute.write ((compute.Write _){.to b_t, .at (row * ranks + rank), .value (int2float mine ~ "element")}))}
 }
 rank2 := compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu" (Cat2)
 Fill := {.n @any : Int}

@@ -187,33 +187,33 @@ append := compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" (KVOu
 Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 8})), .x (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .kdim @any : Int, .in (Gin)}
-score_raw := (k' = ParS) => {
-  i := compute.range k.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.w, .at (i * k.kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
-  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Gout{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))}))})
+score_raw := ParS{.'n : Int, .'kdim : Int, .'in} => {
+  i := compute.range n
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.w, .at (i * kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
+  (Gout{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (fold (kdim, 0.0 ~ "identity"))}))})
 }
 score := compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Gout)
 Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Maxs := {.m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParM := {.n @any : Int, .in (Row)}
-rowmax_raw := (k' = ParM) => {
-  i := compute.range k.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float)) ~ "combine"))
-  b_m := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Maxs{.m (compute.write ((compute.Write _){.to b_m, .at i, .value fold (k.n + 0, ((0.0 - 1.0) / 0.0) ~ "identity")}))})
+rowmax_raw := ParM{.'n : Int, .'in} => {
+  i := compute.range n
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float)) ~ "combine"))
+  b_m := compute.buf (compute.BufParam{.type Float, .length n})
+  (Maxs{.m (compute.write ((compute.Write _){.to b_m, .at i, .value fold (n + 0, ((0.0 - 1.0) / 0.0) ~ "identity")}))})
 }
 rowmax := compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu" (Maxs)
 Soft := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParY := {.n @any : Int, .in (Soft)}
-softmax_raw := (k' = ParY) => {
-  i := compute.range k.n
-  m := (compute.read ((compute.Read _){.from k.in.m, .at 0}) : Float)
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){.from k.in.x, .at s(0) - 1}) : Float) - m) ~ "element")) ~ "combine"))
-  total := fold (k.n + 0, 0.0 ~ "identity")
-  here := exp ((compute.read ((compute.Read _){.from k.in.x, .at i}) : Float) - m)
-  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+softmax_raw := ParY{.'n : Int, .'in} => {
+  i := compute.range n
+  m := (compute.read ((compute.Read _){.from in.m, .at 0}) : Float)
+  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float) - m) ~ "element")) ~ "combine"))
+  total := fold (n + 0, 0.0 ~ "identity")
+  here := exp ((compute.read ((compute.Read _){.from in.x, .at i}) : Float) - m)
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
   (OutY{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (here / total)}))})
 }
 softmax := compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutY)
