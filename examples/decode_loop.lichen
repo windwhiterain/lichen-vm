@@ -148,7 +148,7 @@
     `[0.09625513525746869, 0.7112345942275937, ...]` against the modelled row above.\n\n\
     **Three workarounds and two of them are rules.** (1) **The transcript is a sixth kernel \
     rather than a wider `weigh`** — a **rule**, the extent rule named above. (2) **`keep` \
-    reads the step's output at `lane % k.dim`, not at `lane - base`** — a **rule**: on the \
+    reads the step's output at `lane % dim`, not at `lane - base`** — a **rule**: on the \
     lanes where `lane - base` leaves the two-element buffer the address would be out of \
     range altogether, which answers `0` past a host buffer's end \
     (`crates/lichen-compute/src/compute.rs:6234`), which the device now answers the same way \
@@ -162,7 +162,7 @@
     D17's, that a `compute.write` is **the value of an output position and not an effect**, \
     which is why `keep` writes every one of the transcript's four slots every step and takes \
     the old value back where the step does not reach. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
-    conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The fold's trip count is the launch's extent read as `k.n + 0` (`docs/notes/loop-conversion.md`), and the lane's column is `lane - (lane / k.dim) * k.dim` rather than `lane % k.dim`, which cannot be placed."
+    conversion (`docs/notes/kernel-buffer-declarations.md`). The append's freshness test is an **arithmetic select** rather than a conditional over a read: the surface refuses a conditional whose arm reads a buffer, so the old value and the new value are read unconditionally and the test picks between them with a factor. The fold's trip count is the launch's extent read as `k.n + 0` (`docs/notes/loop-conversion.md`), and the lane's column is `lane - (lane / dim) * dim` rather than `lane % dim`, which cannot be placed."
   output = "([8.888384, 10.773098, 11.235222, 13.9678135], [11.235222, 13.9678135], 2): tuple{array{Float, 4}, array{Float, 2}, Int}"
 ---
 KVIn  := {.k (compute.Buf (compute.BufParam{.type Float, .length 8})), .v (compute.Buf (compute.BufParam{.type Float, .length 8})), .nk (compute.Buf (compute.BufParam{.type Float, .length 2})), .nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
@@ -231,14 +231,14 @@ weigh := compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element
 KTIn  := {.o (compute.Buf (compute.BufParam{.type Float, .length 2})), .x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 KTOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParT  := {.n @any : Int, .j @any : Int, .dim @any : Int, .in (KTIn)}
-keep_raw := (k' = ParT) => {
-  lane := compute.range k.n
-  base := k.j * k.dim
-  held := (compute.read ((compute.Read _){.from k.in.x, .at lane}) : Float)
-  here := (compute.read ((compute.Read _){.from k.in.o, .at (lane - (lane / k.dim) * k.dim)}) : Float)
-  fresh := (lane >= base) & (lane - base < k.dim)
+keep_raw := ParT{.'n : Int, .'j : Int, .'dim : Int, .'in} => {
+  lane := compute.range n
+  base := j * dim
+  held := (compute.read ((compute.Read _){.from in.x, .at lane}) : Float)
+  here := (compute.read ((compute.Read _){.from in.o, .at (lane - (lane / dim) * dim)}) : Float)
+  fresh := (lane >= base) & (lane - base < dim)
   mine := held + ((here - held) * (if fresh then 1.0 else 0.0))
-  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  b_y := compute.buf (compute.BufParam{.type Float, .length n})
   (KTOut{.y (compute.write ((compute.Write _){.to b_y, .at lane, .value (mine ~ "element")}))})
 }
 keep := compute.parallel (keep_raw ~ "claim:Reduction(element)") "cpu" (KTOut)

@@ -14,7 +14,7 @@
     rank `rank` — `[3, 1, 2, 2, 0, 3, 3, 0, 1, 0, 1, 2, 3, 2, 1]`. **Both land from the same launch, \
     in the same body, into two different outputs**, which is what `docs/notes/gather-spelling.md` \
     §2.1 measured and what `.t` is for: **`.t` is the layout `examples/decode_loop.lichen`'s `keep` \
-    can gather from**, because there `lane % k.dim` is a coordinate a consumer can compute without \
+    can gather from**, because there `lane % dim` is a coordinate a consumer can compute without \
     knowing a rank's row. `.p` is the cheaper one and it is free for a reason worth stating: it is \
     written at **`.at lane`**, because `rank * rows + row` **is** the lane index whenever `rank = \
     lane / rows` and `row = lane % rows`. There is nothing to concatenate; a launch of `n * k` lanes \

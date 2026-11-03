@@ -220,12 +220,12 @@ Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Pick := {.p (compute.Buf (compute.BufParam{.type Float, .length 1}))}
 Par  := {.n @any : Int, .w @any : Int, .in (Row)}
 Arg  := {.n @any : Int, .w @any : Int, .I (Row)}
-greedy_raw := (k' = Par) => {
-  lane := compute.range k.n
-  base := lane * k.w
-  @loop fold := s' => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from k.in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from k.in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  b_p := compute.buf (compute.BufParam{.type Float, .length k.n})
-  (Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))})
+greedy_raw := Par{.'n : Int, .'w : Int, .'in} => {
+  lane := compute.range n
+  base := lane * w
+  @loop fold := s' => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  b_p := compute.buf (compute.BufParam{.type Float, .length n})
+  (Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))})
 }
 greedy := compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" (Pick)
 Fill := {.n @any : Int}
