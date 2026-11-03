@@ -73,8 +73,8 @@ matmul_raw := (k' = Par) => {
 matmul := compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutC)
 Fill := {.n @any : Int}
 aBuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_a_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_a_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0)
   aBuf{.a (compute.write ((compute.Write _){.to d, .at i, .value v}))}
@@ -82,8 +82,8 @@ fill_a_raw := (c' = Fill) => {
 fill_a := compute.parallel fill_a_raw "cpu" (aBuf)
 a := (compute.plrun fill_a (Fill{.n 6}) : Struct).a
 bBuf := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_b_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_b_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 7.0 else 0.0) + (if i == 1 then 8.0 else 0.0) + (if i == 2 then 9.0 else 0.0) + (if i == 3 then 10.0 else 0.0) + (if i == 4 then 11.0 else 0.0) + (if i == 5 then 12.0 else 0.0)
   bBuf{.b (compute.write ((compute.Write _){.to d, .at i, .value v}))}

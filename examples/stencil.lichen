@@ -106,8 +106,8 @@ ring_raw := (c' = XPar) => {
 ring := compute.parallel ring_raw "cpu" (XOut)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_x_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_x_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 4.0 else 0.0) + (if i == 5 then 4.0 else 0.0)
   xBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

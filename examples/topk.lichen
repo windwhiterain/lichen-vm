@@ -172,8 +172,8 @@ rank2_raw := (k' = Par2) => {
 }
 rank2 := compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu" (Cat2)
 Fill := {.n @any : Int}
-fill_scores_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_scores_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 20})
   v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
   Row{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

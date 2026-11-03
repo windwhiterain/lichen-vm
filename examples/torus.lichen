@@ -90,8 +90,8 @@ torus_raw := (c' = GPar) => {
 }
 torus := compute.parallel torus_raw "cpu" (GOut)
 Fill := {.n @any : Int}
-fill_plane_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_plane_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 9})
   v := (if i == 2 then 4.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
   GIn{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

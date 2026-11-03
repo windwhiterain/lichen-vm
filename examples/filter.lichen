@@ -49,8 +49,8 @@ filter_raw := (c' = FPar) => {
 filter := compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (FOut)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_x_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_x_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0)
   (xBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
@@ -58,8 +58,8 @@ fill_x_raw := (c' = Fill) => {
 fill_x := compute.parallel fill_x_raw "cpu" (xBuf)
 x := (compute.plrun fill_x (Fill{.n 6}) : Struct).x
 smoothBuf := {.smooth (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-fill_smooth_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_smooth_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0)
   (smoothBuf{.smooth (compute.write ((compute.Write _){.to d, .at i, .value v}))})
@@ -67,8 +67,8 @@ fill_smooth_raw := (c' = Fill) => {
 fill_smooth := compute.parallel fill_smooth_raw "cpu" (smoothBuf)
 smooth := (compute.plrun fill_smooth (Fill{.n 3}) : Struct).smooth
 differenceBuf := {.difference (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-fill_difference_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_difference_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then (0.0 - 1.0) else 0.0)
   (differenceBuf{.difference (compute.write ((compute.Write _){.to d, .at i, .value v}))})

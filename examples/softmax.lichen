@@ -40,8 +40,8 @@ softmax_raw := (k' = ParY) => {
 softmax := compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_x_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_x_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
   xBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

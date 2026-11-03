@@ -75,20 +75,20 @@ XBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 25}))}
 WBuf := {.w (compute.Buf (compute.BufParam{.type Float, .length 9}))}
 EBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 25}))}
 Fill := {.n @any : Int}
-fill_x_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_x_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 25})
   v := (if i == 12 then 8.0 else 0.0)
   (XBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_w_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_w_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 9})
   v := 0.125
   (WBuf{.w (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_e_raw := (c' = Fill) => {
-  i := compute.range c.n
+fill_e_raw := Fill{.'n : Int} => {
+  i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 25})
   v := (if i == 9 then 8.0 else 0.0)
   (EBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))})
