@@ -59,7 +59,7 @@
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .in (Row)}
-row_sum_raw := ParS{.'n : Int, .'in} => {
+row_sum_raw := ParS{.n' : Int, .in'} => {
   i := compute.range n
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float))) ~ "combine"))
   b_s := compute.buf (compute.BufParam{.type Float, .length n})
@@ -68,7 +68,7 @@ row_sum_raw := ParS{.'n : Int, .'in} => {
 row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" (Sums)
 Sumsq := {.q (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParQ := {.n @any : Int, .in (Row)}
-row_sumsq_raw := ParQ{.'n : Int, .'in} => {
+row_sumsq_raw := ParQ{.n' : Int, .in'} => {
   i := compute.range n
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float) * (compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float))) ~ "combine" ~ "element"))
   b_q := compute.buf (compute.BufParam{.type Float, .length n})
@@ -78,7 +78,7 @@ row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity
 Moments := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .w (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4})), .q (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParY := {.n @any : Int, .eps @any : Float, .in (Moments)}
-normalise_raw := ParY{.'n : Int, .'eps : Float, .'in} => {
+normalise_raw := ParY{.n' : Int, .eps' : Float, .in'} => {
   i := compute.range n
   count := int2float n
   m := (compute.read ((compute.Read _){.from in.s, .at 0}) : Float) / count
@@ -92,7 +92,7 @@ normalise_raw := ParY{.'n : Int, .'eps : Float, .'in} => {
 normalise := compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_x_raw := Fill{.'n : Int} => {
+fill_x_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
@@ -101,7 +101,7 @@ fill_x_raw := Fill{.'n : Int} => {
 fill_x := compute.parallel fill_x_raw "cpu" (xBuf)
 x := (compute.plrun fill_x (Fill{.n 4}) : Struct).x
 wBuf := {.w (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_w_raw := Fill{.'n : Int} => {
+fill_w_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 6.0 else 0.0)

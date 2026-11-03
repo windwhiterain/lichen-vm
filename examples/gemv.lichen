@@ -109,7 +109,7 @@
 Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 12})), .x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Par  := {.n @any : Int, .kdim @any : Int, .in (Gin)}
-gemv_raw := Par{.'n : Int, .'kdim : Int, .'in} => {
+gemv_raw := Par{.n' : Int, .kdim' : Int, .in'} => {
   i := compute.range n
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.w, .at (i * kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
   b_y := compute.buf (compute.BufParam{.type Float, .length n})
@@ -118,7 +118,7 @@ gemv_raw := Par{.'n : Int, .'kdim : Int, .'in} => {
 gemv := compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (Gout)
 Fill := {.n @any : Int}
 wBuf := {.w (compute.Buf (compute.BufParam{.type Float, .length 12}))}
-fill_w_raw := Fill{.'n : Int} => {
+fill_w_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 12})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0) + (if i == 8 then 9.0 else 0.0) + (if i == 9 then 10.0 else 0.0) + (if i == 10 then 11.0 else 0.0) + (if i == 11 then 12.0 else 0.0)
@@ -127,7 +127,7 @@ fill_w_raw := Fill{.'n : Int} => {
 fill_w := compute.parallel fill_w_raw "cpu" (wBuf)
 w := (compute.plrun fill_w (Fill{.n 12}) : Struct).w
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
-fill_x_raw := Fill{.'n : Int} => {
+fill_x_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0)

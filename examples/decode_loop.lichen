@@ -187,7 +187,7 @@ append := compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" (KVOu
 Gin  := {.w (compute.Buf (compute.BufParam{.type Float, .length 8})), .x (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 Gout := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .kdim @any : Int, .in (Gin)}
-score_raw := ParS{.'n : Int, .'kdim : Int, .'in} => {
+score_raw := ParS{.n' : Int, .kdim' : Int, .in'} => {
   i := compute.range n
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.w, .at (i * kdim + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from in.x, .at (s(0) - 1)}) : Float))) ~ "combine" ~ "element"))
   b_y := compute.buf (compute.BufParam{.type Float, .length n})
@@ -197,7 +197,7 @@ score := compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element
 Row  := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Maxs := {.m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParM := {.n @any : Int, .in (Row)}
-rowmax_raw := ParM{.'n : Int, .'in} => {
+rowmax_raw := ParM{.n' : Int, .in'} => {
   i := compute.range n
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float)) ~ "combine"))
   b_m := compute.buf (compute.BufParam{.type Float, .length n})
@@ -207,7 +207,7 @@ rowmax := compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "c
 Soft := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .m (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParY := {.n @any : Int, .in (Soft)}
-softmax_raw := ParY{.'n : Int, .'in} => {
+softmax_raw := ParY{.n' : Int, .in'} => {
   i := compute.range n
   m := (compute.read ((compute.Read _){.from in.m, .at 0}) : Float)
   @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float) - m) ~ "element")) ~ "combine"))
@@ -231,7 +231,7 @@ weigh := compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element
 KTIn  := {.o (compute.Buf (compute.BufParam{.type Float, .length 2})), .x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 KTOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParT  := {.n @any : Int, .j @any : Int, .dim @any : Int, .in (KTIn)}
-keep_raw := ParT{.'n : Int, .'j : Int, .'dim : Int, .'in} => {
+keep_raw := ParT{.n' : Int, .j' : Int, .dim' : Int, .in'} => {
   lane := compute.range n
   base := j * dim
   held := (compute.read ((compute.Read _){.from in.x, .at lane}) : Float)
@@ -244,7 +244,7 @@ keep_raw := ParT{.'n : Int, .'j : Int, .'dim : Int, .'in} => {
 keep := compute.parallel (keep_raw ~ "claim:Reduction(element)") "cpu" (KTOut)
 Fill := {.n @any : Int}
 kbufBuf := {.kbuf (compute.Buf (compute.BufParam{.type Float, .length 8}))}
-fill_kbuf_raw := Fill{.'n : Int} => {
+fill_kbuf_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
@@ -253,7 +253,7 @@ fill_kbuf_raw := Fill{.'n : Int} => {
 fill_kbuf := compute.parallel fill_kbuf_raw "cpu" (kbufBuf)
 kbuf := (compute.plrun fill_kbuf (Fill{.n 8}) : Struct).kbuf
 vbufBuf := {.vbuf (compute.Buf (compute.BufParam{.type Float, .length 8}))}
-fill_vbuf_raw := Fill{.'n : Int} => {
+fill_vbuf_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 5.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 7.0 else 0.0) + (if i == 3 then 8.0 else 0.0)
@@ -262,7 +262,7 @@ fill_vbuf_raw := Fill{.'n : Int} => {
 fill_vbuf := compute.parallel fill_vbuf_raw "cpu" (vbufBuf)
 vbuf := (compute.plrun fill_vbuf (Fill{.n 8}) : Struct).vbuf
 nkBuf := {.nk (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_nk_raw := Fill{.'n : Int} => {
+fill_nk_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0)
@@ -271,7 +271,7 @@ fill_nk_raw := Fill{.'n : Int} => {
 fill_nk := compute.parallel fill_nk_raw "cpu" (nkBuf)
 nk := (compute.plrun fill_nk (Fill{.n 2}) : Struct).nk
 nvBuf := {.nv (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_nv_raw := Fill{.'n : Int} => {
+fill_nv_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := (if i == 0 then 30.0 else 0.0) + (if i == 1 then 40.0 else 0.0)
@@ -280,7 +280,7 @@ fill_nv_raw := Fill{.'n : Int} => {
 fill_nv := compute.parallel fill_nv_raw "cpu" (nvBuf)
 nv := (compute.plrun fill_nv (Fill{.n 2}) : Struct).nv
 qBuf := {.q (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_q_raw := Fill{.'n : Int} => {
+fill_q_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := (if i == 0 then 1.0 else 0.0)
@@ -289,7 +289,7 @@ fill_q_raw := Fill{.'n : Int} => {
 fill_q := compute.parallel fill_q_raw "cpu" (qBuf)
 q := (compute.plrun fill_q (Fill{.n 2}) : Struct).q
 logBuf := {.log (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_log_raw := Fill{.'n : Int} => {
+fill_log_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := 0.0
@@ -298,7 +298,7 @@ fill_log_raw := Fill{.'n : Int} => {
 fill_log := compute.parallel fill_log_raw "cpu" (logBuf)
 log := (compute.plrun fill_log (Fill{.n 4}) : Struct).log
 spareBuf := {.spare (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-fill_spare_raw := Fill{.'n : Int} => {
+fill_spare_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 2})
   v := 0.0

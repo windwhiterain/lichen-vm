@@ -90,7 +90,7 @@ torus_raw := (c' = GPar) => {
 }
 torus := compute.parallel torus_raw "cpu" (GOut)
 Fill := {.n @any : Int}
-fill_plane_raw := Fill{.'n : Int} => {
+fill_plane_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 9})
   v := (if i == 2 then 4.0 else 0.0) + (if i == 3 then 4.0 else 0.0)

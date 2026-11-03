@@ -165,19 +165,19 @@ QBuf := {.q (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 KBuf := {.k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 VBuf := {.v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Fill := {.n @any : Int}
-fill_q_raw := Fill{.'n : Int} => {
+fill_q_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
   (QBuf{.q (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_k_raw := Fill{.'n : Int} => {
+fill_k_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 1.0 else 0.0)
   (KBuf{.k (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_v_raw := Fill{.'n : Int} => {
+fill_v_raw := Fill{.n' : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
