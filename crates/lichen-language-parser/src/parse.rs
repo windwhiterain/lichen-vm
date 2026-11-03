@@ -1015,7 +1015,7 @@ fn postfix_parser<'a, Er: GrammarError<'a>>(
             .map(Postfix::Paren),
         glue.clone()
             .ignore_then(token(TokenKind::LBrace))
-            .ignore_then(struct_field_list(expr.clone()))
+            .ignore_then(struct_field_list(tokens, expr.clone()))
             .then_ignore(token(TokenKind::RBrace))
             .map(Postfix::Brace),
     ))
@@ -1145,18 +1145,78 @@ enum Postfix {
     Brace(Vec<StructFieldValue>),
 }
 
-/// `.name expr` — one field of a struct value or a struct instance.
+/// `.name expr` — one field of a struct or an instance; `.name' expr` is the
+/// sugar (`docs/language-spec.md` §Syntax).
 ///
 /// # Invariant
 /// A field is always named: the name is the field's identity, so a struct
-/// value and a struct instance spell their fields the same way.
+/// value and a struct instance spell their fields the same way.  The prime
+/// only abbreviates the field's own value: what follows it annotates that
+/// formal and does not continue an expression.
 fn struct_field_value<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, StructFieldValue, Ex<'a, Er>> + Clone {
-    token(TokenKind::Dot)
+    let plain = token(TokenKind::Dot)
         .ignore_then(name())
         .then(expr.clone())
-        .map(|((name, _span), value)| StructFieldValue { name, value })
+        .map(|((name, _span), value)| StructFieldValue { name, value });
+    let shorthand = token(TokenKind::Dot)
+        .ignore_then(name())
+        .then_ignore(token(TokenKind::Prime))
+        .then(expr.clone().or_not())
+        .validate(|((name, span), tail), me, emit| {
+            let value = match primed_field_value(&name, span, tail) {
+                Some(value) => value,
+                None => {
+                    emit.emit(Er::message(
+                        me.span(),
+                        "a primed field name takes annotations, not another expression",
+                    ));
+                    err_node(tokens, me.span())
+                }
+            };
+            StructFieldValue { name, value }
+        });
+    // The primed form first: only it accepts `.name'`, so the plain field
+    // never stands in for one the sugar describes.
+    shorthand.or(plain)
+}
+
+/// A primed field's value: its formal, annotated by the tail; `None` when the
+/// tail is another expression.
+///
+/// # Invariant
+/// The tail is an annotation chain, so the position it leaves open — the
+/// wildcard head of a value-less chain — is exactly where the formal goes;
+/// a tail that is another expression is refused, not applied.
+fn primed_field_value(name: &str, span: Span, tail: Option<Expr>) -> Option<Expr> {
+    let formal = Expr::Formal {
+        name: name.to_string(),
+        span,
+        binder: None,
+    };
+    match tail {
+        None => Some(formal),
+        Some(Expr::Annotation {
+            value,
+            r#type,
+            perspective,
+            refinement,
+            doc,
+            marks,
+            span: annotation_span,
+        }) if matches!(&*value, Expr::Any(_)) => Some(Expr::Annotation {
+            value: Box::new(formal),
+            r#type,
+            perspective,
+            refinement,
+            doc,
+            marks,
+            span: annotation_span,
+        }),
+        Some(_) => None,
+    }
 }
 
 /// A comma-separated list of zero or more items, runs tolerated — plus whether
@@ -1192,9 +1252,10 @@ fn comma_list<'a, T, Er: GrammarError<'a>>(
 
 /// The field list of a struct value or a struct instance.
 fn struct_field_list<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, Vec<StructFieldValue>, Ex<'a, Er>> + Clone {
-    comma_list(struct_field_value(expr)).map(|(fields, _saw_separator)| fields)
+    comma_list(struct_field_value(tokens, expr)).map(|(fields, _saw_separator)| fields)
 }
 
 /// The content of a `(`: expressions plus whether any comma appeared.
@@ -1280,7 +1341,7 @@ fn struct_value<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LBrace)
-        .ignore_then(struct_field_list(expr))
+        .ignore_then(struct_field_list(tokens, expr))
         .then_ignore(token(TokenKind::RBrace))
         .map_with(|fields, me| Expr::StructValue {
             fields,

@@ -44,6 +44,7 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
+`{.a' ..., ...}` => `{.a a' ..., ...}`
 ```
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
