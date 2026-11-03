@@ -44,13 +44,14 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
-`{.a' ..., ...}` => `{.a a' ..., ...}`
+`{.'a ..., ...}` => `{.a a' ..., ...}`
 ```
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.
 
 > A prime is a **suffix** on a name and it is written against it: `a'` is the formal reference `a`, and `a '` is not a spelling at all.
+> In a field list the prime stands between the `.` and the name, and there it marks the field's value as that name's formal: `{.'a ..., ...}` is `{.a a' ..., ...}`.
 > A prime belongs to the parameter side of a lambda — the expression on the left of a `=>` — and there it declares the parameter the name stands for.
 > A name on the parameter side without a prime is an ordinary expression of the enclosing scope, and a prime anywhere else is refused.
 
