@@ -1145,7 +1145,7 @@ enum Postfix {
     Brace(Vec<StructFieldValue>),
 }
 
-/// `.name expr` — one field of a struct or an instance; `.'name expr` is the
+/// `.name expr` — one field of a struct or an instance; `.name' expr` is the
 /// sugar (`docs/language-spec.md` §Syntax).
 ///
 /// # Invariant
@@ -1162,8 +1162,8 @@ fn struct_field_value<'a, Er: GrammarError<'a>>(
         .then(expr.clone())
         .map(|((name, _span), value)| StructFieldValue { name, value });
     let shorthand = token(TokenKind::Dot)
-        .ignore_then(token(TokenKind::Prime))
         .ignore_then(name())
+        .then_ignore(token(TokenKind::Prime))
         .then(expr.clone().or_not())
         .validate(|((name, span), tail), me, emit| {
             let value = match primed_field_value(&name, span, tail) {
@@ -1178,8 +1178,8 @@ fn struct_field_value<'a, Er: GrammarError<'a>>(
             };
             StructFieldValue { name, value }
         });
-    // The primed form first: only it accepts `.'`, so the plain field never
-    // stands in for one the sugar describes.
+    // The primed form first: only it accepts `.name'`, so the plain field
+    // never stands in for one the sugar describes.
     shorthand.or(plain)
 }
 
