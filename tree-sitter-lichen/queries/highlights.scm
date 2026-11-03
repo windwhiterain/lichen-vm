@@ -25,11 +25,12 @@
 ; named fields (`.name` reads, struct field names)
 (field_read name: (identifier) @property)
 (struct_field name: (identifier) @property)
+(struct_field "'" @operator)
 
 ; bindings / definitions
 (binding name: (identifier) @variable)
 
-; the formal reference `x'` — the prime mark is a suffix on the name, and it
+; the formal reference `'x` — the prime mark is a prefix on the name, and it
 ; is what says the name is a parameter (`docs/language-spec.md` §Syntax).
 ; The name itself is an ordinary identifier and is coloured above.
 (formal "'" @operator)

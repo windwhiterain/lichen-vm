@@ -51,7 +51,7 @@ In  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParE := {{.n @any : Int, .in In}}
 ArgE := {{.n @any : Int, .I In}}
-scale_raw := (k' = ParE) => {{
+scale_raw := ('k = ParE) => {{
   i := compute.range k.n
   e := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((OutE){{.e (compute.write ((compute.Write _){{.to e, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
@@ -61,14 +61,14 @@ In2  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .
 OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := {{.n @any : Int, .in In2}}
 Arg2 := {{.n @any : Int, .I In2}}
-offset_raw := (k' = Par2) => {{
+offset_raw := ('k = Par2) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((OutZ){{.z (compute.write ((compute.Write _){{.to z, .at i, .value (((compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float) + 1.0) ~ "element")}}))}})
 }}
 offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg := {{.n @any : Int, .in In}}
-step := (s' = GArg) => {{
+step := ('s = GArg) => {{
   first := (compute.plrun scale ((ArgE){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   left := (compute.plrun offset ((Arg2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}}) : Struct)
   right := (compute.plrun offset ((Arg2){{.n s.n, .I In2{{.d s.in.d, .p first.e}}}}) : Struct)
@@ -96,7 +96,7 @@ fn filled() -> String {
         r#"
 Data := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Fill := {{.n @any : Int}}
-fill := (c' = Fill) => {{
+fill := ('c = Fill) => {{
   i := compute.range c.n
   d := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
   ((Data){{.d (compute.write ((compute.Write _){{.to d, .at i, .value (int2float i + 1.0)}}))}})
@@ -471,7 +471,7 @@ fn a_pack_naming_the_fan_out_merges_all_three_nodes_into_one() {
     assert_eq!(
         (fragment.inputs, fragment.outputs),
         (3, 2),
-        "the union is `d` three times over and the outputs are the two consumers'"
+        "the union is `d` three times over and the outputs are the two 'consumers"
     );
 }
 

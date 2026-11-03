@@ -37,7 +37,7 @@ pub struct Reduction {
 /// one, which is what keeps that true of a hand-written repair function as well.
 #[derive(Debug, Clone)]
 pub struct RepairFunction {
-    /// The repair function itself, `h(x, r, r')`.
+    /// The repair function itself, `h(x, r, 'r)`.
     pub body: Expr,
 }
 
@@ -98,7 +98,7 @@ pub enum Origin {
     Derived {
         /// How the element function was read as a function of the producer's value.
         abstraction: Abstraction,
-        /// The element function's inverse, `g'(r)^-1(x)`.
+        /// The element function's inverse, `'g(r)^-1(x)`.
         inverse: Expr,
     },
     /// Handed in whole, as an optimization pack may hand one.

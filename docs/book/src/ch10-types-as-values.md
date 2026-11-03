@@ -30,7 +30,7 @@ a template built by a function is an ordinary function. Here is a two-field
 tuple template and a one-field box template:
 
 ```lichen
-Expr := T' => U' => (@any : T, @any : U)
+Expr := 'T => 'U => (@any : T, @any : U)
 Expr Int string
 ```
 
@@ -44,7 +44,7 @@ same function builds a different template when applied to different
 arguments:
 
 ```lichen
-Box := T' => [@any : T, 3]
+Box := 'T => [@any : T, 3]
 Box Int
 ```
 
@@ -55,7 +55,7 @@ Box Int
 and a struct template is the same shape with named fields:
 
 ```lichen
-Pair := A' => B' => {.a @any : A, .b @any : B}
+Pair := 'A => 'B => {.a @any : A, .b @any : B}
 p := Pair Int string
 p{.a 1, .b "s"}
 ```
@@ -91,7 +91,7 @@ function:
   readable.
 
 ```lichen
-type_of := x' => {t := _; x: t; t}
+type_of := 'x => {t := _; x: t; t}
 S := {.a @any : Int}
 s := S{.a 1}
 type_of s.a
@@ -172,7 +172,7 @@ The length of an array requirement `[requirement, length]` is an expression,
 not a numeral, so it may be a binding or a parameter:
 
 ```lichen
-f := n' => [@any : Int, n]
+f := 'n => [@any : Int, n]
 ```
 
 The instance's own element count pins the length cell, and the pin is
@@ -181,7 +181,7 @@ count the length cannot meet is refused at the application, because the
 parameter now carries a length its argument cannot meet.
 
 ```lichen
-f := n' => [@any : Int, n]
+f := 'n => [@any : Int, n]
 ```
 
 This is the language's dependent-type mechanism — via laziness and
@@ -218,9 +218,9 @@ of a kind type is a function's: its type is the shared `FunctionType` marker
 
 ## Exercises
 
-1. Write `Expr := T' => U' => (@any : T, @any : U)` and print
+1. Write `Expr := 'T => 'U => (@any : T, @any : U)` and print
    `Expr Int string` and `Expr Type Int`.
-2. Write a template `Pair := A' => B' => {.a @any : A, .b @any : B}`,
+2. Write a template `Pair := 'A => 'B => {.a @any : A, .b @any : B}`,
    apply it at the call site, and explain why a generic function takes the
    element type rather than reading it out of a requirement.
 3. Write a template `T := (5 : Int, @any : Int)` and check that

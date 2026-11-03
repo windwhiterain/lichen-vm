@@ -22,7 +22,7 @@ const TEMPLATE: &str = r#"
 Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
 Par := {.n @any : Int, .taps @any : Int}
 Arg := {.n @any : Int, .taps @any : Int}
-raw := (c' = Par) => {
+raw := ('c = Par) => {
   i := compute.range c.n
 @BODY@
 }
@@ -37,7 +37,7 @@ const CONTROL: &str = r#"  y := compute.buf (compute.BufParam{.type Float, .leng
 
 /// A fold whose step writes the countdown into the buffer it carries.
 const LOOP: &str = r#"  y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   ((Out){.y (fold (c.taps, y))})"#;
 
 /// The elements the program answers.

@@ -3,7 +3,7 @@
 //! # Invariant
 //! Rendering is not canonicalization: the tree is what it is, and the only rewriting here
 //! is the one that makes a product of exponentials legible, because
-//! `x * exp(r) * exp(-r')` and `x * exp(r - r')` are the same product and only the
+//! `x * exp(r) * exp(-'r)` and `x * exp(r - 'r)` are the same product and only the
 //! second is what the mathematics calls it.
 
 use std::fmt;
@@ -176,8 +176,8 @@ impl fmt::Display for FusedReduction {
                 inverse,
             } => {
                 writeln!(formatter, "c = {}", abstraction.source)?;
-                writeln!(formatter, "g'(r)(c) = {}", abstraction.template)?;
-                writeln!(formatter, "g'(r)^-1(x) = {inverse}")?;
+                writeln!(formatter, "'g(r)(c) = {}", abstraction.template)?;
+                writeln!(formatter, "'g(r)^-1(x) = {inverse}")?;
             }
             Origin::HandSpecified => {
                 writeln!(
@@ -186,7 +186,7 @@ impl fmt::Display for FusedReduction {
                 )?;
             }
         }
-        writeln!(formatter, "h(x, r, r') = {}", self.repair.body)?;
+        writeln!(formatter, "h(x, r, 'r) = {}", self.repair.body)?;
         for step in &self.steps {
             writeln!(formatter, "{step}")?;
         }

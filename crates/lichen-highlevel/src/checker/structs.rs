@@ -322,7 +322,7 @@ where
     /// A struct **value** `{.a e1, .b e2}`.
     ///
     /// # Invariant
-    /// The value is `[name table, nominal id, the fields' own exprs…]` and the
+    /// The value is `[name table, nominal id, the fields own exprs…]` and the
     /// type is the shared `Struct` template: the layout lives in the value, so
     /// a read takes a field's type and attributes from the field itself.
     pub(super) fn check_struct_value(

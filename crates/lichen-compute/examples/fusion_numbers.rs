@@ -66,7 +66,7 @@ fn main() {
     };
     let identity = repair_identity(&fused, &element);
     println!(
-        "per-element identity h(g(d, r), r, r') = g(d, r'), checked numerically over {} points \
+        "per-element identity h(g(d, r), r, 'r) = g(d, 'r), checked numerically over {} points \
          per seed: worst relative gap {identity:.3e}",
         SEEDS.len() * 256
     );

@@ -333,7 +333,7 @@ fn a_select_whose_arms_disagree_is_refused_by_name() {
     fragment
         .body
         .validate()
-        .expect("the body is well formed; it is the arms' classes that are refused");
+        .expect("the body is well formed; it is the arms classes that are refused");
     let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT)
         .expect_err("arms of two classes have no one result type");
     assert_eq!(

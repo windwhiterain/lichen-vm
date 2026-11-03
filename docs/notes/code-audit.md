@@ -388,11 +388,11 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   `P1-18` — compute's registry eviction, per-launch wasm rebuild and unbounded
   `plrun` — is **not** part of this: it shares nothing with the editor path and
   proceeds on its own.
-- **D7 — How to close `P0-2`. — DECIDED: make the obligation explicit (`B'`).**
+- **D7 — How to close `P0-2`. — DECIDED: make the obligation explicit (`'B`).**
   The accessors stay unbounded but become `unsafe` with one written contract, and
   the raw-pointer fields are privatised behind checked constructors.
 
-  *Rejected — full lifetime binding (`A'`):* tying the returned slice to `&self`
+  *Rejected — full lifetime binding (`'A`):* tying the returned slice to `&self`
   does not compile at the VM's own hot spots, because they read an arena slice
   **while mutating the module**. Verified at `gc.rs:57-68` (iterates
   `array.items()` across `self.garbage_collect_node`, then passes
@@ -412,9 +412,9 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   entirely, but it still forces the callers that mutate inside the loop to be
   restructured (the checker's table walks, among others), and it adds a second
   accessor to a type that is already hard to read. Not worth the extra surface
-  when `B'` reaches the same bound on the external hole.
+  when `'B` reaches the same bound on the external hole.
 
-  *What `B'` leaves open, stated so it is not mistaken for done:* inside the
+  *What `'B` leaves open, stated so it is not mistaken for done:* inside the
   crate the one-clause invariant is enforced by discipline and review rather than
   by the type system. The mitigation is that the obligation now lives in exactly
   one written contract, every slicing site is `unsafe` and greppable, and no

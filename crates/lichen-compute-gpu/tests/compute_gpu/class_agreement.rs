@@ -264,7 +264,7 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "Select",
-            "`own_class` states none for it — its class is its arms', which is what \
+            "`own_class` states none for it — its class is its 'arms, which is what \
              `conv_class.rs` already pins",
         ),
         (

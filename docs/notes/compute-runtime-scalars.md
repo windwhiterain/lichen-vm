@@ -83,7 +83,7 @@ Scratch file, not to be committed (the example harness runs every file in
 In0  = struct{.a Int}
 Out0 = struct{.z (compute.Buf _)}
 Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
-g = (k' : Par0) => {
+g = ('k : Par0) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
@@ -93,7 +93,7 @@ In   = struct{.b (compute.Buf _)}
 Out  = struct{.w (compute.Buf _)}
 Par  = struct{.n Int, .alpha Float, .in In, .out Out}
 Host = struct{.n Int, .alpha Float, .I In}
-f = (k' : Par) => {
+f = ('k : Par) => {
   i = compute.range k.n
   v = compute.read ((compute.Read _)(.from k.in.b, .at i))
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value v + float2int k.alpha))
@@ -160,9 +160,9 @@ Two things had to land with the struct argument:
 **The types must be lambdas, not type values.** `Read = struct{.from _, .at _}` is
 a *value*: one occurrence, one expr of `_` cells, and the first instantiation
 specializes them — the next one fails, and the frozen-module path panicked
-outright. `KT = _x' => struct{.I _, .O _}` is a *function*, so every `(KT _)`
+outright. `KT = '_x => struct{.I _, .O _}` is a *function*, so every `(KT _)`
 clones its inner `_`. That is why the wrappers are written
-`Read = T' => struct{.from (Buf T), .at Int}` and call sites are spelled
+`Read = 'T => struct{.from (Buf T), .at Int}` and call sites are spelled
 `compute.read ((compute.Read _)(.from buf, .at i))`.
 
 The `_` spelling at the instantiation site (`_(.from buf, .at i)`) is **not**

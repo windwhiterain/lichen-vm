@@ -58,6 +58,7 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         binding_edges: Vec::new(),
         formals: Vec::new(),
         formal_bases: Vec::new(),
+        body_formals: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
     // The program is one scope, never popped, so every later statement (and the
@@ -112,6 +113,12 @@ struct Resolver {
     formals: Vec<(String, BinderId)>,
     /// The base of each active parameter side.
     formal_bases: Vec<usize>,
+    /// Each lambda body's own declared formals, innermost last.
+    ///
+    /// # Invariant
+    /// A primed body reference names only its innermost lambda's parameter;
+    /// capturing an enclosing lambda's formal uses the plain name instead.
+    body_formals: Vec<HashMap<String, BinderId>>,
 }
 
 /// A block-wide binding whose value is being resolved right now.
@@ -375,7 +382,7 @@ impl Resolver {
                 r#return,
                 ..
             } => {
-                // Resolve the side in the enclosing scope; only `x'` declares here.
+                // Resolve the side in the enclosing scope; only `'x` declares here.
                 self.formal_bases.push(self.formals.len());
                 self.resolve_expr(parameter);
                 let base = self.formal_bases.pop().unwrap_or(self.formals.len());
@@ -384,6 +391,7 @@ impl Resolver {
                 // the enclosing ones in the body.
                 let frame: HashMap<String, BinderId> = formals.into_iter().collect();
                 let declared = !frame.is_empty();
+                self.body_formals.push(frame.clone());
                 if declared {
                     self.scopes.push(frame);
                 }
@@ -393,16 +401,26 @@ impl Resolver {
                 self.resolve_expr(r#return);
                 self.formal_bases = bases;
                 self.lambda_depth -= 1;
+                self.body_formals.pop();
                 if declared {
                     self.scopes.pop();
                 }
             }
-            // `x'` — a formal reference: the hole the argument fills, and the
+            // `'x` — a formal reference: the hole the argument fills, and the
             // name the lambda binds in its body.
             Expr::Formal { name, span, binder } => {
                 let Some(base) = self.formal_bases.last().copied() else {
-                    // A prime outside a parameter side names no parameter: the
-                    // lambda that would own it does not exist.
+                    if let Some(id) = self
+                        .body_formals
+                        .last()
+                        .and_then(|formals| formals.get(name))
+                        .copied()
+                    {
+                        *binder = Some(id);
+                        return;
+                    }
+                    // A prime outside a parameter side must name a formal the
+                    // innermost lambda declared; no other binding declares it.
                     *binder = None;
                     self.diagnostics.push(Diag::new(
                         Stage::Resolve,
@@ -677,14 +695,14 @@ fn binding_cycle(name: &str) -> String {
 ///
 /// # Invariant
 ///
-/// A formal reference names a parameter of the lambda whose parameter side
-/// declares it, so a prime outside every parameter side has no lambda to
-/// belong to and is refused rather than bound by an enclosing one.
+/// A formal reference names a parameter declared by its own parameter side or
+/// innermost body. Any other prime is refused rather than bound to an ordinary
+/// binding or captured from an enclosing lambda.
 fn formal_outside_parameter_side(name: &str) -> String {
     format!(
-        "`{name}'` is a formal reference, and a formal reference belongs to the \
-         parameter side of the function that declares it: write it on the left of \
-         `=>`, or drop the mark and use the name as an ordinary reference."
+        "`'{name}` is a formal reference, but the innermost function does not \
+         declare it: write it on the left of `=>`, or drop the mark and use the \
+         name as an ordinary reference."
     )
 }
 
@@ -696,6 +714,6 @@ fn self_referential_binding(name: &str) -> String {
          the value would be its own input. Write the rebinding with `let`, which compiles the \
          value before the name enters scope, so `let {name} = …` reads the **outer** `{name}` and \
          binds a new one — recursion is spelled the same way, with the reference under a `=>` \
-         parameter (`f = n' => … f (n - 1)`), which is a call rather than a self-reference."
+         parameter (`f = 'n => … f (n - 1)`), which is a call rather than a self-reference."
     )
 }

@@ -164,7 +164,7 @@ const CHAIN: &str = r#"---
 InA  := {.a @any : Int}
 OutA := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParA := {.n @any : Int, .in InA}
-adder := compute.parallel ((k' = ParA) => {
+adder := compute.parallel (('k = ParA) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
@@ -172,7 +172,7 @@ adder := compute.parallel ((k' = ParA) => {
 InB  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 OutB := {.w (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParB := {.n @any : Int, .in InB}
-doubler := compute.parallel ((k' = ParB) => {
+doubler := compute.parallel (('k = ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -181,7 +181,7 @@ doubler := compute.parallel ((k' = ParB) => {
 data := (compute.plrun adder ((compute.A _){.n 4, .I InA{.a 0}}) : Struct)
 InS  := {.b (compute.Buf _)}
 ParS := {.n @any : Int, .in InS}
-step := (s' = ParS) => {
+step := ('s = ParS) => {
   out := (compute.plrun doubler ((compute.A _){.n 4, .I InB{.b data.z}}) : Struct)
   out
 }
@@ -255,7 +255,7 @@ const FROM_PARAMETER: &str = r#"---
 InA  := {.a @any : Int}
 OutA := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParA := {.n @any : Int, .in InA}
-adder := compute.parallel ((k' = ParA) => {
+adder := compute.parallel (('k = ParA) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
@@ -263,7 +263,7 @@ adder := compute.parallel ((k' = ParA) => {
 InB  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 OutB := {.w (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParB := {.n @any : Int, .in InB}
-step := (s' = ParB) => {
+step := ('s = ParB) => {
   out := (compute.plrun adder ((compute.A _){.n s.n, .I InA{.a 0}}) : Struct)
   compute.plrun adder ((compute.A _){.n s.n, .I InA{.a out.z}})
 }
@@ -392,7 +392,7 @@ const BACK_TO_FRONT: &str = r#"---
 InA  := {.a @any : Int}
 OutA := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParA := {.n @any : Int, .in InA}
-adder := compute.parallel ((k' = ParA) => {
+adder := compute.parallel (('k = ParA) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((OutA){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 3}))})
@@ -400,14 +400,14 @@ adder := compute.parallel ((k' = ParA) => {
 InB  := {.b (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 OutB := {.w (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 ParB := {.n @any : Int, .in InB}
-doubler := compute.parallel ((k' = ParB) => {
+doubler := compute.parallel (('k = ParB) => {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   w := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((OutB){.w (compute.write ((compute.Write _){.to w, .at i, .value j + j}))})
 }) "cpu" OutB
 data := (compute.plrun adder ((compute.A _){.n 4, .I InA{.a 0}}) : Struct)
-step := (s' = ParB) => {
+step := ('s = ParB) => {
   buffer := s.in.b
   count := s.n
   out := (compute.plrun doubler ((compute.A _){.n count, .I InB{.b buffer}}) : Struct)

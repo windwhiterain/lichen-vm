@@ -590,7 +590,7 @@ impl fmt::Display for MergeRefusal {
             ),
             MergeRefusal::FanInIsWiderThanTwo { inputs } => write!(
                 formatter,
-                "a node of the region reads {inputs} producers' outputs, and the fold composes a \
+                "a node of the region reads {inputs} producers outputs, and the fold composes a \
                  fan-in of two, so a wider one is not composed yet"
             ),
             MergeRefusal::AbsorbedEdgeIsNotOne { inputs } => write!(

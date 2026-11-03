@@ -100,7 +100,7 @@ Tried and rejected while finding it:
 ## Closed mechanism 2a — a jitted kernel's class reads undecided
 
 `compute.jit` refuses with `UNDECIDED_DOMAIN` for
-`k = compute.jit (x' => helper x + 1)`, which must check.
+`k = compute.jit ('x => helper x + 1)`, which must check.
 
 **Bisected: `5d585047` is the commit that opens it** (green at `aeac9efe`, red at
 `5d585047`, on `jit_inline_lichen_function`). The commit removed the `slot == 1`
@@ -437,7 +437,7 @@ requirement came in `dd4cd0e1`, an ancestor of `dev`, and it fails on the unmodi
 ## Verify
 
 ```pwsh
-$env:CARGO_TARGET_DIR='C:\resource\lichen-vm\.worktrees\spec-literals\target'
+$env:CARGO_TARGET_DIR='C:\resource\lichen-vm\.worktrees\spec-literals\'target
 cargo check --manifest-path C:\resource\lichen-vm\.worktrees\spec-literals\Cargo.toml --workspace --all-targets
 cargo test --manifest-path C:\resource\lichen-vm\.worktrees\spec-literals\Cargo.toml -p lichen-highlevel --test highlevel
 cargo test --manifest-path C:\resource\lichen-vm\.worktrees\spec-literals\Cargo.toml -p lichen-language --test language

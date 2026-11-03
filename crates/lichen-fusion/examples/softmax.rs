@@ -318,7 +318,7 @@ fn hand_specified_repair_with_flipped_sign() {
     .expect("distributivity cannot tell a rescale from its own inverse");
 
     println!(
-        "case 6: the same g, with the rescale's sign flipped, h = x * exp(r' - r)\n--- derived\n{fused}---"
+        "case 6: the same g, with the rescale's sign flipped, h = x * exp('r - r)\n--- derived\n{fused}---"
     );
     check_distributivity_numerically(&fused);
     println!("distributivity passed, and it would have: every factor distributes over a sum");
@@ -364,7 +364,7 @@ fn abstraction_of(fused: &FusedReduction) -> &Abstraction {
     abstraction
 }
 
-/// The worst relative disagreement between `h(g(d, r), r, r')` and `g(d, r')`, over the
+/// The worst relative disagreement between `h(g(d, r), r, 'r)` and `g(d, 'r)`, over the
 /// cross-check seeds.
 ///
 /// # Invariant

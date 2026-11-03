@@ -536,7 +536,7 @@ impl Compiler {
                 );
                 function_id
             }
-            // `x'` is `{ x = _; x }`: the unify's value is the shared formal.
+            // `'x` is `{ x = _; x }`: the unify's value is the shared formal.
             Expr::Formal { span, binder, .. } => {
                 let Some(binder) = *binder else {
                     // A refused formal lowers to the same inert `ErrorBlock` an
@@ -544,7 +544,7 @@ impl Compiler {
                     return self.alloc(ExprKind::ErrorBlock, span);
                 };
                 // One name is one formal: its occurrences share the node, so a
-                // repeated `x'` is one parameter and not two.
+                // repeated `'x` is one parameter and not two.
                 let formal = match self.binder_to_expr.get(binder).copied().flatten() {
                     Some(existing) => existing,
                     None => {

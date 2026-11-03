@@ -125,7 +125,7 @@ and a hand-made `subgroup_width: 16` refuses a 32-element `Warp` slice by name. 
 `Target`'s gaining `lane_height`, measured the gate in the other direction: a hand-written **version-1**
 text names `VersionMismatch` — *"the text is artifact format 1 and this build reads format 2, so the
 artifact is refused before any of it is parsed"* — where the strict read alone would have answered
-`missing field 'lane_height' in type 'Target' (at 'fragment.target') (bytes 814..815)`. Two mutation
+`missing field 'lane_height' in type 'Target' (at 'fragment.'target) (bytes 814..815)`. Two mutation
 checks make those tests discriminate: setting the wrong format constant or the matching subgroup
 width makes them fail.
 

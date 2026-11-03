@@ -19,10 +19,10 @@ fn renders_the_offending_line_with_a_caret() {
         (1, 6),
         "unresolved name 'y'".to_string(),
     );
-    let out = render("x' => y", &diag);
+    let out = render("'x => y", &diag);
     assert_eq!(
         out,
-        "error: unresolved name 'y'\n  --> 1:6\n   |\n 1 | x' => y\n   |      ^\n"
+        "error: unresolved name 'y'\n  --> 1:6\n   |\n 1 | 'x => y\n   |      ^\n"
     );
 }
 
@@ -42,7 +42,7 @@ fn a_spanless_diagnostic_has_no_caret() {
 #[test]
 fn a_node_the_module_no_longer_holds_renders_without_panicking() {
     // A released node is a documented state: answer "no answer", don't index it.
-    let report = crate::compile("x' => x");
+    let report = crate::compile("'x => x");
     let mut build = report.build.expect("the program checks");
     let stale = build.root_ty;
     build
@@ -56,7 +56,7 @@ fn a_node_the_module_no_longer_holds_renders_without_panicking() {
 #[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
     // The message uses the CLI's type spellings, not the raw `TypeInt → TypeInt`.
-    let report = crate::compile("5 = (x' : Int => _: Int)");
+    let report = crate::compile("5 = ('x : Int => _: Int)");
     assert_eq!(
         report.diagnostics[0].message,
         "expected Int => Int, found Int"
@@ -66,7 +66,7 @@ fn a_checker_message_uses_the_cli_type_syntax() {
 #[test]
 fn an_array_element_conflict_renders_undecided_arrow_cells() {
     // The arrow shape is the found side; the instance applies its template once.
-    let report = crate::compile("T := [Int, 2]\nT[Int, x' => x]");
+    let report = crate::compile("T := [Int, 2]\nT[Int, 'x => x]");
     assert_eq!(
         report.diagnostics[0].message,
         "expected Int, found ?a => ?a"
@@ -160,7 +160,7 @@ fn a_set_and_a_table_value_render_their_own_syntax() {
 fn a_function_template_is_a_function() {
     // A function template is a real function: its value states the signature,
     // its type is the shared marker.
-    assert_eq!(output("x' : Int => _: Int"), "Int => Int: TypeFunction");
+    assert_eq!(output("'x : Int => _: Int"), "Int => Int: TypeFunction");
 }
 
 #[test]
@@ -172,8 +172,8 @@ fn a_type_second_slot_does_not_collapse_an_array() {
 #[test]
 fn a_function_value_prints_its_signature() {
     // The value prints the signature; the type is the shared marker.
-    assert_eq!(output("x' => x"), "?a => ?a: TypeFunction");
-    assert_eq!(output("f := x' => x\nf"), "?a => ?a: TypeFunction");
+    assert_eq!(output("'x => x"), "?a => ?a: TypeFunction");
+    assert_eq!(output("f := 'x => x\nf"), "?a => ?a: TypeFunction");
 }
 
 // --- `type_of` as an ordinary lichen function ----------------------------
@@ -183,7 +183,7 @@ fn a_function_value_prints_its_signature() {
 
 /// `source` with the standard library's `type_of` bound ahead of it.
 fn with_type_of(source: &str) -> String {
-    output(&format!("type_of := x' => {{t := _; x: t; t}}\n{source}"))
+    output(&format!("type_of := 'x => {{t := _; x: t; t}}\n{source}"))
 }
 
 #[test]
@@ -201,10 +201,10 @@ fn type_of_reads_the_operands_type() {
 fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
     assert_eq!(with_type_of("f := type_of\nf 1"), "Int: Type");
-    assert_eq!(with_type_of("g := x' => type_of x\ng 2"), "Int: Type");
+    assert_eq!(with_type_of("g := 'x => type_of x\ng 2"), "Int: Type");
     // `type_of` of a function is the shared `FunctionType` marker: a function
     // value's type names no function.
-    assert_eq!(with_type_of("type_of (x' => x)"), "TypeFunction: Type");
+    assert_eq!(with_type_of("type_of ('x => x)"), "TypeFunction: Type");
 }
 
 #[test]

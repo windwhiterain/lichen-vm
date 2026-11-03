@@ -99,7 +99,7 @@ the message above that the table-driven prefix dispatch breaks.
 
 It is not only the precedence chain. Replacing the `=>` body rule's
 `.repeated().collect::<Vec<_>>()` with `or_not()` — the obvious reading of "the
-body is optional" — stops the chain after the first arrow, so on `x' => => y` the
+body is optional" — stops the chain after the first arrow, so on `'x => => y` the
 second arrow is left unconsumed and the diagnostic count goes from one to three:
 `expected a separator or the end of the program, found '=>'` plus the
 program-level message. The repetition is load-bearing for the label set, so it

@@ -18,10 +18,10 @@ PIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .lim (comp
 POut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 PPar := {.n @any : Int, .least @any : Float, .in PIn, .out POut}
 PArg := {.n @any : Int, .least @any : Float, .I PIn}
-sum_raw := (c' = PPar) => {
+sum_raw := ('c = PPar) => {
   i := compute.range c.n
   lim := (compute.read ((compute.Read _){.from c.in.lim, .at 0}) : Int)
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.x, .at (lim - s(0))}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from c.in.x, .at (lim - s(0))}) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (lim, c.least ~ "identity"))})
 }
 sumk := compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" POut

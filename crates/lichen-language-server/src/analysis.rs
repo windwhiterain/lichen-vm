@@ -1518,7 +1518,7 @@ fn classify_token_kind(
         | TokenKind::Pipe
         | TokenKind::Caret
         | TokenKind::Dot
-        // `'` marks a formal reference; the name it follows carries the
+        // `'` marks a formal reference; the name it precedes carries the
         // parameter's own classification.
         | TokenKind::Prime
         | TokenKind::Tilde => Some((SemanticTokenType::OPERATOR, Vec::new())),
@@ -1596,7 +1596,7 @@ impl<'a> NameClass<'a> {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            // `x'` — the formal reference: the parameter's own declaration.
+            // `'x` — the formal reference: the parameter's own declaration.
             Expr::Formal { span, .. } => {
                 self.map.insert(
                     *span,

@@ -665,7 +665,7 @@ function is born. It is not done, and the reason is not effort:
 2. **That different unify is a landed decision, already tried and measured.**
    [eval-before-unify](eval-before-unify.md) §7.1: the checker-side bind that read
    the template's own cells "made the same two comparisons in `check_app`, against
-   the template's **own** cells, so a call site *decided* them: with `type_of = x' =>
+   the template's **own** cells, so a call site *decided* them: with `type_of = 'x =>
    {t = _; x: t; t}`, dev answers `(Int, Type)` … the checker-side version answered
    `expected Int, found Type` — the template was monomorphic after its first call."
    Commit `1ed5f353` deleted it: "The checker-side domain/codomain unification is

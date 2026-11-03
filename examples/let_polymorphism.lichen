@@ -2,5 +2,5 @@
   order = "2"
   output = "(?a => ?a, 1, Int): Tuple"
 ---
-f := x' => x
+f := 'x => x
 (f, f 1, f Int)

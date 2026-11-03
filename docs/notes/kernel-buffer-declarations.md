@@ -46,13 +46,13 @@
 ## The surface
 
 ```lichen
-BufParam = _x' => struct{.type _, .length _}
-Buf = x' : (BufParam _) => struct{
+BufParam = '_x => struct{.type _, .length _}
+Buf = 'x : (BufParam _) => struct{
   .native $buf_type(x.type, x.length),
   .type   x.type : Type,
   .length x.length : Int,
 }
-buf = (x' : (BufParam _)) => (Buf x)(.native $buf(x.type, x.length), .type @any, .length @any)
+buf = ('x : (BufParam _)) => (Buf x)(.native $buf(x.type, x.length), .type @any, .length @any)
 ```
 
 A parameter and a body:
@@ -62,7 +62,7 @@ L    = 3
 In   = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
 Out  = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length L)))}
 Par  = struct{.n Int, .in In}
-raw  = (c' : Par) => {
+raw  = ('c : Par) => {
   i  = compute.range c.n
   y  = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
   ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 1.0)))))

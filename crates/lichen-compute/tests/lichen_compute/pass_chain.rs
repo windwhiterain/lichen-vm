@@ -124,7 +124,7 @@ fn a_stage_sees_the_graph_the_stage_before_it_answered() {
     assert_eq!(
         lines,
         vec!["first: saw 1 node(s)", "second: saw 2 node(s)"],
-        "the lines are the stages' own in stage order, and the second stage was handed the first \
+        "the lines are the stages own in stage order, and the second stage was handed the first \
          stage's two-node graph rather than the one the chain started from"
     );
 }

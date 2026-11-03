@@ -222,7 +222,7 @@ A condition inside a function is checked per application, because the
 parameter is decided per application. This holds:
 
 ```lichen
-f := x' => { @assert (x > 0); x }
+f := 'x => { @assert (x > 0); x }
 f 1
 ```
 
@@ -233,7 +233,7 @@ f 1
 and this does not:
 
 ```lichen
-f := x' => { @assert (x > 0); x }
+f := 'x => { @assert (x > 0); x }
 f 0
 ```
 
@@ -241,7 +241,7 @@ f 0
 error: assertion failed: expected 1, found 0
   --> 1:14
    |
- 1 | f := x' => { @assert (x > 0); x }
+ 1 | f := 'x => { @assert (x > 0); x }
    |              ^
 ```
 

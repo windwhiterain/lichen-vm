@@ -30,7 +30,7 @@ on the three-step ring; the value itself is always the right struct).
 
 ```lichen
 S = struct{.y Int}
-@loop f = (s' => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))
+@loop f = ('s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))
 (f (0, S(.y 3))).y
 ```
 
@@ -39,7 +39,7 @@ is a **tuple of Ints** with the same shape (`f (0, 7)` → `raw 7: ?a`): the los
 base branch to be a **parameter-derived read** whose type is a struct.
 
 **The desugar is not the cause (measured at `dev@575ad0be`).** Writing the branch as the
-desugared form by hand — `s' => [f (s(0) - 1, S(.y (s(1).y + 1))), s(1)][s(0) == 0]` — answers
+desugared form by hand — `'s => [f (s(0) - 1, S(.y (s(1).y + 1))), s(1)][s(0) == 0]` — answers
 the very same `raw none: ?a`, with and without `@loop` (block-wide recursion), so the fold
 and the `if` spelling are one program. A **tuple** container is not an alternative:
 `(1, 2)[1]` is refused `expected TypeArray, found TypeTuple`, so an index read only ever
@@ -93,7 +93,7 @@ annotation the contract requires.** The route-A experiments below stay as the re
 they show the clone walk *can* carry a cloned cell's class members and the topology then
 becomes right, but the decider has nothing to read, and the only thing that made the
 repro answer was an evaluation that hangs the deep budget's test. Meanwhile the arity is
-what the un-annotated form lacks and cannot infer (`g = s' => s(1)` prints `?a -> ?b`),
+what the un-annotated form lacks and cannot infer (`g = 's => s(1)` prints `?a -> ?b`),
 while `(s : tuple{_, _})` is enough for the field types to infer (§7), so the engine is
 left as is.
 
@@ -178,7 +178,7 @@ answers `raw none` at the tree's tip.
 
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
-struct-literal base (`@loop f = (n' => if n == 0 then S(.y 7) else f (n - 1))`) must keep
+struct-literal base (`@loop f = ('n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
 working.
 
 **The sixth reading: the topology is right, and the decider still cannot answer.** With
@@ -221,12 +221,12 @@ from the application:
 
 | program | answer |
 |---|---|
-| `@loop f = ((s' : tuple{_, _}) => …)` — the repro with the desugared array | `3: Int` |
+| `@loop f = (('s : tuple{_, _}) => …)` — the repro with the desugared array | `3: Int` |
 | the same with `if` | `3: Int` |
 | `(s : tuple{Int, _})` / `(s : tuple{Int, S})` | `3: Int` |
-| `g = (s' : tuple{_, _}) => s(1)` ; `g (0, 7)` | `7: Int` |
-| `g = s' => s(1)` ; `g` | `?a -> ?b` — no arity, no field type |
-| `g = (s' : tuple{_, _}) => s(1)` ; `g` | `tuple{raw[?a, ?b], raw[?c, ?d]} -> raw[?c, ?d]` — the arity is fixed, the field types are open until the call |
+| `g = ('s : tuple{_, _}) => s(1)` ; `g (0, 7)` | `7: Int` |
+| `g = 's => s(1)` ; `g` | `?a -> ?b` — no arity, no field type |
+| `g = ('s : tuple{_, _}) => s(1)` ; `g` | `tuple{raw[?a, ?b], raw[?c, ?d]} -> raw[?c, ?d]` — the arity is fixed, the field types are open until the call |
 
 So the arity **cannot** be inferred from uses (`?a -> ?b` above) while the **field types
 can**: with the arity annotated they are decided per call. The defect this note records is

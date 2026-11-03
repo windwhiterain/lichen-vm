@@ -127,7 +127,7 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   find the instantiation to learn which struct was meant.
 
 * **The check-level assert was printed after the runtime consequences, and the assert
-  channel is now gone from the named read.** `f = x' => x.a` ; `f [10, 20]` reported five
+  channel is now gone from the named read.** `f = 'x => x.a` ; `f [10, 20]` reported five
   diagnostics: four runtime read failures (`this value is not a container`, `table lookup
   missed`, twice each) and the actionable `expected a struct type, found array{Int, 2}`.
   `Build::diagnostics` pushed `assert_errors` after `eval_errors`, so the head of the
@@ -139,7 +139,7 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   wherever asserts remain.
 
 * **An apply of a deferred non-function was reported twice, and it now reports once.**
-  `f = g' => g 1` ; `f 5` printed `this value is not a function — it cannot be applied`
+  `f = 'g => g 1` ; `f 5` printed `this value is not a function — it cannot be applied`
   at `1:5` **twice**: `check_app` then built a value apply and a type apply at one site
   (one apply node since [apply-type-side-check](apply-type-side-check.md)), and the
   runtime-failure dedup keyed by the blamed **node** kept both. That kind is now
@@ -192,8 +192,8 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
   | program | `Guard` (today) | `IndexTarget` (wired, reverted) |
   |---|---|---|
-  | `a = x' => (1, Int)(x); a[0]` | `expected TypeArray, found ?a -> ?b` | `expected a tuple, array, or struct type, found ?a -> ?b` |
-  | `f = (x' => x); f[0]` | `expected TypeArray, found ?a -> ?a` | `expected a tuple, array, or struct type, found ?a -> ?a` |
+  | `a = 'x => (1, Int)(x); a[0]` | `expected TypeArray, found ?a -> ?b` | `expected a tuple, array, or struct type, found ?a -> ?b` |
+  | `f = ('x => x); f[0]` | `expected TypeArray, found ?a -> ?a` | `expected a tuple, array, or struct type, found ?a -> ?a` |
   | `5[0]` | `expected TypeArray, found Type` | `expected a tuple, array, or struct type, found Type` |
   | `t = (1, 2); t[0]` | `expected TypeArray, found TypeTuple` | **`expected a tuple, array, or struct type, found TypeTuple`** |
   | `s = [1, 2]; s[0]` | *(checks)* | *(checks)* |
@@ -397,7 +397,7 @@ Both are recorded here rather than fixed: the first needs a diagnostic that dist
 a message change, so neither belongs to the slice that fixed the unclosed delimiter.
 
 * **A runtime read's own type cannot name the container — measured and reverted.** The deferred named read's
-  refusal (`f = x' => x.a` ; `f [10, 20]`) is `Diag::IndexTarget`, whose recorded node is the read's
+  refusal (`f = 'x => x.a` ; `f [10, 20]`) is `Diag::IndexTarget`, whose recorded node is the read's
   **type-chain** node: carrying it into the renderer and printing the node's type answers `TypeArray`, `Type`
   and `TypeTuple` for the array, scalar and tuple arguments — the kind of the chain node, not the user's
   `array{Int, 2}`. So the wording would expose internals. Naming the value the user passed needs the checker

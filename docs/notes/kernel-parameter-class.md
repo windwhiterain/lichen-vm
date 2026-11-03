@@ -62,8 +62,8 @@ Two files, no operator, no `.native`, no `jit` — `b.lichen` is frozen because 
 is imported:
 
 ```lichen
-S = _x' => struct{.I _, .O _}
-mk = x' => (S _)(.I x, .O x)
+S = '_x => struct{.I _, .O _}
+mk = 'x => (S _)(.I x, .O x)
 ```
 
 `main.lichen`:
@@ -209,6 +209,6 @@ Gating it was what left a frozen function type decoding as
 
 **Three measured `DomainStatement` shapes, and why the refusal reads the type cell
 rather than the decoded shape.** `p : In` (a struct) decodes to
-`Array(Unknown, 2)`; an unannotated `y' => y + y` to `Array(Array(Unknown, 2), 2)`;
+`Array(Unknown, 2)`; an unannotated `'y => y + y` to `Array(Array(Unknown, 2), 2)`;
 `p : tuple{Int, _}` to `Tuple([USize, Unknown])`. Only the third says a position is
 missing, and only the first says the domain is a struct.

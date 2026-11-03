@@ -707,7 +707,7 @@ impl fmt::Display for SchemaRefusal {
             ),
             SchemaRefusal::InputsAreNotNamed { node, inputs } => write!(
                 formatter,
-                "the instance at {node} reads {inputs} producers' outputs and this reader names \
+                "the instance at {node} reads {inputs} producers outputs and this reader names \
                  one variable per input ordinal, at most {FAN_IN_INPUTS}"
             ),
             SchemaRefusal::NoElementRole { producer, consumer } => write!(

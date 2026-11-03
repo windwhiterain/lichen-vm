@@ -11,9 +11,9 @@
 // glued delimiter `token.immediate`; a spaced delimiter is a fresh atom and so
 // an argument of `application`.
 //
-// The formal reference (`x'`) is the same kind of glued suffix: the prime mark
+// The formal reference (`'x`) is the same kind of glued prefix: the prime mark
 // is written against the name it marks, so the grammar spells it
-// `token.immediate` too, and `x '` is not a spelling at all.  It is a suffix
+// `token.immediate` too, and `' x` is not a spelling at all.  It is a suffix
 // on a **name** and nothing else — the parameter side of a `=>` is an
 // ordinary expression, and only a primed name in it declares a parameter.
 //
@@ -39,6 +39,8 @@ const binaryLevel = (precedence, operators) => $ => prec.left(precedence, seq(
 // `docs/notes/operators.md` §3.  The bitwise trio keeps C's nesting (`&` in `^`
 // in `|`) and sits tighter than a comparison, so `a & b == c` is
 // `(a & b) == c`.  Every level is left-associative.
+const IDENTIFIER = /[A-Za-z_][A-Za-z0-9_]*/;
+
 const PREC = {
   lambda: 1,
   annotation: 2,
@@ -128,7 +130,7 @@ module.exports = grammar({
 
     // `param => body` (right-assoc).  The parameter side is a **full
     // expression**, so the domain the argument is checked against is
-    // whatever that expression says — a typed param `x' : T => e` reads the
+    // whatever that expression says — a typed param `'x : T => e` reads the
     // `: T` annotation as part of the domain, and `f x => e` has `(f x)` as
     // the parameter side, because application binds tighter than `=>`.
     lambda: $ => prec.right(PREC.lambda, seq(
@@ -273,14 +275,14 @@ module.exports = grammar({
     ),
 
     // -- atoms & literals --------------------------------------------------
-    identifier: $ => /[A-Za-z_][A-Za-z0-9_]*/,
-    // `x'` — the **formal reference**: the prime mark is a suffix on a name
+    identifier: $ => IDENTIFIER,
+    // `'x` — the **formal reference**: the prime mark is a prefix on a name
     // and it is written against it, so the mark is `token.immediate` and
-    // `x '` is not a spelling at all.  It is a suffix on a **name** and
+    // `' x` is not a spelling at all.  It is a prefix on a **name** and
     // nothing else: the parameter side of a `=>` is an ordinary expression,
     // and only a primed name in it declares a parameter
     // (`docs/language-spec.md` §Syntax, sugar).
-    formal: $ => seq(field('name', $.identifier), token.immediate("'")),
+    formal: $ => seq("'", field('name', alias(token.immediate(IDENTIFIER), $.identifier))),
     integer: $ => /[0-9]+/,
     float: $ => /[0-9]+\.[0-9]+/,
     string_literal: $ => /"[^"]*"?/,
@@ -347,11 +349,19 @@ module.exports = grammar({
       '}',
     ),
 
-    // `.name e` — one field of a struct value or a struct instance.
-    struct_field: $ => seq(
-      '.',
-      field('name', $.identifier),
-      field('value', $.expression),
+    // `.name e` is a plain field; `.'name` abbreviates a formal field.
+    struct_field: $ => choice(
+      seq(
+        '.',
+        field('name', $.identifier),
+        field('value', $.expression),
+      ),
+      seq(
+        '.',
+        "'",
+        field('name', alias(token.immediate(IDENTIFIER), $.identifier)),
+        repeat($._annotation_piece),
+      ),
     ),
 
     // `set{E}` — the set type, whose one element is the element **slot**.

@@ -46,9 +46,9 @@ fn wrapped(ir: &IR<LangAttr>) -> ExprId {
 
 #[test]
 fn a_use_is_the_formals_own_id() {
-    // x' => x — the body's use is the formal itself, and the parameter side
+    // 'x => x — the body's use is the formal itself, and the parameter side
     // is the formal's grouped expression.
-    let ir = compile_ok("x' => x");
+    let ir = compile_ok("'x => x");
     let ExprKind::Function {
         parameter,
         r#return,
@@ -70,7 +70,7 @@ fn a_use_is_the_formals_own_id() {
 #[test]
 fn let_is_just_application() {
     // (x => x) 5 — a desugared binding needs no special form.
-    let ir = compile_ok("(x' => x) 5");
+    let ir = compile_ok("('x => x) 5");
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
         panic!("expected an apply")
     };
@@ -83,8 +83,8 @@ fn let_is_just_application() {
 
 #[test]
 fn shadowing_resolves_to_the_inner_binder() {
-    // x' => (x' => x) — the inner use refers to the inner formal.
-    let ir = compile_ok("x' => (x' => x)");
+    // 'x => ('x => x) — the inner use refers to the inner formal.
+    let ir = compile_ok("'x => ('x => x)");
     let ExprKind::Function {
         r#return: outer_body,
         ..
@@ -103,7 +103,7 @@ fn shadowing_resolves_to_the_inner_binder() {
 
 #[test]
 fn every_expression_carries_a_span() {
-    let tokens = lex("x' => x").tokens;
+    let tokens = lex("'x => x").tokens;
     let mut ast = parse(&tokens).program;
     let (ir, spans, _) = compile(&mut ast);
     assert_eq!(spans.len(), ir.expr.len(), "one span entry per expression");
@@ -115,7 +115,7 @@ fn every_expression_carries_a_span() {
 
 #[test]
 fn an_unresolved_name_is_a_resolve_diagnostic() {
-    let err = compile_err("x' => y");
+    let err = compile_err("'x => y");
     assert_eq!(err.stage, Stage::Resolve);
     assert_eq!(err.message, "unresolved name 'y'");
     assert_eq!(err.span, Some((1, 7)));
@@ -135,7 +135,7 @@ fn an_unresolved_name_near_an_in_scope_name_suggests_it() {
 #[test]
 fn a_type_position_underscore_compiles_to_a_placeholder() {
     // x => x : _ — the annotation's type is the placeholder kind.
-    let ir = compile_ok("x' => x : _");
+    let ir = compile_ok("'x => x : _");
     let ExprKind::Function { r#return, .. } = kind(&ir, ir.root) else {
         panic!("expected a function")
     };
@@ -177,9 +177,9 @@ fn a_block_compiles_to_its_final_expression() {
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // The same holds through a lambda body: x' => {y := x; y} is the
+    // The same holds through a lambda body: 'x => {y := x; y} is the
     // identity function, whose return is the formal itself.
-    let ir = compile_ok("x' => {y := x; y}");
+    let ir = compile_ok("'x => {y := x; y}");
     let ExprKind::Function { r#return, .. } = kind(&ir, ir.root) else {
         panic!("expected a function")
     };
@@ -245,9 +245,9 @@ fn a_statement_expression_is_a_statement_root() {
 
 #[test]
 fn an_annotated_parameter_side_rides_the_function() {
-    // x' : Int => x — the annotation is on the parameter side, and it is an
+    // 'x : Int => x — the annotation is on the parameter side, and it is an
     // ordinary annotation over the formal.
-    let ir = compile_ok("x' : Int => x");
+    let ir = compile_ok("'x : Int => x");
     let ExprKind::Function {
         parameter,
         r#return,
@@ -290,7 +290,7 @@ fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
 #[test]
 fn type_of_is_an_ordinary_binding() {
     // No `type_of` form: the standard library defines it as a plain lambda.
-    let ir = compile_ok("type_of := x' => {t := _; x: t; t}\ntype_of");
+    let ir = compile_ok("type_of := 'x => {t := _; x: t; t}\ntype_of");
     assert!(
         matches!(kind(&ir, ir.root), ExprKind::Function { .. }),
         "the standard library's type_of is an ordinary lambda"
@@ -300,7 +300,7 @@ fn type_of_is_an_ordinary_binding() {
 #[test]
 fn a_type_of_use_is_an_ordinary_application() {
     // A spaced paren is an argument; the adjacent `type_of(1)` is a slot read.
-    let source = "type_of := x' => {t := _; x: t; t}\n";
+    let source = "type_of := 'x => {t := _; x: t; t}\n";
     let ir = compile_ok(&format!("{source}type_of (1)"));
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
         panic!("expected an apply")

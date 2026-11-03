@@ -25,9 +25,9 @@ TIn  := {{.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 TOut := {{.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 TPar := {{.n @any : Int, .taps @any : Int, .in TIn, .out TOut}}
 TArg := {{.n @any : Int, .taps @any : Int, .I TIn}}
-tiny_raw := (c' = TPar) => {{
+tiny_raw := ('c = TPar) => {{
   i := compute.range c.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (if {condition} then {then} else {otherwise})) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){{.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))}})
 }}
 tiny := compute.parallel (tiny_raw ~ "claim:Reduction(combine,identity,element)") "cpu" TOut

@@ -271,14 +271,14 @@ Three steps, and the first two are **lowlevel's**:
    - a **state vector** of its scalar parameters,
    - a **base test** `base_i(state)`, the branch that holds no recursive call and
      whose arms are the function's own results,
-   - a **transition** `step_i(state) → (f_j, state')`, the branch that does hold
+   - a **transition** `step_i(state) → (f_j, 'state)`, the branch that does hold
      the recursive call, with its argument expressions evaluated in `state`,
    - an **environment** `env_i`, which must be loop-invariant.
 3. **Build the nest.** Order the cycle by first entry: `f_1` is the outermost
    level. **The level count is `|component|` and is fixed at compile time.** Level
    `L_i` has a header that evaluates `base_i` — true, the whole nest yields that
    result; false, evaluate the recursive branch's selector and descend — and a
-   latch that applies `step_i` and jumps to the level `(f_j, state')` names. Each
+   latch that applies `step_i` and jumps to the level `(f_j, 'state)` names. Each
    level carries **only its own** state; an inner level's state is re-established
    on entry, which is what keeps the nest finite-depth and register-resident.
 4. **Emit.** The nest is a `while`-shaped loop per level, structurally the
@@ -975,8 +975,8 @@ test runs **both arm orders**, which is what item 6's fix made answerable):
 ---
   compute = import "compute.lichen"
 ---
-@loop sum_to = s' => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
-p = compute.parallel (k' => { … count = compute.read ((compute.Read _)(.from k.in.b, .at i)) … sum_to (count, 0) … }) "BACKEND"
+@loop sum_to = 's => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+p = compute.parallel ('k => { … count = compute.read ((compute.Read _)(.from k.in.b, .at i)) … sum_to (count, 0) … }) "BACKEND"
 ```
 
 In order, and the order is forced. **Items 1, 1b, 1c, 2, 2a, 3, 4 and 5 are
@@ -1062,12 +1062,12 @@ done** — the acceptance case at item 5 runs on both backends:
    enter, and the stopping condition for this item was not met.
 
    **Nothing here is curried, and that is why the route terminates.** `read` is
-   written `read = (x' : (Read _)) => $read(x.from, x.at): x.from.element`
+   written `read = ('x : (Read _)) => $read(x.from, x.at): x.from.element`
    (`crates/lichen-compute/src/compute.lichen:16`) — one parameter, one
    application, and the `ComputeOperator::Read` lives in the **frozen body of
    `read` itself**, not at the call site: the call site holds only the projection
    and the `Read` struct. The two curried bindings in that module are `launch` and
-   `call` (`launch = k': (K _) => a': k.I => …`), and a kernel body cannot apply
+   `call` (`launch = 'k: (K _) => 'a: k.I => …`), and a kernel body cannot apply
    either — they are the host's — so an intermediate closure is never what a
    kernel lowering meets. `write` and `range` are the same one-parameter wrapper
    shape and are routed the same way; `collect` is that shape too, and a kernel
@@ -1584,8 +1584,8 @@ compile-time constant:
 
 ```lichen
 --- compute = import "compute.lichen" ---
-@loop sum_to = s' => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
-p = compute.parallel (k' => { … sum_to (compute.read ((compute.Read _)(.from k.in.b, .at i)), 0) … }) "BACKEND"
+@loop sum_to = 's => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+p = compute.parallel ('k => { … sum_to (compute.read ((compute.Read _)(.from k.in.b, .at i)), 0) … }) "BACKEND"
 ```
 
 Three things must be true of it, and each is a rule above being exercised: it runs

@@ -363,7 +363,7 @@ pub enum ExprKind<L> {
     /// [`Ctx`](crate::program::Ctx), never raw lowlevel nodes.
     Literal(L),
     /// A **formal reference**: the hole a lambda's argument fills, and the
-    /// name the lambda binds in its body (`x'`).
+    /// name the lambda binds in its body (`'x`).
     ///
     /// # Invariant
     ///

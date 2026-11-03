@@ -271,7 +271,7 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
 #[test]
 fn an_expression_cannot_continue_across_a_separator() {
     // The flip side: an expression still stops at a separator.
-    for source in ["1 +\n2", "x' =>\n x + 1", "table(1 ==>\n2)"] {
+    for source in ["1 +\n2", "'x =>\n x + 1", "table(1 ==>\n2)"] {
         let tokens = lex(source).tokens;
         let Parsed { errors, .. } = parse(&tokens);
         assert!(!errors.is_empty(), "{source:?} must not parse");
@@ -306,11 +306,11 @@ fn annotation_binds_looser_than_apply() {
 
 #[test]
 fn lambda_bodies_extend_maximally() {
-    let Expr::Lambda { r#return, .. } = parse_ok("x' => e : Int") else {
+    let Expr::Lambda { r#return, .. } = parse_ok("'x => e : Int") else {
         panic!("expected a lambda")
     };
     assert!(matches!(*r#return, Expr::Annotation { .. }));
-    let Expr::Lambda { r#return, .. } = parse_ok("x' => y' => e") else {
+    let Expr::Lambda { r#return, .. } = parse_ok("'x => 'y => e") else {
         panic!("expected a lambda")
     };
     assert!(matches!(*r#return, Expr::Lambda { .. }));
@@ -337,13 +337,13 @@ fn an_annotated_parameter_side_is_a_lambda() {
     ));
     assert!(matches!(*r#return, Expr::Name(name, _, _) if name == "x"));
     // A prime declares the formal: the parameter side is the formal itself.
-    let Expr::Lambda { parameter, .. } = parse_ok("x' => x") else {
+    let Expr::Lambda { parameter, .. } = parse_ok("'x => x") else {
         panic!("expected a lambda")
     };
     assert!(matches!(*parameter, Expr::Formal { name, .. } if name == "x"));
-    // A prime keeps its annotation: `x' : Int` is an annotation over the
+    // A prime keeps its annotation: `'x : Int` is an annotation over the
     // formal, and the annotation is the domain.
-    let Expr::Lambda { parameter, .. } = parse_ok("x' : Int => x") else {
+    let Expr::Lambda { parameter, .. } = parse_ok("'x : Int => x") else {
         panic!("expected a lambda")
     };
     let Expr::Annotation { value, .. } = *parameter else {
@@ -354,7 +354,7 @@ fn an_annotated_parameter_side_is_a_lambda() {
     assert!(matches!(parse_ok("x : Int"), Expr::Annotation { .. }));
     // An annotated parameter side parenthesized is the same form.
     assert!(matches!(
-        parse_ok("(x' : Int) => x"),
+        parse_ok("('x : Int) => x"),
         Expr::Lambda { parameter, .. } if matches!(*parameter, Expr::Annotation { .. })
     ));
     // A parameter template is an ordinary expression too: `x <: T => e` keeps
@@ -631,7 +631,7 @@ fn the_retired_angle_type_prefix_is_a_parse_error() {
 
 #[test]
 fn parse_errors_carry_spans() {
-    let err = parse_err("x' =>");
+    let err = parse_err("'x =>");
     assert_eq!(
         err.message,
         "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
@@ -762,7 +762,7 @@ fn a_block_is_bindings_followed_by_a_final_expression() {
 
 #[test]
 fn a_block_can_be_a_lambda_body() {
-    let Expr::Lambda { r#return, .. } = parse_ok("x' => {a := x; a}") else {
+    let Expr::Lambda { r#return, .. } = parse_ok("'x => {a := x; a}") else {
         panic!("expected a lambda")
     };
     assert!(matches!(*r#return, Expr::Block { .. }));
@@ -889,7 +889,7 @@ fn dangling_operators_are_recovered() {
         ("a := 1 + ; b := 2; b", (1, 10)),
         ("a := 1 <= ; b := 2; b", (1, 11)),
         ("a := 1 : ; b := 2; b", (1, 10)),
-        ("a := x' => ; b := 2; b", (1, 12)),
+        ("a := 'x => ; b := 2; b", (1, 12)),
     ];
     for (source, span) in cases {
         let tokens = lex(source).tokens;

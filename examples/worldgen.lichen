@@ -40,7 +40,7 @@ InTile := {.biomes (compute.Buf (compute.BufParam{.type Int, .length 16384}))}
 
 PNoise := {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .in (InSeed)}
 ANoise := {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .I (InSeed)}
-noise_raw := (p' = PNoise) => {
+noise_raw := ('p = PNoise) => {
   i := compute.range p.n
   row := compute.row p
   col := compute.col p
@@ -64,7 +64,7 @@ noise := compute.parallel noise_raw "cpu" (OutField)
 
 PMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .in (InField2)}
 AMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .I (InField2)}
-mix_raw := PMix{.n' : Int, .cols' : Int, .w' : Float, .in'} => {
+mix_raw := PMix{.'n : Int, .'cols : Int, .'w : Float, .'in} => {
   i := compute.range n
   a := (compute.read ((compute.Read _){.from in.a, .at i}) : Float)
   b := (compute.read ((compute.Read _){.from in.b, .at i}) : Float)
@@ -75,7 +75,7 @@ mix := compute.parallel mix_raw "cpu" (OutField)
 
 PSmooth := {.n @any : Int, .cols @any : Int, .in (InField)}
 ASmooth := {.n @any : Int, .cols @any : Int, .I (InField)}
-smooth_raw := (p' = PSmooth) => {
+smooth_raw := ('p = PSmooth) => {
   i := compute.range p.n
   row := compute.row p
   col := compute.col p
@@ -93,7 +93,7 @@ smooth := compute.parallel smooth_raw "cpu" (OutField)
 
 PBiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .in (InLand)}
 ABiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .I (InLand)}
-biome_raw := PBiome{.n' : Int, .cols' : Int, .sea' : Float, .ridge' : Float, .in'} => {
+biome_raw := PBiome{.'n : Int, .'cols : Int, .'sea : Float, .'ridge : Float, .'in} => {
   i := compute.range n
   e := (compute.read ((compute.Read _){.from in.height, .at i}) : Float)
   m := (compute.read ((compute.Read _){.from in.moisture, .at i}) : Float)
@@ -105,7 +105,7 @@ biome := compute.parallel biome_raw "cpu" (OutIds)
 
 PTile := {.n @any : Int, .cols @any : Int, .seed @any : Int, .in (InTile)}
 ATile := {.n @any : Int, .cols @any : Int, .seed @any : Int, .I (InTile)}
-tile_raw := (p' = PTile) => {
+tile_raw := ('p = PTile) => {
   i := compute.range p.n
   row := compute.row p
   col := compute.col p

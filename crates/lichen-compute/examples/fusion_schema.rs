@@ -46,7 +46,7 @@ fn main() {
     let reference = report("the reference sum/max chain", &reference);
     let respelled = report(
         "the same reference logic, re-spelled: renamed binders, the independent statements \
-         swapped, the commutative operators' operands the other way round",
+         swapped, the commutative operators operands the other way round",
         RESPELT,
     );
     let changed = report(

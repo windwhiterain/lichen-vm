@@ -32,7 +32,7 @@ Side := {{.p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 In   := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutE := {{.e (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParE := {{.n @any : Int, .in In}}
-scale_raw := (k' = ParE) => {{
+scale_raw := ('k = ParE) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) * 2.0) ~ "element")}}))}})
@@ -41,7 +41,7 @@ scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := {{.n @any : Int, .in In2}}
-offset_raw := (k' = Par2) => {{
+offset_raw := ('k = Par2) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((OutZ){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (((compute.read ((compute.Read _){{.from k.in.d, .at i}}) : Float) + (compute.read ((compute.Read _){{.from k.in.p, .at i}}) : Float)) ~ "element")}}))}})
@@ -54,7 +54,7 @@ offset := compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" Out
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
 const ONE_BUFFER: &str = r#"
 GArg := {.n @any : Int, .in In}
-step := (s' = GArg) => {
+step := ('s = GArg) => {
   first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
@@ -65,7 +65,7 @@ built
 /// The same step over an argument naming **two** buffers, both read.
 const TWO_BUFFERS: &str = r#"
 GArg := {.n @any : Int, .in Expr}
-step := (s' = GArg) => {
+step := ('s = GArg) => {
   first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.a}}) : Struct)
   compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.b, .p first.e}})
 }
@@ -76,7 +76,7 @@ built
 /// The same step over an argument whose second buffer sits **outside** `.in`, unread.
 const MISPLACED_BUFFER: &str = r#"
 GArg := {.n @any : Int, .in In, .q Side}
-step := (s' = GArg) => {
+step := ('s = GArg) => {
   first := (compute.plrun scale ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun offset ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.e}})
 }
@@ -91,7 +91,7 @@ built
 /// the whole of what an unannotated parameter gets: the body reads positions
 /// rather than role paths.
 const UNANNOTATED: &str = r#"
-step := ins' => {
+step := 'ins => {
   first := (compute.plrun scale ((compute.A _){.n ins(0), .I In{.d ins(1)}}) : Struct)
   compute.plrun offset ((compute.A _){.n ins(0), .I In2{.d ins(2), .p first.e}})
 }
@@ -121,12 +121,12 @@ fn filled() -> String {
     format!(
         r#"
 Fill := {{.n @any : Int}}
-ones_raw := (c' = Fill) => {{
+ones_raw := ('c = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
   ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value {one}}}))}})
 }}
-tens_raw := (c' = Fill) => {{
+tens_raw := ('c = Fill) => {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
   ((OutE){{.e (compute.write ((compute.Write _){{.to y, .at i, .value {ten}}}))}})

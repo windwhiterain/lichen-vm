@@ -804,13 +804,54 @@ fn expression<'a, Er: GrammarError<'a>>(
                 };
                 // Only a formal declares; other side names use the enclosing scope.
                 Expr::Lambda {
-                    parameter: Box::new(first),
+                    parameter: Box::new(uniform_parameter_domain(first)),
                     r#return: Box::new(body),
                     span: span_at(tokens, me.span().start),
                 }
             })
             .boxed()
     })
+}
+
+/// Give a uniform signature's bare element type its wildcard requirement.
+///
+/// # Invariant
+/// Only a lambda parameter that is a direct `[T, n]` instance made entirely of
+/// formals rewrites a bare type constant `T` to `@any : T`; every other array
+/// template keeps `T` as an exact value.
+fn uniform_parameter_domain(mut parameter: Expr) -> Expr {
+    let Expr::ArrayInst {
+        template, elements, ..
+    } = &mut parameter
+    else {
+        return parameter;
+    };
+    let Expr::Array {
+        template: element,
+        span,
+        ..
+    } = template.as_mut()
+    else {
+        return parameter;
+    };
+    if !matches!(element.as_ref(), Expr::TypeConst(..))
+        || !elements
+            .iter()
+            .all(|element| matches!(element, Expr::Formal { .. }))
+    {
+        return parameter;
+    }
+    let ty = std::mem::replace(element, Box::new(Expr::Any(*span)));
+    **element = Expr::Annotation {
+        value: Box::new(Expr::Any(*span)),
+        r#type: Some(ty),
+        perspective: None,
+        refinement: None,
+        doc: None,
+        marks: Vec::new(),
+        span: *span,
+    };
+    parameter
 }
 
 /// Fold a binary operator into its [`Expr`] node, spanning from the left
@@ -1105,21 +1146,18 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
             // `@any` is a literal, not a keyword: it is a value, so it parses
             // wherever an atom can.
             token(TokenKind::Any).map(|t| Expr::Any(t.span)),
-            name()
-                .then(token(TokenKind::Prime).or_not())
-                .map(|((n, span), prime)| {
-                    if prime.is_some() {
-                        // `x'` — the formal reference: the hole a lambda's
-                        // argument fills, and the name the lambda binds.
-                        Expr::Formal {
-                            name: n,
-                            span,
-                            binder: None,
-                        }
-                    } else {
-                        Expr::Name(n, span, None)
+            token(TokenKind::Prime)
+                .then(name())
+                .map(|(prime, (n, _))| {
+                    // `'x` — the formal reference: the hole a lambda's
+                    // argument fills, and the name the lambda binds.
+                    Expr::Formal {
+                        name: n,
+                        span: prime.span,
+                        binder: None,
                     }
-                }),
+                })
+                .or(name().map(|(n, span)| Expr::Name(n, span, None))),
             // One precedence below the atom, so a comma belonging to an
             // enclosing list is never taken by a nested literal's element.
             native_call(tokens, expr.clone()),
@@ -1145,7 +1183,7 @@ enum Postfix {
     Brace(Vec<StructFieldValue>),
 }
 
-/// `.name expr` — one field of a struct or an instance; `.name' expr` is the
+/// `.name expr` — one field of a struct or an instance; `.'name expr` is the
 /// sugar (`docs/language-spec.md` §Syntax).
 ///
 /// # Invariant
@@ -1162,8 +1200,8 @@ fn struct_field_value<'a, Er: GrammarError<'a>>(
         .then(expr.clone())
         .map(|((name, _span), value)| StructFieldValue { name, value });
     let shorthand = token(TokenKind::Dot)
+        .ignore_then(token(TokenKind::Prime))
         .ignore_then(name())
-        .then_ignore(token(TokenKind::Prime))
         .then(expr.clone().or_not())
         .validate(|((name, span), tail), me, emit| {
             let value = match primed_field_value(&name, span, tail) {
@@ -1178,7 +1216,7 @@ fn struct_field_value<'a, Er: GrammarError<'a>>(
             };
             StructFieldValue { name, value }
         });
-    // The primed form first: only it accepts `.name'`, so the plain field
+    // The primed form first: only it accepts `.'name`, so the plain field
     // never stands in for one the sugar describes.
     shorthand.or(plain)
 }

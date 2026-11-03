@@ -8,5 +8,5 @@ not in their type (the shared `Struct` template).  They therefore coexist in
 one tuple."
   output = "((none,), (none,), (none,)): Tuple"
 ---
-Box := t' => {.f @any : t}
+Box := 't => {.f @any : t}
 (Box Int, Box Type, Box Int)

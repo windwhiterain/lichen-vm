@@ -120,10 +120,10 @@ of C's. Both choices are pinned by `operator_precedence_and_associativity` in
 
 A comparison is one level, left-associative, so `1 < 2 == 1` is `(1 < 2) == 1`.
 
-The **prime is not a rung**: `x'` is a suffix on a name, so it sits with the
+The **prime is not a rung**: `'x` is a prefix on a name, so it sits with the
 atoms and binds tighter than every operator.  It says the name is a formal
 reference — the parameter a lambda's parameter side declares — and it is
-written against the name (`x '` is not a spelling).
+written against the name (`' x` is not a spelling).
 
 `@in` (set membership, [operator-polymorphism](operator-polymorphism.md) §3) shares
 that rung: it yields the same `0`/`1` a comparison yields, so `x @in S == 1` reads
@@ -382,12 +382,12 @@ three changes, and the first is the interesting one.
   spaced `<` as the comparison. The angle forms retired, the second token retired
   with them, and `_angle_element` (a comparison is not an angle form's element)
   retired too — no `>` opens or closes an angle form now.
-- **The formal reference is a node of its own.** `x'` is a `formal`: the name
+- **The formal reference is a node of its own.** `'x` is a `formal`: the name
   plus a prime mark written against it, spelled `token.immediate("'")` so
-  `x '` is not a spelling at all.  The prime is a suffix on a **name** and
+  `' x` is not a spelling at all.  The prime is a prefix on a **name** and
   nothing else, and the parameter side of a `=>` stays a full expression, so
   `f x => e` parses with `(f x)` on the left of the arrow — a name there is
-  a parameter only when it is primed — and a typed parameter `x' : Int => e`
+  a parameter only when it is primed — and a typed parameter `'x : Int => e`
   reads its annotation as part of the domain.  The queries colour the prime
   mark; the name is an ordinary identifier.
 - **The retired syntax is gone.** The grammar models the current surface: the

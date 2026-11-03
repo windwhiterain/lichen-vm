@@ -67,11 +67,11 @@ fn the_shipping_slot_is_the_one_the_package_manager_installs_into() {
 #[test]
 fn cache_round_trip_across_stores() {
     let dir = temp_dir("roundtrip");
-    write(&dir, "inner.lichen", "x' => x + 1\n");
+    write(&dir, "inner.lichen", "'x => x + 1\n");
     write(
         &dir,
         "middle.lichen",
-        "---inc = import \"inner.lichen\"---x' => inc x\n",
+        "---inc = import \"inner.lichen\"---'x => inc x\n",
     );
     let main_path = write(
         &dir,
@@ -165,7 +165,7 @@ fn corrupt_artifact_rebuilds_cleanly() {
     // A truncated artifact file reads as a miss and recompiles; the result
     // is identical and the file heals.
     let dir = temp_dir("corrupt");
-    write(&dir, "pkg.lichen", "x' => x + 1\n");
+    write(&dir, "pkg.lichen", "'x => x + 1\n");
     let cache = dir.join("cache");
     let mut store1 = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
     let h1 = store1.load_package(&dir.join("pkg.lichen")).unwrap();

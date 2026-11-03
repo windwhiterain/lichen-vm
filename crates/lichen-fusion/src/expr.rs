@@ -55,9 +55,9 @@ impl Variable {
     /// The repair function's own first argument `x`.
     pub const REPAIR_ARGUMENT: Variable = Variable("x");
     /// The producer's value after the step, `r_(N+1)`.
-    pub const PRODUCER_NEXT: Variable = Variable("r'");
+    pub const PRODUCER_NEXT: Variable = Variable("'r");
     /// The consumer's state after the step, `t'_(N+1)`.
-    pub const CONSUMER_NEXT: Variable = Variable("t'");
+    pub const CONSUMER_NEXT: Variable = Variable("'t");
     /// The abstracted element parameter `c` the inversion is taken with respect to.
     pub const PARAMETER: Variable = Variable("c");
     /// A per-element term of custom logic, as attention's bias or slope would be.

@@ -1180,10 +1180,10 @@ producer, with no intermediate ever stored.
 1. **Inline** all analyzable code between the two instances into `g` (the
    reference notes this is always safe).
 2. **Find `h` by the inverse-function method.** Rewrite `g` as
-   `g'(r_N)(c)` with `c` the outermost `r_N`-free subexpression — the
+   `'g(r_N)(c)` with `c` the outermost `r_N`-free subexpression — the
    reference's rule, *"the outermost expression independent of the parameter
    is the one to abstract"*, which is exactly the choice that maximizes
-   invertibility — then `h(x, r_N, r_{N+1}) = g'(r_{N+1})(g'(r_N)⁻¹(x))`.
+   invertibility — then `h(x, r_N, r_{N+1}) = 'g(r_{N+1})('g(r_N)⁻¹(x))`.
    The template is substituted **after** the inverse is taken: the inverse is the
    parameter solved at the step's own `r_N`, which is what the template is written
    at, and substituting the producer first would solve at the next value instead —
@@ -1203,7 +1203,7 @@ producer, with no intermediate ever stored.
 
    The candidate is taken **whole and unconditionally**: nothing inside `c` is
    ever inverted, and nothing inside it has to be. The per-element identity is
-   `g'(r_{N+1})(g'(r_N)⁻¹(g'(r_N)(c))) = g'(r_{N+1})(c)`, a composition that
+   `'g(r_{N+1})('g(r_N)⁻¹('g(r_N)(c))) = 'g(r_{N+1})(c)`, a composition that
    holds for any `c` whatsoever, and the rolling update recomputes
    `g(d, r_{N+1})` from the datum rather than from `c`. So `relu²`, a `max`, an
    `exp` or a slope term inside `c` is custom logic the engine carries and never
@@ -1212,7 +1212,7 @@ producer, with no intermediate ever stored.
 3. **Check `h` distributes over `f`**, structurally — the two sides of the
    distributivity equation are small expression trees, and the check is a
    normalisation and comparison, not a search.
-4. **Emit the rolling update** as one kernel body: the state tuple `(r, t')`
+4. **Emit the rolling update** as one kernel body: the state tuple `(r, 't)`
    carried across the reduction loop ([loop-conversion](loop-conversion.md)
    supplies the loop), `op`, `h`, `g` inlined. Several producers concatenate
    into one state tuple — the reference's multi-producer case is free here.
@@ -1247,7 +1247,7 @@ the two-pass form over random inputs. The bridge is in
 three arguments directly: `crates/lichen-compute/examples/fusion_schema.rs` reads a producer's
 `combine`/`identity` and a consumer's `element` out of a derived schema and
 prints the rolling update — §7's `g = exp(d - r)` between a max and a sum comes
-out as `r' = max(d, r)`, `t' = t * exp(r - r') + exp(d - r')`, the online softmax,
+out as `'r = max(d, r)`, `'t = t * exp(r - 'r) + exp(d - 'r)`, the online softmax,
 with no `exp` written anywhere in the engine. What the schema cannot yet supply
 is the *check*: `UnverifiableInstance` is still §9's missing row, so a claimed
 combine is believed. Split-K (step 5) is untouched.
@@ -1260,7 +1260,7 @@ came from — it must read nothing but the value being repaired and the producer
 two values, and it must distribute over `f`. The per-element identity
 `h(g(d, r_N), r_N, r_{N+1}) = g(d, r_{N+1})` is then the **pack's** differential
 obligation rather than a symbolic check: the engine has none it can discharge on
-an expression it did not derive, and `x · exp(r' − r_N)` — a rescale with its sign
+an expression it did not derive, and `x · exp('r − r_N)` — a rescale with its sign
 flipped — passes every check the engine does run.
 
 ## 7. Flash Attention v1, with custom logic, is the acceptance case
@@ -1278,10 +1278,10 @@ o      = <second contraction>        ~ "claim:Reduction(combine,identity)"
 
 - The engine matches `m → g → s`. Inversion on `g = exp((x + alibi·i) − m)`:
   the outermost `m`-free subexpression is `c = x + alibi·i` (the custom logic
-  lands *inside* `c`, unread and unopposed), `g'(m)(c) = exp(c − m)`,
+  lands *inside* `c`, unread and unopposed), `'g(m)(c) = exp(c − m)`,
   inverse `ln`, giving `h(x, m_old, m_new) = x · exp(m_old − m_new)` — which
   distributes over `+` trivially. The emitted rolling state `(m, s)` with
-  `m' = max(m, x)`, `s' = s · exp(m − m') + exp(x + alibi·i − m')` **is Flash
+  `'m = max(m, x)`, `'s = s · exp(m − 'm) + exp(x + alibi·i − 'm)` **is Flash
   Attention v1's online softmax, derived** — and derived *through* the custom
   slope, the case that kills every operator-graph pattern matcher.
 - The second contraction chains the same way against the rescale, extending

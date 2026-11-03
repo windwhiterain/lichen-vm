@@ -17,9 +17,9 @@ MIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
 MOut := {.m (compute.Buf (compute.BufParam{.type Float, .length _}))}
 MPar := {.n @any : Int, .w @any : Int, .least @any : Float, .in MIn, .out MOut}
 MArg := {.n @any : Int, .w @any : Int, .least @any : Float, .I MIn}
-peak_raw := (c' = MPar) => {
+peak_raw := ('c = MPar) => {
   lane := compute.range c.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from c.in.x, .at (lane * c.w + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from c.in.x, .at (lane * c.w + (s(0) - 1))}) : Float)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.m, .at lane, .value (fold (c.w, c.least ~ "identity"))})
 }
 peak := compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" MOut
@@ -27,7 +27,7 @@ HIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (comput
 HOut := {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
 HPar := {.n @any : Int, .big @any : Int, .in HIn, .out HOut}
 HArg := {.n @any : Int, .big @any : Int, .I HIn}
-mark_raw := (c' = HPar) => {
+mark_raw := ('c = HPar) => {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   m := (compute.read ((compute.Read _){.from c.in.m, .at 0}) : Float)
@@ -39,7 +39,7 @@ FIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _})), .m (comput
 FOut := {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
 FPar := {.n @any : Int, .big @any : Float, .in FIn, .out FOut}
 FArg := {.n @any : Int, .big @any : Float, .I FIn}
-markf_raw := (c' = FPar) => {
+markf_raw := ('c = FPar) => {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   m := (compute.read ((compute.Read _){.from c.in.m, .at 0}) : Float)
@@ -51,9 +51,9 @@ TIn  := {.h (compute.Buf (compute.BufParam{.type Int, .length _}))}
 TOut := {.t (compute.Buf (compute.BufParam{.type Int, .length _}))}
 TPar := {.n @any : Int, .w @any : Int, .big @any : Int, .in TIn, .out TOut}
 TArg := {.n @any : Int, .w @any : Int, .big @any : Int, .I TIn}
-pick_raw := (c' = TPar) => {
+pick_raw := ('c = TPar) => {
   lane := compute.range c.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
 pick := compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
@@ -61,9 +61,9 @@ UIn  := {.h (compute.Buf (compute.BufParam{.type Float, .length _}))}
 UOut := {.t (compute.Buf (compute.BufParam{.type Float, .length _}))}
 UPar := {.n @any : Int, .w @any : Int, .big @any : Float, .in UIn, .out UOut}
 UArg := {.n @any : Int, .w @any : Int, .big @any : Float, .I UIn}
-pickf_raw := (c' = UPar) => {
+pickf_raw := ('c = UPar) => {
   lane := compute.range c.n
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _){.from c.in.h, .at (lane * c.w + (s(0) - 1))}) : Int)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _){.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))})
 }
 pickf := compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" UOut
@@ -71,7 +71,7 @@ ZIn  := {.a @any : Int}
 ZOut := {.z (compute.Buf (compute.BufParam{.type Int, .length _}))}
 ZPar := {.n @any : Int, .in ZIn, .out ZOut}
 ZArg := {.n @any : Int, .I ZIn}
-idx_raw := (c' = ZPar) => {
+idx_raw := ('c = ZPar) => {
   i := compute.range c.n
   compute.write ((compute.Write _){.to c.out.z, .at i, .value (i + 10)})
 }

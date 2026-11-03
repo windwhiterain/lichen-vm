@@ -116,7 +116,7 @@ pub enum Expr {
     /// # Invariant
     ///
     /// The parameter side is an ordinary expression: a name in it is an
-    /// outer-scope reference, and only a formal reference (`x'`) declares a
+    /// outer-scope reference, and only a formal reference (`'x`) declares a
     /// parameter of this lambda.
     Lambda {
         /// The parameter side: the domain the argument is unified with.
@@ -124,7 +124,7 @@ pub enum Expr {
         r#return: Box<Expr>,
         span: Span,
     },
-    /// `x'` — a **formal reference**: the hole a lambda's argument fills, and
+    /// `'x` — a **formal reference**: the hole a lambda's argument fills, and
     /// the name the lambda binds in its body.
     ///
     /// # Invariant

@@ -24,10 +24,10 @@ fn lex_one(source: &str) -> Token {
 #[test]
 fn tokens_of_a_small_program() {
     assert_eq!(
-        kinds("x' => 5 : Int"),
+        kinds("'x => 5 : Int"),
         vec![
-            TokenKind::Name("x".to_string()),
             TokenKind::Prime,
+            TokenKind::Name("x".to_string()),
             TokenKind::FatArrow,
             TokenKind::Int(5),
             TokenKind::Colon,
@@ -547,7 +547,7 @@ fn incremental_resume_matches_full_relex() {
         // Delete a separator (merge two statements onto one line).
         ("a = 1\nb = 2", 5, 6, ""),
         // Append at the very end.
-        ("a = 1\nf' = x => a + x", 20, 20, "\nf 2"),
+        ("a = 1\'nf = x => a + x", 20, 20, "\nf 2"),
         // Insert an integer literal's digit.
         ("a = 12\nb = 3", 4, 4, "3"),
         // Insert a parenthesis so a `(` becomes glued to the previous token.
@@ -591,7 +591,7 @@ fn incremental_resume_matches_full_relex_with_a_base_offset() {
         // Insert a newline mid-file: shifts the suffix and its line numbers.
         ("a = 1\nb = 2\nc = 3", 6, 6, "\n"),
         // Append at the very end.
-        ("a = 1\nf' = x => a + x", 20, 20, "\nf 2"),
+        ("a = 1\'nf = x => a + x", 20, 20, "\nf 2"),
     ];
     // Two prefixes with different line structure, so the base is not a whole
     // number of lines in one of them.

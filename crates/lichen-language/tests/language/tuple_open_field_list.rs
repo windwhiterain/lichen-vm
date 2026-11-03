@@ -50,7 +50,7 @@ impl Seed {
 }
 
 fn seed() -> Seed {
-    let report = compile("f := x' => x");
+    let report = compile("f := 'x => x");
     assert!(report.ok(), "the seed checks: {:?}", report.diagnostics);
     let build = report.build.expect("a build");
     Seed {

@@ -148,7 +148,7 @@ const KERNELS: &str = r#"
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par1 := {.n @any : Int, .in In1}
-f1 := (k' = Par1) => {
+f1 := ('k = Par1) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out1){.z (compute.write ((compute.Write _){.to y, .at i, .value i + 10}))})
@@ -157,7 +157,7 @@ k1 := compute.parallel f1 "gpu" Out1
 In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par2 := {.n @any : Int, .in In2}
-f2 := (k' = Par2) => {
+f2 := ('k = Par2) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -174,7 +174,7 @@ k2 := compute.parallel f2 "gpu" Out2
 /// array-to-buffer conversion any more (`docs/notes/kernel-buffer-declarations.md`).
 const FILL: &str = r#"
 Fill := {.n @any : Int}
-fill_raw := (c' = Fill) => {
+fill_raw := ('c = Fill) => {
   i := compute.range c.n
   y := compute.buf (compute.BufParam{.type Int, .length 3})
   ((Out1){.z (compute.write ((compute.Write _){.to y, .at i, .value 1}))})
@@ -186,7 +186,7 @@ filler := compute.parallel fill_raw "cpu" Out1
 const CHAIN: &str = r#"
 InS  := {.a @any : Int}
 ParS := {.n @any : Int, .in InS}
-step := (s' = ParS) => {
+step := ('s = ParS) => {
   first := (compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}}) : Struct)
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.z}})
 }
@@ -206,7 +206,7 @@ fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
 captured := (compute.plrun filler ((Fill){{.n 3}}) : Struct)
 InS  := {{.a @any : Int}}
 ParS := {{.n @any : Int, .in InS}}
-step := (s' = ParS) => {{
+step := ('s = ParS) => {{
   compute.plrun k2 ((compute.A _){{.n s.n, .I In2{{.b captured.z}}}})
 }}
 built := compute.graph step
@@ -248,7 +248,7 @@ fn a_dispatch_the_body_closed_over_is_refused_rather_than_recorded() {
 held := (compute.plrun k1 ((compute.A _){{.n 3, .I In1{{.a 0}}}}) : Struct)
 InS  := {{.a @any : Int}}
 ParS := {{.n @any : Int, .in InS}}
-step := (s' = ParS) => {{
+step := ('s = ParS) => {{
   first := (compute.plrun k1 ((compute.A _){{.n s.n, .I In1{{.a 0}}}}) : Struct)
   compute.plrun k2 ((compute.A _){{.n s.n, .I In2{{.b held.z}}}})
 }}
@@ -296,7 +296,7 @@ fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_on
 {KERNELS}
 held := compute.plrun k1 ((compute.A _){{.n 3, .I In1{{.a 0}}}})
 GArg := {{.n @any : Int, .in In1}}
-step := (s' = GArg) => {{
+step := ('s = GArg) => {{
   first := (compute.plrun k1 ((compute.A _){{.n s.n, .I In1{{.a 0}}}}) : Struct)
   compute.plrun k2 (held, (first,))
 }}
@@ -339,7 +339,7 @@ fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
 ---
 {KERNELS}
 GArg := {{.n @any : Int, .in In1}}
-step := (s' = GArg) => {{
+step := ('s = GArg) => {{
   first := (compute.plrun k1 ((compute.A _){{.n s.n, .I In1{{.a 0}}}}) : Struct)
   pulled := compute.collect first.z
   compute.plrun k2 ((compute.A _){{.n s.n, .I In2{{.b pulled}}}})
@@ -364,7 +364,7 @@ compute.collect (compute.graphrun built 3)
 ---
 {KERNELS}
 GArg := {{.n @any : Int, .in In1}}
-step := (s' = GArg) => {{
+step := ('s = GArg) => {{
   first := (compute.plrun k1 ((compute.A _){{.n s.n, .I In1{{.a 0}}}}) : Struct)
   at_zero := compute.read ((compute.Read _){{.from first.z, .at 0}})
   compute.plrun k2 ((compute.A _){{.n s.n, .I In2{{.b at_zero}}}})
@@ -390,8 +390,8 @@ compute.collect (compute.graphrun built 3)
   compute = import "compute.lichen"
 ---
 {KERNELS}
-one := compute.jit (cfg' : Int => cfg + 1)
-step := (ins' = (@any : Int, )) => compute.call one (ins(0))
+one := compute.jit ('cfg : Int => cfg + 1)
+step := ('ins = (@any : Int, )) => compute.call one (ins(0))
 built := compute.graph step
 compute.collect (compute.graphrun built (3,))
 "#
@@ -427,7 +427,7 @@ fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
         r#"---
   compute = import "compute.lichen"
 ---
-step := (ins' = (@any : Int, )) => ins(0)
+step := ('ins = (@any : Int, )) => ins(0)
 built := compute.graph step
 compute.graphrun built (3,)
 "#,
@@ -451,7 +451,7 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
 In1  := {.a @any : Int}
 Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par1 := {.n @any : Int, .in In1}
-f1 := (k' = Par1) => {
+f1 := ('k = Par1) => {
   i := compute.range k.n
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out1){.z (compute.write ((compute.Write _){.to y, .at i, .value i}))})
@@ -460,7 +460,7 @@ k1 := compute.parallel f1 "gpu" Out1
 In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
 Par2 := {.n @any : Int, .in In2}
-f2 := (k' = Par2) => {
+f2 := ('k = Par2) => {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   y := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -468,7 +468,7 @@ f2 := (k' = Par2) => {
 }
 k2 := compute.parallel f2 "cpu" Out2
 GArg := {.n @any : Int, .in In1}
-step := (s' = GArg) => {
+step := ('s = GArg) => {
   first := (compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}}) : Struct)
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.z}})
 }
@@ -491,7 +491,7 @@ fn a_graph_dispatches_what_the_program_dispatches_with_repeats_collapsed() {
     let (_guard, stub) = stub();
     let body = r#"InS  := {.a @any : Int}
 GArg := {.n @any : Int, .in InS}
-step := (s' = GArg) => {
+step := ('s = GArg) => {
   first := (compute.plrun k1 ((compute.A _){.n s.n, .I In1{.a 0}}) : Struct)
   dead := (compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.z}}) : Struct)
   compute.plrun k2 ((compute.A _){.n s.n, .I In2{.b first.z}})
@@ -547,7 +547,7 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
 In1  := {{.a @any : Int}}
 Out1 := {{.z (compute.Buf (compute.BufParam{{.type Int, .length 3}}))}}
 Par1 := {{.n @any : Int, .in In1}}
-f1 := (k' = Par1) => {{
+f1 := ('k = Par1) => {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Int, .length k.n}})
   ((Out1){{.z (compute.write ((compute.Write _){{.to y, .at i, .value i + 10}}))}})
@@ -556,7 +556,7 @@ k1 := compute.parallel f1 "{backend}" Out1
 In2  := {{.b (compute.Buf (compute.BufParam{{.type Int, .length 3}}))}}
 Out2 := {{.w (compute.Buf (compute.BufParam{{.type Int, .length 3}}))}}
 Par2 := {{.n @any : Int, .in In2}}
-f2 := (k' = Par2) => {{
+f2 := ('k = Par2) => {{
   i := compute.range k.n
   a := (compute.read ((compute.Read _){{.from k.in.b, .at i}}) : Int)
   y := compute.buf (compute.BufParam{{.type Int, .length k.n}})
@@ -564,7 +564,7 @@ f2 := (k' = Par2) => {{
 }}
 k2 := compute.parallel f2 "{backend}" Out2
 GArg := {{.n @any : Int, .in In1}}
-step := (s' = GArg) => {{
+step := ('s = GArg) => {{
   first := (compute.plrun k1 ((compute.A _){{.n s.n, .I In1{{.a 0}}}}) : Struct)
   compute.plrun k2 ((compute.A _){{.n s.n, .I In2{{.b first.z}}}})
 }}

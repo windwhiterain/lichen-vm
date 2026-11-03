@@ -45,7 +45,12 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
 `{.'a ..., ...}` => `{.a 'a ..., ...}`
+`[T, n]['a, ...] => ...` => `[@any : T, n]['a, ...] => ...`
 ```
+
+The uniform-signature conversion applies only on a lambda's parameter side,
+when `T` is a bare type constant and every array-instance element is a formal.
+Elsewhere `[T, n]` keeps the ordinary exact-element-template meaning.
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.
@@ -54,6 +59,7 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 1. Uniform signature: use if all parameter play equal role.
 ```
 sum3 := [Int, 3]['a, 'b, 'c] => 'a + 'b + 'c
+sum3 ([@any : Int, 3][1, 2, 3])
 ```
 2. Named signature: use if the signature will not be used else where.
 ```
@@ -193,6 +199,7 @@ Function is an expression with a specified undecided expression as parameter.
 
 The parameter side is an ordinary expression (`lambda := expr => expr`), and the argument is unified with its value — the **domain**.
 A name written on the parameter side without a prime is an expression of the enclosing scope; a name with a prime is a **formal reference**, and it declares a parameter of this function, which binds that name in its body.
+The body may write either `'a` or `a` for that parameter. A primed body reference names only the innermost lambda's declared formals; plain names retain ordinary lexical closure.
 Several primed names on one parameter side are leaves of one parameter expression, not several parameters, and one name primed twice is one parameter.
 
 Polymorphism at every application: @clone its expression, unify the argument with cloned parameter.
@@ -221,7 +228,7 @@ Clone an node with `Any` value produce an undecide node with `None` value if its
 Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
 
 ```sytax
-`x' => {...; expr}` => `x' => {...; return expr; @any = x;}`
+`'x => {...; expr}` => `'x => {...; return expr; @any = x;}`
 ```
 
 ## Struct

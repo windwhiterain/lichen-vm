@@ -62,18 +62,18 @@
 Ain := {.a (compute.Buf (compute.BufParam{.type Float, .length 6})), .b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 OutC := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Par := {.n @any : Int, .cols @any : Int, .k @any : Int, .in (Ain)}
-matmul_raw := (k' = Par) => {
+matmul_raw := ('k = Par) => {
   i := compute.range k.n
   r := compute.row k
   c := compute.col k
-  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.a, .at (r * k.k + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.b, .at ((s(0) - 1) * k.cols + c)}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from k.in.a, .at (r * k.k + (s(0) - 1))}) : Float) * (compute.read ((compute.Read _){.from k.in.b, .at ((s(0) - 1) * k.cols + c)}) : Float))) ~ "combine" ~ "element"))
   b_c := compute.buf (compute.BufParam{.type Float, .length k.n})
   OutC{.c (compute.write ((compute.Write _){.to b_c, .at i, .value (fold (k.k, 0.0 ~ "identity"))}))}
 }
 matmul := compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu" (OutC)
 Fill := {.n @any : Int}
 aBuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_a_raw := Fill{.n' : Int} => {
+fill_a_raw := Fill{.'n : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0)
@@ -82,7 +82,7 @@ fill_a_raw := Fill{.n' : Int} => {
 fill_a := compute.parallel fill_a_raw "cpu" (aBuf)
 a := (compute.plrun fill_a (Fill{.n 6}) : Struct).a
 bBuf := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_b_raw := Fill{.n' : Int} => {
+fill_b_raw := Fill{.'n : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 7.0 else 0.0) + (if i == 1 then 8.0 else 0.0) + (if i == 2 then 9.0 else 0.0) + (if i == 3 then 10.0 else 0.0) + (if i == 4 then 11.0 else 0.0) + (if i == 5 then 12.0 else 0.0)

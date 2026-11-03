@@ -3,8 +3,8 @@
   output = "[1, 1]: Array"
 ---
 Any2 := [@any, 2]
-f1 := x' => {
-    f2 := y' => Any2[y, y]
+f1 := 'x => {
+    f2 := 'y => Any2[y, y]
     f2 x 
 }
 f1 1

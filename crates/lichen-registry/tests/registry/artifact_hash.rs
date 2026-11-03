@@ -16,11 +16,11 @@ fn a_dependency_identity_moves_the_importer() {
     let key = ModuleKey::from_raw(7);
     let before = artifact_hash(
         identity_of("import before"),
-        &[(key, identity_of("succ' = x => x + 1\n"))],
+        &[(key, identity_of("'succ = x => x + 1\n"))],
     );
     let after = artifact_hash(
         identity_of("import before"),
-        &[(key, identity_of("succ' = x => x + 1\nextra = 7\n"))],
+        &[(key, identity_of("'succ = x => x + 1\nextra = 7\n"))],
     );
     assert_ne!(
         before, after,
@@ -32,7 +32,7 @@ fn a_dependency_identity_moves_the_importer() {
 #[test]
 fn the_own_source_still_moves_the_identity() {
     let key = ModuleKey::from_raw(7);
-    let dep = identity_of("succ' = x => x + 1\n");
+    let dep = identity_of("'succ = x => x + 1\n");
     assert_ne!(
         artifact_hash(identity_of("one"), &[(key, dep)]),
         artifact_hash(identity_of("two"), &[(key, dep)]),

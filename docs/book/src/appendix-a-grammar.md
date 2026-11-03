@@ -92,8 +92,8 @@ element   := ['@shallow' ['(' n ')']] glued-expr
 expr      := expr '==>' expr
 ```
 
-The prime is a **suffix on a name** and it is written against it: `x'` is
-the formal reference `x`, and `x '` is not a spelling. A prime declares a
+The prime is a **prefix on a name** and it is written against it: `'x` is
+the formal reference `x`, and `' x` is not a spelling. A prime declares a
 parameter, and only on the **parameter side** of a `=>`; the lambda binds
 the bare name in its body. A name on the parameter side without a prime is
 an expression of the enclosing scope.

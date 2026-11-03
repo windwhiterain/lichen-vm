@@ -25,7 +25,7 @@ In  := {.unused (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Out := {.y (compute.Buf (compute.BufParam{{.type Float, .length _}}))}
 Par := {.n @any : Int, .taps @any : Int, .in In, .out Out}
 Arg := {.n @any : Int, .taps @any : Int, .I In}
-raw := (c' = Par) => {
+raw := ('c = Par) => {
   i := compute.range c.n
 @BODY@
 }
@@ -39,7 +39,7 @@ compute.collect out.y : Array
 const CONTROL: &str = r#"  compute.write ((compute.Write _){.to c.out.y, .at i, .value 2.0})"#;
 
 /// A fold whose step writes the countdown into the buffer it carries.
-const LOOP: &str = r#"  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
+const LOOP: &str = r#"  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.out.y)"#;
 
 /// What a run answered, or how it refused.
@@ -132,22 +132,22 @@ fn probe_the_state_slot_the_walk_stops_at() {
     for (label, body) in [
         (
             "buffer",
-            r#"  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.out.y)"#,
         ),
         (
             "literal",
-            r#"  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, 0.0)"#,
         ),
         (
             "scalar",
-            r#"  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
+            r#"  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (compute.write ((compute.Write _){.to s(1), .at i, .value (int2float s(0))})))
   fold (c.taps, c.n)"#,
         ),
         (
             "write_outside",
-            r#"  @loop fold := s' => if s(0) == 0 then s(1) else fold (s(0) - 1, s(1))
+            r#"  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, s(1))
   compute.write ((compute.Write _){.to c.out.y, .at i, .value (fold (c.taps, 0.0))})"#,
         ),
     ] {

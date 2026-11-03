@@ -33,7 +33,7 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
 --- compute = import "compute.lichen" ---
 Src := {{.a @any : Int}}
 SrcOut := {{.z (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
-SrcPar := _x' => compute.P compute.KT{{.I Src, .O SrcOut}}
+SrcPar := '_x => compute.P compute.KT{{.I Src, .O SrcOut}}
 fill := (k = (SrcPar _)) => {{
   i := compute.range k.n
   compute.write ((compute.Write _){{.to k.out.z, .at i, .value int2float (i + 10)}})
@@ -41,7 +41,7 @@ fill := (k = (SrcPar _)) => {{
 source_kernel := compute.parallel fill "cpu" SrcOut
 inbuf := (compute.plrun source_kernel ((compute.A _){{.n 3, .I Src{{.a 0}}}}) : Struct)
 {declarations}
-f := (k' = Par) => {{
+f := ('k = Par) => {{
   i := compute.range k.n
   compute.write ((compute.Write _){{.to k.out.w, .at i, .value {written}}})
 }}

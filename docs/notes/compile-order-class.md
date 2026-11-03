@@ -465,13 +465,13 @@ write — no loop, no claim, no coordinate, no second read:
 In = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
 Par = struct{.n Int, .in In, .out OutE}
-raw = (lane' : Par) => {
+raw = ('lane : Par) => {
   compute.write ((compute.Write _)(.to lane.out.e, .at 0, .value compute.read ((compute.Read _)(.from lane.in.d, .at 0))))
 }
 k = compute.parallel raw "gpu"
 Arg = struct{.n Int, .I In}
 GArg = struct{.n Int, .in In}
-built = compute.graph ((a' : GArg) => {
+built = compute.graph (('a : GArg) => {
   (compute.plrun k ((Arg)(.n a.n, .I a.in)) : OutE)
 })
 built

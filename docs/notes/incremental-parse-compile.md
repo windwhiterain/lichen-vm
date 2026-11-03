@@ -276,14 +276,14 @@ built (`done`), so re-checking after an error-only edit does nothing.
 ## 6. Example usage
 
 ```rust
-let mut sess = BufferSession::new("a = 1\nf = x' => a + x\nf 2\n");
+let mut sess = BufferSession::new("a = 1\nf = 'x => a + x\nf 2\n");
 
-// User appends `g = x' =>` (an unfinished tail) → a masked error block, nothing else.
-sess.set_source("a = 1\nf = x' => a + x\nf 2\ng = x' =>");
+// User appends `g = 'x =>` (an unfinished tail) → a masked error block, nothing else.
+sess.set_source("a = 1\nf = 'x => a + x\nf 2\ng = 'x =>");
 let r1 = sess.compile();     // clean signature unchanged → reuse IR/check
 
-// User completes it to `g = x' => x +` → still an error block, still clean statements.
-sess.set_source("a = 1\nf = x' => a + x\nf 2\ng = x' => x +");
+// User completes it to `g = 'x => x +` → still an error block, still clean statements.
+sess.set_source("a = 1\nf = 'x => a + x\nf 2\ng = 'x => x +");
 let r2 = sess.compile();     // same clean signature → reused; only the mask grows
 assert!(r1.reused && r2.reused);
 ```

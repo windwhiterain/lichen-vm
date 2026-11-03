@@ -1199,7 +1199,7 @@ impl std::fmt::Display for ComposeRefusal {
             ComposeRefusal::OneInputIsFilledTwice { body, input } => write!(
                 formatter,
                 "body {body} fills its input position {input} twice, so the union drops it once \
-                 and two producers' values answer one read"
+                 and two producers values answer one read"
             ),
             ComposeRefusal::OneProducerFeedsTwoInputs { body, producer } => write!(
                 formatter,
@@ -1225,7 +1225,7 @@ impl std::fmt::Display for ComposeRefusal {
                 formatter,
                 "the producer's domain {producer:?} and the consumer's {consumer:?} are not the \
                  same shape and not one with runtime scalars spliced in — a merged fragment has one \
-                 parameter list, and it is the union of the two bodies' scalar leaves with each \
+                 parameter list, and it is the union of the two bodies scalar leaves with each \
                  body bound to its own; {blocker}"
             ),
             ComposeRefusal::TargetsDiffer { producer, consumer } => write!(

@@ -1,4 +1,4 @@
-//! The abstraction step: writing an element function as `g'(r_N)(c)`.
+//! The abstraction step: writing an element function as `'g(r_N)(c)`.
 //!
 //! # Invariant
 //! The parameter is the outermost subexpression of the element function that does not
@@ -9,7 +9,7 @@ use crate::expr::{Expr, Variable};
 use crate::invert::InvertRefusal;
 use crate::repair::FusionRefusal;
 
-/// An element function read as a function of the producer's value, `g'(r_N)(c)`.
+/// An element function read as a function of the producer's value, `'g(r_N)(c)`.
 #[derive(Debug, Clone)]
 pub struct Abstraction {
     /// The subexpression the parameter was taken from, the element's own contribution.
@@ -27,7 +27,7 @@ impl Abstraction {
 ///
 /// # Invariant
 /// The outermost candidate wins unconditionally, and no operator inside it is consulted:
-/// the per-element repair identity is `g'(r')(g'(r)⁻¹(g'(r)(c))) = g'(r')(c)`, a composition
+/// the per-element repair identity is `'g('r)('g(r)⁻¹('g(r)(c))) = 'g('r)(c)`, a composition
 /// that holds for any `c`, and the consumer's rolling state is covered by the
 /// distributivity check rather than by anything `c` contains. A refusal therefore comes
 /// only from the chain above `c`.
@@ -65,7 +65,7 @@ pub fn abstract_element_function(
 /// # Invariant
 /// The outermost is the choice that keeps the element's own logic inside one subexpression:
 /// a narrower candidate would re-expose the custom logic the abstraction removed, and the
-/// rolling update recomputes `g(d, r')` from the datum either way.
+/// rolling update recomputes `g(d, 'r)` from the datum either way.
 fn outermost_producer_free(element_function: &Expr, producer: &Variable) -> Option<Expr> {
     let mut candidates = Vec::new();
     collect_producer_free(element_function, producer, &mut candidates);

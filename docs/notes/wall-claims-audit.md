@@ -59,8 +59,8 @@ while demand runs from the codomain outwards (`:222`).
 another nest's step:
 
 ```lichen
-@loop trip = s' => if s(0) == 0 then s(1) else trip (s(0) - 1, (s(1) + s(2) * int2float s(0)) ~ "combine", s(2))
-@loop outer = s' => if s(0) == 0 then s(1) else outer (s(0) - 1, (s(1) + trip (k.m, 0.0, (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1)))))) ~ "combine" ~ "element")
+@loop trip = 's => if s(0) == 0 then s(1) else trip (s(0) - 1, (s(1) + s(2) * int2float s(0)) ~ "combine", s(2))
+@loop outer = 's => if s(0) == 0 then s(1) else outer (s(0) - 1, (s(1) + trip (k.m, 0.0, (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1)))))) ~ "combine" ~ "element")
 ```
 
 answers, verbatim:
@@ -124,7 +124,7 @@ expressible at all.**
 output buffer:
 
 ```lichen
-drive = s' => if s(0) == 1 then { cur = s(1); (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 1, .I In(.k cur.k, .nk row))) : Out) }
+drive = 's => if s(0) == 1 then { cur = s(1); (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 1, .I In(.k cur.k, .nk row))) : Out) }
           else { cur = s(1); drive (s(0) + 1, (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 0, .I In(.k cur.k, .nk row))) : Out)) }
 final = drive (0, Out(.k kbuf))
 ```
@@ -227,7 +227,7 @@ decode loop wants.
 `(t + 1) · dim` and let lane `i` write at `i`, reading the new row when `i >= t * dim`:
 
 ```lichen
-@loop ... raw = (k' : Par) => {
+@loop ... raw = ('k : Par) => {
   i = compute.range k.n
   fresh = i >= k.t * k.dim
   column = i - k.t * k.dim

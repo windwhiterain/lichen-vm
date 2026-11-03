@@ -26,7 +26,7 @@ fn a_store_registration_and_a_module_drop_repeat_where_the_peel_breaks_them() {
     let source = r#"
 ---
   compute = import "compute.lichen" ---
-k := compute.jit (x' : Int => int2float (x + 1))
+k := compute.jit ('x : Int => int2float (x + 1))
 compute.launch k 5
 "#;
     let parallel = r#"
@@ -34,7 +34,7 @@ compute.launch k 5
 In  := {.a @any : Int}
 Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 69}))}
 Par := {.n @any : Int, .in In}
-f := (k' = Par) => {
+f := ('k = Par) => {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value float2int (int2float i + 0.5)}))})

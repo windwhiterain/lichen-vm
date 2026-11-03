@@ -123,10 +123,10 @@ Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
 Pick := {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Par0 := {.n @any : Int, .w @any : Int, .in (Row)}
 Arg0 := {.n @any : Int, .w @any : Int, .I (Row)}
-rank0_raw := Par0{.n' : Int, .w' : Int, .in'} => {
+rank0_raw := Par0{.'n : Int, .'w : Int, .'in} => {
   lane := compute.range n
   base := lane * w
-  @loop fold := s' => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold := 's => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   b_p := compute.buf (compute.BufParam{.type Float, .length n})
   Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))}
 }
@@ -135,13 +135,13 @@ Sel1 := {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compu
 Cat1 := {.p (compute.Buf (compute.BufParam{.type Float, .length 10}))}
 Par1 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel1)}
 Arg1 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel1)}
-rank1_raw := Par1{.n' : Int, .w' : Int, .rows' : Int, .ranks' : Int, .in'} => {
+rank1_raw := Par1{.'n : Int, .'w : Int, .'rows : Int, .'ranks : Int, .'in} => {
   lane := compute.range n
   rank := lane / rows
   row := lane % rows
   base := row * w
   low := float2int ((compute.read ((compute.Read _){.from in.q, .at row}) : Float))
-  @loop fold := s' => if s(0) == 0 then s(2) else { i := s(0) - 1
+  @loop fold := 's => if s(0) == 0 then s(2) else { i := s(0) - 1
     ri := float2int ((compute.read ((compute.Read _){.from in.x, .at (base + i)}) : Float))
     hit := (1 * (ri >= s(1))) * (1 * (i != low))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
@@ -154,14 +154,14 @@ Sel2 := {.x (compute.Buf (compute.BufParam{.type Float, .length 20})), .q (compu
 Cat2 := {.p (compute.Buf (compute.BufParam{.type Float, .length 15})), .t (compute.Buf (compute.BufParam{.type Float, .length 15}))}
 Par2 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .in (Sel2)}
 Arg2 := {.n @any : Int, .w @any : Int, .rows @any : Int, .ranks @any : Int, .I (Sel2)}
-rank2_raw := Par2{.n' : Int, .w' : Int, .rows' : Int, .ranks' : Int, .in'} => {
+rank2_raw := Par2{.'n : Int, .'w : Int, .'rows : Int, .'ranks : Int, .'in} => {
   lane := compute.range n
   rank := lane / rows
   row := lane % rows
   base := row * w
   low := float2int ((compute.read ((compute.Read _){.from in.q, .at row}) : Float))
   mid := float2int ((compute.read ((compute.Read _){.from in.q, .at (rows + row)}) : Float))
-  @loop fold := s' => if s(0) == 0 then s(2) else { i := s(0) - 1
+  @loop fold := 's => if s(0) == 0 then s(2) else { i := s(0) - 1
     ri := float2int ((compute.read ((compute.Read _){.from in.x, .at (base + i)}) : Float))
     hit := (1 * (ri >= s(1))) * (1 * (i != low)) * (1 * (i != mid))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
@@ -172,7 +172,7 @@ rank2_raw := Par2{.n' : Int, .w' : Int, .rows' : Int, .ranks' : Int, .in'} => {
 }
 rank2 := compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu" (Cat2)
 Fill := {.n @any : Int}
-fill_scores_raw := Fill{.n' : Int} => {
+fill_scores_raw := Fill{.'n : Int} => {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 20})
   v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)

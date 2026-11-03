@@ -137,14 +137,14 @@ fn an_annotated_int_checks() {
 
 #[test]
 fn applying_a_lambda_checks_and_evaluates() {
-    assert_eq!(usize_of(&evaluate("(x' => x) 5 : Int")), 5);
+    assert_eq!(usize_of(&evaluate("('x => x) 5 : Int")), 5);
 }
 
 #[test]
 fn a_tuple_domain_parameter_read_checks_and_evaluates() {
     assert_eq!(
         usize_of(&evaluate(
-            "(p' = (@any : Int, @any : Int) => p(0)) (1, 2) : Int"
+            "('p = (@any : Int, @any : Int) => p(0)) (1, 2) : Int"
         )),
         1
     );
@@ -152,7 +152,7 @@ fn a_tuple_domain_parameter_read_checks_and_evaluates() {
     // that failed through the compiler.
     assert_eq!(
         usize_of(&evaluate(
-            "f := p' = (@any : Int, @any : Int) => p(0)\nf (1, 2)"
+            "f := 'p = (@any : Int, @any : Int) => p(0)\nf (1, 2)"
         )),
         1
     );
@@ -163,7 +163,7 @@ fn a_binder_used_once_checks() {
     // The root apply's result cell is lazy, so the whole program is annotated
     // to anchor its type.
     assert_eq!(
-        usize_of(&evaluate("(((id' => (id 5 : Int)) (x' => x)) : Int)")),
+        usize_of(&evaluate("((('id => (id 5 : Int)) ('x => x)) : Int)")),
         5
     );
 }
@@ -172,7 +172,7 @@ fn a_binder_used_once_checks() {
 fn the_polymorphic_identity_checks() {
     // One binder used at Int and at Type — every lambda is automatically
     // let-polymorphic.
-    let (module, root) = run("(((id' => ((id 5 : Int), (id Type : Type))) (x' => x)) : Tuple)");
+    let (module, root) = run("((('id => ((id 5 : Int), (id Type : Type))) ('x => x)) : Tuple)");
     let mut module = module;
     let value = module.evaluate_node_deep(root, None).unwrap();
     let ids = array_ids(value);
@@ -192,7 +192,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     // The returned closure captures the applied parameter's binding: a leak
     // would show as the undecided marker.
     let (mut module, root) = run(
-        "A := [@any, 4]\na := 1; f1 := x' => { b := 2; f2 := y' => A[a, b, x, y]; f2 }; f1 3 4",
+        "A := [@any, 4]\na := 1; f1 := 'x => { b := 2; f2 := 'y => A[a, b, x, y]; f2 }; f1 3 4",
     );
     let ids = array_element_ids(module.evaluate_node_deep(root, None).unwrap());
     let expected = [1usize, 2, 3, 4];
@@ -222,11 +222,11 @@ fn a_homogeneous_array_of_lambdas_checks() {
     // `?a → ?a` and `?b → ?b` unify, so the binder name is not part of the
     // shape.
     assert_eq!(
-        evaluated_array_element_ids("A := [@any, 2]\nA[x' => x, x' => x]").len(),
+        evaluated_array_element_ids("A := [@any, 2]\nA['x => x, 'x => x]").len(),
         2
     );
     assert_eq!(
-        evaluated_array_element_ids("A := [@any, 2]\nA[y' => y, x' => x]").len(),
+        evaluated_array_element_ids("A := [@any, 2]\nA['y => y, 'x => x]").len(),
         2
     );
 }
@@ -249,7 +249,7 @@ fn an_index_with_a_runtime_index_selects() {
     // The root apply is annotated to anchor its lazy result cell.
     assert_eq!(
         usize_of(&evaluate(
-            "A := [@any : Int, 2]\n((i' => A[10, 20][i]) 1 : Int)"
+            "A := [@any : Int, 2]\n(('i => A[10, 20][i]) 1 : Int)"
         )),
         20
     );
@@ -286,18 +286,18 @@ fn expression_statements_check_and_evaluate() {
     assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Guard);
     // The same inside a block.
     assert_eq!(usize_of(&evaluate("{5; 7}")), 7);
-    let d = diags("f := x' => {5 : Type; x}; (f 9 : Int)");
+    let d = diags("f := 'x => {5 : Type; x}; (f 9 : Int)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Annotation);
 }
 
 #[test]
 fn an_annotated_parameter_checks() {
-    assert_eq!(usize_of(&evaluate("(x' : Int => x) 5")), 5);
-    assert_eq!(usize_of(&evaluate("(x' : Int => x) 5 : Int")), 5);
+    assert_eq!(usize_of(&evaluate("('x : Int => x) 5")), 5);
+    assert_eq!(usize_of(&evaluate("('x : Int => x) 5 : Int")), 5);
     // Applying it at Type clashes at the apply (the parameter's pinned
     // type against the argument's).
-    let d = diags("(x' : Int => x) Type");
+    let d = diags("('x : Int => x) Type");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -306,8 +306,8 @@ fn an_annotated_parameter_checks() {
         Some(LangValue::TypeValue(TypeValue::TypeInt))
     );
     // An annotated parameter in a bound function.
-    assert_eq!(usize_of(&evaluate("f := x' : Int => x; (f 5 : Int)")), 5);
-    let d = diags("f := x' : Int => x; f Type");
+    assert_eq!(usize_of(&evaluate("f := 'x : Int => x; (f 5 : Int)")), 5);
+    let d = diags("f := 'x : Int => x; f Type");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Runtime);
 }
@@ -319,7 +319,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
 
     // The printer recognizes a cell unified into the universe class.
     assert_eq!(
-        lichen_language::run::evaluate("x' : Int => x").unwrap(),
+        lichen_language::run::evaluate("'x : Int => x").unwrap(),
         "Int => Int: TypeFunction"
     );
     assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
@@ -362,7 +362,7 @@ fn a_binding_used_twice_shares_one_node() {
 fn two_calls_to_one_function_keep_their_own_results() {
     // Two applications of one template must not share an argument.
     let (module, value, _) = common::run(
-        "f := x' => x + 1
+        "f := 'x => x + 1
 (f 1, f 2)",
     );
     let elements = common::array_values(&module, &value);
@@ -374,7 +374,7 @@ fn two_calls_to_one_function_keep_their_own_results() {
 fn a_bound_lambda_is_still_polymorphic() {
     // The shared function node keeps per-apply fresh clones, so graph sharing
     // does not monomorphize a function.
-    let (module, root) = run("a := x' => x; ((a 5 : Int), (a Type : Type))");
+    let (module, root) = run("a := 'x => x; ((a 5 : Int), (a Type : Type))");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -434,14 +434,14 @@ fn a_block_body_checks_and_evaluates() {
     // The block is the lambda's body: its bindings resolve through the graph
     // and its final expression is the value.
     assert_eq!(
-        usize_of(&evaluate("f := x' => {y := x; y}; (f 5 : Int)")),
+        usize_of(&evaluate("f := 'x => {y := x; y}; (f 5 : Int)")),
         5
     );
     // The same with a block binding used by an index, the fib pattern; the
     // written type decides the container.
     assert_eq!(
         usize_of(&evaluate(
-            "A := [@any : Int, 2]\nf := (a' = A) => {i := 0; a[i]}; (f (A[7, 8]) : Int)"
+            "A := [@any : Int, 2]\nf := ('a = A) => {i := 0; a[i]}; (f (A[7, 8]) : Int)"
         )),
         7
     );
@@ -460,10 +460,10 @@ fn a_block_scopes_its_bindings() {
     // A block-bound name shadows an outer one inside the block, and is gone
     // after the `}`.
     assert_eq!(
-        usize_of(&evaluate("a := 5; f := x' => {a := x; a}; (f 9 : Int)")),
+        usize_of(&evaluate("a := 5; f := 'x => {a := x; a}; (f 9 : Int)")),
         9
     );
-    assert_eq!(usize_of(&evaluate("a := 5; f := x' => {a := x; a}; a")), 5);
+    assert_eq!(usize_of(&evaluate("a := 5; f := 'x => {a := x; a}; a")), 5);
 }
 
 #[test]
@@ -471,7 +471,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     // `g` is one shared function node; each apply gets fresh clones, so it
     // checks at Int and at Type.
     let (module, root) =
-        run("(((x' => {g := y' => y; ((g x : Int), (g Type : Type))}) 5) : Tuple)");
+        run("((('x => {g := 'y => y; ((g x : Int), (g Type : Type))}) 5) : Tuple)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -487,7 +487,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
 
 #[test]
 fn an_unresolved_name_inside_a_block_is_reported() {
-    let d = diags("f := x' => {a := 1; b}; 0");
+    let d = diags("f := 'x => {a := 1; b}; 0");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Resolve);
     assert_eq!(d[0].message, "unresolved name 'b'");
@@ -560,7 +560,7 @@ fn an_int_is_unsigned_where_the_two_readings_differ() {
 /// branch on the GPU path (`docs/notes/operators.md`).
 #[test]
 fn a_zero_divisor_is_recorded_rather_than_answered() {
-    for source in ["1 / 0", "1 % 0", "f := x' => x / 0; f 5"] {
+    for source in ["1 / 0", "1 % 0", "f := 'x => x / 0; f 5"] {
         let run = lichen_language::run::evaluate_reporting(source)
             .expect("a zero divisor answers the lazy marker, not a refusal");
         assert_eq!(run.output, "none: Int", "{source:?} has no value");
@@ -574,7 +574,7 @@ fn a_zero_divisor_is_recorded_rather_than_answered() {
     }
     // A divisor that is merely *able* to be zero is fine: nothing is refused
     // until it is zero.
-    assert_eq!(usize_of(&evaluate("(x' => 10 / x) 2")), 5);
+    assert_eq!(usize_of(&evaluate("('x => 10 / x) 2")), 5);
 }
 
 /// The two conversions each cross **one** way: `int2float` rounds past an
@@ -617,7 +617,7 @@ fn the_two_conversions_cross_in_the_direction_each_one_names() {
             LangValue::LowValue(LowValue::USize(3)),
         ),
         (
-            "(v' => int2float v) 7",
+            "('v => int2float v) 7",
             LangValue::LowValue(LowValue::Float(7.0)),
         ),
     ] {
@@ -688,7 +688,7 @@ fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
     }
     // A float that merely *could* be out of range is fine: nothing is refused
     // until it is.
-    assert_eq!(usize_of(&evaluate("(x' => float2int x) 4.5")), 4);
+    assert_eq!(usize_of(&evaluate("('x => float2int x) 4.5")), 4);
 }
 
 /// `<`/`>` compare alone, and a struct field is read by name.
@@ -719,11 +719,11 @@ fn operator_precedence_and_associativity() {
     assert_eq!(usize_of(&evaluate("5 - 3 - 1")), 1); // (5 - 3) - 1
     // Application binds tighter than arithmetic: f x + 1 = (f x) + 1.
 
-    assert_eq!(usize_of(&evaluate("f := x' => x; f 5 + 1 : Int")), 6);
+    assert_eq!(usize_of(&evaluate("f := 'x => x; f 5 + 1 : Int")), 6);
     // `->` keeps its place in the precedence ladder (looser than `+`).
 
     assert_eq!(
-        lichen_language::run::evaluate("x' => x + 1").unwrap(),
+        lichen_language::run::evaluate("'x => x + 1").unwrap(),
         "Int => Int: TypeFunction"
     );
     // Each new level is checked against the reading that would come out
@@ -743,13 +743,13 @@ fn an_operator_operand_must_be_an_int() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::BinOp);
     // A lambda is not an Int either.
-    let d = diags("(x' => x) <= 1");
+    let d = diags("('x => x) <= 1");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::BinOp);
     // An undecided operand is pinned to Int, so applying at a non-Int is
     // a runtime failure, not a panic.
-    let d = diags("f := x' => x + 1; f Type");
+    let d = diags("f := 'x => x + 1; f Type");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -764,7 +764,7 @@ fn if_selects_a_branch() {
     assert_eq!(usize_of(&evaluate("if 2 <= 1 then 2 else 3")), 3);
     assert_eq!(usize_of(&evaluate("if 1 <= 2 then 2 else 3")), 2);
     // The branches are one expression: if as an argument, as a lambda body.
-    assert_eq!(usize_of(&evaluate("(x' => if x then 1 else 0) 1")), 1);
+    assert_eq!(usize_of(&evaluate("('x => if x then 1 else 0) 1")), 1);
     // An out-of-range condition is an out-of-bounds index at runtime.
     let d = diags("if 5 then 1 else 2");
     assert_eq!(d.len(), 1);
@@ -830,7 +830,7 @@ fn an_assert_on_a_failed_read_fails_with_none() {
 fn an_assert_in_a_function_body_checks_per_call() {
     // The body's assert cannot resolve at normalize, so the apply clones
     // it and re-checks against the argument.
-    let d = diags("f := x' => @assert (x == 1); f 2");
+    let d = diags("f := 'x => @assert (x == 1); f 2");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -850,7 +850,7 @@ fn an_assert_in_a_function_body_checks_per_call() {
 
     // A satisfying argument passes.
     assert!(
-        lichen_language::run::evaluate("f := x' => @assert (x == 1); f 1").is_ok(),
+        lichen_language::run::evaluate("f := 'x => @assert (x == 1); f 1").is_ok(),
         "f 1 must satisfy the body assert"
     );
 }
@@ -861,13 +861,13 @@ fn an_assert_in_a_function_body_checks_per_call() {
 fn a_recursive_function_checks_and_evaluates() {
     // The countdown: f(n) = if n <= 0 then 0 else f(n-1).
     assert_eq!(
-        usize_of(&evaluate("f := n' => if n <= 0 then 0 else f (n - 1); f 5")),
+        usize_of(&evaluate("f := 'n => if n <= 0 then 0 else f (n - 1); f 5")),
         0
     );
     // Fibonacci: the recursion example.
     assert_eq!(
         usize_of(&evaluate(
-            "fib := n' => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
+            "fib := 'n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
         )),
         55
     );
@@ -879,12 +879,12 @@ fn a_recursive_binding_parameter_can_be_annotated() {
     // codomain binds lazily.
     assert_eq!(
         usize_of(&evaluate(
-            "f := n' : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int"
+            "f := 'n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int"
         )),
         0
     );
     // A wrong argument type is a runtime apply failure, not a panic.
-    let d = diags("f := n' => if n <= 0 then 0 else f (n - 1); f Int");
+    let d = diags("f := 'n => if n <= 0 then 0 else f (n - 1); f Int");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Runtime);
 }
@@ -894,7 +894,7 @@ fn a_recursive_binding_inside_a_block_recurses() {
     // g recurses without capturing the enclosing parameter.
     assert_eq!(
         usize_of(&evaluate(
-            "f := y' => {g := z' => if z <= 0 then 0 else g (z - 1); g 3}; f 5"
+            "f := 'y => {g := 'z => if z <= 0 then 0 else g (z - 1); g 3}; f 5"
         )),
         0
     );
@@ -919,8 +919,8 @@ fn mutually_recursive_functions_check() {
     // Sibling template scopes are disjoint, so the runtime descends in
     // place — see the evaluate test below.
     let report = compile(
-        "f := n' => if n <= 0 then 0 else g (n - 1);
-         g := n' => if n <= 0 then 0 else f (n - 1);
+        "f := 'n => if n <= 0 then 0 else g (n - 1);
+         g := 'n => if n <= 0 then 0 else f (n - 1);
          f",
     );
     assert!(
@@ -936,8 +936,8 @@ fn mutually_recursive_functions_evaluate_in_place() {
     // references the peer in place, not a clone per level.
 
     // That is what lets the recursion terminate with exactly two templates.
-    let (mut module, root) = run("f := n' => if n <= 0 then 0 else g (n - 1);
-         g := n' => if n <= 0 then 0 else f (n - 1);
+    let (mut module, root) = run("f := 'n => if n <= 0 then 0 else g (n - 1);
+         g := 'n => if n <= 0 then 0 else f (n - 1);
          f 5");
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 0);
     assert_eq!(module.functions.len(), 2, "peers are referenced in place");
@@ -1028,7 +1028,7 @@ fn a_forward_reference_is_not_a_cycle() {
 #[test]
 fn mutual_recursion_through_calls_is_not_a_cycle() {
     // A name as the head of an apply inside a `=>` body is a call edge, not a value read.
-    assert_not_refused("f := x' => (g (x - 1), x)(x <= 0)\ng := x' => (f (x - 1), x)(x <= 0)\nf 3");
+    assert_not_refused("f := 'x => (g (x - 1), x)(x <= 0)\ng := 'x => (f (x - 1), x)(x <= 0)\nf 3");
 }
 
 #[test]
@@ -1121,7 +1121,7 @@ fn a_struct_type_in_a_function_body_is_shared_across_applications() {
 
     // The apply clone therefore references the node in place: every
     // application of `f` shares one nominal id.
-    let report = compile("A := [@any, 2]\nf := t' => {.f t}; A[f (Int), f (Int)]");
+    let report = compile("A := [@any, 2]\nf := 't => {.f t}; A[f (Int), f (Int)]");
     assert!(
         report.ok(),
         "a body-local struct must be one nominal type across applications: {:?}",
@@ -1136,13 +1136,13 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
 
     // The id lives in the kind slot, the field types in the value
     // shape, so the same constructor still checks.
-    let report = compile("A := [@any, 2]\nBox := t' => {.f t}; A[Box (Int), Box (Int)]");
+    let report = compile("A := [@any, 2]\nBox := 't => {.f t}; A[Box (Int), Box (Int)]");
     assert!(
         report.ok(),
         "same constructor, same fields: {:?}",
         report.diagnostics
     );
-    let report = compile("A := [@any, 2]\nBox := t' => {.f t}; A[Box (Int), Box (Type)]");
+    let report = compile("A := [@any, 2]\nBox := 't => {.f t}; A[Box (Int), Box (Type)]");
     assert!(
         report.ok(),
         "same constructor (one nominal kind), fields differ only in the value: {:?}",
@@ -1157,11 +1157,11 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
 
     // Both halves matter — the occurrence id and the name table
     // (`function-type-merge.md`).
-    let (module, root) = run("A := I' => {.n @any : Int, .I I}\n\
+    let (module, root) = run("A := 'I => {.n @any : Int, .I I}\n\
          In := {.x @any, .y @any}\n\
          S1 := A In\n\
          S2 := A In\n\
-         x := ((_x' => S1) _){.n 3, .I ((_x' => In) _){.x 10, .y 20}}\n\
+         x := (('_x => S1) _){.n 3, .I (('_x => In) _){.x 10, .y 20}}\n\
          y := x = S2\n\
          y");
     let mut module = module;
@@ -1176,10 +1176,10 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     assert_eq!(usize_of_node(&mut module, inner[1]), 20);
     // The id is the *occurrence*, not the instantiation.
     let d = diags(
-        "A := I' => {.n @any : Int, .I @any : I}\n\
+        "A := 'I => {.n @any : Int, .I @any : I}\n\
          S1 := A Int\n\
          S2 := A Float\n\
-         x := ((_x' => (A Int)) _){.n 3, .I 5}\n\
+         x := (('_x => (A Int)) _){.n 3, .I 5}\n\
          y := x = S2\n\
          y",
     );
@@ -1192,11 +1192,11 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     // A pinned id alone does not fix this row — the copied name table is
     // what conflicts.
     let report = compile(
-        "A := I' => {.n @any : I}\n\
+        "A := 'I => {.n @any : I}\n\
          S1 := A Int\n\
          S2 := A Int\n\
-         f := v' => v = S2\n\
-         f (((_x' => (A Int)) _){.n 3})",
+         f := 'v => v = S2\n\
+         f ((('_x => (A Int)) _){.n 3})",
     );
     assert!(
         report.ok(),
@@ -1227,12 +1227,12 @@ fn a_named_struct_field_read_resolves_to_the_positional_index() {
 fn a_field_reads_class_is_decided_where_the_container_type_is() {
     let named = evaluate(
         "A := {.n @any : Int, .alpha @any : Float}\n\
-         f := (x' = A) => x.alpha + x.alpha\n\
+         f := ('x = A) => x.alpha + x.alpha\n\
          f (A{.n 1, .alpha 0.5})",
     );
     assert_eq!(named, LangValue::LowValue(LowValue::Float(1.0)));
     let positional = evaluate(
-        "f := (x' = (@any : Int, @any : Float)) => x(1) + x(1)\n\
+        "f := ('x = (@any : Int, @any : Float)) => x(1) + x(1)\n\
          f (1, 0.5)",
     );
     assert_eq!(positional, LangValue::LowValue(LowValue::Float(1.0)));
@@ -1279,7 +1279,7 @@ fn a_named_field_read_on_a_non_struct_is_rejected() {
 fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
     // The callee is a parameter, so the function-ness guard is skipped
     // and the lowlevel records `RuntimeApplyTarget`.
-    let report = compile("f := g' => g 1\nf 5");
+    let report = compile("f := 'g => g 1\nf 5");
     assert!(
         !report.ok(),
         "an apply of a non-function must not be accepted"
@@ -1304,7 +1304,7 @@ fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
 /// so the caret lands on the parameter rather than nowhere.
 #[test]
 fn an_apply_of_a_deferred_non_function_reports_where_to_look() {
-    let report = compile("f := g' => g 1\nf 5");
+    let report = compile("f := 'g => g 1\nf 5");
     let check = report.diagnostics[0]
         .check
         .as_ref()
@@ -1324,7 +1324,7 @@ fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
 
     // Only the program knows which values are callable
     // (`Program::is_callable`), so its answer refuses this one.
-    let report = compile("S := {.a @any : Int}\nf := g' => g 1\nf (S{.a 1})");
+    let report = compile("S := {.a @any : Int}\nf := 'g => g 1\nf (S{.a 1})");
     assert!(
         !report.ok(),
         "an apply of a struct value must not be accepted: {:?}",
@@ -1343,7 +1343,7 @@ fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Each body writes its own occurrence, so the nominal ids stay
     // distinct and `[f (Int), g (Int)]` is heterogeneous.
     let report = compile(
-        "f := t' => {.f t}; g := t' => {.f t}; S1 := f (Int); S2 := g (Int); A := [S1, 2]; A[S1, S2]",
+        "f := 't => {.f t}; g := 't => {.f t}; S1 := f (Int); S2 := g (Int); A := [S1, 2]; A[S1, S2]",
     );
     assert!(
         !report.ok(),
@@ -1380,7 +1380,7 @@ fn a_struct_type_application_is_an_instance() {
 #[test]
 fn an_instantiation_through_an_undetermined_callee_is_refused() {
     // Determined at normalize, not at the apply.
-    let d = diags("g := c' => c{.a 1}");
+    let d = diags("g := 'c => c{.a 1}");
     assert_eq!(d.len(), 1);
     assert!(
         d[0].message.contains("is not determined here"),
@@ -1409,7 +1409,7 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     );
     // a different source occurrence is a different nominal type
     let d = diags(
-        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; A := [s1, 2]; A[((_x' => s1) _){.f 1, .g 2}, ((_x' => s2) _){.f 1, .g 2}]",
+        "s1 := {.f @any : Int, .g @any : Int}; s2 := {.f @any : Int, .g @any : Int}; A := [s1, 2]; A[(('_x => s1) _){.f 1, .g 2}, (('_x => s2) _){.f 1, .g 2}]",
     );
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -1447,7 +1447,7 @@ fn a_struct_instance_reads_its_fields_by_name() {
     // The argument is parenthesized: `f s(1, Int)` would parse as
     // `(f s)(1, Int)`.
     let (module, root) = run(
-        "s := {.f @any : Int, .t @any : Type}; f := (a' = s) => a.f; f (s{.f 1, .t Int}) : Int",
+        "s := {.f @any : Int, .t @any : Type}; f := ('a = s) => a.f; f (s{.f 1, .t Int}) : Int",
     );
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 1);
@@ -1552,7 +1552,7 @@ fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
 #[test]
 fn a_struct_instantiation_of_a_brace_block_is_rejected() {
     // A brace group without named fields is a block, not a struct template.
-    let d = diags("S := _x' => {Int, Type}; (S _){.x 1, .y Int}");
+    let d = diags("S := '_x => {Int, Type}; (S _){.x 1, .y Int}");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::InstantiateCallee);
 }
@@ -1573,7 +1573,7 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
     // A field read through a parameter: the written type names the struct,
     // so its name table resolves the field.
     let report = compile(
-        "S := {.x @any : Int, .y @any : Type}; a := S{.y Int, .x 1}; apply := (s' = S) => s.y; apply (a) : Type",
+        "S := {.x @any : Int, .y @any : Type}; a := S{.y Int, .x 1}; apply := ('s = S) => s.y; apply (a) : Type",
     );
     assert!(
         report.ok(),
@@ -1590,7 +1590,7 @@ fn a_lazy_named_read_of_a_brace_block_instance_is_refused() {
     // The refusal is a check diagnostic, never a panic and never a false
     // non-termination report from the read that follows.
     let d =
-        diags("S := _x' => {Int, Type}\na := (S _){.x 1, .y Int}\napply := s' => s.x\napply (a)");
+        diags("S := '_x => {Int, Type}\na := (S _){.x 1, .y Int}\napply := 's => s.x\napply (a)");
     assert!(
         d.iter().any(|d| d
             .check
@@ -1612,11 +1612,11 @@ fn an_instantiation_through_a_call_result_checks() {
     // The checker forces the unevaluated call result and sees the concrete
     // struct type, where a panic used to be the answer.
     let (module, value, _) = common::evaluate(
-        "mk := u' => {.f @any : Int, .g @any : Int}\n((_x' => (mk (Int))) _){.f 1, .g 2}",
+        "mk := 'u => {.f @any : Int, .g @any : Int}\n(('_x => (mk (Int))) _){.f 1, .g 2}",
     );
     assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
     let (module, value, _) = common::evaluate(
-        "mk := u' => {.f @any : Int, .g @any : Int}\nt := mk (Int)\n((_x' => t) _){.f 1, .g 2}",
+        "mk := 'u => {.f @any : Int, .g @any : Int}\nt := mk (Int)\n(('_x => t) _){.f 1, .g 2}",
     );
     assert_eq!(common::usize_struct_fields(&module, &value), vec![1, 2]);
 }
@@ -1625,7 +1625,7 @@ fn an_instantiation_through_a_call_result_checks() {
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
     // The forced callee is concretely not a struct type — a reported diagnostic,
     // never a panic.
-    let d = diags("mk := u' => Int\n((_x' => (mk (Int))) _){.f 1, .g 2}");
+    let d = diags("mk := 'u => Int\n(('_x => (mk (Int))) _){.f 1, .g 2}");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::InstantiateCallee
@@ -1651,7 +1651,7 @@ fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
         "{}",
         d[0].message
     );
-    let d = diags("((_x' => (x' : Int => x)) _){.f 1}");
+    let d = diags("(('_x => ('x : Int => x)) _){.f 1}");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::InstantiateCallee
@@ -1803,8 +1803,8 @@ fn mutually_recursive_structs_check_and_evaluate() {
     let report = compile(
         "A := {.f @any : Int, .g B}
          B := {.f @any : Type, .g A}
-         AT := _x' => A
-         BT := _x' => B
+         AT := '_x => A
+         BT := '_x => B
          a := (AT _){.f 1, .g b}
          b := (BT _){.f Int, .g a}
          (A, B, a, b)",
@@ -1824,7 +1824,7 @@ fn mutually_recursive_structs_check_and_evaluate() {
 #[test]
 fn a_function_template_is_a_first_class_value() {
     // A function template is a value; the identity satisfies its constraint.
-    run("(x' => x) = (x' : Int => _: Int)");
+    run("('x => x) = ('x : Int => _: Int)");
 }
 
 #[test]
@@ -1832,7 +1832,7 @@ fn a_dependent_array_length_pins_the_parameter() {
     // The check resolves the length read to a pure reference of `n`'s cell and
     // pins it, so the parameter is monomorphized.
     assert_eq!(
-        evaluated_array_element_ids("(((n' => {A := [@any : Int, n]; A[1, 2, 3]}) 3) : Array)")
+        evaluated_array_element_ids("((('n => {A := [@any : Int, n]; A[1, 2, 3]}) 3) : Array)")
             .len(),
         3
     );
@@ -1841,7 +1841,7 @@ fn a_dependent_array_length_pins_the_parameter() {
 #[test]
 fn a_dependent_array_length_rejects_other_lengths() {
     // The instance count pins `n` to 3; applying 5 is a runtime length mismatch.
-    let d = diags("((n' => {A := [@any : Int, n]; A[1, 2, 3]}) 5)");
+    let d = diags("(('n => {A := [@any : Int, n]; A[1, 2, 3]}) 5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -1861,7 +1861,7 @@ fn a_dependent_array_length_rejects_other_lengths() {
 
 #[test]
 fn an_unresolved_name_is_reported() {
-    let d = diags("x' => y");
+    let d = diags("'x => y");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Resolve);
     assert_eq!(d[0].message, "unresolved name 'y'");
@@ -1869,7 +1869,7 @@ fn an_unresolved_name_is_reported() {
     // The resolve error is *absorbed* — it lowers to the same inert ErrorBlock
     // a parse error uses.
     assert!(
-        compile("x' => y").build.is_some(),
+        compile("'x => y").build.is_some(),
         "the resolve error is absorbed; the frontend no longer fails first"
     );
 }
@@ -1891,7 +1891,7 @@ fn calling_an_unregistered_native_operator_is_a_diagnostic() {
 
 #[test]
 fn an_annotation_mismatch_reports_expected_and_found() {
-    let d = diags("5 = (x' : Int => _: Int)");
+    let d = diags("5 = ('x : Int => _: Int)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     assert_eq!(d[0].span, Some((1, 1)));
@@ -1927,7 +1927,7 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
     // diagnostic points at the argument.
 
     // The highlevel `check.message` is raw (`[[TypeInt, TypeInt], TypeTuple]`).
-    let d = diags("T := (@any : Int, @any : Int)\ng := (x' = T) => x(0)\ng (5)");
+    let d = diags("T := (@any : Int, @any : Int)\ng := ('x = T) => x(0)\ng (5)");
     // A failed apply does not narrow the checked set: the body checks under it too.
     assert_eq!(d.len(), 2, "the apply's refusal and the body's: {d:?}");
     assert_eq!(d[0].span, Some((3, 4)), "the caret is on the argument `5`");
@@ -1949,7 +1949,7 @@ fn indexing_a_function_is_an_index_target_error() {
     // index of a function value.
 
     // The guard is attributed to that value, not to the `a[0]` marker.
-    let d = diags("a := x' => (1, Int)(x); a[0]");
+    let d = diags("a := 'x => (1, Int)(x); a[0]");
     assert_eq!(d.len(), 1);
     // The caret is on the function value, not on the `a[0]` marker.
     assert_eq!(
@@ -1965,14 +1965,14 @@ fn indexing_a_function_is_an_index_target_error() {
         d[0].message
     );
     // the corrected program applies the selector instead of indexing it
-    let (module, root) = run("a := x' => (1, Int)(x); a 0 : Int");
+    let (module, root) = run("a := 'x => (1, Int)(x); a 0 : Int");
     let mut module = module;
     assert_eq!(
         usize_of(&module.evaluate_node_deep(root, None).unwrap()),
         1,
         "the dependent selector applied to 0 reads the value"
     );
-    let (module, root) = run("a := x' => (1, Int)(x); a 1 : Type");
+    let (module, root) = run("a := 'x => (1, Int)(x); a 1 : Type");
     let mut module = module;
     assert_eq!(
         module.evaluate_node_deep(root, None).unwrap(),
@@ -1985,7 +1985,7 @@ fn indexing_a_function_is_an_index_target_error() {
 fn a_bare_lambda_checks() {
     // The root type is the arrow `?a → ?a` — undecided components, but a
     // determined shape.
-    let report = compile("x' => x");
+    let report = compile("'x => x");
     assert!(report.ok(), "bare lambdas check: {:?}", report.diagnostics);
 }
 
@@ -1993,12 +1993,12 @@ fn a_bare_lambda_checks() {
 fn an_unannotated_call_runs_and_its_type_is_derived() {
     // The call's result type cell is a lazy record, so the checker
     // pre-evaluates the root type from the evaluated value (5).
-    assert_eq!(usize_of(&evaluate("((id' => id 5) (x' => x))")), 5);
+    assert_eq!(usize_of(&evaluate("(('id => id 5) ('x => x))")), 5);
 }
 
 #[test]
 fn a_heterogeneous_array_is_rejected() {
-    let d = diags("A := [@any, 2]\nA[1, x' => x]");
+    let d = diags("A := [@any, 2]\nA[1, 'x => x]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
@@ -2041,7 +2041,7 @@ fn an_out_of_bounds_index_is_rejected() {
 
 #[test]
 fn the_frontend_builds_a_rooted_table() {
-    let ir = frontend("(x' => x) 5").ir.unwrap();
+    let ir = frontend("('x => x) 5").ir.unwrap();
     assert_eq!(
         ir.root,
         lichen_highlevel::ir::ExprId(ir.expr.len() as u32 - 1)
@@ -2053,7 +2053,7 @@ fn the_frontend_builds_a_rooted_table() {
 #[test]
 fn garbage_input_never_panics() {
     for source in [
-        "", "(", "x' =>", "3 :", "\\", "@", "x )", "f x => e", "(,)", "[ ]", "<", "<Int>", "->",
+        "", "(", "'x =>", "3 :", "\\", "@", "x )", "f x => e", "(,)", "[ ]", "<", "<Int>", "->",
         "5 : ",
     ] {
         let report = compile(source);
@@ -2070,11 +2070,11 @@ fn garbage_input_never_panics() {
 
 #[test]
 fn diagnostics_render_with_carets() {
-    let d = diags("x' => y");
-    let out = lichen_language::render::render("x' => y", &d[0]);
+    let d = diags("'x => y");
+    let out = lichen_language::render::render("'x => y", &d[0]);
     assert_eq!(
         out,
-        "error: unresolved name 'y'\n  --> 1:7\n   |\n 1 | x' => y\n   |       ^\n"
+        "error: unresolved name 'y'\n  --> 1:7\n   |\n 1 | 'x => y\n   |       ^\n"
     );
 }
 
@@ -2089,14 +2089,14 @@ fn an_underscore_annotation_infers_the_type() {
 fn an_underscore_annotation_on_an_apply() {
     // (x => x) 5 : _ — the annotation binds loosest, so the apply is the
     // annotated value.
-    assert_eq!(usize_of(&evaluate("(x' => x) 5 : _")), 5);
+    assert_eq!(usize_of(&evaluate("('x => x) 5 : _")), 5);
 }
 
 #[test]
 fn partial_inference_in_a_function_template() {
     // The input is fixed to `Int` by the template, the return inferred.
     assert_eq!(
-        usize_of(&evaluate("(((x' => x) = (x' : Int => _)) 5) : Int")),
+        usize_of(&evaluate("((('x => x) = ('x : Int => _)) 5) : Int")),
         5
     );
 }
@@ -2110,7 +2110,7 @@ fn an_underscore_in_the_array_length_position() {
 
 #[test]
 fn a_mismatch_against_a_partial_type_is_reported() {
-    let d = diags("5 = (x' : Int => _)");
+    let d = diags("5 = ('x : Int => _)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -2171,7 +2171,7 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
 
     // An annotated container is what makes each of these reads checkable.
     let (module, value, _) = common::evaluate(
-        "A := [@any, 2]\nf := x' => A[x, @shallow f (x + 1)]\n\
+        "A := [@any, 2]\nf := 'x => A[x, @shallow f (x + 1)]\n\
          inf := f 0\n\
          tail := inf[1]\n\
          tail1 := tail[1]\n\
@@ -2226,7 +2226,7 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     // A length could not tell `1, 2, 3` from an expr, a shape and
     // a kind marker; the numbers are what this asserts.
     let (module, value, _) = common::evaluate(
-        "A := [@any, 2]\nf := x' => A[x, @shallow(1) f (x + 1)]\n\
+        "A := [@any, 2]\nf := 'x => A[x, @shallow(1) f (x + 1)]\n\
          inf := f 0\n\
          step1 := inf[1]\n\
          step2 := step1(0)\n\

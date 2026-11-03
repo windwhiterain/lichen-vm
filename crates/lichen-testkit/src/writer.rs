@@ -153,7 +153,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.function(name, side, body, looping)
     }
 
-    /// `name = \p # a. body` — the `x' # a` spelling, an ordinary annotation
+    /// `name = \p # a. body` — the `'x # a` spelling, an ordinary annotation
     /// over the formal.
     ///
     /// # Invariant

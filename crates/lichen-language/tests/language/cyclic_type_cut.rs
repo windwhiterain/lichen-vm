@@ -16,7 +16,7 @@ fn root_type(source: &str) -> String {
 #[test]
 fn a_function_values_type_is_the_shared_marker() {
     // A function value's type names no function: it is the shared marker.
-    assert_eq!(root_type("f := x' => x; f"), "TypeFunction");
+    assert_eq!(root_type("f := 'x => x; f"), "TypeFunction");
 }
 
 /// The §7.6 lazy spine: the cut; one level short prints `tuple{Float, tuple{Float, …}}`.
@@ -24,7 +24,7 @@ fn a_function_values_type_is_the_shared_marker() {
 fn a_coinductive_spine_is_cut_at_the_first_revisited_node() {
     // "the walk cuts the spine at the first node it meets again" — spec §5.
     assert_eq!(
-        root_type("A := [@any, 2]\nf := x' => A[x, @shallow f (x + 1.0)]; inf := f 0.0; inf"),
+        root_type("A := [@any, 2]\nf := 'x => A[x, @shallow f (x + 1.0)]; inf := f 0.0; inf"),
         "Array"
     );
 }
@@ -35,7 +35,7 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
     // The call result is the per-call instance; the shared cut is not here.
     assert_eq!(
         root_type(
-            "A := [@any, 2]\nf := x' => A[x, @shallow g x]; g := y' => A[y, @shallow f y]; inf := f 0.0; inf"
+            "A := [@any, 2]\nf := 'x => A[x, @shallow g x]; g := 'y => A[y, @shallow f y]; inf := f 0.0; inf"
         ),
         "Array"
     );
@@ -46,7 +46,7 @@ fn a_two_name_cycle_through_a_call_result_is_instantiated() {
 fn a_three_name_cycle_terminates_at_its_first_revisit() {
     // The cycle stops at its first revisit; the struct values keep their shape.
     let printed =
-        root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := x' = ((_x' => A) _) => 0; f");
+        root_type("A := {.g B}; B := {.g C}; C := {.g A}; f := 'x = (('_x => A) _) => 0; f");
     // The struct cycle is not in the type at all: the printer walks none.
     assert_eq!(printed, "TypeFunction");
     assert_eq!(printed.matches("Struct").count(), 0);

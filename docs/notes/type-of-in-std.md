@@ -21,7 +21,7 @@
 ## The expression
 
 ```lichen
-type_of = x' => {t = _; x: t; t}
+type_of = 'x => {t = _; x: t; t}
 ```
 
 `t = _` binds a fresh cell, the annotation `x : t` unifies that cell with the
@@ -36,7 +36,7 @@ Every observation the builtin produced is reproduced:
 | `type_of Int`, `type_of Type` | `Type: Type` |
 | `type_of [1, 2]` | `array{Int, 2}: TypeArray` |
 | `type_of (1, Int)` | `tuple{Int, Type}: TypeTuple` |
-| `type_of (x' => x)` | `?a -> ?a: TypeFunction` |
+| `type_of ('x => x)` | `?a -> ?a: TypeFunction` |
 | `type_of (type_of (1))` | `Type: Type` |
 | `5 : type_of (5)`, `type_of (1) : Type` | `5: Int`, `Int: Type` |
 
@@ -78,7 +78,7 @@ it (`std.type_of`) instead of getting it from the grammar.
 ## The duplication this leaves
 
 `crates/lichen-compute/src/compute.lichen` repeats the definition as a private
-`let type_of = x' => {t = _; x: t; t}`: an embedded native plugin source is
+`let type_of = 'x => {t = _; x: t; t}`: an embedded native plugin source is
 compiled against that plugin's own private native registry and cannot depend on
 a package. The `let` keeps it out of the module's exported struct. Every other
 consumer either imports the standard library or spells the one-liner next to
@@ -99,7 +99,7 @@ from*.
 ### The symptom
 
 ```lichen
-k = compute.jit (y' => y + y)
+k = compute.jit ('y => y + y)
 k
 ```
 
@@ -131,12 +131,12 @@ The program is the wrapper spelling of the time, with its retired `.sig` field;
 the wrapper carries the signature in `.I`/`.O` now:
 
 ```lichen
-let type_of = x' => {t = _; x: t; t}
-jit = f' => {
+let type_of = 'x => {t = _; x: t; t}
+jit = 'f => {
   f : _ -> _
   (struct{.native _, .sig (type_of f)})(.native 0, .sig _)
 }
-jit (y' => y + 1)
+jit ('y => y + 1)
 ```
 
 The read must sit in the struct type's **field-type** position and the
@@ -193,10 +193,10 @@ returns it**:
 | program | result |
 |---|---|
 | `(type_of 1, type_of 1.5)` | `(Int, Float): tuple{Type, Type}` |
-| `f = v' => type_of v; (f 1, f 1.5)` | **refused**: `expected Int, found Float` |
-| `f = v' => type_of v; f 1` | `Int: Type` |
-| `f = v' => type_of v; f 1.5` | `Float: Type` |
-| `f = v' => type_of v; f` | `Function: raw[?a, ?b] -> ?b` |
+| `f = 'v => type_of v; (f 1, f 1.5)` | **refused**: `expected Int, found Float` |
+| `f = 'v => type_of v; f 1` | `Int: Type` |
+| `f = 'v => type_of v; f 1.5` | `Float: Type` |
+| `f = 'v => type_of v; f` | `Function: raw[?a, ?b] -> ?b` |
 
 The declaration is the tell: the wrapper's **domain prints as a raw expr**
 (`raw[?a, ?b]`, not `?a`), because `type_of`'s declared result type *is* the
@@ -213,15 +213,15 @@ annotation tied to the parameter's type slot is not among the nodes it remaps.
 
 **Until it is fixed** a predicate that needs the class does **not** use the read
 at all: the refinement is written on the **type** (`x : (_ ! in_num)`), so its
-predicate receives the type value and `in_num = t' => t @in Num` needs no read
+predicate receives the type value and `in_num = 't => t @in Num` needs no read
 ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 3).  Before that
 landed, the workaround was to keep the read's cells out of the caller's type
 through one opaque combinator:
 
 ```lichen
-type_of = x' => {t = _; x : t; t}
-compose = f' => g' => x' => f (g x)
-in_num = compose (t' => t @in Num) type_of     -- measured: (in_num 1, in_num 1.5, in_num "a") = (1, 1, 0)
+type_of = 'x => {t = _; x : t; t}
+compose = 'f => 'g => 'x => f (g x)
+in_num = compose ('t => t @in Num) type_of     -- measured: (in_num 1, in_num 1.5, in_num "a") = (1, 1, 0)
 ```
 
 It is kept here as the measurement that localised the defect, not as a spelling to
@@ -230,7 +230,7 @@ use: the class refinement supersedes it.
 **The preferred fix** is the one the measurement points at: the per-call
 instantiation must remap every cell in the equality class of the parameter's type
 slot, so a body cell an annotation tied to it is re-instantiated too — which would
-let the read be wrapped plainly (`in_num = v' => type_of v @in Num`) and would
+let the read be wrapped plainly (`in_num = 'v => type_of v @in Num`) and would
 retire the `raw[?a, ?b]` domain.  It touches the apply/instantiation path the
 kernel workstream also depends on, so it is its own change, not this one's.
 **Where the open domain shows in public output**: `examples/import/math.lichen`

@@ -1428,7 +1428,7 @@ fn a_two_step_loop_carries_by_identity() {
     assert_eq!(
         back.args,
         vec![advanced, combined],
-        "the backedge hands the step's own results back, in the params' positions"
+        "the backedge hands the step's own results back, in the params positions"
     );
     let Terminator::Return { values } = &body.blocks[merged].terminator else {
         panic!("the merge returns");
@@ -1493,7 +1493,7 @@ fn the_transforms_two_step_loop_carries_by_identity() {
     assert_eq!(
         back.args,
         vec![advanced, combined, moved],
-        "the backedge's operands are, in the params' order, the advanced counter, the combine's \
+        "the backedge's operands are, in the params order, the advanced counter, the combine's \
          result and the moved slot"
     );
     let returns: Vec<usize> = body

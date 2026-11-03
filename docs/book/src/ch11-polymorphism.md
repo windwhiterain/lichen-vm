@@ -11,7 +11,7 @@ Applying a function instantiates its parameter and
 the return type afresh, so one binding can serve different types:
 
 ```lichen
-id := x' => x
+id := 'x => x
 (id 5, id Int)
 ```
 
@@ -30,7 +30,7 @@ constrains its parameter decides it there, and then every call must meet
 it:
 
 ```lichen
-inc := x' => x + 1
+inc := 'x => x + 1
 inc 2.5
 ```
 
@@ -81,7 +81,7 @@ What a class accepts is written with a **set of types**. The core prelude
 
 ```lichen
 Num := set(Int, Float)
-in_num := t' => t @in Num
+in_num := 't => t @in Num
 ```
 
 `Num` is a set value whose members are the types `Int` and `Float`, and
@@ -95,8 +95,8 @@ A **refinement** attaches a predicate to a value and requires the
 predicate to answer `1`. Written on a value, it checks that value:
 
 ```lichen
-small := v' => v < 10
-f := (x' ! small) => x
+small := 'v => v < 10
+f := ('x ! small) => x
 f 5
 ```
 
@@ -105,8 +105,8 @@ it answers `1` and the call returns `5`. A value outside the refinement is
 refused at the refinement:
 
 ```lichen
-small := v' => v < 10
-f := (x' ! small) => x
+small := 'v => v < 10
+f := ('x ! small) => x
 f 20
 ```
 
@@ -114,7 +114,7 @@ f 20
 error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
   --> 2:7
    |
- 2 | f := (x' ! small) => x
+ 2 | f := ('x ! small) => x
    |       ^
 ```
 
@@ -135,8 +135,8 @@ the *type*, not the value:
 
 ```lichen
 Num := set(Int, Float)
-in_num := t' => t @in Num
-keep := (x' : (_ ! in_num)) => x
+in_num := 't => t @in Num
+keep := ('x : (_ ! in_num)) => x
 (keep 1, keep 2.5)
 ```
 
@@ -151,8 +151,8 @@ both are members of `Num`. A class that is not admitted is refused:
 
 ```lichen
 Num := set(Int, Float)
-in_num := t' => t @in Num
-keep := (x' : (_ ! in_num)) => x
+in_num := 't => t @in Num
+keep := ('x : (_ ! in_num)) => x
 keep string
 ```
 
@@ -160,7 +160,7 @@ keep string
 error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
   --> 3:16
    |
- 3 | keep := (x' : (_ ! in_num)) => x
+ 3 | keep := ('x : (_ ! in_num)) => x
    |                ^
 ```
 
@@ -173,9 +173,9 @@ consumed, so it can ride on one requirement of a compound's **template**:
 
 ```lichen
 Num := set(Int, Float)
-in_num := t' => t @in Num
+in_num := 't => t @in Num
 Pair := (@any : (_ ! in_num), @any : (_ ! in_num))
-f := (p' = Pair) => p
+f := ('p = Pair) => p
 f (1, 2.5)
 ```
 
@@ -205,7 +205,7 @@ refined by the class:
 
 ```lichen
 let Pair := (@any ! in_num, @any ! in_num)
-add := operands' => { operands = Pair; operands(0) + operands(1) }
+add := 'operands => { operands = Pair; operands(0) + operands(1) }
 ```
 
 `Pair` is a template, and `operands = Pair` unifies the operands with it:
@@ -220,7 +220,7 @@ diagnostics the operator reports, the class refusal reads:
 error: does not satisfy {Int, Float}
   --> …/builtin/core.lichen:4:39
    |
- 4 | add := operands' => { operands = Pair; operands(0) + operands(1) }
+ 4 | add := 'operands => { operands = Pair; operands(0) + operands(1) }
    |                                       ^
 note: the failing use is here
   --> 1:5

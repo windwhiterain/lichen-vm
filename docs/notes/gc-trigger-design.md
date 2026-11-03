@@ -45,7 +45,7 @@ language's own tests):
 | `x = @gc [1, 2, 3]` | 14 | 0 | deep: decided |
 | `x = @gc { a = [1, 2, 3]; 2 }` | 34 | 0 (a value node is decided at allocation) | deep: decided |
 | `x = @gc { y = f 0; 7 }` | 31 | **7** (a call the tail never reads) | deep: decided |
-| `f = n' => @gc { a = n + 1; b = a * 2; b }` (template) | 33 | 6 | deep: undecided |
+| `f = 'n => @gc { a = n + 1; b = a * 2; b }` (template) | 33 | 6 | deep: undecided |
 | the same scope's per-call blocks | 13 | 3 | never deep-passed |
 | `@gc { let a = _; a }` | 3 | 2 | deep: undecided |
 
@@ -168,7 +168,7 @@ under the old trigger). The corpus' two collects released 23 and 8 nodes, and no
 named a released one through its operand, array or table edge; after the function-template
 fix (§8) neither leaves a dangling function node.
 
-The template decision (`2.b`) is measured too: `f = n' => @gc { a = 1; a }` leaves 7 blocks /
+The template decision (`2.b`) is measured too: `f = 'n => @gc { a = 1; a }` leaves 7 blocks /
 5 declared scopes after compile and 2 / 0 after the run — a definition-pass read decides the
 template's scope, so it is released there and the calls have none of their own. Skipping a
 block whose parent is a function's template body was the alternative; it would keep a scope

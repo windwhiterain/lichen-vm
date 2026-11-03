@@ -101,10 +101,10 @@ fn source() -> String {
 In  := {{.b (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
 Out := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {BOUND}}}))}}
 Par := {{.n @any : Int, .in In}}
-reduction := (k' = Par) => {{
+reduction := ('k = Par) => {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := s' => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at 0}}) : Float)) ~ "combine"))
+  @loop fold := 's => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.b, .at 0}}) : Float)) ~ "combine"))
   ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value fold (0, 0.0 ~ "identity")}}))}})
 }}
 k := compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out

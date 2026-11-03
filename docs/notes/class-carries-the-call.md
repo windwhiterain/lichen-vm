@@ -452,9 +452,9 @@ cell whose value is `LowValue::Any`; a template cell that holds **no value** fal
 the outside-the-scope return shares it. Broadening `wildcard` to
 `value.is_none() && operation.is_none()` was measured **worse**: 225/15.
 
-**A compute-free example does not reproduce it.** `T := {.a @any : Int}; f := x' = T => x.a;
+**A compute-free example does not reproduce it.** `T := {.a @any : Int}; f := 'x = T => x.a;
 (f (T{.a 1}), f (T{.a 2}))` answers `(1, 2)`; the nested-template shape
-`step := (s' = P) => Arg{.n s.n, .I In{.d s.in.d}}` applied to two instances answers
+`step := ('s = P) => Arg{.n s.n, .I In{.d s.in.d}}` applied to two instances answers
 `((1, (2,)), (3, (4,)))`; and a placeholder argument followed by a concrete one answers
 `((none, (none,)), (3, (4,)))`. Repeated applies are correct at the language level, so the
 defect is the compute layer's binding of a **runtime buffer** into a shared template cell.
@@ -469,12 +469,12 @@ built from that declaration's field list, `assemble_parameter`) is the route; th
 attempt crashed on a cyclic value walk and the safe version needs a `visited` set and the
 pairing itself, which is the next step.
 
-**The writer, named: the prelude's `plrun` binding.** `plrun := k' = K => a = (k.I _) => …`
+**The writer, named: the prelude's `plrun` binding.** `plrun := 'k = K => a = (k.I _) => …`
 unifies the runtime argument `a` with `(k.I _)`, and `k.I` is the **declared input group**
 (`In1`) substituted for the prelude's implicit parameter `I`. So the unify merges the
 argument's cells with the *declaration's* cells — the `In1` native is the cell measured as
 `1810` — and a later launch's buffer lands there. The pure-language shape is not expressible:
-`In := {.a @any : Int}; K := {.I In}; apply := (k' = K) => (x = (k.I _) => x.a)` is refused
+`In := {.a @any : Int}; K := {.I In}; apply := ('k = K) => (x = (k.I _) => x.a)` is refused
 ("this field read cannot be checked: the container's type is not decided here"), because `k.I`
 is the compute package's implicit type parameter and not an ordinary value field. The next
 site is the checker's **implicit-parameter substitution**: substituting a declaration for `I`

@@ -2059,7 +2059,7 @@ where
                     Ok(self.emit_const(ScalarClass::Float, float_bits(value)))
                 }
                 other => Err(format!(
-                    "a kernel body reached a frozen module''s node holding {other:?} where it needs \
+                    "a kernel body reached a frozen 'module's node holding {other:?} where it needs \
                      a value: a static module is the callee of an apply, and the only part of it \
                      a kernel can carry across is a scalar constant"
                 )),

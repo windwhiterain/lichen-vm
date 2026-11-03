@@ -159,12 +159,12 @@ pub enum TokenKind {
     Caret,
     /// '.' -- a named field read `a.b`.
     Dot,
-    /// `'` -- the formal-reference mark: `x'` names the formal parameter `x`.
+    /// `'` -- the formal-reference mark: `'x` names the formal parameter `x`.
     ///
     /// # Invariant
     ///
-    /// The mark is a **suffix**: the lexer emits it only when it is adjacent to
-    /// the token it follows, so `x'` is a formal reference and `x '` is not a
+    /// The mark is a **prefix**: the lexer emits it only when it is adjacent to
+    /// the name it precedes, so `'x` is a formal reference and `' x` is not a
     /// spelling at all.
     Prime,
     /// '('.
@@ -303,9 +303,17 @@ pub struct Lexed {
     pub errors: Vec<LexDiag>,
 }
 
-/// The formal-reference mark must be adjacent to the token it follows.
+/// The formal-reference mark must be adjacent to the name it precedes.
 const PRIME_NOT_ADJACENT: &str =
-    "a formal reference mark follows the name it marks: write `x'` with no space between them";
+    "a formal reference mark precedes the name it marks: write `'x` with no space between them";
+
+/// Whether a prime stands immediately on the name it marks.
+fn prime_precedes_name(remainder: &str) -> bool {
+    remainder
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+}
 
 /// The token kinds logos recognizes; payloads are read from the matched slice.
 // Same reason as `TokenKind`: the float payload is `f32`, not `Eq`.
@@ -428,7 +436,7 @@ enum RawToken {
     #[token(".")]
     Dot,
     /// `'` -- the formal-reference mark; the lexer admits it only adjacent to
-    /// the token it follows.
+    /// the name it precedes.
     #[token("'")]
     Prime,
     #[token("(")]
@@ -503,7 +511,7 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                         range: (start, start),
                     });
                 }
-                if raw == RawToken::Prime && prev_end != Some(start) {
+                if raw == RawToken::Prime && !prime_precedes_name(lexer.remainder()) {
                     errors.push(LexDiag {
                         span: Some(lc),
                         message: PRIME_NOT_ADJACENT.to_string(),
@@ -631,7 +639,7 @@ pub fn lex_resume(
                     }
                     tokens.push(g);
                 }
-                if raw == RawToken::Prime && prev_end != Some(start_abs) {
+                if raw == RawToken::Prime && !prime_precedes_name(lexer.remainder()) {
                     errors.push(LexDiag {
                         span: Some(lc),
                         message: PRIME_NOT_ADJACENT.to_string(),
