@@ -17,7 +17,7 @@
     would need a `Select` whose arms are data, and the surface has none.\n\n\
     **The write address is the lane's own index.** A `compute.write` names a slot of an output \
     buffer exactly as long as the launch's extent \
-    (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range c.n` with `.at i` is a \
+    (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range n` with `.at i` is a \
     bijection and the answer does not depend on a schedule. The **read** address is the interesting \
     one: `[i - 1, i + 1]` is not a prefix of the buffer and not a slice of it, so a body that \
     reaches outside its own lane has to be checked against the device's tail-lane rule rather than \

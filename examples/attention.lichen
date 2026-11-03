@@ -82,7 +82,7 @@
    `matmul`, `layernorm`, `rmsnorm` and `softmax` all run there unchanged, so the device is \
    available and the difference is this operator's. The `scores` kernel is **refused outright** by \
    the SPIR-V emitter: *a `Select`'s two arms are computed in different classes ([Int, Float])* — \
-   and the trigger is narrow and reproducible. `sqrt 4.0` runs, `sqrt (int2float k.n + 0.25)` (which \
+   and the trigger is narrow and reproducible. `sqrt 4.0` runs, `sqrt (int2float n + 0.25)` (which \
    is what `examples/rmsnorm.lichen` writes) runs, and **`sqrt (int2float k.dim)` does not**, for \
    the second extent or for the third leaf alike; adding one arithmetic term between the crossing \
    and the root, `sqrt (int2float k.dim + 0.0)`, runs and answers the same numbers. The crossing's \

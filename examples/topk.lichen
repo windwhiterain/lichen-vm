@@ -32,8 +32,8 @@
     and a `Select` arm**, not a new form: ranks one and two differ from each other by one more \
     conjunct, `(1 * (i != mid))`, and from rank zero by being in `Int`.\n\n\
     **The `k`-tuple spelling runs too, and it is the cheaper one on launches.** Three `@loop` \
-    nests in **one** body, each result bound at lane level — `first = f0 (k.w, ((0.0 - 1.0) / 0.0) ~ \
-    `identity`, 0)`, `second = f1 (k.w, 0, 0)`, `third = f2 (k.w, 0, 0)` — the next nest's step \
+    nests in **one** body, each result bound at lane level — `first = f0 (w, ((0.0 - 1.0) / 0.0) ~ \
+    `identity`, 0)`, `second = f1 (w, 0, 0)`, `third = f2 (w, 0, 0)` — the next nest's step \
     reading `first` in `(1 * (i != first))`, and three writes returned as a **tuple in output-field \
     order**. Measured here at `k = 3`: it **runs**, and answers `([3, 2, 3, 0, 3], [1, 0, 0, 1, 2], \
     [2, 3, 1, 2, 1])` — the same three ranks, in **one launch and three buffers**. So the \
@@ -59,7 +59,7 @@
     why a tie row is the case that exercises it. **The one way a position repeats is the seed, and \
     the next paragraph is that case.**\n\n\
     **The finite seed's consequence is a refusal, not a wrong answer.** Ranks one and two seed their \
-    folds with `(k.w, 0, 0)` where rank zero seeds with `((0.0 - 1.0) / 0.0)`, and **a row whose \
+    folds with `(w, 0, 0)` where rank zero seeds with `((0.0 - 1.0) / 0.0)`, and **a row whose \
     values go below that seed never gets that far**: `examples/convert.lichen` records that \
     `float2int` refuses a float with no `Int` to truncate toward — `NaN`, an infinity, **a \
     negative** — as `operator.out_of_range`, and inside a kernel body that refusal arrives as \

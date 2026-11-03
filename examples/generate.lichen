@@ -21,7 +21,7 @@
     enumeration and the `position == k.t` freshness test. `greedy_raw` is \
     `examples/sample.lichen`'s **verbatim**, with its `(counter, best value, best position)` \
     fold and its `1 *` anchor. `logits_raw` is `examples/decode_loop.lichen`'s `score_raw` \
-    **verbatim** — the same GEMV, the same `i * k.kdim + (s(0) - 1)` address, the same `0.0` \
+    **verbatim** — the same GEMV, the same `i * kdim + (s(0) - 1)` address, the same `0.0` \
     identity — with **only the binder renamed**, because this file already uses the name. What \
     changed is the **launch configuration, not the bodies**: `dim` is `1` rather than `2`, the \
     sampler runs `.n 1 .w 4` over one row rather than `.n 5 .w 4` over five, and the GEMV is \

@@ -7,7 +7,7 @@
   array-to-buffer conversion (`docs/notes/kernel-buffer-declarations.md`).
   The row is `7, 3, 1, 2`, whose squares sum to `63`, so the mean is `63 / 4 = 15.75` and
   `15.75 + 0.25 = 16`: `sqrt` answers `4`, and every division below divides by it exactly. The host's data is built by **fill kernels**: the surface has no array-to-buffer \
-  conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
+  conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
   output = "[3.5, 3.0, 2.0, 8.0]: Array"
 ---
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}

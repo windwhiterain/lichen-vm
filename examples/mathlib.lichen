@@ -9,7 +9,7 @@
     the answer is a per-element formula and there is nothing to reduce.\n\n\
     **One lane per element, and the write address is the lane's own index.** A `compute.write` \
     names a slot of an output buffer exactly as long as the launch's extent \
-    (`crates/lichen-compute/src/compute.rs:5979`), so `i = compute.range k.n` with `compute.write \
+    (`crates/lichen-compute/src/compute.rs:5979`), so `i = compute.range n` with `compute.write \
     (... .at i)` is a bijection and the only spelling whose answer does not depend on a schedule. \
     That is also why these operators need **no coordinates**: unlike `examples/matmul.lichen` and \
     `examples/attention.lichen` they never read `compute.row` or `compute.col`, so the second \
@@ -58,7 +58,7 @@
     backends to disagree about.\n\n\
     **The reduction layer: `rowsum`, one lane per row.** A fold cannot be elementwise and cannot be \
     faked by one — `@loop fold = s' => ...` counts down **inside a single lane**, so `rowsum` \
-    launches over the **rows** (`r = compute.range c.n`) and walks `kdim` elements itself: \
+    launches over the **rows** (`r = compute.range n`) and walks `kdim` elements itself: \
     `y[r] = Sigma_k x[r * kdim + k]`. Its read address is therefore **computed** (`r * kdim + s(0) \
     - 1`) while its write address is still the lane's own index, which is the same split \
     `examples/gemv.lichen` has and the reason that operator needs no coordinates either. The \
