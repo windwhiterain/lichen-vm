@@ -928,7 +928,7 @@ pub enum ComputeOperator {
     Graph,
     /// `[graph, arguments]` — run a graph over its source function's values.
     GraphRun,
-    /// `[backend, a, b, c]` — the cooperative matrix product `c' = a·b + c`.
+    /// `[backend, a, b, c]` — the cooperative matrix product `'c = a·b + c`.
     ///
     /// # Invariant
     /// `a`/`b` hold signed bytes and `c` signed words, row-major, over the shape
@@ -2639,6 +2639,7 @@ where
     let Some(fields) = struct_field_exprs(module, value) else {
         return Err(RoleUnread::Undecided);
     };
+    let standing_structs = StandingStructIndex::new(module);
     let mut roles = KernelRoles::default();
     for (field, &field_expr) in fields.iter().enumerate() {
         let role = match (source, field) {
@@ -2647,7 +2648,14 @@ where
             (_, at) if outputs_at == Some(at) => LeafRole::Output,
             _ => LeafRole::Scalar,
         };
-        walk_role(module, field_expr, &[field], role, &mut roles)?;
+        walk_role(
+            module,
+            &standing_structs,
+            field_expr,
+            &[field],
+            role,
+            &mut roles,
+        )?;
     }
     Ok(roles)
 }
@@ -2697,6 +2705,7 @@ fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
 /// none leaves every cell there open.
 fn walk_role<P>(
     module: &mut Module<P>,
+    standing_structs: &StandingStructIndex,
     field: AnyNodeId,
     path: &[usize],
     role: LeafRole,
@@ -2713,7 +2722,10 @@ where
     // A primed field holds a formal: the shape it answers is the struct value
     // the formal stands for.
     let held = struct_field_value_of_expr(module, field)
-        .map(|held| standing_struct_value(module, held).unwrap_or(held));
+        .map(|held| {
+            standing_struct_value(module, standing_structs, held).map(|value| value.unwrap_or(held))
+        })
+        .transpose()?;
     if let Some(held) = held
         && is_struct_value(module, held)
     {
@@ -2770,7 +2782,7 @@ where
         for (at, field) in fields.into_iter().enumerate() {
             let mut path = path.to_vec();
             path.push(at);
-            walk_role(module, field, &path, role, roles)?;
+            walk_role(module, standing_structs, field, &path, role, roles)?;
         }
         return Ok(());
     }
@@ -4201,6 +4213,46 @@ where
     Some(node)
 }
 
+/// A supplied formal class's unique struct template field, or an ambiguous one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StandingStruct {
+    Unique(NodeId),
+    Ambiguous,
+}
+
+/// Reverse index from a supplied formal's equality class to its struct template field.
+///
+/// # Invariant
+/// The index is built for one role walk or path resolution and is not cached for a later
+/// compilation. Multiple different struct fields supplying one class are ambiguous and must
+/// be refused, never selected in hash iteration order.
+struct StandingStructIndex(HashMap<NodeId, StandingStruct>);
+
+impl StandingStructIndex {
+    fn new<P>(module: &Module<P>) -> Self
+    where
+        P: Program,
+        P::Value: ValueType,
+    {
+        let mut index = HashMap::new();
+        for (required, supplied) in &module.field_sources {
+            if !is_struct_value(module, AnyNodeId::Dynamic(*required)) {
+                continue;
+            }
+            let root = module.class_root(*supplied);
+            let entry = match index.get(&root).copied() {
+                None => StandingStruct::Unique(*required),
+                Some(StandingStruct::Unique(previous)) if previous == *required => {
+                    StandingStruct::Unique(previous)
+                }
+                Some(_) => StandingStruct::Ambiguous,
+            };
+            index.insert(root, entry);
+        }
+        Self(index)
+    }
+}
+
 /// The struct value an open cell **stands for**: the template value the
 /// instance match supplies the formal with.
 ///
@@ -4210,24 +4262,30 @@ where
 /// template's field value as supplied by that formal (`field_sources`), so the
 /// struct-valued entry naming the formal's class is the shape the formal
 /// answers. A decided cell is not peeled: it answers its own shape.
-fn standing_struct_value<P>(module: &Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
+fn standing_struct_value<P>(
+    module: &Module<P>,
+    standing_structs: &StandingStructIndex,
+    node: AnyNodeId,
+) -> Result<Option<AnyNodeId>, String>
 where
     P: Program,
     P::Value: ValueType,
 {
     if module.node_value(node).is_some() {
-        return None;
+        return Ok(None);
     }
-    let dynamic = node.dynamic()?;
+    let Some(dynamic) = node.dynamic() else {
+        return Ok(None);
+    };
     let root = module.class_root(dynamic);
-    module
-        .field_sources
-        .iter()
-        .find(|(required, supplied)| {
-            module.class_root(**supplied) == root
-                && is_struct_value(module, AnyNodeId::Dynamic(**required))
-        })
-        .map(|(required, _)| AnyNodeId::Dynamic(*required))
+    match standing_structs.0.get(&root).copied() {
+        Some(StandingStruct::Unique(required)) => Ok(Some(AnyNodeId::Dynamic(required))),
+        Some(StandingStruct::Ambiguous) => Err(
+            "multiple struct template fields supply one formal, so its parameter shape is ambiguous"
+                .into(),
+        ),
+        None => Ok(None),
+    }
 }
 
 /// The type a buffer's elements are, for the wrapper's `.element` slot.
@@ -5623,7 +5681,8 @@ where
         }
     }
     full.extend(kept);
-    resolve_steps(module, param_expr, &full)
+    let standing_structs = StandingStructIndex::new(module);
+    resolve_steps(module, &standing_structs, param_expr, &full)
 }
 
 /// Convert a materialized read's physical slots into a parameter role path.
@@ -5724,6 +5783,7 @@ where
 /// own name table and the next level is the value the step before it selected.
 fn resolve_steps<P>(
     module: &Module<P>,
+    standing_structs: &StandingStructIndex,
     param_expr: NodeId,
     steps: &[IndexStep],
 ) -> Result<Option<Vec<usize>>, String>
@@ -5748,7 +5808,7 @@ where
         };
         // A primed field's walk reaches the formal: names and
         // positions continue in the struct value it stands for.
-        let value = standing_struct_value(module, value).unwrap_or(value);
+        let value = standing_struct_value(module, standing_structs, value)?.unwrap_or(value);
         // A struct's constant step is physical (`name_table[name] + 2`); a tuple's is not.
         let on_struct = is_struct_value(module, value);
         let at = match step {

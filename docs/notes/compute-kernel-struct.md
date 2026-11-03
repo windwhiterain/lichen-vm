@@ -29,7 +29,7 @@ Drop `TypeKernel`/`TypeParKernel` and `is_function_kind`. A kernel is an ordinar
   earlier version of this note argued for: the domain and the codomain are read separately,
   and a launch's result is `.O`.
 
-A **buffer** is the same kind of wrapper, `Buf = T' => struct{.native _, .element T}` — the
+A **buffer** is the same kind of wrapper, `Buf = 'T => struct{.native _, .element T}` — the
 `.native` field is the packed payload and `.element` its element type — where it used to be
 a bare extension value the type system special-cased. There is no `TypeBuffer`/`TypeWrite`
 marker either.
@@ -41,26 +41,26 @@ struct: a `jit` result reads `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw
 ### The embedded wrapper
 
 ```
-let type_of = x' => {t = _; x: t; t}
-KT = _x' => struct{.I _, .O _}
-K = _x' => struct{.native _, .I _, .O _}
-A = I' => struct{.n Int, .I I}
+let type_of = 'x => {t = _; x: t; t}
+KT = '_x => struct{.I _, .O _}
+K = '_x => struct{.native _, .I _, .O _}
+A = 'I => struct{.n Int, .I I}
 P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
 S = T: KT _ => A T.I -> T.O
-Buf = T' => struct{.native _, .element T}
-jit = f' => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
-launch = k': (K _) => a': k.I => {r = $launch(k.native, a); r: k.O; r}
-call = k': (K _) => a': k.I => {r = $call(k.native, a); r: k.O; r}
-parallel = f' => b': string => o': _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
-plrun = k': (K _) => a': k.I => {r = $plrun(k.native, a); r: k.O; r}
-range = x': Int => $range(x): Int
-Read = T' => struct{.from (Buf T), .at Int}
-Write = T' => struct{.to (Buf T), .at Int, .value T}
-read = (x' : (Read _)) => $read(x.from, x.at)
-write = (x' : (Write _)) => $write(x.to, x.at, x.value)
-collect = (b' : (Buf _)) => $collect(b)
-graph = f' => {f: _ -> _; $graph(f)}
-graphrun = g' => a' => $graphrun(g, a)
+Buf = 'T => struct{.native _, .element T}
+jit = 'f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
+launch = 'k: (K _) => 'a: k.I => {r = $launch(k.native, a); r: k.O; r}
+call = 'k: (K _) => 'a: k.I => {r = $call(k.native, a); r: k.O; r}
+parallel = 'f => 'b: string => 'o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
+plrun = 'k: (K _) => 'a: k.I => {r = $plrun(k.native, a); r: k.O; r}
+range = 'x: Int => $range(x): Int
+Read = 'T => struct{.from (Buf T), .at Int}
+Write = 'T => struct{.to (Buf T), .at Int, .value T}
+read = ('x : (Read _)) => $read(x.from, x.at)
+write = ('x : (Write _)) => $write(x.to, x.at, x.value)
+collect = ('b : (Buf _)) => $collect(b)
+graph = 'f => {f: _ -> _; $graph(f)}
+graphrun = 'g => 'a => $graphrun(g, a)
 ```
 
 `type_of` is the standard library's type read (`lichen-std/_.lichen`), repeated
@@ -76,7 +76,7 @@ separate argument), `$call(k.native, a)` the bare kernel, and so on. The buffer 
 
 ## Checker support required
 
-Reading `.native`/`.I`/`.O` off a **generic** wrapper parameter (`k` in `launch = k': (K _) => …`,
+Reading `.native`/`.I`/`.O` off a **generic** wrapper parameter (`k` in `launch = 'k: (K _) => …`,
 whose type is a fresh `?a` in the frozen compute module) makes each field-read's TYPE a lazy
 `Index(Index(?a,0), key)` that can't be forced while `?a` is undecided. Two things make this
 resolve correctly:
@@ -157,7 +157,7 @@ must not hide the decided native value behind a class variable. See
   universe. Only a *tuple* codomain dumps nested.
 
 **Measured exception: a kernel whose body launches another kernel leaves `.O` undecided.**
-`examples/compute_jit.lichen`'s `k_outer = compute.jit (x' : Int => compute.launch k_double x)`
+`examples/compute_jit.lichen`'s `k_outer = compute.jit ('x : Int => compute.launch k_double x)`
 renders `(raw Kernel, Int, raw none)` with type
 `struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}` — `.I` is decided and `.O` is not. The path:
 the lambda's codomain is the launch apply's result cell, and `check_app` gives every apply a
@@ -165,7 +165,7 @@ the lambda's codomain is the launch apply's result cell, and `check_app` gives e
 apply binds to the returned expr; `jit`'s `f: I -> O` then unifies that cell with the cloned `O`
 placeholder. Three readings narrow it:
 
-* a direct launch of a decided kernel types: `compute.jit (y' : Int => y + y)` then
+* a direct launch of a decided kernel types: `compute.jit ('y : Int => y + y)` then
   `compute.launch k 3` is `6: Int`;
 * the launch result itself is raw when the kernel's `.O` is open:
   `compute.launch kout 3` is `raw 6: raw[?a, raw[?b, ?c]]`;
@@ -188,10 +188,10 @@ write lands in a class whose members include the value's check-time cells, which
 the clone rule from the bind.
 
 **A dynamic application in the body does not open `.O`; a *static* one with a dependent codomain
-does.** `compute.jit (x' : Int => x + 1)` and `compute.jit (x' : Int => id x)` both render
+does.** `compute.jit ('x : Int => x + 1)` and `compute.jit ('x : Int => id x)` both render
 `(raw Kernel, Int, Int)` with `.O Type`, so an open `.O` is not "the body applies something". It is
 specific to the callee being a **static** function whose codomain is **dependent on its argument** —
-`compute.lichen`'s `launch = k': (K _) => a': k.I => {r = $launch(k.native, a); r: k.O; r}` names its
+`compute.lichen`'s `launch = 'k: (K _) => 'a: k.I => {r = $launch(k.native, a); r: k.O; r}` names its
 codomain `k.O`. The checker's type-apply pass resolves a plain function type at check time (which is
 why `id x` types), but a dependent codomain is a *read on the callee's parameter*, so the apply's
 result cell stays open until the application runs — and the run's write lands in the clone's class,
@@ -199,9 +199,9 @@ not the value's. The fix is check-time resolution of a static apply's dependent 
 [function-normalization](function-normalization.md) contract's first clause.
 
 **The argument's value is not the blocker, which is measured.** Making the inlined kernel the call's
-argument (`compute.jit (x' : Int => compute.launch (compute.jit (y' : Int => y + y)) x)`) and making
-the body's argument a **literal** (`… (compute.jit (y' : Int => y + y)) 3`) both still leave `.O`
-open. A root-level `compute.launch (compute.jit (y' : Int => y + y)) 3` prints `6: Int`, but that is
+argument (`compute.jit ('x : Int => compute.launch (compute.jit ('y : Int => y + y)) x)`) and making
+the body's argument a **literal** (`… (compute.jit ('y : Int => y + y)) 3`) both still leave `.O`
+open. A root-level `compute.launch (compute.jit ('y : Int => y + y)) 3` prints `6: Int`, but that is
 the *printed value's* type derived from the value at print time, not the checker's cell. So nothing
 about argument availability distinguishes the cases.
 
@@ -419,3 +419,19 @@ buffers, scalars and mixed groups all nest to any depth, and `tests/lichen_compu
 
 **The repair is a temporary measure.** The name→position fold belongs after the apply clone, once for
 every reader, not in one reader at compile time — see `specialize-normalize.md`.
+
+
+## Formal-field shape lookup
+
+`standing_struct_value` peels only an open supplied cell. Its reverse index is
+built once per role walk or parameter-path resolution from `field_sources`:
+the supplied equality-class root names the unique struct-valued template field,
+so each peel is a hash lookup rather than another scan. The index is deliberately
+traversal-scoped because constructor matching, clone and replay mutate the map
+and equality roots between resolutions; a module-lived cache would need
+invalidation for both.
+
+Two different struct template fields supplying one formal class make its shape
+ambiguous. Compilation refuses that case. Choosing the first map entry would be
+hash-order-dependent, and choosing a lowest node id would make allocation order
+part of the language's shape semantics.
