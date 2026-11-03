@@ -40,20 +40,30 @@ sugar:
 ```sytax
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-`a'` => `{a = _; a}`
+` ...'a... => ...` => `{a := _; ...a... => ...}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
-`{.a' ..., ...}` => `{.a a' ..., ...}`
+`{.'a ..., ...}` => `{.a 'a ..., ...}`
 ```
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.
 
-> A prime is a **suffix** on a name and it is written against it: `a'` is the formal reference `a`, and `a '` is not a spelling at all.
-> In a field list a primed name is the field's value: `{.a' ..., ...}` is `{.a a' ..., ...}`.
-> A prime belongs to the parameter side of a lambda — the expression on the left of a `=>` — and there it declares the parameter the name stands for.
-> A name on the parameter side without a prime is an ordinary expression of the enclosing scope, and a prime anywhere else is refused.
+## Ideal API
+1. Uniform signature: use if all parameter play equal role.
+```
+sum3 := [Int, 3]['a, 'b, 'c] => 'a + 'b + 'c
+```
+2. Named signature: use if the signature will not be used else where.
+```
+div := {.'dividend: Int, .'dividor: Int} => dividend / dividor
+div _{.dividend 2, .dividor 1} 
+```
+3. Struct signature: use if the signature will be used else where.
+Div := {.dividend @any: Int, .dividor @any: Int}
+div := 'x = Div => x.dividend / x.dividor
+div _{.dividend 2, .dividor 1}
 
 ## Lowlevel
 
