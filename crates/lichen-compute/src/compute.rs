@@ -2710,7 +2710,10 @@ where
     // A field that holds a struct value is a group; a field that holds a number
     // is a leaf.
     module.evaluate_node_deep_ref(field, None);
-    let held = struct_field_value_of_expr(module, field);
+    // A primed field holds a formal: the shape it answers is the struct value
+    // the formal stands for.
+    let held = struct_field_value_of_expr(module, field)
+        .map(|held| standing_struct_value(module, held).unwrap_or(held));
     if let Some(held) = held
         && is_struct_value(module, held)
     {
@@ -4198,6 +4201,35 @@ where
     Some(node)
 }
 
+/// The struct value an open cell **stands for**: the template value the
+/// instance match supplies the formal with.
+///
+/// # Invariant
+/// A primed struct field's value is the formal the argument fills
+/// (`docs/language-spec.md` §Syntax sugar), and the instance match records the
+/// template's field value as supplied by that formal (`field_sources`), so the
+/// struct-valued entry naming the formal's class is the shape the formal
+/// answers. A decided cell is not peeled: it answers its own shape.
+fn standing_struct_value<P>(module: &Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    if module.node_value(node).is_some() {
+        return None;
+    }
+    let dynamic = node.dynamic()?;
+    let root = module.class_root(dynamic);
+    module
+        .field_sources
+        .iter()
+        .find(|(required, supplied)| {
+            module.class_root(**supplied) == root
+                && is_struct_value(module, AnyNodeId::Dynamic(**required))
+        })
+        .map(|(required, _)| AnyNodeId::Dynamic(*required))
+}
+
 /// The type a buffer's elements are, for the wrapper's `.element` slot.
 ///
 /// # Invariant
@@ -5540,7 +5572,14 @@ where
             module.class_low_type(target_node),
             Some(lichen_lowlevel::LowShape::Tuple(items))
                 if items.len() == 2 && items[1].is_none()
-        );
+        ) || (usize_value(module, selector) == Some(0)
+            // A constant-0 peel of a `[value, type]` slot is no path step;
+            // `s(0)` and `a[i]` keep theirs.
+            && !matches!(
+                module.class_low_type(target_node),
+                Some(lichen_lowlevel::LowShape::Tuple(..))
+                    | Some(lichen_lowlevel::LowShape::Array(..))
+            ));
         // The selector is a *name* when the read was written `a.name`, and a
         // *position* when it was written `a(0)`.
         match field_name(module, selector)? {
@@ -5656,6 +5695,12 @@ where
         if field
             .dynamic()
             .is_some_and(|field| module.class_root(field) == module.class_root(target))
+            // A read over the field's expr bottoms at the expr, not the
+            // value it holds: the expr is the node at this path.
+            || items
+                .get(base + at)
+                .and_then(|item| item.node.dynamic())
+                .is_some_and(|node| module.class_root(node) == module.class_root(target))
         {
             return Some(vec![physical]);
         }
@@ -5701,6 +5746,9 @@ where
         let Some(value) = current else {
             break;
         };
+        // A primed field's walk reaches the formal: names and
+        // positions continue in the struct value it stands for.
+        let value = standing_struct_value(module, value).unwrap_or(value);
         // A struct's constant step is physical (`name_table[name] + 2`); a tuple's is not.
         let on_struct = is_struct_value(module, value);
         let at = match step {
