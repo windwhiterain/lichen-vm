@@ -58,8 +58,8 @@ Elsewhere `[T, n]` keeps the ordinary exact-element-template meaning.
 ## Ideal API
 1. Uniform signature: use if all parameter play equal role.
 ```
-sum3 := [Int, 3]['a, 'b, 'c] => 'a + 'b + 'c
-sum3 ([@any : Int, 3][1, 2, 3])
+sum3 := [@any: Int, 3]['a, 'b, 'c] => 'a + 'b + 'c
+sum3 (_[1, 2, 3])
 ```
 2. Named signature: use if the signature will not be used else where.
 ```
