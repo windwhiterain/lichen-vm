@@ -130,6 +130,17 @@ rulings below are why it has this shape; they are not a second statement of it.
    placeholder is resolved this way: a callee that is a *parameter* stays refused,
    because no context states its type.
 
+   **Both instance forms read through the placeholder.** A struct instance `S{…}`
+   and an array instance `T[…]` are compiled the same way: the callee *is* the
+   `template` field, with no apply inserted between them, so `_{…}` and `_[…]` are
+   both a placeholder callee. `_{…}` pins it to the parameter's struct template;
+   `_[1, 2, 3]` now pins it to the parameter's array template, and that is the one
+   place the two differed — the array form never reached the pin and refused before
+   it. Measured on the spec's ideal API: `sum3 (_[1, 2, 3])` answers `6: Int`,
+   exactly as `sum3 ([@any : Int, 3][1, 2, 3])` does, while a bare `_[1, 2, 3]` is
+   still refused (`this array instance cannot be checked: the container's type is
+   not decided here`) — that refusal is this ruling, not a gap.
+
 ## 4. What this corrected
 
 The class-read investigation called the decide "an apply clone's run-time

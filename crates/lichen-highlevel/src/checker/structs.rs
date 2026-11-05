@@ -436,8 +436,8 @@ where
         (value, self.struct_template())
     }
 
-    /// The placeholder in a callee position, including the apply inserted by
-    /// the instantiation desugaring.
+    /// The placeholder in a callee position: the callee itself, or the wildcard
+    /// an apply is written on.
     fn placeholder_callee_expr(&self, template: ExprId) -> Option<ExprId> {
         match self.ir[template].kind {
             ExprKind::Placeholder => Some(template),
@@ -533,12 +533,14 @@ where
     /// A placeholder callee takes the template the **context requires**.
     ///
     /// # Invariant
-    /// Only a **placeholder** callee is resolved here: an undetermined callee
-    /// (a parameter) stays refused (`docs/notes/function-normalization.md`
-    /// §3.7).  An undecided template decides nothing, so the instantiation
-    /// refuses itself.
+    /// Only a **placeholder** callee is resolved here, and both instance forms
+    /// read through it: an undetermined callee (a parameter) stays refused
+    /// (`docs/notes/function-normalization.md` §3.7).  An undecided template
+    /// decides nothing, so the instantiation refuses itself.
     pub(super) fn pin_placeholder_callee(&mut self, function: ExprId, argument: ExprId) {
-        let ExprKind::Instantiate { template, .. } = self.ir[argument].kind else {
+        let (ExprKind::Instantiate { template, .. } | ExprKind::ArrayInst { template, .. }) =
+            self.ir[argument].kind
+        else {
             return;
         };
         let Some(placeholder) = self.placeholder_callee_expr(template) else {

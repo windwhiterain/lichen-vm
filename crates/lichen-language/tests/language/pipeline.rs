@@ -159,6 +159,18 @@ fn a_tuple_domain_parameter_read_checks_and_evaluates() {
 }
 
 #[test]
+fn a_wildcard_callee_takes_the_parameters_template() {
+    // The ideal API: the argument's template is `_`, decided by the parameter.
+    assert_eq!(
+        usize_of(&evaluate(
+            "sum3 := [@any : Int, 3]['a, 'b, 'c] => 'a + 'b + 'c\n\
+             sum3 (_[1, 2, 3])"
+        )),
+        6
+    );
+}
+
+#[test]
 fn a_binder_used_once_checks() {
     // The root apply's result cell is lazy, so the whole program is annotated
     // to anchor its type.
