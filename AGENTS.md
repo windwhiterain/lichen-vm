@@ -188,7 +188,9 @@ A branch lands **in the checkout that owns the branch**: `git -C <checkout> merg
 - **Run the merge checks on the merged tip, not just on the branch**:
   `comments-check --config comments-test.toml . --max-violations 0` (the default
   prints only the first violation) and `cargo fmt --all -- --check` (fmt writes
-  LF; restore CRLF after it).
+  LF — which is the rule everywhere: the repository and the working tree are
+  both LF, forced by `* text=auto eol=lf` in `.gitattributes`; see
+  [line endings](docs/notes/line-endings.md)).
 - **Gate the merge on the verification, not on the commit**: a script that
   verifies, commits and merges in one breath must `exit` when the output does not
   match what the artefact declares, because otherwise it merges the broken

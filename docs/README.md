@@ -184,6 +184,7 @@ authority, and this table only names the state.
 | [Open issues after the slot isomorphism](notes/open-issues.md) | `lichen-lowlevel` (`function.rs`'s clone rule), `lichen-compute` (the recording pass) | historical |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current |
 | [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current |
+| [Line endings: LF in the repository, LF in the checkout](notes/line-endings.md) | — (all crates) | current |
 | [The attribute isomorphism — handoff](notes/attribute-isomorphism.md) | `lichen-highlevel` (`checker`, `checker/annotations`, `checker/lambda`, `shape`), `lichen-lowlevel` (`apply`, `static_module/apply`), `lichen-compute` (`compile_fragment`) | current |
 | [The apply's type side](notes/apply-type-side-check.md) | `lichen-highlevel`, `lichen-lowlevel` | current |
 | [Who may start a backend](notes/backend-ownership.md) | — (all crates) | current |

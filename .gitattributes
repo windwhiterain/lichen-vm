@@ -1,0 +1,5 @@
+# 行尾策略：仓库里存 LF，检出也是 LF —— 这是强制的，不跟着机器走。
+# `eol=lf` 才是"强制"的那一半：只写 text=auto 会把检出形态交给 core.eol（默认
+# native，Windows 上就是 CRLF），于是同一棵树在两台机器上长得不一样
+# （见 docs/notes/line-endings.md）。文本文件没有例外，.bat / .cmd 也是 LF。
+* text=auto eol=lf

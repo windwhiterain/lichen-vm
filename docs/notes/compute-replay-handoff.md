@@ -391,42 +391,42 @@ was measured and is not the repair. The earlier owner-only and dynamic
 reintroduce block-wide `reopen_stalled`: it reopens old recording operations and
 collides distinct `GraphValue` answers.
 
-### 10.1 The dependency walk was removed
-
-`evaluate_recording_dependencies` was later deleted. It replayed every open
-Apply in a `ParLaunch` operand to make a produced buffer's projection
-followable, and the replay instantiated the callee again: a two-dispatch
-chain recorded up to five nodes (one scale body four times), and the region
-derivation saw four regions where the test expects one.
-
-`recorded_buffer_payload` now reads the applied projection whenever the
-wrapper **or** its payload is open (`field_source_of` reads a class's
-representative too), which resolves the same produced buffers without
-re-driving the Apply. Measured: removing the walk flips
-`fan_out_merge::a_fan_out_derives_a_region_a_pack_can_name`,
-`fan_out_merge::a_pack_naming_the_fan_out_merges_all_three_nodes_into_one`,
-`fan_out_merge::without_a_pack_the_floor_proves_the_fan_out` and
-`fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`,
-with no newly failing test; the compute suite moves 156 / 84 to 160 / 80.
-`jit_cross_kernel_wrapper`, the graph scalar tests and the refusal tests
-read the same before and after.
-### 10.2 A replay reuses the recorded dispatch
-
-The remaining duplicate was a **replay**: the clone walk's replay of an Apply
-whose returned shell was open instantiated the callee again, and the replayed
-body's `$plrun` appended a second node for a call the program had dispatched
-once. The two ops share one source call (`node_origin`: `9514` in the measured
-elementwise chain), so `record_dispatch` keys a replayed dispatch — an unowned
-clone — by that source call, the compiled body's digest, its edges, extent and
-scalars, and answers with the node the body's own call recorded. A call the
-body performs owns its nodes and always appends, so the graph's node sequence
-stays the sequence the body performed.
-
-Measured: the compute suite moves 160 / 80 to **181 / 59**, with no newly
-failing test; the elementwise chain now records two nodes, and
-`graph_jit::a_graph_recorded_for_one_backend_runs_on_another` sees the two
-dispatches its body performs. The comment gate passes
-(`comments-check --config comments-test.toml . --max-violations 0`).
+### 10.1 The dependency walk was removed
+
+`evaluate_recording_dependencies` was later deleted. It replayed every open
+Apply in a `ParLaunch` operand to make a produced buffer's projection
+followable, and the replay instantiated the callee again: a two-dispatch
+chain recorded up to five nodes (one scale body four times), and the region
+derivation saw four regions where the test expects one.
+
+`recorded_buffer_payload` now reads the applied projection whenever the
+wrapper **or** its payload is open (`field_source_of` reads a class's
+representative too), which resolves the same produced buffers without
+re-driving the Apply. Measured: removing the walk flips
+`fan_out_merge::a_fan_out_derives_a_region_a_pack_can_name`,
+`fan_out_merge::a_pack_naming_the_fan_out_merges_all_three_nodes_into_one`,
+`fan_out_merge::without_a_pack_the_floor_proves_the_fan_out` and
+`fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees`,
+with no newly failing test; the compute suite moves 156 / 84 to 160 / 80.
+`jit_cross_kernel_wrapper`, the graph scalar tests and the refusal tests
+read the same before and after.
+### 10.2 A replay reuses the recorded dispatch
+
+The remaining duplicate was a **replay**: the clone walk's replay of an Apply
+whose returned shell was open instantiated the callee again, and the replayed
+body's `$plrun` appended a second node for a call the program had dispatched
+once. The two ops share one source call (`node_origin`: `9514` in the measured
+elementwise chain), so `record_dispatch` keys a replayed dispatch — an unowned
+clone — by that source call, the compiled body's digest, its edges, extent and
+scalars, and answers with the node the body's own call recorded. A call the
+body performs owns its nodes and always appends, so the graph's node sequence
+stays the sequence the body performed.
+
+Measured: the compute suite moves 160 / 80 to **181 / 59**, with no newly
+failing test; the elementwise chain now records two nodes, and
+`graph_jit::a_graph_recorded_for_one_backend_runs_on_another` sees the two
+dispatches its body performs. The comment gate passes
+(`comments-check --config comments-test.toml . --max-violations 0`).
 ## 11. Workspace and workflow
 
 - Worktree: `C:/resource/lichen-vm/.worktrees/compute-provenance`
