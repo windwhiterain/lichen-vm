@@ -357,24 +357,24 @@ fn an_annotated_parameter_side_is_a_lambda() {
         parse_ok("('x : Int) => x"),
         Expr::Lambda { parameter, .. } if matches!(*parameter, Expr::Annotation { .. })
     ));
-    // A parameter template is an ordinary expression too: `x <: T => e` keeps
+    // A parameter template is an ordinary expression too: `x = T => e` keeps
     // the unify on the parameter side.
     let Expr::Lambda {
         parameter,
         r#return,
         ..
-    } = parse_ok("x <: T => x")
+    } = parse_ok("x = T => x")
     else {
         panic!("expected a lambda")
     };
-    let Expr::TemplateUnify {
-        actual, template, ..
+    let Expr::Unify {
+        actual, expected, ..
     } = *parameter
     else {
-        panic!("expected a template unify parameter side")
+        panic!("expected a unify parameter side")
     };
     assert!(matches!(*actual, Expr::Name(n, _, _) if n == "x"));
-    assert!(matches!(*template, Expr::Name(n, _, _) if n == "T"));
+    assert!(matches!(*expected, Expr::Name(n, _, _) if n == "T"));
     assert!(matches!(*r#return, Expr::Name(n, _, _) if n == "x"));
 }
 
@@ -627,6 +627,13 @@ fn index_errors_carry_spans() {
 fn the_retired_angle_type_prefix_is_a_parse_error() {
     let err = parse_err("<Int>");
     assert_eq!(err.span, Some((1, 1)));
+}
+
+#[test]
+fn the_retired_template_match_spelling_is_a_parse_error() {
+    // `=` is the only template match; `<:` lexes as `<` then `:`.
+    let err = parse_err("a <: b");
+    assert_eq!(err.span, Some((1, 4)));
 }
 
 #[test]

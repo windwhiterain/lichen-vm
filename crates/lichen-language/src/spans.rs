@@ -70,16 +70,6 @@ pub(crate) fn shift_expr(
             shift_expr(actual, old_starts, new_starts, delta);
             shift_expr(expected, old_starts, new_starts, delta);
         }
-        // `actual <: template`: the actual and the template it is matched against.
-        Expr::TemplateUnify {
-            actual,
-            template,
-            span,
-        } => {
-            shift(span, old_starts, new_starts, delta);
-            shift_expr(actual, old_starts, new_starts, delta);
-            shift_expr(template, old_starts, new_starts, delta);
-        }
         Expr::If {
             condition,
             then_branch,

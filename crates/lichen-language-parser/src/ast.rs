@@ -155,12 +155,6 @@ pub enum Expr {
         expected: Box<Expr>,
         span: Span,
     },
-    /// `actual <: template` — the plain unify of the actual with the template.
-    TemplateUnify {
-        actual: Box<Expr>,
-        template: Box<Expr>,
-        span: Span,
-    },
     /// `a op b` — a binary integer operation.
     BinOp {
         operator: BinOp,
@@ -401,7 +395,6 @@ impl Expr {
             Expr::Formal { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
             Expr::Unify { span, .. } => *span,
-            Expr::TemplateUnify { span, .. } => *span,
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,

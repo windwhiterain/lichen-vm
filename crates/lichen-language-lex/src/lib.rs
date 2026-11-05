@@ -116,8 +116,6 @@ pub enum TokenKind {
     Colon,
     /// ':=' -- the core binding: `name := expr`.
     ColonEquals,
-    /// '<:' -- the template match: `actual <: template`.
-    TemplateUnify,
     /// '==>' -- the table entry's key/value separator (`table(k ==> v)`).
     TableArrow,
     /// '<==' -- the table read's container/key separator (`t <== k`).
@@ -243,7 +241,6 @@ impl TokenKind {
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
             TokenKind::ColonEquals => "':='",
-            TokenKind::TemplateUnify => "'<:'",
             TokenKind::TableArrow => "'==>'",
             TokenKind::TableFindArrow => "'<=='",
             TokenKind::Hash => "'#'",
@@ -397,8 +394,6 @@ enum RawToken {
     Colon,
     #[token(":=")]
     ColonEquals,
-    #[token("<:")]
-    TemplateUnify,
     #[token("#")]
     Hash,
     #[token("?")]
@@ -868,7 +863,6 @@ fn raw_to_kind(
         RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::ColonEquals => Some(TokenKind::ColonEquals),
-        RawToken::TemplateUnify => Some(TokenKind::TemplateUnify),
         RawToken::Hash => Some(TokenKind::Hash),
         RawToken::Question => Some(TokenKind::Question),
         RawToken::Bang => Some(TokenKind::Bang),

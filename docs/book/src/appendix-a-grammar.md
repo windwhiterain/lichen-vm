@@ -115,8 +115,8 @@ spellings of a type; the shape of a compound lives in its value, and a
 **template** is a direct compound value whose open slots are `@any`
 (Chapter 7). The match operator `=` unifies an actual with the template,
 and a template that is a function is applied where it is used, as
-`(F _)`. The spelling `<:` is retired: it is sugar for `=` and lowers
-exactly like it.
+`(F _)`. The spelling `<:` is gone: the lexer does not produce it, and a
+template match is written `=`.
 
 Where this differs from the spec, the spec is right.
 

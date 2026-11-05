@@ -612,7 +612,7 @@ fn a_tuple_matches_a_tuple_template_elementwise() {
 
 #[test]
 fn a_tuple_whose_length_differs_from_its_template_fails() {
-    // (1, 2) <: (@any : int) — the template states one element.
+    // (1, 2) = (@any : int) — the template states one element.
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
@@ -925,7 +925,7 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
 
 #[test]
 fn tuple_length_mismatch_reports_both_sides() {
-    // (1, 2) <: (@any : int)
+    // (1, 2) = (@any : int)
     let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
@@ -2301,7 +2301,7 @@ fn a_body_index_fails_at_the_violating_argument() {
 
 #[test]
 fn a_struct_template_parameter_function_reads_a_named_field() {
-    // `f = (p <: A => p.x)`; `f (A{.x 1, .y 2})`.
+    // `f = (p = A => p.x)`; `f (A{.x 1, .y 2})`.
     let w = Writer::new();
     let p = w.param("p");
     let int_x = any_of(&w, "int_x", w.int_type("int_ty"));
@@ -2351,7 +2351,7 @@ fn two_written_struct_values_are_distinct_nominal_types() {
 
 #[test]
 fn an_open_struct_template_lets_its_field_be_read() {
-    // `F = t => { t <: A; t.I }` with `A = {.I _, .O _}` — the template names
+    // `F = t => { t = A; t.I }` with `A = {.I _, .O _}` — the template names
     // the fields, leaving their types open.
 
     // The parameter and argument use the same constructor's returned requirement.
@@ -2388,7 +2388,7 @@ fn an_open_struct_template_lets_its_field_be_read() {
 
 #[test]
 fn a_tuple_template_parameter_function_reads_an_element() {
-    // The regression `f = p => { p <: (@any : int, @any : int); p(0) }`;
+    // The regression `f = p => { p = (@any : int, @any : int); p(0) }`;
     // `f (1, 2)` failed with `expected raw[?a, Int]`.
     let w = Writer::new();
     let p = w.param("p");

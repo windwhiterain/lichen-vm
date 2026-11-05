@@ -251,12 +251,13 @@ fn angle_brackets_lex_as_their_own_tokens() {
             TokenKind::Eof,
         ]
     );
-    // `<:` is one token, distinct from `<` and `<==`.
+    // `<:` is not a spelling: it lexes as `<` and `:`.
     assert_eq!(
         kinds("a <: b"),
         vec![
             TokenKind::Name("a".to_string()),
-            TokenKind::TemplateUnify,
+            TokenKind::LAngle,
+            TokenKind::Colon,
             TokenKind::Name("b".to_string()),
             TokenKind::Eof,
         ]

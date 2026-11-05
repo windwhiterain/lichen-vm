@@ -577,17 +577,6 @@ impl Compiler {
                 let expected = self.compile_expr(expected);
                 self.alloc_unify(actual, expected, span)
             }
-            // `actual <: template`: plain unify. A function template is applied
-            // explicitly.
-            Expr::TemplateUnify {
-                actual,
-                template,
-                span,
-            } => {
-                let actual = self.compile_expr(actual);
-                let template = self.compile_expr(template);
-                self.alloc_unify(actual, template, span)
-            }
             // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
             Expr::StructInst {
                 callee,

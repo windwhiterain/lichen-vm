@@ -1506,9 +1506,8 @@ fn classify_token_kind(
         | TokenKind::TableArrow
         | TokenKind::TableFindArrow
         | TokenKind::Colon
-        // `:=` binds a name; `<:` matches a value against a template.
+        // `:=` binds a name.
         | TokenKind::ColonEquals
-        | TokenKind::TemplateUnify
         | TokenKind::Hash
         | TokenKind::Question
         | TokenKind::Bang
@@ -1656,12 +1655,6 @@ impl<'a> NameClass<'a> {
             } => {
                 self.expr(actual);
                 self.expr(expected);
-            }
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                self.expr(actual);
-                self.expr(template);
             }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
@@ -1967,12 +1960,6 @@ impl Walk {
             } => {
                 self.expr(actual);
                 self.expr(expected);
-            }
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                self.expr(actual);
-                self.expr(template);
             }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {
@@ -2307,12 +2294,6 @@ impl<'a> ScopeCapture<'a> {
             } => {
                 self.expr(actual);
                 self.expr(expected);
-            }
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                self.expr(actual);
-                self.expr(template);
             }
             Expr::Prefix { operands, .. } => {
                 for operand in operands {

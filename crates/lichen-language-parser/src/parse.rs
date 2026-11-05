@@ -738,17 +738,18 @@ fn expression<'a, Er: GrammarError<'a>>(
             )
             .boxed();
 
-        // `=` and `<:` are left-associative, between comparisons and annotations.
+        // `=` is left-associative, between comparisons and annotations.
         let unify = table_find
             .clone()
             .foldl(
-                choice((
-                    token(TokenKind::Equals).to(UnifyOp::Plain),
-                    token(TokenKind::TemplateUnify).to(UnifyOp::Template),
-                ))
-                .then(operand(tokens, table_find.clone()))
-                .repeated(),
-                |lhs, (op, rhs)| unify_op(lhs, op, rhs),
+                token(TokenKind::Equals)
+                    .then(operand(tokens, table_find.clone()))
+                    .repeated(),
+                |lhs, (_, rhs)| Expr::Unify {
+                    span: lhs.span(),
+                    actual: Box::new(lhs),
+                    expected: Box::new(rhs),
+                },
             )
             .boxed();
 
@@ -863,33 +864,6 @@ fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
         left: Box::new(left),
         right: Box::new(right),
         span,
-    }
-}
-
-/// Which unify the expression level's `=` and `<:` spell.
-#[derive(Clone, Copy, Debug)]
-enum UnifyOp {
-    /// `=` — the plain unify of an actual and an expected value.
-    Plain,
-    /// `<:` — the plain unify, kept as a spelling during the migration.
-    Template,
-}
-
-/// Fold a unify operator into its [`Expr`] node, spanning from the left
-/// operand.
-fn unify_op(left: Expr, operator: UnifyOp, right: Expr) -> Expr {
-    let span = left.span();
-    match operator {
-        UnifyOp::Plain => Expr::Unify {
-            actual: Box::new(left),
-            expected: Box::new(right),
-            span,
-        },
-        UnifyOp::Template => Expr::TemplateUnify {
-            actual: Box::new(left),
-            template: Box::new(right),
-            span,
-        },
     }
 }
 

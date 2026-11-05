@@ -8,9 +8,10 @@ use super::*;
 ///
 /// Adding an [`Expr`] variant or changing any tag bumps this constant; there is
 /// no compatibility path, so the bump invalidates every cached key. `9` added
-/// the value-template variants (`Unify` 39, `TemplateUnify` 40, `Clone` 41,
-/// `StructValue` 42, `Array` 43, `ArrayInst` 44) and retired the compound-type
-/// ones. See docs/notes/incremental-update.md §6.1.
+/// the value-template variants (`Unify` 39, `Clone` 41, `StructValue` 42,
+/// `Array` 43, `ArrayInst` 44) and retired the compound-type ones; tag `40`
+/// retired with the `<:` spelling it keyed. See docs/notes/incremental-update.md
+/// §6.1.
 const KEY_FORMAT_VERSION: u64 = 9;
 
 /// The tag that opens a path-written binder, so an id-written key can never alias one.
@@ -263,14 +264,6 @@ impl KeyWriter<'_> {
                 self.u(39);
                 self.expr(actual);
                 self.expr(expected);
-            }
-            // `actual <: template`: the actual and the template it is matched against.
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                self.u(40);
-                self.expr(actual);
-                self.expr(template);
             }
             Expr::BinOp {
                 operator,

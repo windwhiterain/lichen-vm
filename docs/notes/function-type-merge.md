@@ -49,7 +49,7 @@
   `shape::is_function_type_any`.
 - There is **no separate signature concept**: a function is unified with the
   template **directly**. The current spelling of a template is
-  `'_x : Int => _: Int`; the constraint is that unify, with `=` or `<:`.
+  `'_x : Int => _: Int`; the constraint is that unify, written `=`.
   `unify_function_signatures` still compares two functions' parameter and
   return cells, and `Module::function_signature` reads a known function's
   signature.
@@ -120,11 +120,11 @@ requirement: the actual's **signature** is unified with the template's, and the
 actual's own body is kept
 (`crates/lichen-highlevel/src/checker/templates.rs`).
 
-Plain `=` is the spelling, not `<:`. The match operator applies its right
-hand side exactly once, and a function template is not a constructor to apply:
-it states a signature, not a requirement to be produced. A `<:` whose right
-hand side is a function template would apply that template and unify the
-actual with its **result**.
+Plain `=` is the only spelling; the older `<:` is refused. The match operator
+applies its right hand side exactly once, and a function template is not a
+constructor to apply: it states a signature, not a requirement to be produced.
+A `<:` whose right hand side is a function template would have applied that
+template and unified the actual with its **result**.
 
 Because the template *is* a function, the one-representation property this
 note records survives the change of spelling: there is no second shape for a

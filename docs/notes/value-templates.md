@@ -21,8 +21,8 @@ reasons for them, and the measurements that now hold.
 - A direct template is a value, for example `S := {.a @any, .b @any}`,
   `T := [@any : Int, 3]`, or `P := (@any : Int, @any : Int)`. It is not a
   function and is never applied.
-- `=` is the only template match. `<:` is retired in source; the compiler
-  lowers it as a plain unify and the migration rewrites it to `=`.
+- `=` is the only template match. `<:` is not a spelling at all: the lexer
+  produces no token for it, and every use was rewritten to `=`.
 - A direct template is instantiated **per use**: its open value slots become
   fresh empty cells, while its types, attributes, name table and nominal id are
   shared. The actual fills the fresh slots, so the template itself is never
@@ -75,8 +75,8 @@ result that came out of a kernel struct.
 
 ## Implementation
 
-The source-to-IR step performs no implicit application: `<:` lowers exactly like
-`=`, and an instance uses its callee value directly. A template that is a
+The source-to-IR step performs no implicit application: an instance uses its
+callee value directly. A template that is a
 function is applied at the call site with the ordinary apply syntax.
 
 `check_unify_expr` asks whether the expected value has an open value slot. If it
@@ -402,8 +402,9 @@ After the direct-template migration on `dev@ffef59c8`:
 
 ## Verification boundary
 
-The source model is measured when plain `=` performs no application, `<:` is
-retired in source, every compound instance uses its template value directly
+The source model is measured when plain `=` performs no application (the lexer
+refuses the retired `<:` spelling), every compound instance uses its template
+value directly
 without cloning an outer capture, and the grammar and language suite no longer
 accept the retired `tuple{…}`, `array{…}`, `struct{…}`, or source `@clone`
 spellings. The remaining consumer is the compute layer's parallel lowering: its

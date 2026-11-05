@@ -633,10 +633,10 @@ where
         }
     }
 
-    /// Record a template parameter's field sources in `<:`.
+    /// Record a template parameter's field sources in `=`.
     ///
     /// # Invariant
-    /// Only the desugared `actual <: template` shape with a parameter actual enters. Sources
+    /// Only the desugared `actual = template` shape with a parameter actual enters. Sources
     /// are constant projections of that parameter, written on the constructor's own template
     /// return fields; an instantiated return or an arbitrary unify creates no provenance.
     pub(super) fn record_template_field_sources(

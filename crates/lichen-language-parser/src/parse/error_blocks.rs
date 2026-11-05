@@ -44,12 +44,6 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(actual, out);
                 walk_expr(expected, out);
             }
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                walk_expr(actual, out);
-                walk_expr(template, out);
-            }
             Expr::BinOp { left, right, .. } => {
                 walk_expr(left, out);
                 walk_expr(right, out);

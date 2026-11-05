@@ -465,13 +465,6 @@ impl Resolver {
                 self.resolve_expr(actual);
                 self.resolve_expr(expected);
             }
-            // `actual <: template`: the actual and the template it is matched against.
-            Expr::TemplateUnify {
-                actual, template, ..
-            } => {
-                self.resolve_expr(actual);
-                self.resolve_expr(template);
-            }
             Expr::If {
                 condition,
                 then_branch,

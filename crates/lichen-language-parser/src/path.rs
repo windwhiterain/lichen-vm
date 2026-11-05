@@ -116,12 +116,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 0, actual);
             push_index(&mut out, 1, expected);
         }
-        Expr::TemplateUnify {
-            actual, template, ..
-        } => {
-            push_index(&mut out, 0, actual);
-            push_index(&mut out, 1, template);
-        }
         Expr::BinOp { left, right, .. } => {
             push_index(&mut out, 0, left);
             push_index(&mut out, 1, right);

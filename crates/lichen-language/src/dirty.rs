@@ -172,13 +172,6 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(actual, deps);
             walk(expected, deps);
         }
-        // `actual <: template`: the actual and the template it is matched against.
-        Expr::TemplateUnify {
-            actual, template, ..
-        } => {
-            walk(actual, deps);
-            walk(template, deps);
-        }
         Expr::If {
             condition,
             then_branch,
