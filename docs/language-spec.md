@@ -45,12 +45,7 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
 `{.'a ..., ...}` => `{.a 'a ..., ...}`
-`[T, n]['a, ...] => ...` => `[@any : T, n]['a, ...] => ...`
 ```
-
-The uniform-signature conversion applies only on a lambda's parameter side,
-when `T` is a bare type constant and every array-instance element is a formal.
-Elsewhere `[T, n]` keeps the ordinary exact-element-template meaning.
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.

@@ -805,54 +805,13 @@ fn expression<'a, Er: GrammarError<'a>>(
                 };
                 // Only a formal declares; other side names use the enclosing scope.
                 Expr::Lambda {
-                    parameter: Box::new(uniform_parameter_domain(first)),
+                    parameter: Box::new(first),
                     r#return: Box::new(body),
                     span: span_at(tokens, me.span().start),
                 }
             })
             .boxed()
     })
-}
-
-/// Give a uniform signature's bare element type its wildcard requirement.
-///
-/// # Invariant
-/// Only a lambda parameter that is a direct `[T, n]` instance made entirely of
-/// formals rewrites a bare type constant `T` to `@any : T`; every other array
-/// template keeps `T` as an exact value.
-fn uniform_parameter_domain(mut parameter: Expr) -> Expr {
-    let Expr::ArrayInst {
-        template, elements, ..
-    } = &mut parameter
-    else {
-        return parameter;
-    };
-    let Expr::Array {
-        template: element,
-        span,
-        ..
-    } = template.as_mut()
-    else {
-        return parameter;
-    };
-    if !matches!(element.as_ref(), Expr::TypeConst(..))
-        || !elements
-            .iter()
-            .all(|element| matches!(element, Expr::Formal { .. }))
-    {
-        return parameter;
-    }
-    let ty = std::mem::replace(element, Box::new(Expr::Any(*span)));
-    **element = Expr::Annotation {
-        value: Box::new(Expr::Any(*span)),
-        r#type: Some(ty),
-        perspective: None,
-        refinement: None,
-        doc: None,
-        marks: Vec::new(),
-        span: *span,
-    };
-    parameter
 }
 
 /// Fold a binary operator into its [`Expr`] node, spanning from the left

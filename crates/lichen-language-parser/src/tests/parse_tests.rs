@@ -379,6 +379,22 @@ fn an_annotated_parameter_side_is_a_lambda() {
 }
 
 #[test]
+fn a_bare_type_in_an_array_parameter_stays_an_exact_element() {
+    // No uniform-signature conversion: `[Int, 3]` keeps its exact element,
+    // so a wildcard is written `@any : Int`.
+    let Expr::Lambda { parameter, .. } = parse_ok("[Int, 3]['a, 'b, 'c] => 0") else {
+        panic!("expected a lambda")
+    };
+    let Expr::ArrayInst { template, .. } = *parameter else {
+        panic!("expected an array instance")
+    };
+    let Expr::Array { template, .. } = *template else {
+        panic!("expected an array template")
+    };
+    assert!(matches!(*template, Expr::TypeConst(TypeConst::Int, _)));
+}
+
+#[test]
 fn parens_are_always_tuple_values() {
     // `(a, b)` is a tuple *value* in every position — there is no type/value
     // mode.

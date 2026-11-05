@@ -197,11 +197,11 @@ or template was written as a special form of that name.
   argument, and the argument is the whole expression.
 - **One name primed twice is one formal**: its occurrences and its body
   share it.
-- **A uniform signature is one array domain.** `[Int, 3]['a, 'b, 'c]`
+- **A uniform signature is one array domain.** `[@any : Int, 3]['a, 'b, 'c]`
   declares three leaves of one three-element argument, not three curried
-  parameters. On this parameter side only, a bare type constant means an
-  `@any` requirement annotated by that type; ordinary array templates keep
-  their exact-element meaning. The matching call is
+  parameters. The element requirement is written out: a bare type constant in
+  an array template states an exact element, on the parameter side as anywhere
+  else, so the wildcard is `@any`. The matching call is
   `sum3 ([@any : Int, 3][1, 2, 3])`.
 - **A primed body reference names only the innermost lambda's declared
   formals.** It never captures an enclosing lambda by prime; plain names keep
