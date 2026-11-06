@@ -18,6 +18,7 @@
 > `crates/lichen-lowlevel/src/static_module.rs` / `static_module/apply.rs` (the
 > frozen mirror), and `crates/lichen-render/src/render/value_printer.rs`
 > (`raw_cells`).
+> Behaviour: docs/compute-spec.md section 3
 
 ## Why the class has to be decided
 

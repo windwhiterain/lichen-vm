@@ -60,6 +60,7 @@
 > `crates/lichen-compute-gpu/src/dispatch.rs` (the padding that makes a barrier
 > safe), `crates/lichen-perspective/src/perspective.rs` (the perspective lattice:
 > `0` is the top and the `∞` fold, `1` the bottom).
+> Behaviour: docs/compute-spec.md section 3
 >
 > Companions: [compute-buffer-wrapper](compute-buffer-wrapper.md) (the ABI this
 > extends, and the determinism theorem §3 scopes to `Buf`),

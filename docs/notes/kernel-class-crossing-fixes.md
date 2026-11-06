@@ -12,6 +12,7 @@
 > (the shared class check), `crates/lichen-compute-gpu/src/spirv.rs` (the SPIR-V
 > module contract), and `crates/lichen-compute/tests/lichen_compute/compute.rs` (the
 > end-to-end pins).
+> Behaviour: docs/compute-spec.md section 3
 
 ## The class of a value is a fact of the value
 

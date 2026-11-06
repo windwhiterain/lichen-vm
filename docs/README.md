@@ -38,7 +38,9 @@ documentation in exactly two places, on purpose:
 2. [README](../README.md) — what lichen is, the crate map, quick start.
 3. [Architecture overview](notes/overview.md) — the core idea (`[value, type]`
    exprs, `Type : Type`) and the layering.
-4. The feature note for the crate you are working in.
+4. [The language spec](language-spec.md) and the
+   [compute spec](compute-spec.md) — the two contracts a program is read against.
+5. The feature note for the crate you are working in.
 
 ## Status legend
 
@@ -218,6 +220,15 @@ checking the chapters that state the behaviour it changed.
 It is the one document from the project's early days that is retained as the language
 reference, because it describes a stable, user-facing contract. Feature notes and
 rustdoc refer to it for syntax and never restate it.
+
+## The compute spec
+
+[compute-spec.md](compute-spec.md) is the contract of the **compute sub-language** —
+the forms a `.lichen` program may write against `compute`, and what it gets from
+them. It sits beside the language spec above rather than in the note table, because
+it states a contract and a note explains how the behaviour is built. Its owner is
+`crates/lichen-compute`; [notes/lichen-compute.md](notes/lichen-compute.md) is the
+note beside it.
 
 ## Reference
 

@@ -6,6 +6,7 @@
 > only the JIT's use of it, and the facts about kernel compilation that are
 > its own.
 > Points at: `crates/lichen-compute/src/compute.rs`.
+> Behaviour: docs/compute-spec.md section 5
 
 The JIT compiles a **function template**, before any apply. That is the whole
 reason the low type layer exists: the value graph cannot decide a template's

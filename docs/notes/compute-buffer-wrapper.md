@@ -19,6 +19,7 @@
 > `param_path`, `buf_payload`, `is_buf_shape`, `compile_parallel_fragment`,
 > `build_graph`), `crates/lichen-kernel-ir/src/lib.rs` (`KernelRoles`), and
 > `crates/lichen-compute/tests/lichen_compute/compute.rs`.
+> Behaviour: docs/compute-spec.md section 3
 >
 > Companions: [compute-kernel-struct](compute-kernel-struct.md) (the kernel this
 > mirrors), [compute-runtime-scalars](compute-runtime-scalars.md) (the per-leaf

@@ -15,6 +15,7 @@
 > `crates/lichen-compute-gpu/src/spirv.rs` (`push_layout`, `push_width`), and
 > `crates/lichen-compute-gpu/src/dispatch.rs` (`scalar_block`,
 > `RunError::ScalarLeavesMismatch`).
+> Behaviour: docs/compute-spec.md section 4
 
 ## What a runtime scalar is, and why it is the point
 

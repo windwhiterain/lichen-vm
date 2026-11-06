@@ -9,6 +9,8 @@
 > `compute.lichen`),
 > `crates/lichen-highlevel/src/native.rs` (the `NativeOp`/`NativeOps` extension point),
 > and `crates/lichen-compute/tests/lichen_compute/compute.rs` (the end-to-end suite).
+> Behaviour: docs/compute-spec.md section 1
+> Behaviour: docs/compute-spec.md section 3
 
 `lichen-compute` is a compiler plugin — a native wrapper package (think `numpy`)
 that jit-compiles a lichen function to a **wasm kernel** and runs it. The user-facing

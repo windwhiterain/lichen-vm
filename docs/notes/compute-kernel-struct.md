@@ -7,6 +7,7 @@
 > `ParLaunchOp`/`ReadOp`/`WriteOp`/`BufferCollectOp`, `kernel_id_of`, `native_ops`),
 > `crates/lichen-compute/src/lib.rs` (`compute_native_ops!`),
 > `crates/lichen-compute/src/language.rs`, `crates/lichen-compute/tests/lichen_compute/compute.rs`.
+> Behaviour: docs/compute-spec.md section 3
 
 ## Problem
 

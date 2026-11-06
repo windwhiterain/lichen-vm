@@ -5,6 +5,7 @@
 > somebody re-runs that probe and sees it change.
 > Points at: `crates/lichen-compute/src/` (the probes),
 > `crates/lichen-compute-gpu/src/spirv.rs` (the fold template).
+> Behaviour: docs/compute-spec.md section 7
 
 Every entry below was measured by the operator line, and each names the probe that prints it, so an
 entry is current until somebody re-runs that probe and sees it change. The owner column names the side
