@@ -413,9 +413,10 @@ where
             },
         };
         self.depth -= 1;
-        // Only the frame that moved the cursor puts it back: a nest's move to its
-        // merge block stands.
-        if target.is_some() {
+        // Only the frame that moved the cursor puts it back: a nest's merge stands.
+        if let Some(target) = target
+            && self.block == target
+        {
             self.block = enclosing;
         }
         self.publish_mark(node, value);
@@ -1789,6 +1790,10 @@ where
         self.lower_loop_tests(index)?;
         self.lower_loop_steps(index)?;
         let result = self.lower_loop_exit(index)?;
+        // The enclosing body continues at the merge; its state slots stay the step's.
+        if let Some(enclosing) = self.loops.len().checked_sub(2) {
+            self.loops[enclosing].block = merge;
+        }
         self.loops.pop();
         // The nest's other blocks take their parameters' classes from the branches
         // reaching them.
@@ -1916,8 +1921,9 @@ where
             let condition = self.value(condition)?;
             let test = self.loops[index].conversion.tests[position];
             let (if_true, if_false) = self.loop_arms(index, test.on_one, test.on_zero)?;
+            // The branch goes where the walk ended: a nest's entry branch stands.
             self.body.set_terminator(
-                block,
+                self.block,
                 Terminator::CondBr {
                     cond: condition,
                     if_true,
@@ -1939,8 +1945,9 @@ where
                 .map(|value| self.value(value))
                 .collect::<Result<_, _>>()?;
             let header = self.loops[index].header;
+            // The backedge goes where the walk ended, not the step's own block.
             self.body.set_terminator(
-                block,
+                self.block,
                 Terminator::Br(Br {
                     target: header,
                     args: next,
@@ -1959,8 +1966,9 @@ where
             let value = self.loops[index].conversion.exits[position].value;
             let value = self.value(value)?;
             let merge = self.loops[index].merge;
+            // The same rule as the tests' and the steps'.
             self.body.set_terminator(
-                block,
+                self.block,
                 Terminator::Br(Br {
                     target: merge,
                     args: vec![value],
