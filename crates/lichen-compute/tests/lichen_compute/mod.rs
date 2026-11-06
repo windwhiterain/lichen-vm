@@ -52,6 +52,7 @@ mod tiled_reduction;
 mod tiling_visibility;
 mod trig_domain;
 mod union_ports;
+mod zz_contract_probe;
 mod zz_gc_panic_probe;
 mod zz_nested_loop_probe;
 mod zz_tensor_probe;

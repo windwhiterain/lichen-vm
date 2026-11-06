@@ -6,8 +6,6 @@
 //! table shape, and the closure selector; the answers and refusals are recorded in
 //! `docs/notes/named-tensors.md`.
 //!
-use super::common;
-
 use lichen_compute::language::new_store;
 
 /// Two buffers of different lengths, the type's length open.

@@ -7,8 +7,6 @@
 //! The inner adds one per trip and the outer calls it once per trip, so `n = 3` is `9`
 //! per lane if the nest lowers, and the dominance refusal if it does not.
 
-use super::common;
-
 use lichen_compute::language::new_store;
 
 const PROGRAM: &str = r#"

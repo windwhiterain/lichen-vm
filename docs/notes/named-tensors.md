@@ -523,22 +523,24 @@ the gap.
 
 What remains:
 
-1. **A plan-specialized body is the first slice.** `MATVEC_STEP` is a 2-D contraction — one
-   fold, an unrolled address. The generalization is explicit stride leaves, the free and
-   contracted extents, and the output `Buf`; no new machinery.
-2. **The dynamic-rank body is now writable**, because the address fold may sit in the
+1. **The dynamic-rank body is now writable**, because the address fold may sit in the
    contraction fold's step. What it still wants is a plan buffer and the coordinate decode,
    whose cost is unmeasured.
-3. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
+2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
-4. **A language-level two-operand run** still hits the earlier per-use type cell: two buffers of
-   different lengths in one parameter need the field-type instantiation fix (§4). The host path
-   passes `RunArgument`s and works; the serve contraction is host-driven.
-5. **The output** is a flat `Buf`; the caller wraps it with the result shape (the split form
+3. **A language-level two-operand run with different lengths** still hits the per-use cell
+   (§4); a same-length pair works (the probe's fill), and the host path passes `RunArgument`s.
+   The serve contraction is host-driven.
+4. **The output** is a flat `Buf`; the caller wraps it with the result shape (the split form
    measured working).
-6. **The contracted extents' equality** is a value comparison: check-time when literal, the
+5. **The contracted extents' equality** is a value comparison: check-time when literal, the
    library or host otherwise.
 
-The next slice: a 2-D contraction `A{r0,c0} · B{r1,c1} -> C{r0,c1}` with a plan-specialized
-kernel (stride leaves and one fold), the result type from `merge`/`without`, and the answer
-against the hand-written `MATVEC_STEP`.
+**Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
+`B{r1,c1}` (6×2, `B[t][c] = t+1+c`) over `c0`/`r1`; `C` is 2×2 and the probe answers
+`[91, 112, 217, 274]`, with `C`'s shape `{r0: 2, c1: 2}` from `merge`/`without`
+(`zz_contract_probe`). The kernel is plan-specialized: the extent, the contraction and both
+pitches are scalar leaves in the proven `.meta`/`.in` parameter, and the address unfolds inside
+the one fold. Its input buffers come from a fill kernel; a top-level `compute.buffer` value
+carrying the `compute.Buf` annotation into a struct field still meets the per-use cell (the
+other session's), while the fill kernel's two same-length buffers work.
