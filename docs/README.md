@@ -216,7 +216,8 @@ checking the chapters that state the behaviour it changed.
 ## The language spec
 
 [language-spec.md](language-spec.md) is the single source of truth for the lichen
-**source language**: syntax, grammar, semantics, name resolution, and diagnostics.
+**source language**: syntax, the ideal API, the lowlevel, attributes, types,
+subtypes, undecided nodes, functions, structs, and the preprocessor block.
 It is the one document from the project's early days that is retained as the language
 reference, because it describes a stable, user-facing contract. Feature notes and
 rustdoc refer to it for syntax and never restate it.
