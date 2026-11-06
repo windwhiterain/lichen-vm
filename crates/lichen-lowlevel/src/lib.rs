@@ -325,6 +325,14 @@ pub enum LowOperator {
     /// The table without the entry the key names. A miss records
     /// [`EvalError::TableRemoveMiss`] and yields [`LowValue::Error`].
     TableWithout,
+    /// `@table_count t`: `[table]`; the entry count.
+    TableCount,
+    /// `@table_key t i`: `[table, index]`; the `i`-th key in the stored order.
+    ///
+    /// # Invariant
+    /// An out-of-range index records [`EvalError::TableKeyOutOfRange`] and yields
+    /// [`LowValue::Error`].
+    TableKey,
     /// One instance of a `link`ed library: `library` names it, `instance` the entry.
     ///
     /// # Safety

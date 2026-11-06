@@ -631,6 +631,18 @@ fn expression<'a, Er: GrammarError<'a>>(
                     PrefixOp::Min,
                     operand(tokens, atom.clone()),
                 ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwTableCount,
+                    PrefixOp::TableCount,
+                    operand(tokens, atom.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwTableKey,
+                    PrefixOp::TableKey,
+                    operand(tokens, atom.clone()),
+                ),
             )))
             .or(application.clone())
             .boxed();

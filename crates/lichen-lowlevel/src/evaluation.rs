@@ -49,6 +49,13 @@ pub enum EvalError {
     TableKeyUndecided { key: AnyNodeId },
     /// A [`LowOperator::TableWithout`] whose key names no entry.
     TableRemoveMiss { table: AnyNodeId, key: AnyNodeId },
+    /// A [`LowOperator::TableKey`] whose index names no entry.
+    TableKeyOutOfRange {
+        table: AnyNodeId,
+        index: AnyNodeId,
+        index_value: usize,
+        length: usize,
+    },
     /// A [`LowOperator::Index`] whose target is not an array — a recorded failure, never an
     /// internal error.
     IndexTarget { target: AnyNodeId },
@@ -557,6 +564,66 @@ impl<P: Program> Module<P> {
                 }
                 let table = self.build_table(&entries, block);
                 Some(P::Value::from(LowValue::Table(table)))
+            }
+            Some(LowOperator::TableCount) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("TableCount expects an operand array of [table]")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(array)) = operand.as_enum() else {
+                    unreachable!("TableCount operand must be an array of [table]")
+                };
+                let operands = unsafe { array.items() };
+                let Some(table) = self.evaluate_node(operands[0].node, Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Table(table)) = table.as_enum() else {
+                    return Some(P::Value::from(LowValue::Error));
+                };
+                // SAFETY: the payload is a live value of this module.
+                let items = unsafe { table.items() };
+                Some(P::Value::from(LowValue::USize(items.len())))
+            }
+            Some(LowOperator::TableKey) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("TableKey expects an operand array of [table, index]")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(array)) = operand.as_enum() else {
+                    unreachable!("TableKey operand must be an array of [table, index]")
+                };
+                let operands = unsafe { array.items() };
+                let table_node = operands[0].node;
+                let index_node = operands[1].node;
+                let Some(table) = self.evaluate_node(table_node, Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(index) = self.evaluate_node(index_node, Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Table(table)) = table.as_enum() else {
+                    return Some(P::Value::from(LowValue::Error));
+                };
+                let Some(LowValue::USize(index_value)) = index.as_enum() else {
+                    return Some(P::Value::from(LowValue::Error));
+                };
+                // SAFETY: the payload is a live value of this module.
+                let items = unsafe { table.items() };
+                let Some(item) = items.get(index_value) else {
+                    self.eval_errors.push(EvalError::TableKeyOutOfRange {
+                        table: table_node,
+                        index: index_node,
+                        index_value,
+                        length: items.len(),
+                    });
+                    return Some(P::Value::from(LowValue::Error));
+                };
+                let key = item.key;
+                self.evaluate_node(key, Some(block))
             }
             Some(LowOperator::Unify) => {
                 let Some(operands) = operation.operand else {

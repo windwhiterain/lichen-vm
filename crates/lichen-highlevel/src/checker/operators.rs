@@ -268,18 +268,18 @@ where
             self.check_expr(operand);
         }
         let types: Vec<NodeId> = ids.iter().map(|&id| self.state[id].ty.unwrap()).collect();
-        let (result, operator) = match operator {
+        let (result, operator): (NodeId, P::Operator) = match operator {
             PrefixOp::Int2Float => {
                 self.unify_stated_class(ids[0], types[0], self.int_type);
-                (self.float_type, TypeOperator::Int2Float)
+                (self.float_type, P::Operator::from(TypeOperator::Int2Float))
             }
             PrefixOp::Float2Int => {
                 self.unify_stated_class(ids[0], types[0], self.float_type);
-                (self.int_type, TypeOperator::Float2Int)
+                (self.int_type, P::Operator::from(TypeOperator::Float2Int))
             }
             PrefixOp::Max | PrefixOp::Min => (
                 self.arithmetic_class(e, ids[0], types[0], ids[1], types[1]),
-                TypeOperator::from(operator),
+                P::Operator::from(TypeOperator::from(operator)),
             ),
             PrefixOp::Exp
             | PrefixOp::Sqrt
@@ -293,17 +293,44 @@ where
                     self.loc(ids[0], 1),
                     DiagKind::BinOp,
                 );
-                (self.float_type, TypeOperator::from(operator))
+                (
+                    self.float_type,
+                    P::Operator::from(TypeOperator::from(operator)),
+                )
+            }
+            // `@table_count t` — the entry count, a machine scalar.
+            PrefixOp::TableCount => {
+                let (_, _, _) = match self.pin_table(e, ids[0], types[0], "table count") {
+                    Ok(cells) => cells,
+                    Err(refused) => return refused,
+                };
+                (
+                    self.int_type,
+                    P::Operator::from(lichen_lowlevel::LowOperator::TableCount),
+                )
+            }
+            // `@table_key t i` — the `i`-th key, in the table's stored order.
+            PrefixOp::TableKey => {
+                let (key, _, _) = match self.pin_table(e, ids[0], types[0], "table key") {
+                    Ok(cells) => cells,
+                    Err(refused) => return refused,
+                };
+                self.check_unify(
+                    types[1],
+                    self.int_type,
+                    self.loc(ids[1], 1),
+                    DiagKind::BinOp,
+                );
+                (
+                    key,
+                    P::Operator::from(lichen_lowlevel::LowOperator::TableKey),
+                )
             }
         };
         // The operand array is the source's own list, in the order it was written.
         let values: Vec<NodeId> = ids.iter().map(|&id| self.value_of(id)).collect();
         let operands = self.array_node(self.current_block, &values);
-        let node = self.op_node(
-            self.current_block,
-            P::Operator::from(operator),
-            Some(operands),
-        );
+        let node = self.op_node(self.current_block, operator, Some(operands));
         let expr = self.expr_of(node, result);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(node);

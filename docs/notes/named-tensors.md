@@ -304,11 +304,13 @@ Measured, in the current table spelling:
 - a miss is a check-time refusal: `pick (table(2 ==> 20))` refuses with "table lookup missed — no entry for key 1";
 - a call-site capture with string labels answers (`shape := table("r0" ==> 2, "c0" ==> 3); shape <== "r0"` is `2`).
 
-**Landed for this slice**: `@table_merge` (the union, the right entry winning a duplicate key)
-and `@table_without` (a table without one key; a miss is a named `TableRemoveMiss`). They are
-structural low operators, emitted by the checker and dispatched by the VM, so the determined
-evaluation reaches them like any other operator. The contraction's result shape is now
-expressible as `without (without (merge A B) c0) r1`, without iterating an entry list.
+**Landed for this slice**: `@table_merge` (the union, the right entry winning a duplicate key),
+`@table_without` (a table without one key; a miss is a named `TableRemoveMiss`), and the
+reflection pair `@table_count` / `@table_key` (the entries by ordinal; an out-of-range ordinal
+is a named `TableKeyOutOfRange`). They are structural low operators, emitted by the checker and
+dispatched by the VM, so the determined evaluation reaches them like any other operator. The
+contraction's result shape is expressible as `without (without (merge A B) c0) r1`, and the
+entries are enumerable for the plan.
 
 Measured with the primitives:
 
@@ -506,27 +508,34 @@ Measured now: the result shape is `merge` then `without`, and its **type positio
 shape table and reads a label back through it at check time. The contract's result type is not
 the gap.
 
-The gaps, in the order they block a kernel:
+**The two blockers this note named are gone.**
 
-1. **A dynamic-rank body is refused by the loop-nest rule.** The address is a fold over dims,
-   and it must run inside the contraction fold's step; an inner nest's result cannot be the
-   enclosing step's value (the dominator refusal; attention's one-kernel form, `llm-operators`).
-   Workarounds: plan-specialized unrolled bodies (writable now), a fixed max-rank odometer in
-   the fold's state (a `Select` inside a fold is refused, so the carry is arithmetic masks), or
-   a lowering fix that lets the inner nest's value reach the enclosing step.
-2. **A plan-specialized body is writable now.** `MATVEC_STEP` is a 2-D contraction — one fold,
-   an unrolled address. The generalization is explicit stride leaves (`.wstride`/`.xstride`
-   beside `.dim`), the free and contracted extents, and the output `Buf`; no new machinery.
-3. **The plan's dims** come from the caller's selectors (the closure spelling) or an explicit
-   list. The shape table has no entry/key enumeration — `get`, `merge` and `without` only — so
-   a fully automatic library would need a `table_keys` primitive. The result shape needs no
-   enumeration: `merge` + `without` computes it from the contracted labels.
+- **The loop-nest rule is fixed, and measured.** An inner `@loop` nest's result now feeds the
+  enclosing step: `zz_nested_loop_probe` answers `[9.0, 9.0, 9.0]`. Three changes in
+  `compute/body.rs`: a block's terminator is set where the walk ended, so a nest's entry branch
+  is not overwritten; `value_inner` restores the cursor only when its own lowering did not move
+  it, so a nest's merge stands; and a merged nest becomes the enclosing loop's current block.
+  The full compute suite passes (246 tests).
+- **A table's entries are enumerable.** `@table_count t` and `@table_key t i` (an out-of-range
+  ordinal refuses by name) give the keys by ordinal in the table's stored order, so a library
+  can build the plan and the output descriptor from a shape table. `merge`, `without`, `count`
+  and `key` are the whole reflection surface.
+
+What remains:
+
+1. **A plan-specialized body is the first slice.** `MATVEC_STEP` is a 2-D contraction — one
+   fold, an unrolled address. The generalization is explicit stride leaves, the free and
+   contracted extents, and the output `Buf`; no new machinery.
+2. **The dynamic-rank body is now writable**, because the address fold may sit in the
+   contraction fold's step. What it still wants is a plan buffer and the coordinate decode,
+   whose cost is unmeasured.
+3. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
+   are explicit, so it is a valid output order; the library and the host must both use it.
 4. **A language-level two-operand run** still hits the earlier per-use type cell: two buffers of
    different lengths in one parameter need the field-type instantiation fix (§4). The host path
    passes `RunArgument`s and works; the serve contraction is host-driven.
 5. **The output** is a flat `Buf`; the caller wraps it with the result shape (the split form
-   measured working). A library returning a tensor value needs the result's keys for the
-   descriptor — the enumeration in 3.
+   measured working).
 6. **The contracted extents' equality** is a value comparison: check-time when literal, the
    library or host otherwise.
 

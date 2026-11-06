@@ -119,6 +119,10 @@ pub enum PrefixOp {
     Cos,
     /// `ln x` — the natural logarithm of one `Float`.
     Ln,
+    /// `@table_count t` — the number of a table's entries.
+    TableCount,
+    /// `@table_key t i` — the table's `i`-th key, in its stored order.
+    TableKey,
 }
 
 /// The [`TypeOperator`] each [`PrefixOp`] runs, as [`BinOp`] does.
@@ -135,6 +139,10 @@ impl From<PrefixOp> for TypeOperator {
             PrefixOp::Sin => TypeOperator::Sin,
             PrefixOp::Cos => TypeOperator::Cos,
             PrefixOp::Ln => TypeOperator::Ln,
+            // Structural: the checker emits the table operators directly.
+            PrefixOp::TableCount | PrefixOp::TableKey => {
+                unreachable!("the table operators are emitted by the checker")
+            }
         }
     }
 }

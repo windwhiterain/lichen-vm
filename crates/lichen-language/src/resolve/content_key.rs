@@ -326,6 +326,8 @@ impl KeyWriter<'_> {
                     crate::ast::PrefixOp::Sin => 7,
                     crate::ast::PrefixOp::Cos => 8,
                     crate::ast::PrefixOp::Ln => 9,
+                    crate::ast::PrefixOp::TableCount => 10,
+                    crate::ast::PrefixOp::TableKey => 11,
                 });
                 for operand in operands {
                     self.expr(operand);

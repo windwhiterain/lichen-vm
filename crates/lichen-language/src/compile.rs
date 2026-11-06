@@ -724,6 +724,8 @@ impl Compiler {
                     crate::ast::PrefixOp::Sin => PrefixOp::Sin,
                     crate::ast::PrefixOp::Cos => PrefixOp::Cos,
                     crate::ast::PrefixOp::Ln => PrefixOp::Ln,
+                    crate::ast::PrefixOp::TableCount => PrefixOp::TableCount,
+                    crate::ast::PrefixOp::TableKey => PrefixOp::TableKey,
                 };
                 let operand_ids: Vec<ExprId> = operands
                     .iter()

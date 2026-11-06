@@ -71,6 +71,10 @@ pub enum TokenKind {
     KwTableMerge,
     /// `@table_without` — one key removed, `t @table_without k`; provisional.
     KwTableWithout,
+    /// `@table_count` — a table's entry count, `@table_count t`; provisional.
+    KwTableCount,
+    /// `@table_key` — a table's entry key by ordinal, `@table_key t i`; provisional.
+    KwTableKey,
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
@@ -229,6 +233,8 @@ impl TokenKind {
             TokenKind::KwIn => "'@in'",
             TokenKind::KwTableMerge => "'@table_merge'",
             TokenKind::KwTableWithout => "'@table_without'",
+            TokenKind::KwTableCount => "'@table_count'",
+            TokenKind::KwTableKey => "'@table_key'",
             TokenKind::KwShallow => "'@shallow'",
             TokenKind::Any => "'@any'",
             TokenKind::KwGc => "'@gc'",
@@ -796,6 +802,8 @@ fn raw_to_kind(
             "in" => Some(TokenKind::KwIn),
             "table_merge" => Some(TokenKind::KwTableMerge),
             "table_without" => Some(TokenKind::KwTableWithout),
+            "table_count" => Some(TokenKind::KwTableCount),
+            "table_key" => Some(TokenKind::KwTableKey),
             "shallow" => Some(TokenKind::KwShallow),
             "any" => Some(TokenKind::Any),
             "gc" => Some(TokenKind::KwGc),

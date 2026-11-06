@@ -387,6 +387,13 @@ where
             Some(key) => format!("table removal missed — no entry for key {key}"),
             None => "table removal missed — no entry for this key".to_string(),
         },
+        DiagKind::TableKeyOutOfRange => {
+            let (Some(index), Some(length)) = (d.index, d.length) else {
+                return "table key index out of range".to_string();
+            };
+            let entries = if length == 1 { "entry" } else { "entries" };
+            format!("table key index {index} out of range (table has {length} {entries})")
+        }
         // The report invariant's last resort: the build failed with nothing to
         // attribute it to.
         DiagKind::UnattributedFailure => {

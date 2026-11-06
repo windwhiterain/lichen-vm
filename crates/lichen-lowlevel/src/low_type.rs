@@ -123,6 +123,16 @@ impl<P: Program> Module<P> {
             LowOperator::TableMerge | LowOperator::TableWithout => {
                 self.low_type_of_node(self.operand_at(node, 0)?)
             }
+            // A table's entry count is a machine scalar.
+            LowOperator::TableCount => Some(LowShape::USize),
+            // A removed key answers the table's key shape.
+            LowOperator::TableKey => {
+                let LowShape::Table(key, _) = self.low_type_of_node(self.operand_at(node, 0)?)?
+                else {
+                    return None;
+                };
+                (*key).clone()
+            }
             // `Unify(actual, _)` yields the actual expression's type.
             LowOperator::Unify => self.low_type_of_node(self.operand_at(node, 0)?),
             // A loaded library's entry states no class: its result is opaque here.

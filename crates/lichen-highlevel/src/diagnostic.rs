@@ -84,6 +84,8 @@ pub enum DiagKind {
     TableMiss,
     /// A table removal named a key the table does not hold.
     TableRemoveMiss,
+    /// A table key ordinal named no entry.
+    TableKeyOutOfRange,
     /// A table build dropped a non-concrete key (see [`Diag::TableKeyUndecided`]).
     TableKeyUndecided,
     /// A read whose **runtime** target turned out not to be a container.
@@ -497,6 +499,12 @@ where
                 } => (0, Some(*index), Some(*index_value), Some(*length), None),
                 EvalError::TableMiss { key, .. } => (1, Some(*key), None, None, None),
                 EvalError::TableRemoveMiss { key, .. } => (6, Some(*key), None, None, None),
+                EvalError::TableKeyOutOfRange {
+                    index,
+                    index_value,
+                    length,
+                    ..
+                } => (7, Some(*index), Some(*index_value), Some(*length), None),
                 EvalError::TableKeyUndecided { key } => (2, Some(*key), None, None, None),
                 EvalError::IndexTarget { target } => (3, Some(*target), None, None, None),
                 EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None, None),
@@ -551,6 +559,18 @@ where
                     table_key: self.module.node_value(*key),
                     ..Diag::factual(DiagKind::TableRemoveMiss, self.node_loc(*key))
                 }),
+                EvalError::TableKeyOutOfRange {
+                    index,
+                    index_value,
+                    length,
+                    ..
+                } => {
+                    let mut diag =
+                        Diag::factual(DiagKind::TableKeyOutOfRange, self.node_loc(*index));
+                    diag.index = Some(*index_value);
+                    diag.length = Some(*length);
+                    out.push(diag);
+                }
                 EvalError::TableKeyUndecided { key } => out.push(Diag::factual(
                     DiagKind::TableKeyUndecided,
                     self.node_loc(*key),

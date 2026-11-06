@@ -1712,6 +1712,40 @@ t @table_without 7",
 }
 
 #[test]
+fn a_table_counts_and_names_its_keys_by_ordinal() {
+    // The stored order is the hash order: distinct ordinals, the two entries.
+    assert_eq!(
+        usize_of(&evaluate(
+            "t := table(1 ==> 10, 2 ==> 20)
+@table_count t"
+        )),
+        2
+    );
+    assert_eq!(
+        usize_of(&evaluate(
+            "t := table(1 ==> 10, 2 ==> 20)
+(@table_key t 0 == @table_key t 1)"
+        )),
+        0
+    );
+    assert_eq!(
+        usize_of(&evaluate(
+            "t := table(1 ==> 10, 2 ==> 20)
+(t <== (@table_key t 0)) + (t <== (@table_key t 1))"
+        )),
+        30
+    );
+    let d = diags(
+        "t := table(1 ==> 10)
+@table_key t 5",
+    );
+    assert_eq!(
+        d[0].message, "table key index 5 out of range (table has 1 entry)",
+        "the ordinal and the size are the fix: {d:?}"
+    );
+}
+
+#[test]
 fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
     // The use of `c` captured the reserved placeholder before `c = b` compiled;
     // the alias re-points it to `b`'s node.

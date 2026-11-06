@@ -1054,6 +1054,14 @@ where
                     "unsupported tablewithout operator in kernel body (kernel-safe subset is                      scalar arith)"
                         .into(),
                 ),
+                LowOperator::TableCount => Err(
+                    "unsupported tablecount operator in kernel body (kernel-safe subset is                      scalar arith)"
+                        .into(),
+                ),
+                LowOperator::TableKey => Err(
+                    "unsupported tablekey operator in kernel body (kernel-safe subset is scalar                      arith)"
+                        .into(),
+                ),
                 LowOperator::Unify => Err(
                     "unsupported unify operator in kernel body (kernel-safe subset is scalar arith)"
                         .into(),

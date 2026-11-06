@@ -190,6 +190,8 @@ impl OperatorExt<TestProgram> for TestOperator {
                 | TestOperator::LowOperator(LowOperator::TableGet)
                 | TestOperator::LowOperator(LowOperator::TableMerge)
                 | TestOperator::LowOperator(LowOperator::TableWithout)
+                | TestOperator::LowOperator(LowOperator::TableCount)
+                | TestOperator::LowOperator(LowOperator::TableKey)
                 | TestOperator::LowOperator(LowOperator::External { .. }) => {
                     unreachable!("structural operators are dispatched by the VM")
                 }

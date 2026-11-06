@@ -74,6 +74,10 @@ pub enum PrefixOp {
     /// `ln x` — the natural logarithm of one `Float`
     /// (`crates/lichen-kernel-ir/src/unary.rs`).
     Ln,
+    /// `@table_count t` — the number of a table's entries.
+    TableCount,
+    /// `@table_key t i` — the table's `i`-th key, in its stored order.
+    TableKey,
 }
 
 impl PrefixOp {
@@ -91,8 +95,9 @@ impl PrefixOp {
             | PrefixOp::Floor
             | PrefixOp::Sin
             | PrefixOp::Cos
-            | PrefixOp::Ln => 1,
-            PrefixOp::Max | PrefixOp::Min => 2,
+            | PrefixOp::Ln
+            | PrefixOp::TableCount => 1,
+            PrefixOp::Max | PrefixOp::Min | PrefixOp::TableKey => 2,
         }
     }
 }

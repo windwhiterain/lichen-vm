@@ -762,6 +762,34 @@ fn the_table_operators_parse_at_the_comparison_level() {
 }
 
 #[test]
+fn the_table_prefix_operators_parse_by_arity() {
+    let e = parse_ok("@table_count t");
+    assert!(
+        matches!(
+            e,
+            Expr::Prefix {
+                operator: PrefixOp::TableCount,
+                ref operands,
+                ..
+            } if operands.len() == 1
+        ),
+        "the count takes the table alone"
+    );
+    let e = parse_ok("@table_key t 0");
+    assert!(
+        matches!(
+            e,
+            Expr::Prefix {
+                operator: PrefixOp::TableKey,
+                ref operands,
+                ..
+            } if operands.len() == 2
+        ),
+        "the key takes the table and its ordinal"
+    );
+}
+
+#[test]
 fn an_at_in_membership_test_parses_at_the_comparison_level() {
     // `a @in S` — the left operand is the application (it binds tighter).
     let e = parse_ok("type_of v @in set(Int, Float)");

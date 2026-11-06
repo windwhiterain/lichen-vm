@@ -463,6 +463,9 @@ impl<P: Program> Module<P> {
                 self.ref_is_live(*table) && self.ref_is_live(*key)
             }
             EvalError::TableKeyUndecided { key } => self.ref_is_live(*key),
+            EvalError::TableKeyOutOfRange { table, index, .. } => {
+                self.ref_is_live(*table) && self.ref_is_live(*index)
+            }
             EvalError::IndexTarget { target } => self.ref_is_live(*target),
             EvalError::IndexSubscript { subscript } => self.ref_is_live(*subscript),
             EvalError::ApplyTarget { function } => self.ref_is_live(*function),
