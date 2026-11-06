@@ -17,7 +17,7 @@
 > of submission slots, staging), `crates/lichen-kernel-ir/src/lib.rs`
 > (`ParallelBackend`, `LaunchSet`, `Pending`, `KernelFragment`), and
 > `crates/lichen-graph-ir/` (the executor).
-> Behaviour: docs/compute-spec.md section 6
+> Behaviour: docs/compute-spec.md section 5
 >
 > Companions: [compute-graph-jit](compute-graph-jit.md) (the recorded path and
 > the scheduling model), [lichen-compute](lichen-compute.md) (the IR and the
