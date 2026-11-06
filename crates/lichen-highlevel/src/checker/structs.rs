@@ -206,7 +206,7 @@ where
         let container_ty = self.state[container].ty.unwrap();
         self.module.evaluate_node_deep(container_ty, None);
         let concrete = self.type_is_concrete(container_ty);
-        if !concrete && !self.is_loop_state(container) {
+        if !concrete && !self.is_loop_state(container) && !self.is_formal_rooted(container) {
             return self.refuse_undecided_container(e, container, container_ty, "field read");
         }
         if concrete {
@@ -262,6 +262,25 @@ where
             }
         };
         let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
+        if !concrete && !self.is_loop_state(container) {
+            // Deferred to the call, which states the field's type from the argument.
+            if let (Some(&(function, _)), Some(root)) =
+                (self.function_stack.last(), self.formal_root(container))
+            {
+                let read = super::DeferredFieldRead {
+                    container_ty,
+                    name,
+                    ty: ty_node,
+                    read_loc: self.loc(e, 0),
+                    container_loc: self.loc(container, 1),
+                    direct: root == container,
+                };
+                self.deferred_field_reads
+                    .entry(function)
+                    .or_default()
+                    .push(read);
+            }
+        }
         let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);

@@ -42,6 +42,20 @@ fn undecided_read(source: &str, form: &str) -> Option<(u32, u32)> {
     first.span
 }
 
+/// The call decides the read: the argument's field meets the annotation.
+#[test]
+fn a_formal_field_read_is_checked_against_the_argument_at_the_call() {
+    let (message, _kind) = refused(
+        "S := {.a @any : string}
+f := 'x => { a := x.a; a : Int; a }
+f (S{.a \"s\"})",
+    );
+    assert!(
+        message.contains("Int") && message.contains("string"),
+        "the call decides the read's type: {message}"
+    );
+}
+
 // --- `a(k)` is the tuple read --------------------------------------------
 
 /// A parameter container: the read is refused where it is checked, because

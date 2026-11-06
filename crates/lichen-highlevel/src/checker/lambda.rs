@@ -559,6 +559,28 @@ where
                     ),
                     None => false,
                 };
+                // The call decides the read: the argument's value states the field.
+                if let Some(AnyFunctionId::Dynamic(function)) = callee
+                    && let Some(reads) = self.deferred_field_reads.remove(&function)
+                {
+                    let argument_value = self.value_of(argument);
+                    let mut remaining = Vec::new();
+                    for read in reads {
+                        if !read.direct {
+                            remaining.push(read);
+                            continue;
+                        }
+                        let field_ty = self.resolved_field_type(argument_value, read.name);
+                        if let Some(field_ty) = field_ty {
+                            self.check_unify(field_ty, read.ty, read.read_loc, DiagKind::Guard);
+                        } else {
+                            remaining.push(read);
+                        }
+                    }
+                    if !remaining.is_empty() {
+                        self.deferred_field_reads.insert(function, remaining);
+                    }
+                }
                 // A Check failure settles its node: the shallow pass walks it again.
                 if report && !applied {
                     self.module

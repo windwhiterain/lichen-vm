@@ -1,6 +1,6 @@
 # Undecided reads are refused
 
-> Status: **current.** Points at
+> Status: **current, narrowed for the formal field read by [per-application-body](per-application-body.md).** Points at
 > `crates/lichen-highlevel/src/checker/{structs,indexing}.rs` (the read gates
 > and `DiagKind::UndecidedContainer`), `checker/lambda.rs` (a parameter
 > annotation is decided before the body), and
@@ -254,3 +254,17 @@ write, so it names one output; it is the body's shape, not the lambda's spelling
 and it is identical either way.
 
 
+
+## 7. The formal field read since per-application-body
+
+A field read whose container is a **direct formal** and whose type is undecided
+is no longer refused at the definition. It is deferred, and each application of
+that function reconciles the field's declared type (read from the argument's
+value) with the type the body stated; a disagreement is an error at the read's
+site. The exploit above now refuses with `expected Int, found string`, measured
+by `field_read_kinds.rs::a_formal_field_read_is_checked_against_the_argument_at_the_call`.
+
+The refusal remains for a read no application resolves (the unapplied function),
+and for every form not rooted at a direct formal: the tuple/array/table reads and
+the nested `x.a.b` chain. [per-application-body](per-application-body.md) carries
+the slices that widen the deferral.
