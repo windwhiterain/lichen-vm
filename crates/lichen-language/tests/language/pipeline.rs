@@ -1687,6 +1687,31 @@ fn a_missed_table_read_names_the_key() {
 }
 
 #[test]
+fn a_table_merges_with_the_right_entry_winning() {
+    // A duplicate key takes the right entry; a key only one side has survives.
+    let merge = "t := table(1 ==> 10, 2 ==> 20) @table_merge table(2 ==> 21, 3 ==> 30)
+";
+    assert_eq!(usize_of(&evaluate(&format!("{merge}t <== 1"))), 10);
+    assert_eq!(usize_of(&evaluate(&format!("{merge}t <== 2"))), 21);
+    assert_eq!(usize_of(&evaluate(&format!("{merge}t <== 3"))), 30);
+}
+
+#[test]
+fn a_table_removal_drops_one_entry_and_names_a_miss() {
+    let value = evaluate(
+        "t := table(\"a\" ==> 10, \"b\" ==> 20)
+t2 := t @table_without \"a\"
+t2 <== \"b\"",
+    );
+    assert_eq!(usize_of(&value), 20);
+    let d = diags(
+        "t := table(1 ==> 10)
+t @table_without 7",
+    );
+    assert_eq!(d[0].message, "table removal missed — no entry for key 7");
+}
+
+#[test]
 fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
     // The use of `c` captured the reserved placeholder before `c = b` compiled;
     // the alias re-points it to `b`'s node.

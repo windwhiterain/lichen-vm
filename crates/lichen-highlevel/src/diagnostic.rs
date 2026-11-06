@@ -82,6 +82,8 @@ pub enum DiagKind {
     IndexOutOfBounds,
     /// A table read that missed (see [`Diag::TableMiss`]).
     TableMiss,
+    /// A table removal named a key the table does not hold.
+    TableRemoveMiss,
     /// A table build dropped a non-concrete key (see [`Diag::TableKeyUndecided`]).
     TableKeyUndecided,
     /// A read whose **runtime** target turned out not to be a container.
@@ -494,6 +496,7 @@ where
                     length,
                 } => (0, Some(*index), Some(*index_value), Some(*length), None),
                 EvalError::TableMiss { key, .. } => (1, Some(*key), None, None, None),
+                EvalError::TableRemoveMiss { key, .. } => (6, Some(*key), None, None, None),
                 EvalError::TableKeyUndecided { key } => (2, Some(*key), None, None, None),
                 EvalError::IndexTarget { target } => (3, Some(*target), None, None, None),
                 EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None, None),
@@ -543,6 +546,10 @@ where
                 EvalError::TableMiss { key, .. } => out.push(Diag {
                     table_key: self.module.node_value(*key),
                     ..Diag::factual(DiagKind::TableMiss, self.node_loc(*key))
+                }),
+                EvalError::TableRemoveMiss { key, .. } => out.push(Diag {
+                    table_key: self.module.node_value(*key),
+                    ..Diag::factual(DiagKind::TableRemoveMiss, self.node_loc(*key))
                 }),
                 EvalError::TableKeyUndecided { key } => out.push(Diag::factual(
                     DiagKind::TableKeyUndecided,

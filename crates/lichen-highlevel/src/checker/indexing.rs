@@ -93,24 +93,10 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
-        self.module.evaluate_node_deep(container_ty, None);
-        if !self.type_is_concrete(container_ty) && !self.is_loop_state(container) {
-            return self.refuse_undecided_container(e, container, container_ty, "table read");
-        }
-        let key_cell = self.fresh_cell();
-        let value_cell = self.fresh_cell();
-        // The two positions are slots, so the pin's shape is `[key, value]`.
-        let key_slot = self.element_slot(None, Some(key_cell), None);
-        let value_slot = self.element_slot(None, Some(value_cell), None);
-        let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
-        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let table_ty = self.slot_expr(self.current_block, shape, kind);
-        self.check_unify(
-            container_ty,
-            table_ty,
-            self.loc(container, 1),
-            DiagKind::Guard,
-        );
+        let (_, value_cell, _) = match self.pin_table(e, container, container_ty, "table read") {
+            Ok(cells) => cells,
+            Err(refused) => return refused,
+        };
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));

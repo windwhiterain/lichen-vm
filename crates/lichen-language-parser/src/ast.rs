@@ -42,6 +42,11 @@ pub enum BinOp {
     BitXor,
     /// `value @in set` — membership in a set.
     In,
+    /// `a @table_merge b` — the union of two tables, the right entry winning a
+    /// duplicate key.
+    TableMerge,
+    /// `t @table_without k` — `t` without the entry `k`.
+    TableWithout,
 }
 
 /// A prefix keyword operator: its `arity` operands follow it by juxtaposition.

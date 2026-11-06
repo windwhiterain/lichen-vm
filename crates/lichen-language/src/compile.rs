@@ -669,6 +669,8 @@ impl Compiler {
                     crate::ast::BinOp::BitOr => BinOp::BitOr,
                     crate::ast::BinOp::BitXor => BinOp::BitXor,
                     crate::ast::BinOp::In => BinOp::In,
+                    crate::ast::BinOp::TableMerge => BinOp::TableMerge,
+                    crate::ast::BinOp::TableWithout => BinOp::TableWithout,
                 };
                 self.alloc(
                     ExprKind::BinOp {

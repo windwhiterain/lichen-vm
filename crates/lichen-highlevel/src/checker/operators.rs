@@ -30,6 +30,7 @@ where
         let left_ty = self.state[left].ty.unwrap();
         let right_ty = self.state[right].ty.unwrap();
         let mut arithmetic = None;
+        let mut table_result = None;
         match operator {
             // Generalized equality: the operands must be the same type.
             BinOp::Eq | BinOp::Neq => {
@@ -58,6 +59,33 @@ where
                 let set_ty = self.slot_expr(self.current_block, shape, kind);
                 self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
+            // `a @table_merge b` — both operands are tables of one key/value
+            // type, and the result is that table type.
+            BinOp::TableMerge => {
+                let (left_key, left_value, _) =
+                    match self.pin_table(e, left, left_ty, "table merge") {
+                        Ok(cells) => cells,
+                        Err(refused) => return refused,
+                    };
+                let (right_key, right_value, _) =
+                    match self.pin_table(e, right, right_ty, "table merge") {
+                        Ok(cells) => cells,
+                        Err(refused) => return refused,
+                    };
+                self.check_unify(left_key, right_key, self.loc(right, 1), DiagKind::BinOp);
+                self.check_unify(left_value, right_value, self.loc(right, 1), DiagKind::BinOp);
+                table_result = Some(self.table_type(left_key, left_value));
+            }
+            // `t @table_without k` — the right operand is a key of `t`'s table
+            // type, and the result is that table type.
+            BinOp::TableWithout => {
+                let (key, value, _) = match self.pin_table(e, left, left_ty, "table removal") {
+                    Ok(cells) => cells,
+                    Err(refused) => return refused,
+                };
+                self.check_unify(right_ty, key, self.loc(right, 1), DiagKind::BinOp);
+                table_result = Some(self.table_type(key, value));
+            }
             BinOp::Add
             | BinOp::Sub
             | BinOp::Mul
@@ -71,13 +99,22 @@ where
         }
         // A comparison yields the `0`/`1` scalar; arithmetic the class it computed
         // over — the shared cell while it is open.
-        let result = match operator {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                arithmetic.expect("the arithmetic arm ran")
-            }
-            _ => self.int_type,
+        let result = match table_result {
+            Some(result) => result,
+            None => match operator {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                    arithmetic.expect("the arithmetic arm ran")
+                }
+                _ => self.int_type,
+            },
         };
-        let operator = P::Operator::from(TypeOperator::from(operator));
+        let operator = match operator {
+            // The table operators are structural: they are emitted as the low
+            // operators the VM dispatches, never as type-level ones.
+            BinOp::TableMerge => P::Operator::from(lichen_lowlevel::LowOperator::TableMerge),
+            BinOp::TableWithout => P::Operator::from(lichen_lowlevel::LowOperator::TableWithout),
+            _ => P::Operator::from(TypeOperator::from(operator)),
+        };
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
@@ -87,6 +124,40 @@ where
         self.state[e].val = Some(value);
         self.state[e].ty = Some(result);
         expr
+    }
+
+    /// Pin a container's type to a table type, answering its key and value cells
+    /// and the table type itself.
+    ///
+    /// # Invariant
+    /// The container's type is the whole requirement a table operation reads: an
+    /// undecided container is refused here, and the answered cells are the table
+    /// type's own, so a merge pins both sides to one key/value pair.
+    pub(super) fn pin_table(
+        &mut self,
+        e: ExprId,
+        container: ExprId,
+        container_ty: NodeId,
+        read: &'static str,
+    ) -> Result<(NodeId, NodeId, NodeId), NodeId> {
+        self.module.evaluate_node_deep(container_ty, None);
+        if !self.type_is_concrete(container_ty) && !self.is_loop_state(container) {
+            return Err(self.refuse_undecided_container(e, container, container_ty, read));
+        }
+        let key = self.fresh_cell();
+        let value = self.fresh_cell();
+        let table = self.table_type(key, value);
+        self.check_unify(container_ty, table, self.loc(container, 1), DiagKind::Guard);
+        Ok((key, value, table))
+    }
+
+    /// The `table{K, V}` type whose slots are `key` and `value`.
+    pub(super) fn table_type(&mut self, key: NodeId, value: NodeId) -> NodeId {
+        let key_slot = self.element_slot(None, Some(key), None);
+        let value_slot = self.element_slot(None, Some(value), None);
+        let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
+        self.slot_expr(self.current_block, shape, kind)
     }
 
     /// The class two arithmetic operands share, and the assert that keeps it a numeric one.

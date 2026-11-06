@@ -729,6 +729,39 @@ fn an_at_assert_binds_a_full_application_but_tighter_than_a_binary_operator() {
 }
 
 #[test]
+fn the_table_operators_parse_at_the_comparison_level() {
+    let e = parse_ok("a @table_merge b");
+    assert!(matches!(
+        e,
+        Expr::BinOp {
+            operator: BinOp::TableMerge,
+            ..
+        }
+    ));
+    let e = parse_ok("t @table_without k");
+    assert!(matches!(
+        e,
+        Expr::BinOp {
+            operator: BinOp::TableWithout,
+            ..
+        }
+    ));
+    // The table read is looser, so the removal is its container.
+    let e = parse_ok("t @table_without k <== v");
+    assert!(matches!(
+        e,
+        Expr::TableFind { container, .. }
+            if matches!(
+                *container,
+                Expr::BinOp {
+                    operator: BinOp::TableWithout,
+                    ..
+                }
+            )
+    ));
+}
+
+#[test]
 fn an_at_in_membership_test_parses_at_the_comparison_level() {
     // `a @in S` — the left operand is the application (it binds tighter).
     let e = parse_ok("type_of v @in set(Int, Float)");

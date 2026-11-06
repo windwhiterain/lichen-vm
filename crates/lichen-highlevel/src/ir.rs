@@ -58,6 +58,11 @@ pub enum BinOp {
     BitXor,
     /// `value @in set` — membership in a set (`docs/notes/operator-polymorphism.md` §3).
     In,
+    /// `a @table_merge b` — the union of two tables, the right entry winning a
+    /// duplicate key.
+    TableMerge,
+    /// `t @table_without k` — `t` without the entry `k`.
+    TableWithout,
 }
 
 /// The [`TypeOperator`] each [`BinOp`] runs.
@@ -79,6 +84,10 @@ impl From<BinOp> for TypeOperator {
             BinOp::BitOr => TypeOperator::BitOr,
             BinOp::BitXor => TypeOperator::BitXor,
             BinOp::In => TypeOperator::InDomain,
+            // Structural: the checker emits the table operators directly.
+            BinOp::TableMerge | BinOp::TableWithout => {
+                unreachable!("the table operators are emitted by the checker")
+            }
         }
     }
 }

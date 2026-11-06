@@ -313,6 +313,18 @@ pub enum LowOperator {
     ///
     /// A miss records a [`EvalError`] and yields [`LowValue::Error`].
     TableGet,
+    /// `a @table_merge b`: `[left table, right table]`.
+    ///
+    /// # Invariant
+    /// The union of the two tables, a duplicate key taking the right entry. The
+    /// operand array is evaluated first, so both sides are decided tables.
+    TableMerge,
+    /// `t @table_without k`: `[table, key]`.
+    ///
+    /// # Invariant
+    /// The table without the entry the key names. A miss records
+    /// [`EvalError::TableRemoveMiss`] and yields [`LowValue::Error`].
+    TableWithout,
     /// One instance of a `link`ed library: `library` names it, `instance` the entry.
     ///
     /// # Safety

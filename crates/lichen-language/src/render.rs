@@ -383,6 +383,10 @@ where
             Some(key) => format!("table lookup missed — no entry for key {key}"),
             None => "table lookup missed — no entry for this key".to_string(),
         },
+        DiagKind::TableRemoveMiss => match table_key_text(d) {
+            Some(key) => format!("table removal missed — no entry for key {key}"),
+            None => "table removal missed — no entry for this key".to_string(),
+        },
         // The report invariant's last resort: the build failed with nothing to
         // attribute it to.
         DiagKind::UnattributedFailure => {

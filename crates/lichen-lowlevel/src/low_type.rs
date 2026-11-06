@@ -118,6 +118,11 @@ impl<P: Program> Module<P> {
                 };
                 (*value).clone()
             }
+            // A table operation yields the left table's shape: a merge or a
+            // removal keeps the key and value shapes.
+            LowOperator::TableMerge | LowOperator::TableWithout => {
+                self.low_type_of_node(self.operand_at(node, 0)?)
+            }
             // `Unify(actual, _)` yields the actual expression's type.
             LowOperator::Unify => self.low_type_of_node(self.operand_at(node, 0)?),
             // A loaded library's entry states no class: its result is opaque here.

@@ -288,6 +288,8 @@ impl KeyWriter<'_> {
                     crate::ast::BinOp::BitOr => 12,
                     crate::ast::BinOp::BitXor => 13,
                     crate::ast::BinOp::In => 14,
+                    crate::ast::BinOp::TableMerge => 15,
+                    crate::ast::BinOp::TableWithout => 16,
                 });
                 self.expr(left);
                 self.expr(right);

@@ -64,9 +64,13 @@ pub enum TokenKind {
     /// `@assert` — the prefix assert, `@assert e`; it replaced the `!` sigil,
     /// now a refinement annotation.
     KwAssert,
-    /// `@in` — set membership, `value @in set`; the one keyword that is an infix
-    /// operator.
+    /// `@in` — set membership, `value @in set`; the first `@` keyword that is an
+    /// infix operator.
     KwIn,
+    /// `@table_merge` — table union, `a @table_merge b`; provisional.
+    KwTableMerge,
+    /// `@table_without` — one key removed, `t @table_without k`; provisional.
+    KwTableWithout,
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
@@ -223,6 +227,8 @@ impl TokenKind {
             TokenKind::KwLoop => "'@loop'",
             TokenKind::KwAssert => "'@assert'",
             TokenKind::KwIn => "'@in'",
+            TokenKind::KwTableMerge => "'@table_merge'",
+            TokenKind::KwTableWithout => "'@table_without'",
             TokenKind::KwShallow => "'@shallow'",
             TokenKind::Any => "'@any'",
             TokenKind::KwGc => "'@gc'",
@@ -788,6 +794,8 @@ fn raw_to_kind(
             "loop" => Some(TokenKind::KwLoop),
             "assert" => Some(TokenKind::KwAssert),
             "in" => Some(TokenKind::KwIn),
+            "table_merge" => Some(TokenKind::KwTableMerge),
+            "table_without" => Some(TokenKind::KwTableWithout),
             "shallow" => Some(TokenKind::KwShallow),
             "any" => Some(TokenKind::Any),
             "gc" => Some(TokenKind::KwGc),

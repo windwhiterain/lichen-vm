@@ -699,8 +699,8 @@ fn expression<'a, Er: GrammarError<'a>>(
             )
             .boxed();
 
-        // The comparisons, left-associative; `@in` sits here too (it yields the
-        // same `0`/`1`).
+        // The comparisons; `@in` and the table operators sit here, so
+        // `t @table_without k <== v` reads the removal's result.
         let comparison = bitor
             .clone()
             .foldl(
@@ -712,6 +712,8 @@ fn expression<'a, Er: GrammarError<'a>>(
                     token(TokenKind::Eq).to(BinOp::Eq),
                     token(TokenKind::Neq).to(BinOp::Neq),
                     token(TokenKind::KwIn).to(BinOp::In),
+                    token(TokenKind::KwTableMerge).to(BinOp::TableMerge),
+                    token(TokenKind::KwTableWithout).to(BinOp::TableWithout),
                 ))
                 .then(operand(tokens, bitor.clone()))
                 .repeated(),

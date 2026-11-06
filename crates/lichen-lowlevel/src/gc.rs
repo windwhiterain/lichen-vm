@@ -459,7 +459,7 @@ impl<P: Program> Module<P> {
         });
         failures.1.retain(|error| match error {
             EvalError::Index { index, .. } => self.ref_is_live(*index),
-            EvalError::TableMiss { table, key } => {
+            EvalError::TableMiss { table, key } | EvalError::TableRemoveMiss { table, key } => {
                 self.ref_is_live(*table) && self.ref_is_live(*key)
             }
             EvalError::TableKeyUndecided { key } => self.ref_is_live(*key),

@@ -47,6 +47,8 @@ pub enum EvalError {
     TableMiss { table: AnyNodeId, key: AnyNodeId },
     /// A table build dropped an entry whose key could not be forced concrete.
     TableKeyUndecided { key: AnyNodeId },
+    /// A [`LowOperator::TableWithout`] whose key names no entry.
+    TableRemoveMiss { table: AnyNodeId, key: AnyNodeId },
     /// A [`LowOperator::Index`] whose target is not an array — a recorded failure, never an
     /// internal error.
     IndexTarget { target: AnyNodeId },
@@ -454,6 +456,107 @@ impl<P: Program> Module<P> {
                     }
                     _ => unreachable!("TableGet operand must be an array of [table, key]"),
                 }
+            }
+            Some(LowOperator::TableMerge) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("TableMerge expects an operand array of [table, table]")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(array)) = operand.as_enum() else {
+                    unreachable!("TableMerge operand must be an array of [table, table]")
+                };
+                let operands = unsafe { array.items() };
+                let left = self.evaluate_node(operands[0].node, Some(block));
+                let right = self.evaluate_node(operands[1].node, Some(block));
+                let (Some(left), Some(right)) = (left, right) else {
+                    return self.ran_undecided(node);
+                };
+                let (left, right) = match (left.as_enum(), right.as_enum()) {
+                    (Some(LowValue::Table(left)), Some(LowValue::Table(right))) => (left, right),
+                    // A side that computes nothing is a recorded failure; its
+                    // residue is the answer, with no second record.
+                    (Some(LowValue::Error), _) | (_, Some(LowValue::Error)) => {
+                        return Some(P::Value::from(LowValue::Error));
+                    }
+                    _ => unreachable!("a table merge's operands are tables"),
+                };
+                // SAFETY: both payloads are live values of this module.
+                let left_items = unsafe { left.items() };
+                let right_items = unsafe { right.items() };
+                let mut entries: Vec<(AnyNodeId, AnyNodeId)> =
+                    Vec::with_capacity(left_items.len() + right_items.len());
+                let mut path = AncestorPairs::new();
+                let (mut i, mut j) = (0, 0);
+                while i < left_items.len() && j < right_items.len() {
+                    let (a, b) = (&left_items[i], &right_items[j]);
+                    if a.hash < b.hash {
+                        entries.push((a.key, a.value));
+                        i += 1;
+                    } else if b.hash < a.hash {
+                        entries.push((b.key, b.value));
+                        j += 1;
+                    } else if self.key_eq(a.key, b.key, &mut path) {
+                        // The right entry wins a duplicate key.
+                        entries.push((b.key, b.value));
+                        i += 1;
+                        j += 1;
+                    } else {
+                        // A hash collision of distinct keys keeps both.
+                        entries.push((a.key, a.value));
+                        entries.push((b.key, b.value));
+                        i += 1;
+                        j += 1;
+                    }
+                }
+                entries.extend(left_items[i..].iter().map(|item| (item.key, item.value)));
+                entries.extend(right_items[j..].iter().map(|item| (item.key, item.value)));
+                let table = self.build_table(&entries, block);
+                Some(P::Value::from(LowValue::Table(table)))
+            }
+            Some(LowOperator::TableWithout) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("TableWithout expects an operand array of [table, key]")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(array)) = operand.as_enum() else {
+                    unreachable!("TableWithout operand must be an array of [table, key]")
+                };
+                let operands = unsafe { array.items() };
+                let table_node = operands[0].node;
+                let key = operands[1].node;
+                let Some(left) = self.evaluate_node(table_node, Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let left = match left.as_enum() {
+                    Some(LowValue::Table(left)) => left,
+                    Some(LowValue::Error) => return Some(P::Value::from(LowValue::Error)),
+                    _ => unreachable!("a table removal's container is a table"),
+                };
+                // SAFETY: the payload is a live value of this module.
+                let items = unsafe { left.items() };
+                let mut entries = Vec::with_capacity(items.len());
+                let mut path = AncestorPairs::new();
+                let mut removed = false;
+                for item in items {
+                    if !removed && self.key_eq(key, item.key, &mut path) {
+                        removed = true;
+                        continue;
+                    }
+                    entries.push((item.key, item.value));
+                }
+                if !removed {
+                    self.eval_errors.push(EvalError::TableRemoveMiss {
+                        table: table_node,
+                        key,
+                    });
+                    return Some(P::Value::from(LowValue::Error));
+                }
+                let table = self.build_table(&entries, block);
+                Some(P::Value::from(LowValue::Table(table)))
             }
             Some(LowOperator::Unify) => {
                 let Some(operands) = operation.operand else {
