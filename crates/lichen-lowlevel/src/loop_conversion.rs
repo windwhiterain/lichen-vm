@@ -335,6 +335,108 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         self.operand_items(array)?.get(k).copied()
     }
 
+    /// The function's parameter node, in its own graph.
+    fn function_parameter(&self, function: crate::AnyFunctionId) -> Option<AnyNodeId> {
+        match function {
+            crate::AnyFunctionId::Dynamic(function) => Some(AnyNodeId::Dynamic(
+                self.module.functions[function].parameter,
+            )),
+            crate::AnyFunctionId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                Some(AnyNodeId::Static(crate::StaticNodeId {
+                    module: sref.module,
+                    index: frozen.functions[sref.index.0].parameter,
+                }))
+            }
+        }
+    }
+
+    /// The node a clone was made from, in the node's own graph.
+    fn node_origin(&self, node: AnyNodeId) -> Option<AnyNodeId> {
+        match node {
+            AnyNodeId::Dynamic(node) => self.module.node_origin(node).map(AnyNodeId::Dynamic),
+            AnyNodeId::Static(_) => None,
+        }
+    }
+
+    /// The state path a read of the marked slot names, in either graph.
+    fn marked_state_path(
+        &self,
+        function: crate::AnyFunctionId,
+        node: AnyNodeId,
+        slot: usize,
+    ) -> Option<Vec<usize>> {
+        let parameter = self.function_parameter(function)?;
+        let mut collected = Vec::new();
+        let mut current = node;
+        for _ in 0..16 {
+            let (operator, operand) = self.node_operation(current)?;
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operator),
+                Some(LowOperator::Index)
+            ) {
+                return None;
+            }
+            let operands = self.operand_items(operand?)?;
+            let (target, selector) = (*operands.first()?, *operands.get(1)?);
+            let position = self.read_position(selector)?;
+            if target == parameter {
+                if position != slot {
+                    return None;
+                }
+                return Module::<P>::state_path(collected);
+            }
+            collected.push(position);
+            current = target;
+        }
+        None
+    }
+
+    /// The path into `function`'s parameter value that `node` reads, in either graph.
+    fn parameter_value_path(
+        &self,
+        function: crate::AnyFunctionId,
+        node: AnyNodeId,
+    ) -> Option<Vec<usize>> {
+        if let Some(slot) = self.function_looping(function)
+            && let Some(path) = self.marked_state_path(function, node, slot)
+        {
+            return Some(path);
+        }
+        let parameter = self.function_parameter(function)?;
+        let value_cell = self.expr_value_half(parameter).unwrap_or(parameter);
+        let value_class = self.class_root(value_cell);
+        let mut path = Vec::new();
+        let mut current = node;
+        let mut followed = false;
+        for _ in 0..16 {
+            if self.class_root(current) == value_class {
+                return Module::<P>::state_path(path);
+            }
+            let Some((operator, operand)) = self.node_operation(current) else {
+                let origin = self.node_origin(current)?;
+                if followed || origin == current {
+                    return None;
+                }
+                followed = true;
+                current = origin;
+                continue;
+            };
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operator),
+                Some(LowOperator::Index)
+            ) {
+                return None;
+            }
+            let items = self.operand_items(operand?)?;
+            let target = *items.first()?;
+            let position = self.read_position(*items.get(1)?)?;
+            path.push(position);
+            current = target;
+        }
+        None
+    }
+
     /// The structural value behind `node`, in either graph.
     fn structural_value(&self, node: AnyNodeId) -> Option<LowValue> {
         let value = self.node_value(node)?;
@@ -1094,7 +1196,10 @@ impl<P: Program> Module<P> {
             if !seen.insert(node) {
                 continue;
             }
-            if let Some(path) = self.parameter_value_path(function, node) {
+            if let Some(path) = LoopGraph::new(self).parameter_value_path(
+                crate::AnyFunctionId::Dynamic(function),
+                AnyNodeId::Dynamic(node),
+            ) {
                 match path.as_slice() {
                     [] => {
                         if !structural && (*tuple || arity != 1) {
