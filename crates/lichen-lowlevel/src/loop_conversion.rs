@@ -257,6 +257,64 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         }
     }
 
+    /// The function's declared return node, in its own graph.
+    fn function_return(&self, function: crate::AnyFunctionId) -> Option<AnyNodeId> {
+        match function {
+            crate::AnyFunctionId::Dynamic(function) => {
+                Some(AnyNodeId::Dynamic(self.module.functions[function].r#return))
+            }
+            crate::AnyFunctionId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                Some(AnyNodeId::Static(crate::StaticNodeId {
+                    module: sref.module,
+                    index: frozen.functions[sref.index.0].r#return,
+                }))
+            }
+        }
+    }
+
+    /// The value half of a `[value, type]` node, in the node's own graph.
+    fn expr_value_half(&self, node: AnyNodeId) -> Option<AnyNodeId> {
+        match node {
+            AnyNodeId::Dynamic(node) => self.module.expr_value_half(node).map(AnyNodeId::Dynamic),
+            AnyNodeId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                let items = frozen.static_array_items(sref.index)?;
+                let first = *items.first()?;
+                Some(AnyNodeId::Static(crate::StaticNodeId {
+                    module: sref.module,
+                    index: first,
+                }))
+            }
+        }
+    }
+
+    /// The value's element value nodes, in the value's own graph.
+    fn value_leaves(&self, value: AnyNodeId) -> Result<Vec<AnyNodeId>, String> {
+        match value {
+            AnyNodeId::Dynamic(node) => self
+                .module
+                .value_leaves(node)
+                .map(|leaves| leaves.into_iter().map(AnyNodeId::Dynamic).collect()),
+            AnyNodeId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                let items = frozen.static_array_items(sref.index).ok_or_else(|| {
+                    "a frozen value's body is not an array, and a tuple-bodied return is a                      tuple of element slots"
+                        .to_string()
+                })?;
+                let mut out = Vec::with_capacity(items.len());
+                for index in items {
+                    let element = AnyNodeId::Static(crate::StaticNodeId {
+                        module: sref.module,
+                        index,
+                    });
+                    out.push(self.expr_value_half(element).unwrap_or(element));
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// The function a `node`'s apply names, in either graph.
     fn callee_function(&self, node: AnyNodeId) -> Option<crate::AnyFunctionId> {
         let (operator, operand) = self.node_operation(node)?;
@@ -619,12 +677,18 @@ impl<P: Program> Spine<'_, P> {
     /// Walk the return value's spine. Its leaves are the bases and steps;
     /// anything else that recurses is not a tail call.
     fn walk(&mut self) -> Result<(), LoopRefusal> {
-        let ret = self.module.functions[self.function].r#return;
-        let value = self.module.expr_value_half(ret).unwrap_or(ret);
-        let roots = self
-            .module
+        let graph = LoopGraph::new(self.module);
+        let function = crate::AnyFunctionId::Dynamic(self.function);
+        let ret = graph
+            .function_return(function)
+            .ok_or(LoopRefusal::NotRecursive)?;
+        let value = graph.expr_value_half(ret).unwrap_or(ret);
+        let roots: Vec<NodeId> = graph
             .value_leaves(value)
-            .map_err(|_| LoopRefusal::StateShape)?;
+            .map_err(|_| LoopRefusal::StateShape)?
+            .into_iter()
+            .filter_map(AnyNodeId::dynamic)
+            .collect();
         if roots.len() == 1 {
             match self.classify(roots[0])? {
                 Classified::Test(selection) => {
