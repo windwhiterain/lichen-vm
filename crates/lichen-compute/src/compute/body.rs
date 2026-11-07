@@ -382,7 +382,7 @@ where
         }
     }
 
-    /// Where a state read's entry chain ends: value -> param -> argument -> origin.
+    /// The node a state read's entry chain ends at.
     fn resolve_entry(&self, node: NodeId) -> NodeId {
         let mut resolved = node;
         let mut follow_origin = false;
@@ -548,7 +548,13 @@ where
             let belongs = self.module.belongs_to(node, function).unwrap_or(false)
                 || self.module.node_origin(node).is_some_and(|origin| {
                     self.module.belongs_to(origin, function).unwrap_or(false)
-                });
+                })
+                // A structural state match is ownership: the node's path names
+                // the slot.
+                || self
+                    .module
+                    .parameter_value_path(function, node)
+                    .is_some_and(|path| self.loops[index].conversion.state.contains(&path));
             if belongs {
                 return Some(index);
             }
@@ -1823,8 +1829,7 @@ where
             if let Some(class) = class {
                 self.value_classes.insert(param, class);
             }
-            // The call's argument node is the entry a state read names; it is
-            // resolved while the enclosing nest's bindings are still live.
+            // The call's argument node is the entry a state read names.
             let entry_slot = self.resolve_entry(state[index].1);
             self.loop_state_paths
                 .insert(param, conversion.state[index].clone());
