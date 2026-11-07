@@ -558,5 +558,10 @@ the core reduction (`probe_a_type_application_field`, a function over a paramete
 body reads its fields, applied in a type position and placed in a struct literal) checks as
 well. The `buffer` native is not the trigger — the `buf` wrapper fails identically.
 `Buf`'s `.native @any : $buf_type(x.type, x.length)` carries a native type term, and that
-term's per-use application and unify is what differs. The fix is at that boundary — the `Buf`
-definition or the native term's per-use handling — not the per-use field read.
+term's per-use application and unify is what differs. The ruling: the JIT takes the element type and
+length from the buffer's `.type`/`.length`; `walk_role` now does (the `$buf_type` fallback
+and `buffer_shape`/`is_buffer_type_any` are gone) and the compute suite passes (250). What
+still refuses the direct pair is the **legacy `compute.buffer`**: its `.native` carries the
+`$buf_type` term in the value slot, and its buffer value's `.native` is that term, not a
+`$buf` payload (`buf`'s is). `kernel-buffer-declarations.md` removes that conversion; the fill
+kernel is the path, and it works.

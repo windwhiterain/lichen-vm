@@ -508,49 +508,6 @@ where
     is_universe_any(module, universe, items[EXPR_TYPE_SLOT].node)
 }
 
-/// Whether `ty` is a **native buffer type** `[shape, [marker, K]]`, its kind
-/// carrying the buffer marker.
-///
-/// # Invariant
-/// The shape is `[element type, length]`, the shape a buffer carries, so the
-/// shape's two positions are the buffer's own.
-pub fn is_buffer_type_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, ty) }) else {
-        return false;
-    };
-    items.len() >= 2
-        && kind_marker_is_any(
-            module,
-            universe,
-            items[TYPE_KIND_SLOT].node,
-            P::Value::buffer_marker(),
-        )
-}
-
-/// A native buffer's **element type and length**: its shape's two positions.
-pub fn buffer_shape<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<(AnyNodeId, AnyNodeId)>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    let shape = field_list(module, ty)?;
-    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = unsafe { array_items(module, shape) }?;
-    Some((
-        items.get(BUFFER_TYPE_ELEMENT_SLOT)?.node,
-        items.get(BUFFER_TYPE_LENGTH_SLOT)?.node,
-    ))
-}
-
 // --- type references and field access ---------------------------------------
 
 /// A type as the encoding holds it: the `[shape, kind]` term, or a node holding

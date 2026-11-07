@@ -165,3 +165,19 @@ slice; the ruling above is what the earlier slices build toward.
    refused (`frozen_buffer_reuse`).
 3. **The pack**: the file format, its reader, the space/slot mapping, and the
    perspective constraint enforced against it.
+
+## The metadata comes from `.type` / `.length`
+
+Ruling: the JIT reads a buffer's element type and length from the buffer's own `.type` /
+`.length` fields, not from the `$buf_type` term; the native type stays only as the **kind
+marker**. Implemented: `walk_role` takes the element class from `.type` (the `$buf_type`
+fallback and `buffer_shape` / `is_buffer_type_any` are gone), and the compute suite passes
+(250 tests). The fill kernel and the `buf` declaration path carry the metadata in those
+fields and work.
+
+The **legacy `compute.buffer`** (the array-to-buffer conversion this note already removes)
+still refuses the direct pair: its `.native` field carries the `$buf_type` term in the value
+slot, and a `compute.buffer` value's `.native` is that term rather than a `$buf` payload —
+the `buf` wrapper's is the payload. The direct top-level pair therefore still fails while the
+fill path answers; the remaining fix is the `.native` / payload placement in the new design,
+not the JIT's metadata read.

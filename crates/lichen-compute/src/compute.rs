@@ -2736,26 +2736,13 @@ where
             let fields = struct_field_exprs(module, held);
             let mut element = None;
             if let Some(fields) = &fields {
-                // The `.native` field holds the buffer **type**, so the element
-                // class is that type's element.
-                if let Some(native) = fields.first()
-                    && let Some(native) = struct_field_value_of_expr(module, *native)
-                    && let Some((element_type, _length)) =
-                        shape::buffer_shape(module, shape::TypeRef::Term(native))
-                {
-                    element =
-                        low_type_of_slot(module, element_type).map(|shape| scalar_class_of(&shape));
-                }
-                if element.is_none() {
-                    // The `.type` field holds the element **type**, so its own
-                    // value names the class.
-                    element = fields
-                        .get(1)
-                        .copied()
-                        .and_then(|field| struct_field_value_of_expr(module, field))
-                        .and_then(|value| low_type_of_slot(module, value))
-                        .map(|shape| scalar_class_of(&shape));
-                }
+                // The `.type` field names the element; the length is `.length`.
+                element = fields
+                    .get(1)
+                    .copied()
+                    .and_then(|field| struct_field_value_of_expr(module, field))
+                    .and_then(|value| low_type_of_slot(module, value))
+                    .map(|shape| scalar_class_of(&shape));
             }
             // The path is the `Buf` field, as the checker resolves it for the
             // source's read; the payload is one step in.
@@ -9694,12 +9681,12 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$buf_type(type, length)` — the native buffer **type** `$buf(T, L)`.
+    /// `$buf_type(type, length)` — the native buffer **kind marker** `$buf(T, L)`.
     ///
     /// # Invariant
-    /// A decided type term built where it is written: the shape is `[type, length]` and the
-    /// kind carries the buffer marker, so a type position reads it without a run
-    /// (`docs/notes/kernel-buffer-declarations.md`). It allocates nothing.
+    /// The shape is the buffer marker's `[type, length]`, but the element and length are
+    /// read from a buffer's `.type`/`.length` fields; a type position reads only the kind,
+    /// and a type term never carries the metadata the JIT needs.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
