@@ -787,6 +787,41 @@ fn static_closure_has_open_captures<P: Program>(
 }
 
 impl<P: Program> StaticModule<P> {
+    /// The frozen node's operation, if it has one — the static mirror of
+    /// [`Module::node_operation`].
+    pub fn static_operation(&self, id: LocalNodeId) -> Option<&StaticOperation<P>> {
+        self.nodes[id.index].operation.as_ref()
+    }
+
+    /// The representative of `id`'s equality class — the static mirror of
+    /// [`Module::class_root`].
+    pub fn static_class_root(&self, id: LocalNodeId) -> LocalNodeId {
+        let mut root = id;
+        while let Some(parent) = self.nodes[root.index].equality.parent() {
+            root = parent;
+        }
+        root
+    }
+
+    /// The array items of `id`'s value, as local indices — the static mirror of
+    /// [`Module::array_items`].
+    pub fn static_array_items(&self, id: LocalNodeId) -> Option<Vec<LocalNodeId>> {
+        let value = self.nodes[id.index].value.as_ref()?;
+        let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value) else {
+            return None;
+        };
+        // SAFETY: the array is a live value of this module.
+        let items = unsafe { array.items() };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let AnyNodeId::Static(sref) = item.node else {
+                return None;
+            };
+            out.push(sref.index);
+        }
+        Some(out)
+    }
+
     /// Fill every function's scope and every class's scope summary, once.
     ///
     /// # Safety
