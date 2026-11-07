@@ -20,7 +20,7 @@ cell is one whose type is not decided, printed `?a`. Chapter 5.
 the fusion machinery. Chapter 17.
 
 **class** — a set of type values used as a contract, such as
-`set(Int, Float)`. Chapter 11.
+`set(set{Type})(Int, Float)`. Chapter 11.
 
 **closure** — a function that kept the names visible where it was written.
 Chapter 4.

@@ -11,7 +11,7 @@ with their own type forms.
 A table is a constant mapping written with `=>` exprs:
 
 ```lichen
-t := table(1 => 10, 2 => 20)
+t := table(table{Int, Int})(1 => 10, 2 => 20)
 t
 ```
 
@@ -25,7 +25,7 @@ a table is homogeneous in both directions. A table's keys and values may
 be any values, including tuples and type values:
 
 ```lichen
-t := table((1, 2) => 10, (3, 4) => 20)
+t := table(table{{Int, Int}, Int})((1, 2) => 10, (3, 4) => 20)
 (t <== (1, 2), t <== (3, 4))
 ```
 
@@ -39,7 +39,7 @@ t := table((1, 2) => 10, (3, 4) => 20)
 equal to `k`:
 
 ```lichen
-t := table((1, 2) => "expr", (3, 4) => "other")
+t := table(table{{Int, Int}, string})((1, 2) => "expr", (3, 4) => "other")
 (t <== (1, 2), t <== (3, 4))
 ```
 
@@ -89,7 +89,7 @@ Looking up a key that is not in the table is refused where the read is
 written:
 
 ```lichen
-t := table(1 => 10, 2 => 20)
+t := table(table{Int, Int})(1 => 10, 2 => 20)
 t <== 9
 ```
 
@@ -113,7 +113,7 @@ binary level — looser than a comparison, so its key is a whole comparison
 expression:
 
 ```lichen
-t := table(1 => 10, 2 => 20)
+t := table(table{Int, Int})(1 => 10, 2 => 20)
 t <== 1 + 1
 ```
 
@@ -135,11 +135,11 @@ a value can.
 A set is written `set(a, b, …)`:
 
 ```lichen
-set(1, 2, 3)
+set(set{Int})(1, 2, 3)
 ```
 
 ```text
-set(1, 2, 3): set{Int}
+set(set{Int})(1, 2, 3): set{Int}
 ```
 
 A set is homogeneous like an array: its members share one type. The type
@@ -147,11 +147,11 @@ is `set{E}`, and it has **no length** — a set's type says which values may
 be members, not how many there are:
 
 ```lichen
-(set(1), set(1, 2))
+(set(set{Int})(1), set(set{Int})(1, 2))
 ```
 
 ```text
-(set(1), set(1, 2)): Tuple
+(set(set{Int})(1), set(set{Int})(1, 2)): Tuple
 ```
 
 The value of a set is its members; what makes it a set is its type. A set
@@ -164,7 +164,7 @@ parameter. `set()` is the empty set, with an open element slot.
 `0` like a comparison:
 
 ```lichen
-(1 @in set(1, 2), 4 @in set(1, 2))
+(1 @in set(set{Int})(1, 2), 4 @in set(set{Int})(1, 2))
 ```
 
 ```text
@@ -176,7 +176,7 @@ decided, while a membership test through an unannotated parameter `s` is
 refused (`this set membership cannot be checked: the container's type is not
 decided here — annotate the container's type`).
 
-The keyword sits at the comparison level, so `2 @in set(1, 2) == 1` is
+The keyword sits at the comparison level, so `2 @in set(set{Int})(1, 2) == 1` is
 `(2 @in set(1, 2)) == 1`, and its right operand must be a set:
 
 ```lichen
