@@ -846,6 +846,11 @@ impl<P: Program> Module<P> {
         self.functions[function].static_origin = Some(origin);
     }
 
+    /// Record the template a live function was rebuilt from.
+    pub fn set_template(&mut self, function: FunctionId, template: FunctionId) {
+        self.functions[function].template = Some(template);
+    }
+
     /// The parameter slot the mark states for `function`'s loop state.
     pub fn function_loop_slot(&self, function: FunctionId) -> Option<usize> {
         self.functions[function].looping

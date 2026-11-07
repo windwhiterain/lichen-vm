@@ -36,6 +36,10 @@ where
         // as its members and a sibling's do not.
         let parent = parent_expr.and_then(|p| self.function_of.get(&p).copied());
         let function = self.module.begin_function(return_block, parent);
+        // **A rebuild names its template**: a re-check keeps the earlier function.
+        if let Some(template) = self.function_of.get(&e).copied() {
+            self.module.set_template(function, template);
+        }
         self.function_of.insert(e, function);
         self.function_stack.push((function, Some(e)));
         // The `@loop` mark crosses into the graph here, where the shell exists and

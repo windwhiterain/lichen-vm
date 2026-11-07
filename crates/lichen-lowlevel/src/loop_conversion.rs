@@ -125,10 +125,18 @@ impl<P: Program> Module<P> {
     /// The mark is read from the live function, not the frozen copy: a freeze may
     /// run before `mark_looping`, so the static function's `looping` is stale.
     pub fn static_dynamic_function(&self, sref: crate::StaticFunctionRef) -> Option<FunctionId> {
+        let module = self.static_module(sref.module);
+        let source = module
+            .dynamic_functions
+            .get(sref.index.0)
+            .copied()
+            .flatten();
         self.functions
             .iter()
             .find(|(_, function)| {
-                function.looping.is_some() && function.static_origin == Some(sref)
+                function.looping.is_some()
+                    && (function.static_origin == Some(sref)
+                        || (source.is_some() && function.template == source))
             })
             .map(|(id, _)| id)
     }
