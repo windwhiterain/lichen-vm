@@ -15,19 +15,23 @@ stmt := bind | assert
 bind := [`let`] name `:=` expr
 assert := `@assert` expr
 unify := expr `=` expr
-lambda := expr => expr
+lambda := expr -> expr
 apply := expr expr
 annotated := expr annotation+
 annotation := annotator expr
 annotator := `:` | `!` | `?` | `#`
-compound := tuple | array | struct
+compound := tuple | array | struct | table | set
 tuple := `(` (expr sep)* `)`
 array := `[` expr'template sep expr'length `]`
 struct := `{` (`.` name expr sep)* `}`
+table := `table` glue `{` expr'key_template sep expr'valye_template `}`
+set := `set` glue `{` expr'template `}`
 access := tuple_access | struct_access | array_access
-instanciate := array_instanciate | struct_instanciate
+instanciate := array_instanciate | struct_instanciate | table_instanciate | set_instanciate
 array_instanciate := expr'array glue `[` (expr sep)* `]` 
 struct_instanciate := expr'struct glue `{` (`.` name expr sep)* `}`
+table_instanciate := `table` glue `(` expr'table `)` glue `(` (expr'key `=>` expr'value sep)* `)`
+set_instanciate := `set` glue `(` expr'set `)` glue `(` (expr sep)* `)`
 tuple_access := tuple glue `(` expr `)` 
 struct_access := struct `.` name
 array_access := array glue `[` expr `]`
@@ -40,7 +44,7 @@ sugar:
 ```sytax
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-` ...'a... => ...` => `{a := _; ...a... => ...}`
+` ...'a... -> ...` => `{a := _; ...a... -> ...}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -53,17 +57,17 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 ## Ideal API
 1. Uniform signature: use if all parameter play equal role.
 ```
-sum3 := [@any: Int, 3]['a, 'b, 'c] => 'a + 'b + 'c
+sum3 := [@any: Int, 3]['a, 'b, 'c] -> 'a + 'b + 'c
 sum3 (_[1, 2, 3])
 ```
 2. Named signature: use if the signature will not be used else where.
 ```
-div := {.'dividend: Int, .'dividor: Int} => dividend / dividor
+div := {.'dividend: Int, .'dividor: Int} -> dividend / dividor
 div _{.dividend 2, .dividor 1} 
 ```
 3. Struct signature: use if the signature will be used else where.
 Div := {.dividend @any: Int, .dividor @any: Int}
-div := 'x = Div => x.dividend / x.dividor
+div := 'x = Div -> x.dividend / x.dividor
 div _{.dividend 2, .dividor 1}
 
 ## Lowlevel
@@ -92,7 +96,7 @@ An annotated expr creats a new expression with each annotated attribute:
 - replaced by the corresponding annotation expression.
 
 ```sytax
-`@raw[value, ann1, ...] : ann2` => `{ann1 = ann2; @raw[value, ann2, ...]}`
+`@raw[value, ann1, ...] : ann2` -> `{ann1 = ann2; @raw[value, ann2, ...]}`
 ``` 
 
 ## Type
@@ -107,7 +111,7 @@ expression with unit vairant lowlevel value has type `Type`
 `Type` := `@raw[@raw TypeType, Type, ...]`
 ```
 
-### Compound
+## Compound
 
 Compound type is an layout documentation of lowleval array value, e.g. tuple, array, struct. 
 
@@ -137,6 +141,75 @@ Array unify every element expression to a template expression.
 }`
 
 `a[n]` := `{(type_of t) = Array; @raw t.value[n+1]}` 
+```
+
+### Struct
+
+Struct is a special tuple that: 
+- Each index has a name.
+- Nominal over the sytax position.
+
+```sytax
+`Struct` := `@raw[@raw StructType, Type, ...]`
+
+`
+s := {.n1 e1 .n2 e2}
+name_table := @raw Table
+` 
+
+`s` := `@raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]`
+
+`s{.n2 e3, .n1 e4}` 
+:= 
+`{
+  let _{.n1 e1, .n2 e2} = s;
+  v := @raw[name_table, nominal_id, @raw None, @raw None]
+  @raw v[name_table["n1"]+2] = e1;
+  @raw v[name_table["n2"]+2] = e2;
+  e3 = @raw v[name_table["n2"]+2]
+  e4 = @raw v[name_table["n1"]+2]
+  @raw[@raw v, Struct, ...]
+}`
+
+`s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
+```
+
+> ```lichen raw t[name_table["n1"]+2]` is lowlevel computation.
+
+### Table
+```sytax
+`Table = @raw[@raw TableType, Type, ...]`
+
+`table{kt, vt}` := `@raw[@raw[kt, vt], Table, ...]`
+
+`table(t)(k1 => v1, k2 => v2)` :=
+`
+{
+  let table{kt, vt} = t
+  k1 = kt
+  k2 = kt
+  v1 = vt
+  v2 = vt
+  @raw[kt, vt, @raw Table(k1 => v1, k2 => v2), ...]
+}
+`
+```
+
+### Set
+```sytax
+`Set = @raw[@raw SetType, Type, ...]`
+
+`set{t}` := `@raw[@raw[t], Set, ...]`
+
+`set(t)(e1, e2)` :=
+`
+{
+  let set{t} = t
+  e1 = t
+  e2 = t
+  @raw[t, @raw Set(e1, e2), ...]
+}
+`
 ```
 
 ## Subtype
@@ -169,7 +242,7 @@ Subtype via lowlevel unify exception:
 `_ = @any` := `_`
 `{a := _; @any = a}` := `@any`
 `{ret = @raw [@raw None, @raw None]; @raw Any = ret; ret}` := @raw[@raw Any, @raw Any]`
-`{ret = @raw None => @raw None; @raw Any = ret; ret}` := `@raw None => @raw None`
+`{ret = @raw None -> @raw None; @raw Any = ret; ret}` := `@raw None -> @raw None`
 ```  
 
 ## Undecided
@@ -201,11 +274,11 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 
 ```sytax
 `Function` := `@raw[@raw FunctionType, Type, ...]`
-`<p> => <body>` := `@raw[ <p> @raw=> <body>, Function, ...]`
-`{f := <p> => <body>; f a}` => `{let (p_clone => body_clone) = @clone (<p> => <body>); a = p_clone; body_clone}`
+`<p> -> <body>` := `@raw[ <p> @raw-> <body>, Function, ...]`
+`{f := <p> -> <body>; f a}` => `{let (p_clone -> body_clone) = @clone (<p> -> <body>); a = p_clone; body_clone}`
 ```
 
-> `p @raw=> body`: lowlevel function.
+> `p @raw-> body`: lowlevel function.
 > `@clone f`: see section `### Clone`.   
 
 ### Clone
@@ -223,38 +296,8 @@ Clone an node with `Any` value produce an undecide node with `None` value if its
 Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
 
 ```sytax
-`'x => {...; expr}` => `'x => {...; return expr; @any = x;}`
+`'x -> {...; expr}` => `'x -> {...; return expr; @any = x;}`
 ```
-
-## Struct
-
-Struct is a special tuple that: 
-- Each index has a name.
-- Nominal over the sytax position.
-
-```sytax
-`Struct` = `@raw[@raw StructType, Struct, ...]`
-
-`s := {.n1 e1 .n2 e2}` 
-
-`s` := `@raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]`
-
-`s{.n2 e3, .n1 e4}` 
-:= 
-`{
-  let _{.n1 e1, .n2 e2} = s;
-  v := raw[name_table, nominal_id, @raw None, @raw None]
-  raw v[name_table["n1"]+2] = e1;
-  raw v[name_table["n2"]+2] = e2;
-  e3 = raw v[name_table["n2"]+2]
-  e4 = raw v[name_table["n1"]+2]
-  raw[raw v, Struct, ...]
-}`
-
-`s.<name>` := `{type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}`
-```
-
-> ```lichen raw t[name_table["n1"]+2]` is lowlevel computation.
 
 ## Preprocessor block
 
