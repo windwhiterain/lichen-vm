@@ -2080,7 +2080,20 @@ where
     fn enter_loop_block(&mut self, index: usize, block: usize) {
         self.block = block;
         self.loops[index].block = block;
-        self.loops[index].block_slots = self.body.blocks[block].params.clone();
+        let params = self.body.blocks[block].params.clone();
+        let function = self.loops[index].function;
+        let state = self.loops[index].conversion.state.clone();
+        // **The block's own parameters are the state bindings**: a branch block has
+        // its own.
+        for (slot, path) in state.iter().enumerate() {
+            let Some(param) = params.get(slot).copied() else {
+                continue;
+            };
+            for node in self.module.state_nodes(function, path) {
+                self.remember(node, param);
+            }
+        }
+        self.loops[index].block_slots = params;
     }
 
     /// The two branches one test's arms take.
