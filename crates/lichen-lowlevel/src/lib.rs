@@ -910,6 +910,9 @@ pub struct StaticFunction {
     /// The real original this static function is a re-export of; `None` for its own.
     pub origin: Option<StaticFunctionRef>,
     pub asserts: Vec<LocalNodeId>,
+    /// The static mirror of [`Function::looping`]: the `@loop` mark, so a frozen
+    /// callee can name the nest it converts to.
+    pub looping: Option<usize>,
     /// The template scope as local indices — the static mirror of [`Function::nodes`].
     ///
     /// # Invariant

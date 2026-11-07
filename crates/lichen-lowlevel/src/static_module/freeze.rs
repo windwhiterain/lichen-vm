@@ -176,6 +176,7 @@ impl<P: Program> StaticModule<P> {
                 // A re-exported function keeps its original-position id, so two
                 // re-exports of one function compare equal.
                 origin: function.static_origin,
+                looping: function.looping,
                 asserts: function
                     .asserts
                     .iter()

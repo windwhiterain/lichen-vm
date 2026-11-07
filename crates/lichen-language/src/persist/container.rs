@@ -572,6 +572,8 @@ where
             return_attribute,
             origin,
             asserts,
+            // Not serialized yet: the loop conversion reads the live module's mark.
+            looping: None,
             nodes: scope,
             parent,
             // Not serialized: recomputed from the loaded tables, so an artifact
