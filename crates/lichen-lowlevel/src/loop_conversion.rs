@@ -552,6 +552,31 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         false
     }
 
+    /// The marked component `function` belongs to: the `@loop` functions that
+    /// reach it and reach back, in either graph.
+    fn loop_component(&self, function: crate::AnyFunctionId) -> Vec<crate::AnyFunctionId> {
+        let reachable = |from: crate::AnyFunctionId| {
+            let mut seen = vec![];
+            let mut stack = vec![from];
+            while let Some(g) = stack.pop() {
+                if seen.contains(&g) {
+                    continue;
+                }
+                seen.push(g);
+                for callee in self.marked_callees_of(g) {
+                    if !seen.contains(&callee) {
+                        stack.push(callee);
+                    }
+                }
+            }
+            seen
+        };
+        reachable(function)
+            .into_iter()
+            .filter(|&g| reachable(g).contains(&function))
+            .collect()
+    }
+
     /// The marked functions `g`'s template subtree applies to — the edges of
     /// the marked call graph, live and frozen.
     fn marked_callees_of(&self, g: crate::AnyFunctionId) -> Vec<crate::AnyFunctionId> {
@@ -609,7 +634,16 @@ impl<P: Program> Module<P> {
     /// every self-application in the subtree is one of those steps; there is a
     /// base; the state is a flat tuple of scalar cells covering every read.
     pub fn loop_conversion(&self, function: FunctionId) -> Result<LoopConversion, LoopRefusal> {
-        let component = self.loop_component(function);
+        self.loop_conversion_any(crate::AnyFunctionId::Dynamic(function))
+    }
+
+    /// The conversion of a live or a frozen `@loop` function, read through one
+    /// graph (see [`LoopGraph`]).
+    pub fn loop_conversion_any(
+        &self,
+        function: crate::AnyFunctionId,
+    ) -> Result<LoopConversion, LoopRefusal> {
+        let component = LoopGraph::new(self).loop_component(function);
         if !component.contains(&function) {
             return Err(LoopRefusal::NotRecursive);
         }
@@ -618,12 +652,12 @@ impl<P: Program> Module<P> {
                 size: component.len(),
             });
         }
-        let mut spine = Spine::new(self, crate::AnyFunctionId::Dynamic(function));
+        let mut spine = Spine::new(self, function);
         spine.walk()?;
         let state = spine.state();
         let state = state?;
         Ok(LoopConversion {
-            function: crate::AnyFunctionId::Dynamic(function),
+            function,
             state,
             tests: spine.tests,
             steps: spine.steps,
@@ -825,37 +859,6 @@ impl<P: Program> Module<P> {
     fn graph(&self) -> LoopGraph<'_, P> {
         LoopGraph::new(self)
     }
-
-    /// The marked component `function` belongs to: the `@loop` functions
-    /// that reach it and reach back.
-    fn loop_component(&self, function: FunctionId) -> Vec<FunctionId> {
-        let graph = self.graph();
-        let reachable = |from: crate::AnyFunctionId| {
-            let mut seen = vec![];
-            let mut stack = vec![from];
-            while let Some(g) = stack.pop() {
-                if seen.contains(&g) {
-                    continue;
-                }
-                seen.push(g);
-                for callee in graph.marked_callees_of(g) {
-                    if !seen.contains(&callee) {
-                        stack.push(callee);
-                    }
-                }
-            }
-            seen
-        };
-        let function = crate::AnyFunctionId::Dynamic(function);
-        reachable(function)
-            .into_iter()
-            .filter(|&g| reachable(g).contains(&function))
-            .filter_map(|g| match g {
-                crate::AnyFunctionId::Dynamic(function) => Some(function),
-                crate::AnyFunctionId::Static(_) => None,
-            })
-            .collect()
-    }
 }
 
 /// The spine walk: classify the return value's branches, then validate the
@@ -887,12 +890,9 @@ impl<P: Program> Spine<'_, P> {
             .function_return(self.function)
             .ok_or(LoopRefusal::NotRecursive)?;
         let value = graph.expr_value_half(ret).unwrap_or(ret);
-        let roots: Vec<NodeId> = graph
+        let roots = graph
             .value_leaves(value)
-            .map_err(|_| LoopRefusal::StateShape)?
-            .into_iter()
-            .filter_map(AnyNodeId::dynamic)
-            .collect();
+            .map_err(|_| LoopRefusal::StateShape)?;
         if roots.len() == 1 {
             match self.classify(roots[0])? {
                 Classified::Test(selection) => {
@@ -909,7 +909,7 @@ impl<P: Program> Spine<'_, P> {
             // A tuple-bodied return: a recursion hiding in an element is a
             // call the spine does not own.
             for &root in &roots {
-                if graph.subtree_applies(AnyNodeId::Dynamic(root), self.function) {
+                if graph.subtree_applies(root, self.function) {
                     return Err(LoopRefusal::NonTailCall);
                 }
             }
@@ -928,20 +928,20 @@ impl<P: Program> Spine<'_, P> {
     }
 
     /// One selection of the spine: record its test, then walk both arms.
-    fn walk_test(&mut self, selection: NodeId) -> Result<usize, LoopRefusal> {
+    fn walk_test(&mut self, selection: AnyNodeId) -> Result<usize, LoopRefusal> {
         // A view is not a conditional: the test is what the view names
         // (`docs/notes/loop-conversion.md`).
         let mut selection = selection;
         let mut seen = HashSet::new();
         let graph = LoopGraph::new(self.module);
         while seen.insert(selection) {
-            match graph.selection_of(AnyNodeId::Dynamic(selection)) {
-                Some(Selection::Views(view)) => selection = view,
+            match graph.selection_of(selection) {
+                Some(Selection::Views(view)) => selection = AnyNodeId::Dynamic(view),
                 _ => break,
             }
         }
         let operands = graph
-            .operands_of(AnyNodeId::Dynamic(selection))
+            .operands_of(selection)
             .ok_or(LoopRefusal::StateShape)?;
         let (Some(arms), Some(condition)) = (operands.first().copied(), operands.get(1).copied())
         else {
@@ -953,18 +953,16 @@ impl<P: Program> Spine<'_, P> {
         }
         let arm = |index: usize| {
             // An element is a complete slot: the arm is its value position.
-            match graph.element_value_node(arms[index]) {
-                Some(AnyNodeId::Dynamic(node)) => Ok(node),
-                _ => Err(LoopRefusal::StateShape),
-            }
+            graph
+                .element_value_node(arms[index])
+                .ok_or(LoopRefusal::StateShape)
         };
-        let condition = condition.dynamic().ok_or(LoopRefusal::StateShape)?;
         // `[b, a][c]` is `if c then a else b`: element 1 answers the `1` edge.
         let on_zero = self.walk_arm(arm(0)?)?;
         let on_one = self.walk_arm(arm(1)?)?;
         let index = self.tests.len();
         self.tests.push(LoopTest {
-            condition: AnyNodeId::Dynamic(condition),
+            condition,
             on_one,
             on_zero,
         });
@@ -972,7 +970,7 @@ impl<P: Program> Spine<'_, P> {
     }
 
     /// One branch of the spine: a base, a step, or a nested test.
-    fn walk_arm(&mut self, arm: NodeId) -> Result<LoopArm, LoopRefusal> {
+    fn walk_arm(&mut self, arm: AnyNodeId) -> Result<LoopArm, LoopRefusal> {
         match self.classify(arm)? {
             Classified::Test(selection) => Ok(LoopArm::Test(self.walk_test(selection)?)),
             Classified::Step(apply) => Ok(LoopArm::Step(self.record_step(apply)?)),
@@ -982,22 +980,22 @@ impl<P: Program> Spine<'_, P> {
 
     /// What a spine node is. Views resolve first, but the recorded value
     /// stays the arm's node, so a base keeps its read path.
-    fn classify(&self, arm: NodeId) -> Result<Classified, LoopRefusal> {
+    fn classify(&self, arm: AnyNodeId) -> Result<Classified, LoopRefusal> {
         let graph = LoopGraph::new(self.module);
         let function = self.function;
         let mut resolved = arm;
         let mut seen = HashSet::new();
         while seen.insert(resolved) {
-            match graph.selection_of(AnyNodeId::Dynamic(resolved)) {
-                Some(Selection::Views(view)) => resolved = view,
+            match graph.selection_of(resolved) {
+                Some(Selection::Views(view)) => resolved = AnyNodeId::Dynamic(view),
                 Some(Selection::Computed) => return Ok(Classified::Test(resolved)),
                 None => break,
             }
         }
-        if graph.callee_function(AnyNodeId::Dynamic(resolved)) == Some(function) {
+        if graph.callee_function(resolved) == Some(function) {
             return Ok(Classified::Step(resolved));
         }
-        if graph.subtree_applies(AnyNodeId::Dynamic(resolved), function) {
+        if graph.subtree_applies(resolved, function) {
             return Err(LoopRefusal::NonTailCall);
         }
         Ok(Classified::Base(arm))
@@ -1005,72 +1003,40 @@ impl<P: Program> Spine<'_, P> {
 
     /// A step's next state: the call's argument's elements, each a scalar
     /// cell; an aggregate or a function is not carryable.
-    fn record_step(&mut self, apply: NodeId) -> Result<usize, LoopRefusal> {
+    fn record_step(&mut self, apply: AnyNodeId) -> Result<usize, LoopRefusal> {
         let graph = LoopGraph::new(self.module);
-        let operands = graph
-            .operands_of(AnyNodeId::Dynamic(apply))
-            .ok_or(LoopRefusal::StateShape)?;
+        let operands = graph.operands_of(apply).ok_or(LoopRefusal::StateShape)?;
         let argument = *operands.get(1).ok_or(LoopRefusal::StateShape)?;
         let value = graph.expr_value_half(argument).unwrap_or(argument);
-        let next: Vec<NodeId> = match graph.operand_items(value) {
+        let next: Vec<AnyNodeId> = match graph.operand_items(value) {
             Some(items) => items
                 .into_iter()
                 .map(|item| {
                     // An element is a complete slot: the carried value is its first
                     // position.
-                    let item = graph.element_value_node(item).unwrap_or(item);
-                    match item {
-                        AnyNodeId::Dynamic(node) => Ok(node),
-                        AnyNodeId::Static(_) => Err(LoopRefusal::StateShape),
-                    }
+                    graph.element_value_node(item).unwrap_or(item)
                 })
-                .collect::<Result<_, _>>()?,
-            None => vec![value.dynamic().ok_or(LoopRefusal::StateShape)?],
+                .collect(),
+            None => vec![value],
         };
         for element in &next {
             if matches!(
-                graph.structural_value(AnyNodeId::Dynamic(*element)),
+                graph.structural_value(*element),
                 Some(LowValue::Array(_) | LowValue::Function(_) | LowValue::Table(_))
-            ) && !graph.carries_buffer(AnyNodeId::Dynamic(*element))
+            ) && !graph.carries_buffer(*element)
             {
                 return Err(LoopRefusal::StateShape);
             }
         }
         let index = self.steps.len();
-        self.steps.push(LoopStep {
-            apply: AnyNodeId::Dynamic(apply),
-            next: next.into_iter().map(AnyNodeId::Dynamic).collect(),
-        });
+        self.steps.push(LoopStep { apply, next });
         Ok(index)
     }
 
-    /// Whether `value` is a `Buf`: the struct whose `.native` payload is the `$buf` operator.
-    ///
-    /// # Invariant
-    /// The lowlevel cannot name the compute's operator type (the dependency runs the other
-    /// way), so the payload's debug label is the witness: `Buf` is the `$buf` op and nothing
-    /// else. A plain array's items carry no such operator.
-    fn carries_buffer(&self, value: NodeId) -> bool {
-        // SAFETY: `value` is a live node of the module.
-        let Some(items) = (unsafe { self.module.array_items(value) }) else {
-            return false;
-        };
-        items
-            .iter()
-            .filter_map(|item| match item.node {
-                AnyNodeId::Dynamic(node) => Some(node),
-                AnyNodeId::Static(_) => None,
-            })
-            .filter_map(|node| self.module.node_operation(node))
-            .any(|operation| format!("{:?}", operation.operator) == "Buf")
-    }
-
     /// A base case: the branch's value half.
-    fn record_exit(&mut self, arm: NodeId) -> Result<usize, LoopRefusal> {
+    fn record_exit(&mut self, arm: AnyNodeId) -> Result<usize, LoopRefusal> {
         let index = self.exits.len();
-        self.exits.push(LoopExit {
-            value: AnyNodeId::Dynamic(arm),
-        });
+        self.exits.push(LoopExit { value: arm });
         Ok(index)
     }
 
@@ -1145,43 +1111,14 @@ impl<P: Program> Spine<'_, P> {
 /// What [`Spine::classify`] resolved one branch to.
 enum Classified {
     /// A nested selection — the walk continues into it.
-    Test(NodeId),
+    Test(AnyNodeId),
     /// A tail self-application.
-    Step(NodeId),
+    Step(AnyNodeId),
     /// A base value (the arm's own node, path intact).
-    Base(NodeId),
+    Base(AnyNodeId),
 }
 
 impl<P: Program> Module<P> {
-    /// Whether a self-application of `function` is reachable from `node`
-    /// through operands and array values.
-    ///
-    /// # Invariant
-    ///
-    /// The walk stays inside values: a closure's *body* is not an operand of
-    /// its value node, so a recursion hidden in a nested closure is
-    /// [`Spine::complete`]'s catch, not this one's.
-    fn subtree_applies(&self, node: NodeId, function: FunctionId) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![node];
-        while let Some(current) = stack.pop() {
-            if !seen.insert(current) {
-                continue;
-            }
-            if self.callee_function(current) == Some(function) {
-                return true;
-            }
-            if let Ok(operands) = self.operands_of(current) {
-                stack.extend(operands);
-            }
-            // SAFETY: `current` is a live node of `self`.
-            if let Some(items) = unsafe { self.array_items(current) } {
-                stack.extend(items.iter().filter_map(|item| item.node.dynamic()));
-            }
-        }
-        false
-    }
-
     /// Validate every parameter read reachable from `root` against the
     /// state; refuse a read the flat state cannot name.
     fn check_reads(
