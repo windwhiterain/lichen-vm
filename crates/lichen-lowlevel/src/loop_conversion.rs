@@ -335,6 +335,24 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         self.operand_items(array)?.get(k).copied()
     }
 
+    /// Whether `node`'s subtree applies `function`, in either graph.
+    fn subtree_applies(&self, node: AnyNodeId, function: crate::AnyFunctionId) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![node];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            if self.callee_function(current) == Some(function) {
+                return true;
+            }
+            if let Some(items) = self.operand_items(current) {
+                stack.extend(items);
+            }
+        }
+        false
+    }
+
     /// Whether a node is the language's conditional or a view, in either graph.
     fn selection_of(&self, node: AnyNodeId) -> Option<Selection> {
         let (operator, operand) = self.node_operation(node)?;
@@ -832,19 +850,21 @@ impl<P: Program> Spine<'_, P> {
     /// What a spine node is. Views resolve first, but the recorded value
     /// stays the arm's node, so a base keeps its read path.
     fn classify(&self, arm: NodeId) -> Result<Classified, LoopRefusal> {
+        let graph = LoopGraph::new(self.module);
+        let function = crate::AnyFunctionId::Dynamic(self.function);
         let mut resolved = arm;
         let mut seen = HashSet::new();
         while seen.insert(resolved) {
-            match self.module.selection_of(resolved) {
+            match graph.selection_of(AnyNodeId::Dynamic(resolved)) {
                 Some(Selection::Views(view)) => resolved = view,
                 Some(Selection::Computed) => return Ok(Classified::Test(resolved)),
                 None => break,
             }
         }
-        if self.module.callee_function(resolved) == Some(self.function) {
+        if graph.callee_function(AnyNodeId::Dynamic(resolved)) == Some(function) {
             return Ok(Classified::Step(resolved));
         }
-        if self.module.subtree_applies(resolved, self.function) {
+        if graph.subtree_applies(AnyNodeId::Dynamic(resolved), function) {
             return Err(LoopRefusal::NonTailCall);
         }
         Ok(Classified::Base(arm))
