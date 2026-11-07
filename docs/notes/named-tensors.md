@@ -469,6 +469,9 @@ descriptor.
 
 ## 9. What is measured, and what is read
 
+The probes behind this section used `compute.buffer`, which the buffer-declarations design
+removed; the forms stand and the live input path is the fill kernel (§5.5, §11).
+
 | claim | how |
 |---|---|
 | a tensor under `.in` is a buffer plus scalar leaves | measured |

@@ -2,89 +2,11 @@
 //!
 //! # Invariant
 //!
-//! Print-only. The programs measure a bare-template tensor, a per-use constructor, the
-//! table shape, and the closure selector; the answers and refusals are recorded in
-//! `docs/notes/named-tensors.md`.
+//! Print-only. The programs measure the table shape, the closure selector and the contract
+//! shape; the answers are recorded in `docs/notes/named-tensors.md`. The two buffer programs
+//! this file used to carry went with `compute.buffer`'s removal.
 //!
 use lichen_compute::language::new_store;
-
-/// Two buffers of different lengths, the type's length open.
-const TWO_BUFFERS: &str = r#"
---- compute = import "compute.lichen" ---
-In  := {.w (compute.Buf (compute.BufParam{.type Int, .length _})), .x (compute.Buf (compute.BufParam{.type Int, .length _}))}
-Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
-Par := {.n @any : Int, .in In}
-Arg := {.n @any : Int, .I In}
-w := (compute.buffer ([@any : Int, 6][1, 2, 3, 4, 5, 6] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 6})))
-x := (compute.buffer ([@any : Int, 3][10, 20, 30] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 3})))
-body := ('k = Par) -> {
-  i := compute.range k.n
-  a := (compute.read ((compute.Read _){.from k.in.w, .at i}) : Int)
-  b := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Int)
-  z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value (a + b)}))})
-}
-k := compute.parallel body "cpu" Out
-out := (compute.plrun k ((Arg){.n 3, .I In{.w w, .x x}}) : Struct)
-compute.collect out.z : Array
-"#;
-
-/// The split matvec: two buffers and two named descriptors, a fold over `w`'s count.
-const MATVEC: &str = r#"
---- compute = import "compute.lichen" ---
-Pair := {.row @any : Int, .column @any : Int}
-Desc := {.shape Pair, .stride Pair, .origin @any : Int}
-In   := {.w (compute.Buf (compute.BufParam{.type Int, .length _})), .x (compute.Buf (compute.BufParam{.type Int, .length _})), .wd Desc, .xd Desc}
-Out  := {.z (compute.Buf (compute.BufParam{.type Int, .length 2}))}
-Par  := {.n @any : Int, .in In}
-Arg  := {.n @any : Int, .I In}
-w := (compute.buffer ([@any : Int, 6][1, 2, 3, 4, 5, 6] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 6})))
-x := (compute.buffer ([@any : Int, 3][1, 1, 1] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 3})))
-body := ('k = Par) -> {
-  i := compute.range k.n
-  wb := k.in.w
-  xb := k.in.x
-  wd := k.in.wd
-  xd := k.in.xd
-  wsr := wd.stride.row
-  wsc := wd.stride.column
-  xsc := xd.stride.column
-  wc := wd.shape.column
-  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (((compute.read ((compute.Read _){.from wb, .at (i * wsr + (s(0) - 1) * wsc)})) : Int) * ((compute.read ((compute.Read _){.from xb, .at ((s(0) - 1) * xsc)})) : Int))))
-  z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value (fold (wc, 0))}))})
-}
-k := compute.parallel body "cpu" Out
-wv := Desc{.shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}, .origin 0}
-xv := Desc{.shape Pair{.row 1, .column 3}, .stride Pair{.row 0, .column 1}, .origin 0}
-out := (compute.plrun k ((Arg){.n 2, .I In{.w w, .x x, .wd wv, .xd xv}}) : Struct)
-compute.collect out.z : Array
-"#;
-
-/// What a program renders, or the diagnostics that refused it.
-fn rendered(body: &str) -> String {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    match lichen_language::run::evaluate_raw(body, None, &mut store) {
-        Ok(text) => text,
-        Err(diagnostics) => format!(
-            "refused: {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.message.clone())
-                .collect::<Vec<_>>()
-        ),
-    }
-}
-
-#[test]
-fn probe_a_named_tensor_parameter() {
-    println!("[two open buffers] {}", rendered(TWO_BUFFERS));
-}
-
-#[test]
-fn probe_a_named_tensor_output() {
-    println!("[split matvec] {}", rendered(MATVEC));
-}
 
 /// The selector mechanism: a closure reads the names, the caller indexes the result.
 ///
