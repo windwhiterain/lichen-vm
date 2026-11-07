@@ -75,7 +75,7 @@ different key. A function, on the other hand, is found by its identity:
 
 ```lichen
 f := 'x -> x
-t := table(f => 1)
+t := table(table{@any, Int})(f => 1)
 t <== f
 ```
 
