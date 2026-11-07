@@ -151,6 +151,23 @@ impl<P: Program> Module<P> {
         })
     }
 
+    /// Every state read that names `path` — the inverse of [`Self::parameter_value_path`].
+    ///
+    /// # Invariant
+    /// A node is a state read when the marked slot's own chain collects to `path`. The
+    /// same state has one read in the loop's body and another at the entry, so **all**
+    /// of them are answered, not the first.
+    pub fn state_nodes(&self, function: FunctionId, path: &[usize]) -> Vec<NodeId> {
+        let Some(slot) = self.functions[function].looping else {
+            return Vec::new();
+        };
+        self.blocks
+            .iter()
+            .flat_map(|(_, block)| block.nodes.iter().copied())
+            .filter(|node| self.marked_state_path(function, *node, slot).as_deref() == Some(path))
+            .collect()
+    }
+
     /// The path into `function`'s parameter value that `node` reads: `[]` the
     /// whole value, `[k]` element `k` of a tuple.
     ///

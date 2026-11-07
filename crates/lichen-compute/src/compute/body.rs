@@ -29,6 +29,21 @@ use super::{
     write_node,
 };
 
+/// The input position a loop state path names: the parameter's path tail.
+fn parallel_buffer_pos_for_state(params: &[ParamSlot], path: &[usize]) -> Option<usize> {
+    for slot in params {
+        let Some(roles) = &slot.roles else {
+            continue;
+        };
+        for (position, input) in roles.inputs.iter().enumerate() {
+            if input.len() > path.len() && input.ends_with(path) {
+                return Some(position);
+            }
+        }
+    }
+    None
+}
+
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
 fn param_classes_of(params: &[ParamSlot]) -> Vec<ScalarClass> {
     params
@@ -69,6 +84,9 @@ pub struct Lower<'a, P: Program> {
     /// A node to the value it produced — **emission happens once**, so a shared
     /// subexpression is computed once.
     values: HashMap<NodeId, ValueId>,
+    /// One frame per active loop instance: a state read binds to its own
+    /// instance's parameters.
+    frames: Vec<HashMap<NodeId, ValueId>>,
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
@@ -117,6 +135,10 @@ pub struct Lower<'a, P: Program> {
     block: usize,
     /// The active `@loop` nests, innermost last.
     loops: Vec<ActiveLoop>,
+    /// A loop parameter to the node the loop entered with: the entry's buffer.
+    loop_entries: HashMap<ValueId, NodeId>,
+    /// A loop header parameter's state path, for its input position.
+    loop_state_paths: HashMap<ValueId, Vec<usize>>,
     /// The declared buffers' lengths, one per declaration, in declaration order.
     ///
     /// # Invariant
@@ -235,6 +257,7 @@ where
             body,
             values: HashMap::new(),
             depth: 0,
+            frames: Vec::new(),
             value_classes: HashMap::new(),
             lowered_path: HashSet::new(),
             origins: HashSet::new(),
@@ -243,6 +266,8 @@ where
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
+            loop_entries: HashMap::new(),
+            loop_state_paths: HashMap::new(),
             declarations: Vec::new(),
             declared: HashMap::new(),
         };
@@ -291,6 +316,7 @@ where
             body,
             values: HashMap::new(),
             depth: 0,
+            frames: Vec::new(),
             value_classes: HashMap::new(),
             lowered_path: HashSet::new(),
             origins: HashSet::new(),
@@ -299,6 +325,8 @@ where
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
+            loop_entries: HashMap::new(),
+            loop_state_paths: HashMap::new(),
             declarations: Vec::new(),
             declared: HashMap::new(),
         };
@@ -331,6 +359,27 @@ where
         result
     }
 
+    /// A node's value: an active loop instance's binding shadows the body's own.
+    fn lookup(&self, node: NodeId) -> Option<ValueId> {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(&node).copied())
+            .or_else(|| self.values.get(&node).copied())
+    }
+
+    /// Bind a node where its lowering runs: an active loop instance is its own frame.
+    fn remember(&mut self, node: NodeId, value: ValueId) {
+        match self.frames.last_mut() {
+            Some(frame) => {
+                frame.insert(node, value);
+            }
+            None => {
+                self.values.insert(node, value);
+            }
+        }
+    }
+
     fn value_inner(&mut self, node: NodeId) -> Result<ValueId, String> {
         // **Inside a `@loop` nest the roles are the binding**: a marked function's read
         // resolves to its block's parameters.
@@ -340,10 +389,10 @@ where
             self.publish_mark(node, value);
             // **The node's value is this block parameter**: its class is the
             // parameter's (`emitted_class`).
-            self.values.insert(node, value);
+            self.remember(node, value);
             return Ok(value);
         }
-        if let Some(&value) = self.values.get(&node) {
+        if let Some(value) = self.lookup(node) {
             return Ok(value);
         }
         if self.depth > MAX_KERNEL_BODY_DEPTH {
@@ -420,7 +469,7 @@ where
             self.block = enclosing;
         }
         self.publish_mark(node, value);
-        self.values.insert(node, value);
+        self.remember(node, value);
         Ok(value)
     }
 
@@ -1349,9 +1398,7 @@ where
         // **A doubled comparison is refused where its value is used**: it is compared
         // twice (`docs/notes/operator-gaps.md`).
         for operand in [left_operand, right_operand] {
-            if let Some(produced) = operand
-                .dynamic()
-                .and_then(|node| self.values.get(&node).copied())
+            if let Some(produced) = operand.dynamic().and_then(|node| self.lookup(node))
                 && self.value_is_doubled_comparison(produced)
             {
                 return Err(DOUBLED_COMPARISON.into());
@@ -1723,7 +1770,10 @@ where
         function: FunctionId,
         conversion: &LoopConversion,
     ) -> Result<ValueId, String> {
-        let slots = self.loop_state(node, conversion)?;
+        let state = self.loop_state(node, conversion)?;
+        let slots: Vec<ValueId> = state.iter().map(|(value, _)| *value).collect();
+        // **The instance's own frame**: state reads bind to this instance's params.
+        self.frames.push(HashMap::new());
         let entry = self.block;
         let header = self.body.add_block();
         for _ in 0..slots.len() {
@@ -1731,9 +1781,10 @@ where
         }
         // **A block parameter's class is its incoming argument's**: a state read is
         // classed by the value it was entered with.
-        for (&slot, &param) in slots
+        for (index, (&slot, &param)) in slots
             .iter()
             .zip(self.body.blocks[header].params.clone().iter())
+            .enumerate()
         {
             // A state slot's class is its entry value's; a read of the slot keeps it.
             let params = self.params.to_vec();
@@ -1745,6 +1796,17 @@ where
             });
             if let Some(class) = class {
                 self.value_classes.insert(param, class);
+            }
+            // The call's argument node is the entry a state read names.
+            let entry_slot = state[index].1;
+            self.loop_state_paths
+                .insert(param, conversion.state[index].clone());
+            for state_node in self
+                .module
+                .state_nodes(conversion.function, &conversion.state[index])
+            {
+                self.remember(state_node, param);
+                self.loop_entries.insert(param, entry_slot);
             }
         }
         let tests: Vec<usize> = (0..conversion.tests.len())
@@ -1811,6 +1873,7 @@ where
             self.loops[enclosing].block = merge;
         }
         self.loops.pop();
+        self.frames.pop();
         // The nest's other blocks take their parameters' classes from the branches
         // reaching them.
         self.propagate_param_classes();
@@ -1866,7 +1929,7 @@ where
         &mut self,
         node: NodeId,
         conversion: &LoopConversion,
-    ) -> Result<Vec<ValueId>, String> {
+    ) -> Result<Vec<(ValueId, NodeId)>, String> {
         let Some(argument) = self.module.operands_of(node).ok().and_then(|operands| {
             operands
                 .get(1)
@@ -1882,7 +1945,8 @@ where
         let value = self.module.expr_value_half(argument).unwrap_or(argument);
         let scalar = conversion.state.len() == 1 && conversion.state[0].is_empty();
         if scalar {
-            return Ok(vec![self.value(value)?]);
+            let lowered = self.value(value)?;
+            return Ok(vec![(lowered, argument)]);
         }
         let elements = unsafe { self.module.array_items(value) }.ok_or_else(|| {
             format!(
@@ -1899,9 +1963,20 @@ where
                 elements.len()
             ));
         }
+        // The call's expression nodes, so a state read resolves to the entry's
+        // argument.
+        let exprs: Vec<NodeId> = unsafe { self.module.array_items(argument) }
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.node.dynamic())
+                    .collect()
+            })
+            .unwrap_or_default();
         elements
             .iter()
-            .map(|element| {
+            .enumerate()
+            .map(|(index, element)| {
                 let element = dynamic(element.node)?;
                 // An element is a complete slot: the entering state is its value.
                 let value = self
@@ -1909,12 +1984,14 @@ where
                     .element_value_node(element.into())
                     .and_then(|node| node.dynamic())
                     .unwrap_or(element);
+                let entry = exprs.get(index).copied().unwrap_or(element);
                 // **A buffer slot is carried as a version token**: a buffer is named, not
                 // emitted (`docs/notes/loop-conversion.md` §6).
                 if super::write_chain_output_pos(self.module, self.params, value)?.is_some() {
-                    return Ok(self.version_token());
+                    return Ok((self.version_token(), entry));
                 }
-                self.value(value)
+                let lowered = self.value(value)?;
+                Ok((lowered, entry))
             })
             .collect()
     }
@@ -2045,8 +2122,8 @@ where
         let AnyNodeId::Dynamic(value) = value else {
             return None;
         };
-        let produced = self.values.get(&value)?;
-        self.value_classes.get(produced).copied()
+        let produced = self.lookup(value)?;
+        self.value_classes.get(&produced).copied()
     }
 
     /// The values a program's own operator reads — its operand array's elements.
@@ -2538,31 +2615,32 @@ where
         // destructuring, so resolve it to the actual buffer node.
         let raw = *buffer;
         let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(raw))?;
-        // **A loop-state read reads the buffer the loop entered with**; the state
-        // parameter is a fresh SSA value.
+        // **A state read names its own entry**: value → param → the call's arg.
         let resolved = buffer
             .dynamic()
-            .and_then(|node| self.values.get(&node).copied())
-            .and_then(|value| {
-                self.loops.iter().rev().find_map(|active| {
-                    active
-                        .block_slots
-                        .iter()
-                        .position(|slot| *slot == value)
-                        .map(|_| active.state)
-                })
-            })
+            .and_then(|node| self.lookup(node))
+            .and_then(|value| self.loop_entries.get(&value).copied())
             .map(AnyNodeId::Dynamic)
             .unwrap_or(buffer);
-        let pos = parallel_buffer_pos(self.module, self.params, resolved)?.ok_or_else(|| {
-            let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
-                Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
-                None => "the parameter declares no inputs".to_string(),
-            };
-            format!(
-                "read's buffer argument is not an input buffer of the parallel parameter ({seen})"
-            )
-        })?;
+        // A loop state read names its slot's path, not a node across clone worlds.
+        let from_state = buffer
+            .dynamic()
+            .and_then(|node| self.lookup(node))
+            .and_then(|value| self.loop_state_paths.get(&value).cloned())
+            .and_then(|path| parallel_buffer_pos_for_state(self.params, &path));
+        let pos = match from_state {
+            Some(pos) => pos,
+            None => parallel_buffer_pos(self.module, self.params, resolved)?
+                .ok_or_else(|| {
+                    let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
+                        Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
+                        None => "the parameter declares no inputs".to_string(),
+                    };
+                    format!(
+                        "read's buffer argument is not an input buffer of the parallel parameter ({seen})"
+                    )
+                })?,
+        };
         // **A read's element class is declared, not inferred**: the tally records it
         // at the position and answers the class.
         let element = self.tally.record_read(pos);
@@ -2736,7 +2814,7 @@ where
         match self.parameter_path_of(target)? {
             Some(slot) => {
                 let value = self.parameter(slot)?;
-                self.values.insert(target, value);
+                self.remember(target, value);
             }
             None => {
                 // **A write to an input buffer is refused by name**: a write fills an output,
