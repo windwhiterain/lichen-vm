@@ -1674,12 +1674,12 @@ fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
 fn a_missed_table_read_names_the_key() {
     // The message is the fix: a reader who cannot ask which entry to add
     // reads the key off the diagnostic.
-    let d = diags("t := table(1 => 10, 2 => 20)\nt <== 7");
+    let d = diags("t := table(table{Int, Int})(1 => 10, 2 => 20)\nt <== 7");
     assert_eq!(
         d[0].message, "table lookup missed — no entry for key 7",
         "an Int key names itself: {d:?}"
     );
-    let d = diags("t := table(\"a\" => 10)\nt <== \"b\"");
+    let d = diags("t := table(table{string, Int})(\"a\" => 10)\nt <== \"b\"");
     assert_eq!(
         d[0].message, "table lookup missed — no entry for key \"b\"",
         "a string key keeps its quotes, so it cannot read as a name: {d:?}"
@@ -1689,7 +1689,7 @@ fn a_missed_table_read_names_the_key() {
 #[test]
 fn a_table_merges_with_the_right_entry_winning() {
     // A duplicate key takes the right entry; a key only one side has survives.
-    let merge = "t := table(1 => 10, 2 => 20) @table_merge table(2 => 21, 3 => 30)
+    let merge = "t := table(table{Int, Int})(1 => 10, 2 => 20) @table_merge table(table{Int, Int})(2 => 21, 3 => 30)
 ";
     assert_eq!(usize_of(&evaluate(&format!("{merge}t <== 1"))), 10);
     assert_eq!(usize_of(&evaluate(&format!("{merge}t <== 2"))), 21);
@@ -1699,13 +1699,13 @@ fn a_table_merges_with_the_right_entry_winning() {
 #[test]
 fn a_table_removal_drops_one_entry_and_names_a_miss() {
     let value = evaluate(
-        "t := table(\"a\" => 10, \"b\" => 20)
+        "t := table(table{string, Int})(\"a\" => 10, \"b\" => 20)
 t2 := t @table_without \"a\"
 t2 <== \"b\"",
     );
     assert_eq!(usize_of(&value), 20);
     let d = diags(
-        "t := table(1 => 10)
+        "t := table(table{Int, Int})(1 => 10)
 t @table_without 7",
     );
     assert_eq!(d[0].message, "table removal missed — no entry for key 7");
@@ -1716,27 +1716,27 @@ fn a_table_counts_and_names_its_keys_by_ordinal() {
     // The stored order is the hash order: distinct ordinals, the two entries.
     assert_eq!(
         usize_of(&evaluate(
-            "t := table(1 => 10, 2 => 20)
+            "t := table(table{Int, Int})(1 => 10, 2 => 20)
 @table_count t"
         )),
         2
     );
     assert_eq!(
         usize_of(&evaluate(
-            "t := table(1 => 10, 2 => 20)
+            "t := table(table{Int, Int})(1 => 10, 2 => 20)
 (@table_key t 0 == @table_key t 1)"
         )),
         0
     );
     assert_eq!(
         usize_of(&evaluate(
-            "t := table(1 => 10, 2 => 20)
+            "t := table(table{Int, Int})(1 => 10, 2 => 20)
 (t <== (@table_key t 0)) + (t <== (@table_key t 1))"
         )),
         30
     );
     let d = diags(
-        "t := table(1 => 10)
+        "t := table(table{Int, Int})(1 => 10)
 @table_key t 5",
     );
     assert_eq!(
@@ -2317,12 +2317,12 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
 #[test]
 fn probe_table_set_template_freshness() {
     for source in [
-        "F := ('x = table{_, Int}) -> x\n(F table(1 => 2), F table(\"a\" => 2))",
-        "G := ('x = set{_}) -> x\n(G set(1), G set(\"a\"))",
+        "F := ('x = table{_, Int}) -> x\n(F table(table{Int, Int})(1 => 2), F table(table{string, Int})(\"a\" => 2))",
+        "G := ('x = set{_}) -> x\n(G set(1), G set(set{string})(\"a\"))",
         "G := ('x = set{_}) -> x
-G set(1, 2)",
+G set(set{Int})(1, 2)",
         "G := ('x = set{Int}) -> x
-G set(\"a\")",
+G set(set{string})(\"a\")",
         "H := ('x = [_, 2]) -> x
 (H [1, 2], H [\"a\", \"b\"])",
     ] {

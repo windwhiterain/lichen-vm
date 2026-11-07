@@ -273,12 +273,20 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: Span,
     },
-    /// `table(k => v)` — a constant table literal; a key that is not
-    /// concrete is dropped with an error.
-    Table(Vec<(Expr, Expr)>, Span),
-    /// `set(a, b)` — a set of ordinary values
-    /// (`docs/notes/operator-polymorphism.md` §3).
-    Set(Vec<Expr>, Span),
+    /// `table(t)(k => v)` — a constant table literal; `t` is a
+    /// `table{kt, vt}` value.
+    Table {
+        ty: Box<Expr>,
+        entries: Vec<(Expr, Expr)>,
+        span: Span,
+    },
+    /// `set(t)(a, b)` — a set of ordinary values whose `t` is a `set{t}`
+    /// value (`docs/notes/operator-polymorphism.md` §3).
+    Set {
+        ty: Box<Expr>,
+        members: Vec<Expr>,
+        span: Span,
+    },
     /// `@shallow e` — a shallow-marked position; `usize::MAX` is the bare form.
     Shallow(Box<Expr>, usize, Span),
     /// `{ stmt; …; expr }` — a scoped block whose value is its final expression.
@@ -422,8 +430,8 @@ impl Expr {
             Expr::StructValue { span, .. } => *span,
             Expr::Array { span, .. } => *span,
             Expr::ArrayInst { span, .. } => *span,
-            Expr::Table(_, s) => *s,
-            Expr::Set(_, s) => *s,
+            Expr::Table { span, .. } => *span,
+            Expr::Set { span, .. } => *span,
             Expr::Shallow(_, _, s) => *s,
             Expr::Block { span, .. } => *span,
             Expr::RecordBlock { span, .. } => *span,

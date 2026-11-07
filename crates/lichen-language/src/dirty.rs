@@ -221,9 +221,15 @@ fn walk(expr: &Expr, deps: &mut Deps) {
                 walk(attribute, deps);
             }
         }
-        Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
+        Expr::Tuple(elements, _) => {
             for element in elements {
                 walk(element, deps);
+            }
+        }
+        Expr::Set { ty, members, .. } => {
+            walk(ty, deps);
+            for member in members {
+                walk(member, deps);
             }
         }
         // `{.a e1, …}`: the struct template's fields.
@@ -254,7 +260,8 @@ fn walk(expr: &Expr, deps: &mut Deps) {
                 walk(element, deps);
             }
         }
-        Expr::Table(entries, _) => {
+        Expr::Table { ty, entries, .. } => {
+            walk(ty, deps);
             for (key, value) in entries {
                 walk(key, deps);
                 walk(value, deps);

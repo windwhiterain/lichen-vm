@@ -96,13 +96,18 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
-    pub(super) fn alloc_set(&mut self, members: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_set(members);
+    pub(super) fn alloc_set(&mut self, ty: ExprId, members: &[ExprId], span: &Span) -> ExprId {
+        let id = self.ir.alloc_set(ty, members);
         self.spans.push(Some(*span));
         id
     }
-    pub(super) fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: &Span) -> ExprId {
-        let id = self.ir.alloc_table(entries);
+    pub(super) fn alloc_table(
+        &mut self,
+        ty: ExprId,
+        entries: &[(ExprId, ExprId)],
+        span: &Span,
+    ) -> ExprId {
+        let id = self.ir.alloc_table(ty, entries);
         self.spans.push(Some(*span));
         id
     }

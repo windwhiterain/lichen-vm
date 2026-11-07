@@ -147,11 +147,11 @@ fn a_layout_constant_prints_with_its_own_type() {
 fn a_set_and_a_table_value_render_their_own_syntax() {
     assert_eq!(output("set(1, 2)"), "set(1, 2): set{Int}");
     assert_eq!(
-        output("table(1 => \"a\")\ntable{Int, string}"),
+        output("table(table{Int, string})(1 => \"a\")\ntable{Int, string}"),
         "table{Int, string}: ?"
     );
     assert_eq!(
-        output("t := table(1 => \"a\")\nt"),
+        output("t := table(table{Int, string})(1 => \"a\")\nt"),
         "table(1 => \"a\"): table{Int, string}"
     );
 }

@@ -521,9 +521,15 @@ impl Resolver {
                     self.resolve_expr(d);
                 }
             }
-            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) => {
                 for el in elems {
                     self.resolve_expr(el);
+                }
+            }
+            Expr::Set { ty, members, .. } => {
+                self.resolve_expr(ty);
+                for member in members {
+                    self.resolve_expr(member);
                 }
             }
             // `{.a e1, …}`: the struct template's fields.
@@ -561,7 +567,8 @@ impl Resolver {
                     }
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
+                self.resolve_expr(ty);
                 for (k, v) in entries {
                     self.resolve_expr(k);
                     self.resolve_expr(v);

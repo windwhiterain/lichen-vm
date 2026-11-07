@@ -125,17 +125,17 @@ fn probe_a_selector_closure() {
 /// evaluated at the use; a miss is `EvalError::TableMiss`, not "undecided".
 const SHAPE_TABLE: &str = r#"
 pick := ('s : (table{Int, Int})) -> s <== 1
-pick (table(1 => 10, 2 => 20))
+pick (table(table{Int, Int})(1 => 10, 2 => 20))
 "#;
 
 const SHAPE_TABLE_MISS: &str = r#"
 pick := ('s : (table{Int, Int})) -> s <== 1
-pick (table(2 => 20))
+pick (table(table{Int, Int})(2 => 20))
 "#;
 
 /// The same selector over a concrete tensor's shape table — the call-site capture.
 const SHAPE_TABLE_CAPTURE: &str = r#"
-shape := table("r0" => 2, "c0" => 3)
+shape := table(table{string, Int})("r0" => 2, "c0" => 3)
 sel := 'i -> shape <== "r0"
 sel 0
 "#;
@@ -168,16 +168,16 @@ fn probe_a_shape_table() {
 /// operands, drop the contracted labels); the second puts that computed shape into a
 /// type and reads a label back through the type — the `contract` result type's question.
 const CONTRACT_SHAPE: &str = r#"
-a := table("r0" => 2, "c0" => 3)
-b := table("r1" => 3, "c1" => 4)
+a := table(table{string, Int})("r0" => 2, "c0" => 3)
+b := table(table{string, Int})("r1" => 3, "c1" => 4)
 c := a @table_merge b @table_without "c0" @table_without "r1"
 (c <== "r0", c <== "c1")
 "#;
 
 const CONTRACT_TYPE: &str = r#"
 Tensor := 's -> {.shape s, .value @any : Int}
-a := table("r0" => 2, "c0" => 3)
-b := table("r1" => 3, "c1" => 4)
+a := table(table{string, Int})("r0" => 2, "c0" => 3)
+b := table(table{string, Int})("r1" => 3, "c1" => 4)
 shape := a @table_merge b @table_without "c0" @table_without "r1"
 t := (Tensor shape){.shape shape, .value 1}
 t.shape <== "r0"

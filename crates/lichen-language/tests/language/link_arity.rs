@@ -166,7 +166,7 @@ static ARITY_OPS: [(&str, &dyn NativeOp<HostProgram>); 1] = [("probe_family", &A
 /// `sphere` and `voxels` are the documented surface — one parameter holding a
 /// tuple, a type argument beside it (`docs/language-spec.md` §442–448).
 /// `one`..`four` are regression readings for an operand of N items.
-const FAMILIES: &str = "scalars := set(Float, Int)\n\
+const FAMILIES: &str = "scalars := set(set{Type})(Float, Int)\n\
     grid_kind := 't -> t @in scalars\n\
     sphere := 'args -> { r := $probe_family(args); r : Int; r }\n\
     voxels := ('t ! grid_kind) -> 'args -> { r := $probe_family(t, args); r : Int; r }\n\

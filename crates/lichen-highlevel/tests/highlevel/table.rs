@@ -80,7 +80,10 @@ fn a_table_literal_checks_and_reads_by_deep_key() {
                 let six = w.int("v1", 4);
                 let a = int_tuple(w, "key_a", &[first, second]);
                 let b = int_tuple(w, "key_b", &[1, 2]);
-                let table = w.table("table", &[(a, three), (b, six)]);
+                let key_ty =
+                    w.type_tuple("key_ty", &[w.int_type("key_ty_0"), w.int_type("key_ty_1")]);
+                let table_ty = w.type_table("table_ty", key_ty, w.int_type("value_ty"));
+                let table = w.table("table", table_ty, &[(a, three), (b, six)]);
                 let probe_key = int_tuple(w, "probe_key", &[first, second]);
                 w.find("read", table, probe_key)
             },
@@ -96,7 +99,8 @@ fn a_table_literal_checks_and_reads_by_deep_key() {
 #[test]
 fn an_empty_table_misses() {
     let found = kinds(|w| {
-        let table = w.table("table", &[]);
+        let table_ty = w.type_table("table_ty", w.int_type("key_ty"), w.int_type("value_ty"));
+        let table = w.table("table", table_ty, &[]);
         let key = w.int("key", 1);
         w.find("read", table, key)
     });
@@ -108,7 +112,9 @@ fn a_miss_is_a_recorded_error() {
     let found = kinds(|w| {
         let three = w.int("three", 3);
         let key = int_tuple(w, "key", &[1, 2]);
-        let table = w.table("table", &[(key, three)]);
+        let key_ty = w.type_tuple("key_ty", &[w.int_type("key_ty_0"), w.int_type("key_ty_1")]);
+        let table_ty = w.type_table("table_ty", key_ty, w.int_type("value_ty"));
+        let table = w.table("table", table_ty, &[(key, three)]);
         let miss = int_tuple(w, "miss", &[7, 8]);
         w.find("read", table, miss)
     });
@@ -120,7 +126,8 @@ fn an_undecided_key_is_dropped_with_an_error() {
     // The table is built eagerly, so an undecided key cannot be hashed.
     let found = kinds(|w| {
         let x = w.param("x");
-        let table = w.table("table", &[(x, w.int("one", 1))]);
+        let table_ty = w.type_table("table_ty", w.int_type("key_ty"), w.int_type("value_ty"));
+        let table = w.table("table", table_ty, &[(x, w.int("one", 1))]);
         let f = w.lam("f", x, table);
         w.app("call", f, w.int("five", 5))
     });
@@ -139,7 +146,19 @@ fn table_keys_share_one_type() {
         let four = w.int("four", 4);
         let short = int_array(w, "short_key", &[1, 2]);
         let long = w.tuple("long_key", &[w.int("one", 1), w.int("two", 2), three]);
-        w.table("table", &[(short, w.int("v0", 3)), (long, four)])
+        w.table(
+            "table",
+            w.type_table(
+                "table_ty",
+                w.type_array(
+                    "key_ty",
+                    w.int_type("key_ty_element"),
+                    w.int("key_ty_len", 2),
+                ),
+                w.int_type("value_ty"),
+            ),
+            &[(short, w.int("v0", 3)), (long, four)],
+        )
     });
     assert!(
         found.contains(&DiagKind::TableKey),
@@ -153,7 +172,19 @@ fn table_values_share_one_type() {
         let key = int_array(w, "key", &[1, 2]);
         let other = int_array(w, "other_key", &[4, 5]);
         let type_value = w.int_type("type_value");
-        w.table("table", &[(key, w.int("v0", 3)), (other, type_value)])
+        w.table(
+            "table",
+            w.type_table(
+                "table_ty",
+                w.type_array(
+                    "key_ty",
+                    w.int_type("key_ty_element"),
+                    w.int("key_ty_len", 2),
+                ),
+                w.int_type("value_ty"),
+            ),
+            &[(key, w.int("v0", 3)), (other, type_value)],
+        )
     });
     assert!(
         found.contains(&DiagKind::TableValue),
@@ -181,7 +212,8 @@ fn a_table_flows_through_a_function() {
     let answer = value_of(
         |w| {
             let x = w.param("x");
-            let table = w.table("table", &[(w.int("key", 1), x)]);
+            let table_ty = w.type_table("table_ty", w.int_type("key_ty"), w.int_type("value_ty"));
+            let table = w.table("table", table_ty, &[(w.int("key", 1), x)]);
             let f = w.lam("f", x, table);
             let applied = w.app("applied", f, w.int("five", 5));
             w.find("read", applied, w.int("probe_key", 1))
@@ -202,7 +234,7 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
             let value_ty = w.int_type("value_ty");
             let table_ty = w.type_table("table_ty", key_ty, value_ty);
             let get = w.lam_typed("get", t, Some(table_ty), body, false);
-            let table = w.table("table", &[(w.int("key", 1), w.int("seven", 7))]);
+            let table = w.table("table", table_ty, &[(w.int("key", 1), w.int("seven", 7))]);
             w.app("call", get, table)
         },
         "call",
@@ -216,7 +248,11 @@ fn a_failed_read_key_never_phantom_matches() {
     let found = kinds(|w| {
         let source_key = int_array(w, "source_key", &[1, 2]);
         let out_of_bounds = w.index("source_read", source_key, w.int("five", 5));
-        let table = w.table("table", &[(out_of_bounds, w.int("three", 3))]);
+        let table = w.table(
+            "table",
+            w.type_table("table_ty", w.int_type("key_ty"), w.int_type("value_ty")),
+            &[(out_of_bounds, w.int("three", 3))],
+        );
         let probe_source = int_array(w, "probe_source", &[9]);
         let bad = w.index("probe_key", probe_source, w.int("seven", 7));
         w.find("read", table, bad)

@@ -133,10 +133,17 @@ pub(crate) fn shift_expr(
                 shift_expr(attribute, old_starts, new_starts, delta);
             }
         }
-        Expr::Tuple(elements, span) | Expr::Set(elements, span) => {
+        Expr::Tuple(elements, span) => {
             shift(span, old_starts, new_starts, delta);
             for element in elements {
                 shift_expr(element, old_starts, new_starts, delta);
+            }
+        }
+        Expr::Set { ty, members, span } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(ty, old_starts, new_starts, delta);
+            for member in members {
+                shift_expr(member, old_starts, new_starts, delta);
             }
         }
         Expr::TypeSet(element, span) => {
@@ -188,8 +195,9 @@ pub(crate) fn shift_expr(
                 shift_expr(element, old_starts, new_starts, delta);
             }
         }
-        Expr::Table(entries, span) => {
+        Expr::Table { ty, entries, span } => {
             shift(span, old_starts, new_starts, delta);
+            shift_expr(ty, old_starts, new_starts, delta);
             for (key, value) in entries {
                 shift_expr(key, old_starts, new_starts, delta);
                 shift_expr(value, old_starts, new_starts, delta);

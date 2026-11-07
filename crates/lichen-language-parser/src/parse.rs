@@ -1253,7 +1253,7 @@ fn paren_fields<'a, Er: GrammarError<'a>>(
 /// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value.
 fn paren<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LParen)
         .ignore_then(expr.clone())
@@ -1334,11 +1334,11 @@ fn struct_value<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// `(k => v, …)` — the body of a constant table literal, `=>` separating the
-/// expr unambiguously.
+/// `(t)(k => v, …)` — the type argument, then the body of a constant table
+/// literal with `=>` separating each entry.
 fn table_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let entry = expr
         .clone()
@@ -1360,21 +1360,46 @@ fn table_value_atom<'a, Er: GrammarError<'a>>(
             }
         });
     token(TokenKind::LParen)
-        .ignore_then(comma_list(entry))
+        .ignore_then(expr.clone())
         .then_ignore(token(TokenKind::RParen))
-        .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
+        .then(
+            // The entry list's `(` is preceded by a `Glue` token; skip it.
+            token(TokenKind::Glue)
+                .ignored()
+                .or_not()
+                .ignore_then(token(TokenKind::LParen))
+                .ignore_then(comma_list(entry))
+                .then_ignore(token(TokenKind::RParen)),
+        )
+        .map_with(|(ty, (entries, _)), me| Expr::Table {
+            ty: Box::new(ty),
+            entries,
+            span: span_at(tokens, me.span().start),
+        })
 }
 
-/// `(a, b, …)` — a set of ordinary values, comma-separated like an array
-/// literal's (`set{E}` spells the set *type*).
+/// `(t)(a, b, …)` — a set's type argument, then its members.
 fn set_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LParen)
-        .ignore_then(comma_list(expr))
+        .ignore_then(expr.clone())
         .then_ignore(token(TokenKind::RParen))
-        .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
+        .then(
+            // The member list's `(` is preceded by a `Glue` token; skip it.
+            token(TokenKind::Glue)
+                .ignored()
+                .or_not()
+                .ignore_then(token(TokenKind::LParen))
+                .ignore_then(comma_list(expr))
+                .then_ignore(token(TokenKind::RParen)),
+        )
+        .map_with(|(ty, (members, _)), me| Expr::Set {
+            ty: Box::new(ty),
+            members,
+            span: span_at(tokens, me.span().start),
+        })
 }
 
 /// `{E}` — the body of the set type, holding the element **slot**.

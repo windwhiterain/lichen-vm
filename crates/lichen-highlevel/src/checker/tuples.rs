@@ -49,7 +49,17 @@ where
             } => (Some(value), type_expr),
             _ => (None, el),
         };
-        let denotation = self.type_denotation(type_expr, None);
+        // A compound value used as a type denotes its own type; a bare type
+        // atom denotes itself.
+        let denotation = match self.ir[type_expr].kind {
+            ExprKind::Tuple(_)
+            | ExprKind::ArrayInst { .. }
+            | ExprKind::Table { .. }
+            | ExprKind::Set { .. } => self.state[type_expr]
+                .ty
+                .expect("a type expression is compiled"),
+            _ => self.type_denotation(type_expr, None),
+        };
         // A slot's attributes are the **element's**: `5 : Int # 2` is one
         // annotation, so the type child holds none of them.
         let attrs = self.element_attr_slots(el);

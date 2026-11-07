@@ -332,9 +332,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.range(name, elements, ExprKind::Tuple)
     }
 
-    /// `name = set{a, b, …}`.
-    pub fn set(&self, name: &str, members: &[ExprId]) -> ExprId {
-        let range = self.push_children(members);
+    /// `name = set{T}(a, b, …)`: the type argument, then the members.
+    pub fn set(&self, name: &str, ty: ExprId, members: &[ExprId]) -> ExprId {
+        let mut children = Vec::with_capacity(members.len() + 1);
+        children.push(ty);
+        children.extend_from_slice(members);
+        let range = self.push_children(&children);
         self.named(name, ExprKind::Set(range))
     }
 
@@ -343,17 +346,27 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.range(name, &[element], ExprKind::TypeSet)
     }
 
+    /// `name = {T1, T2, …}` — a tuple type: the tuple of its element types.
+    pub fn type_tuple(&self, name: &str, elements: &[ExprId]) -> ExprId {
+        self.tuple(name, elements)
+    }
+
+    /// `name = [T, n]` — an array type: the element type and the length.
+    pub fn type_array(&self, name: &str, element: ExprId, length: ExprId) -> ExprId {
+        self.array_template(name, element, length)
+    }
+
     /// `name = table{K, V}`.
     pub fn type_table(&self, name: &str, key: ExprId, value: ExprId) -> ExprId {
         self.range(name, &[key, value], ExprKind::TypeTable)
     }
 
-    /// `name = table(k => v, …)` — keys and values interleaved.
-    pub fn table(&self, name: &str, entries: &[(ExprId, ExprId)]) -> ExprId {
-        let interleaved: Vec<ExprId> = entries
-            .iter()
-            .flat_map(|&(key, value)| [key, value])
-            .collect();
+    /// `name = table{K, V}(k => v, …)`: the type argument, then the keys and
+    /// values interleaved.
+    pub fn table(&self, name: &str, ty: ExprId, entries: &[(ExprId, ExprId)]) -> ExprId {
+        let mut interleaved = Vec::with_capacity(entries.len() * 2 + 1);
+        interleaved.push(ty);
+        interleaved.extend(entries.iter().flat_map(|&(key, value)| [key, value]));
         self.range(name, &interleaved, ExprKind::Table)
     }
 

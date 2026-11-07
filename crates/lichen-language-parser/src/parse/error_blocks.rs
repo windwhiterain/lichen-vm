@@ -102,9 +102,15 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(r, out);
                 }
             }
-            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) => {
                 for el in elems {
                     walk_expr(el, out);
+                }
+            }
+            Expr::Set { ty, members, .. } => {
+                walk_expr(ty, out);
+                for member in members {
+                    walk_expr(member, out);
                 }
             }
             Expr::TypeSet(element, _) => walk_expr(element, out),
@@ -137,7 +143,8 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(e, out);
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
+                walk_expr(ty, out);
                 for (k, v) in entries {
                     walk_expr(k, out);
                     walk_expr(v, out);

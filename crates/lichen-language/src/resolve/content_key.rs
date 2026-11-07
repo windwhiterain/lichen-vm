@@ -390,8 +390,9 @@ impl KeyWriter<'_> {
                     self.expr(el);
                 }
             }
-            Expr::Set(members, _) => {
+            Expr::Set { ty, members, .. } => {
                 self.u(35);
+                self.expr(ty);
                 self.u(members.len() as u64);
                 for member in members {
                     self.expr(member);
@@ -443,8 +444,9 @@ impl KeyWriter<'_> {
                     self.expr(&f.value);
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
                 self.u(20);
+                self.expr(ty);
                 self.u(entries.len() as u64);
                 for (k, v) in entries {
                     self.expr(k);

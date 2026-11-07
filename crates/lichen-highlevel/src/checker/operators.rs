@@ -53,9 +53,11 @@ where
                 if !self.type_is_concrete(right_ty) && !self.is_loop_state(right) {
                     return self.refuse_undecided_container(e, right, right_ty, "set membership");
                 }
-                // A set's type is the shared kind; the element rides in the value.
+                // A set's type value states the element in its shape; the type
+                // itself is the shared kind.
                 let set_ty = self.kind_expr(self.current_block, self.markers.set_type_marker);
-                self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
+                let right_kind = self.stated_type(right_ty);
+                self.check_unify(right_kind, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
             // `a @table_merge b` — both operands are tables of one key/value
             // type, and the result is that table type.
@@ -166,25 +168,51 @@ where
             return Err(self.refuse_undecided_container(e, container, container_ty, read));
         }
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
-        // The value is `[key slot, value slot, raw table]`: the slots state the
-        // type, as an array's element slot does.
-        let container_value = self.value_of(container);
-        let key = self.slot_type_at(container_value, 0);
-        let value = self.slot_type_at(container_value, 1);
+        let value_kind = self.stated_type(container_ty);
+        self.check_unify(value_kind, kind, self.loc(container, 1), DiagKind::Guard);
+        // The type value is `[key slot, value slot]`; its slots state the K/V.
+        let shape = self.stated_shape(container_ty);
+        let key = self.slot_type_at(shape, 0);
+        let value = self.slot_type_at(shape, 1);
         Ok((key, value, kind))
     }
 
+    /// The shape a type value states — the expr's [`shape::EXPR_VALUE_SLOT`].
+    pub(super) fn stated_shape(&mut self, ty: NodeId) -> NodeId {
+        crate::shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(ty),
+            crate::shape::EXPR_VALUE_SLOT,
+        )
+        .and_then(|node| node.dynamic())
+        .unwrap_or_else(|| self.fresh_cell())
+    }
+
+    /// The type a type value states — the expr's [`shape::EXPR_TYPE_SLOT`].
+    pub(super) fn stated_type(&mut self, ty: NodeId) -> NodeId {
+        crate::shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(ty),
+            crate::shape::EXPR_TYPE_SLOT,
+        )
+        .and_then(|node| node.dynamic())
+        .unwrap_or_else(|| self.fresh_cell())
+    }
+
     /// The type of a compound value's slot at `at`.
-    fn slot_type_at(&mut self, container_value: NodeId, at: usize) -> NodeId {
+    pub(super) fn slot_type_at(&mut self, container_value: NodeId, at: usize) -> NodeId {
         let index = self.usize_node(at);
         let (_, _, ty) = self.value_slot_read(container_value, index, Some(at));
         ty
     }
 
-    /// The `table{K, V}` type whose slots are `key` and `value`.
-    pub(super) fn table_type(&mut self, _key: NodeId, _value: NodeId) -> NodeId {
-        self.kind_expr(self.current_block, self.markers.table_type_marker)
+    /// The `table{K, V}` type value whose slots are `key` and `value`.
+    pub(super) fn table_type(&mut self, key: NodeId, value: NodeId) -> NodeId {
+        let key = self.element_slot(None, Some(key), None);
+        let value = self.element_slot(None, Some(value), None);
+        let shape = self.array_node(self.current_block, &[key, value]);
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
+        self.slot_expr(self.current_block, shape, kind)
     }
 
     /// The class two arithmetic operands share, and the assert that keeps it a numeric one.

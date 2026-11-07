@@ -329,34 +329,48 @@ where
     /// type; the separate kind keeps a set from flowing into an `array{T, n}`
     /// and makes `s[i]` a refusal. See [`crate::set`].
     pub(super) fn check_set_term(&mut self, e: ExprId) -> NodeId {
-        let members = self.range_children(e);
+        let children = self.range_children(e);
+        let ty_expr = children[0];
+        let members = &children[1..];
+        // The type argument is the instance's type: members unify with its
+        // element slot.
+        self.check_expr(ty_expr);
+        let ty_node = self.state[ty_expr]
+            .term
+            .expect("the type argument is compiled");
+        let shape = self.stated_shape(ty_node);
+        // The type argument states the element `template`: a member matches it
+        // by the directed unify, as an array element does.
+        let element_template = self.template_at(shape, 0);
         let mut vals = Vec::new();
-        let element_ty = self.fresh_cell();
-        for &member in &members {
+        for &member in members {
             self.check_expr(member);
-            // An element is a complete slot: the term is the value expr.
-            vals.push(self.state[member].term.expect("a member is compiled"));
-            // Found = the member's type, expected = the shared cell: a set is
-            // homogeneous, exactly like an array.
+            let member_term = self.state[member].term.expect("a member is compiled");
+            vals.push(member_term);
             self.check_unify(
-                self.state[member].ty.unwrap(),
-                element_ty,
+                member_term,
+                element_template,
                 self.loc(member, 1),
                 DiagKind::ArrayElement,
             );
         }
         // A set is `[t, @raw Set(members)]`: the template then the raw members.
-        let element = self.element_slot(None, Some(element_ty), None);
+        let element = element_template;
         let raw = self.array_node(self.current_block, &vals);
         let mask = [false, false];
         let value = self.array_instance_node(self.current_block, &[element, raw], &mask);
-        let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let ty_node = kind;
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         expr
+    }
+
+    /// The template slot a type value's shape holds at `at`.
+    fn template_at(&mut self, shape: NodeId, at: usize) -> NodeId {
+        crate::shape::value_item(&self.module, AnyNodeId::Dynamic(shape), at)
+            .and_then(|node| node.dynamic())
+            .unwrap_or_else(|| self.fresh_cell())
     }
 
     /// A constant table literal `table(k1 => v1, …)`, typed by
@@ -368,9 +382,20 @@ where
     /// which drops an entry whose key is not concrete and records
     /// [`EvalError::TableKeyUndecided`] instead.
     pub(super) fn check_table_term(&mut self, e: ExprId) -> NodeId {
-        let entries = self.range_children(e);
-        let key_ty = self.fresh_cell();
-        let value_ty = self.fresh_cell();
+        let children = self.range_children(e);
+        let ty_expr = children[0];
+        let entries = &children[1..];
+        // The type argument is the instance's type: its key and value slots
+        // type every entry.
+        self.check_expr(ty_expr);
+        let ty_node = self.state[ty_expr]
+            .term
+            .expect("the type argument is compiled");
+        let shape = self.stated_shape(ty_node);
+        // The type argument states the key and value templates; an entry
+        // unifies with them.
+        let key_template = self.template_at(shape, 0);
+        let value_template = self.template_at(shape, 1);
         let mut exprs = Vec::with_capacity(entries.len() / 2);
         for chunk in entries.chunks(2) {
             let (key, value) = (chunk[0], chunk[1]);
@@ -383,14 +408,14 @@ where
                 AnyNodeId::Dynamic(self.value_of(value)),
             ));
             self.check_unify(
-                self.state[key].ty.unwrap(),
-                key_ty,
+                self.state[key].term.expect("a key is compiled"),
+                key_template,
                 self.loc(key, 1),
                 DiagKind::TableKey,
             );
             self.check_unify(
-                self.state[value].ty.unwrap(),
-                value_ty,
+                self.state[value].term.expect("a value is compiled"),
+                value_template,
                 self.loc(value, 1),
                 DiagKind::TableValue,
             );
@@ -401,12 +426,9 @@ where
             None,
             Some(P::Value::from(LowValue::Table(table))),
         );
-        // A table is `[key slot, value slot, raw table]`; the type is the kind.
-        let key = self.element_slot(None, Some(key_ty), None);
-        let value_slot = self.element_slot(None, Some(value_ty), None);
-        let value = self.array_node(self.current_block, &[key, value_slot, raw]);
-        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let ty_node = kind;
+        // A table is `[key slot, value slot, raw table]`; its type is the type
+        // argument.
+        let value = self.array_node(self.current_block, &[key_template, value_template, raw]);
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);

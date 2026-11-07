@@ -33,8 +33,8 @@ body := ('p = Par) -> {
   ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value (fold (p.meta.k, 0.0))}))})
 }
 kernel := compute.parallel body "cpu" Out
-a_shape := table("r0" => 2, "c0" => 6)
-b_shape := table("r1" => 6, "c1" => 2)
+a_shape := table(table{string, Int})("r0" => 2, "c0" => 6)
+b_shape := table(table{string, Int})("r1" => 6, "c1" => 2)
 c_shape := a_shape @table_merge b_shape @table_without "c0" @table_without "r1"
 out := (compute.plrun kernel ((Arg){.meta Meta{.n ((c_shape <== "r0") * (c_shape <== "c1")), .k (a_shape <== "c0"), .c1 (c_shape <== "c1"), .ar (a_shape <== "c0"), .ac 1, .br (b_shape <== "c1"), .bc 1}, .I In{.a data.a, .b data.b}}) : Struct)
 (compute.collect out.c : Array, c_shape <== "r0", c_shape <== "c1")

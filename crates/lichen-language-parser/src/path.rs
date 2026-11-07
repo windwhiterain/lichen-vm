@@ -180,9 +180,16 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 push_index(&mut out, 4, refinement);
             }
         }
-        Expr::Tuple(elements, _) | Expr::Set(elements, _) => {
+        Expr::Tuple(elements, _) => {
             for (i, element) in elements.iter().enumerate() {
                 push_index(&mut out, i as u32, element);
+            }
+        }
+        Expr::Set { ty, members, .. } => {
+            // The type argument reserves slot 0, so the members start at 1.
+            push_index(&mut out, 0, ty);
+            for (i, member) in members.iter().enumerate() {
+                push_index(&mut out, i as u32 + 1, member);
             }
         }
         Expr::StructValue { fields, .. } => {
@@ -220,10 +227,12 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 push_index(&mut out, i as u32 + 1, element);
             }
         }
-        Expr::Table(entries, _) => {
+        Expr::Table { ty, entries, .. } => {
+            // The type argument reserves slot 0, so the entries start at 1.
+            push_index(&mut out, 0, ty);
             for (i, (key, value)) in entries.iter().enumerate() {
-                push_index(&mut out, 2 * i as u32, key);
-                push_index(&mut out, 2 * i as u32 + 1, value);
+                push_index(&mut out, 2 * i as u32 + 1, key);
+                push_index(&mut out, 2 * i as u32 + 2, value);
             }
         }
         Expr::TypeSet(element, _) => push_index(&mut out, 0, element),

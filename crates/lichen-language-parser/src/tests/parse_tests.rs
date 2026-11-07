@@ -241,8 +241,8 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         Expr::StructInst { fields, .. } if fields.len() == 2
     ));
     assert!(matches!(
-        parse_ok("table(1 => 2,\n3 => 4)"),
-        Expr::Table(entries, _) if entries.len() == 2
+        parse_ok("table(table{Int, Int})(1 => 2,\n3 => 4)"),
+        Expr::Table { entries, .. } if entries.len() == 2
     ));
     // The two *type* forms write their slots in braces, one per line.
     assert!(matches!(
@@ -792,7 +792,7 @@ fn the_table_prefix_operators_parse_by_arity() {
 #[test]
 fn an_at_in_membership_test_parses_at_the_comparison_level() {
     // `a @in S` — the left operand is the application (it binds tighter).
-    let e = parse_ok("type_of v @in set(Int, Float)");
+    let e = parse_ok("type_of v @in set(set{Type})(Int, Float)");
     let Expr::BinOp {
         operator: BinOp::In,
         left,
@@ -806,10 +806,10 @@ fn an_at_in_membership_test_parses_at_the_comparison_level() {
         matches!(*left, Expr::Apply { .. }),
         "`type_of v` is the left operand"
     );
-    assert!(matches!(*right, Expr::Set(..)));
+    assert!(matches!(*right, Expr::Set { .. }));
     // Left-associative at the comparison rung: `x @in S == 1` is
     // `(x @in S) == 1`.
-    let e = parse_ok("Int @in set(Int) == 1");
+    let e = parse_ok("Int @in set(set{Type})(Int) == 1");
     assert!(matches!(
         e,
         Expr::BinOp {

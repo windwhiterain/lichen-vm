@@ -844,18 +844,22 @@ impl Compiler {
                 let value = self.compile_expr(value);
                 self.alloc_type_table(key, value, span)
             }
-            Expr::Table(entries, span) => {
-                // Each entry's key and value are their own nodes; the exprs feed the Table kind.
+            Expr::Table { ty, entries, span } => {
+                // The type argument compiles first; each entry's key and value
+                // are their own nodes.
+                let ty = self.compile_expr(ty);
                 let mut exprs = Vec::with_capacity(entries.len());
                 for (key, value) in entries {
                     exprs.push((self.compile_expr(key), self.compile_expr(value)));
                 }
-                self.alloc_table(&exprs, span)
+                self.alloc_table(ty, &exprs, span)
             }
-            Expr::Set(members, span) => {
-                // The members compile like array elements; the kind makes it a set.
+            Expr::Set { ty, members, span } => {
+                // The type argument compiles first; the members follow it like
+                // array elements.
+                let ty = self.compile_expr(ty);
                 let ids = self.compile_all(members);
-                self.alloc_set(&ids, span)
+                self.alloc_set(ty, &ids, span)
             }
             Expr::Shallow(inner, _, _) => {
                 // A mark outside an instance's element list has no carrier, so

@@ -955,17 +955,21 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc(ExprKind::Unify { actual, expected })
     }
 
-    /// Allocate a set literal: the members are variadic children, and the kind
-    /// alone decides the type.
-    pub fn alloc_set(&mut self, members: &[ExprId]) -> ExprId {
-        self.alloc_variadic(members, ExprKind::Set)
+    /// Allocate a set literal: the type argument, then the members, as
+    /// variadic children.
+    pub fn alloc_set(&mut self, ty: ExprId, members: &[ExprId]) -> ExprId {
+        let mut elements = Vec::with_capacity(members.len() + 1);
+        elements.push(ty);
+        elements.extend_from_slice(members);
+        self.alloc_variadic(&elements, ExprKind::Set)
     }
 
-    /// Allocate a constant table literal, interleaved entry by entry.
-    pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)]) -> ExprId {
+    /// Allocate a constant table literal: the type argument, then the entries
+    /// interleaved entry by entry.
+    pub fn alloc_table(&mut self, ty: ExprId, entries: &[(ExprId, ExprId)]) -> ExprId {
         let range = extend_range(
             &mut self.children,
-            entries.iter().flat_map(|&(key, value)| [key, value]),
+            std::iter::once(ty).chain(entries.iter().flat_map(|&(key, value)| [key, value])),
         );
         self.alloc(ExprKind::Table(range))
     }
