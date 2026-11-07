@@ -4,8 +4,9 @@
 //!
 //! `A` is 4x2 and `B` is 2x3 (lengths 8 and 6, which the language's own parameter cannot
 //! state); the contraction over `c0`/`r1` answers `A·B` as `C{r0,c1}`:
-//! `[5, 8, 11, 11, 18, 25, 17, 28, 39, 23, 38, 53]`. The step's free values are the `In`'s
-//! `.a` and `.b` in declaration order; the shape-table leaves are computed at check time.
+//! `[5, 8, 11, 11, 18, 25, 17, 28, 39, 23, 38, 53]`. The step's free values are the
+//! `GArg`'s `.in`'s `.a` and `.b` in declaration order; the shape-table leaves are computed at
+//! check time.
 
 use std::process::ExitCode;
 
@@ -21,6 +22,7 @@ Out := {.c (compute.Buf (compute.BufParam{.type Float, .length 12}))}
 Meta := {.n @any : Int, .k @any : Int, .c1 @any : Int, .ar @any : Int, .ac @any : Int, .br @any : Int, .bc @any : Int}
 Par  := {.meta Meta, .in In}
 Arg  := {.meta Meta, .I In}
+GArg := {.in In}
 body := ('p = Par) -> {
   i := compute.range p.meta.n
   row := i / p.meta.c1
@@ -33,9 +35,9 @@ kernel := compute.parallel body "gpu" Out
 a_shape := table(table{string, Int})("r0" => 4, "c0" => 2)
 b_shape := table(table{string, Int})("r1" => 2, "c1" => 3)
 c_shape := a_shape @table_merge b_shape @table_without "c0" @table_without "r1"
-step := 's : In -> {
+step := 's = GArg -> {
   meta := Meta{.n ((c_shape <== "r0") * (c_shape <== "c1")), .k (a_shape <== "c0"), .c1 (c_shape <== "c1"), .ar (a_shape <== "c0"), .ac 1, .br (b_shape <== "c1"), .bc 1}
-  out := (compute.plrun kernel ((Arg){.meta meta, .I In{.a s.a, .b s.b}}) : Struct)
+  out := (compute.plrun kernel ((Arg){.meta meta, .I In{.a s.in.a, .b s.in.b}}) : Struct)
   out.c
 }
 built := compute.graph step

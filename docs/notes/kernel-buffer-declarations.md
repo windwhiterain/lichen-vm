@@ -182,8 +182,9 @@ The direct pair the probes used to run is **gone with `compute.buffer`**: the mo
 host-level `compute.buf` is kernel-only. The live input paths are the fill kernel (the
 committed contraction probe) and the serve's host `RunArgument`s.
 
-The serve example `contract_direct.rs` now hands one prepared step two host buffers of
-different lengths (8 and 6) directly. It reaches a **language** case, not a buffer one: the
-step's annotated direct template (`s : In`, `Arg`'s `.I In`) is refused with
-`expected Struct, found In` — the per-use session's annotated-template case. The top-level
-fill contraction and the compute suite are unaffected.
+The serve example `contract_direct.rs` hands one prepared step two host buffers of different
+lengths (8 and 6) directly and answers `[5, 8, 11, 11, 18, 25, 17, 28, 39, 23, 38, 53]`. Its
+first spellings were wrong in two spec'd places, both recorded in the example: the step's
+domain is the struct signature's `=` form (`'s = GArg ->`, not the `: ` annotation, which
+replaces the attribute), and the graph's ABI wants the buffers under `.in`
+(`GArg := {.in In}`).

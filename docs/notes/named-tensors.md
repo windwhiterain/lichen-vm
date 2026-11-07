@@ -549,6 +549,7 @@ the one fold. Its input buffers come from a fill kernel. The direct spelling the
 and `collect` only, so `compute.buffer` is a missing field; a host-level `compute.buf` is
 kernel-only. The JIT's metadata now comes from `.type`/`.length`, and the native `$buf_type`
 is removed entirely (`Buf`'s `.native` is a plain `@any` slot). The serve example
-`contract_direct.rs` hands the step two host buffers of different lengths directly; it reaches
-the **language's** annotated direct template (`s : In`, `Arg`'s `.I In`) and is refused with
-`expected Struct, found In` — the per-use session's case, not the buffer type.
+`contract_direct.rs` hands one prepared step two host buffers of different lengths directly
+and answers `[5, 8, 11, 11, 18, 25, 17, 28, 39, 23, 38, 53]`. The two spelling lessons are
+the spec's: the step's domain is `'s = GArg ->` (the struct signature's `=`), not the `: `
+annotation, and the graph's ABI wants the buffers under `.in`.
