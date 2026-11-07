@@ -76,13 +76,16 @@ body := ('p = Par) -> {
   }
   base_a := decode_a (rank, i, 0)
   base_b := decode_b (rank, i, 0)
-  @loop dot := 'u -> if u(0) == 0 then u(1) else {
-    j := u(0) - 1
-    ca := address_a (contract, j, 0, p.in.plan, rank, contract)
-    cb := address_b (contract, j, 0, p.in.plan, rank, contract)
-    dot (u(0) - 1, (u(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (base_a + ca)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at (base_b + cb)}) : Float))))
+  fold := 'w -> {
+    @loop dot := 'u -> if u(0) == 0 then u(1) else {
+      j := u(0) - 1
+      ca := address_a (contract, j, 0, p.in.plan, rank, contract)
+      cb := address_b (contract, j, 0, p.in.plan, rank, contract)
+      dot (u(0) - 1, (u(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (base_a + ca)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at (base_b + cb)}) : Float))))
+    }
+    dot (p.meta.total, 0.0)
   }
-  value := dot (p.meta.total, 0.0)
+  value := fold 0
   o := compute.buf (compute.BufParam{.type Float, .length p.meta.n})
   ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value value}))})
 }
