@@ -528,9 +528,10 @@ What remains:
    whose cost is unmeasured.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
-3. **A language-level two-operand run with different lengths** still hits the per-use cell
-   (§4); a same-length pair works (the probe's fill), and the host path passes `RunArgument`s.
-   The serve contraction is host-driven.
+3. **The direct input spelling is open.** Two top-level `compute.buffer` values with the
+   `compute.Buf` annotation in a struct literal refuse on dev after the per-use fixes (the
+   gather probe refuses the same way, silently); the fill kernel is the working spelling, and
+   the host path passes `RunArgument`s. The serve contraction is host-driven.
 4. **The output** is a flat `Buf`; the caller wraps it with the result shape (the split form
    measured working).
 5. **The contracted extents' equality** is a value comparison: check-time when literal, the
@@ -541,6 +542,12 @@ What remains:
 `[91, 112, 217, 274]`, with `C`'s shape `{r0: 2, c1: 2}` from `merge`/`without`
 (`zz_contract_probe`). The kernel is plan-specialized: the extent, the contraction and both
 pitches are scalar leaves in the proven `.meta`/`.in` parameter, and the address unfolds inside
-the one fold. Its input buffers come from a fill kernel; a top-level `compute.buffer` value
-carrying the `compute.Buf` annotation into a struct field still meets the per-use cell (the
-other session's), while the fill kernel's two same-length buffers work.
+the one fold. Its input buffers come from a fill kernel. The direct spelling is still open:
+a top-level `compute.buffer` carrying the `compute.Buf (BufParam{...})` annotation into a struct
+literal refuses (`no field with this name in the struct type Struct`,
+`expected Struct, found Buf`) at the annotation and at the field reads — on dev **after** the
+per-use fixes (`01936889`, `6626901f`), and the pre-existing gather probe (print-only, so the
+suite counted it as a pass) refuses the same way. Without the annotation the second
+`compute.buffer` misses the module's `buffer` key (`table lookup missed — no entry for key
+"buffer"`). The fill kernel's two buffers work, and the kernel body's formal chain reads
+(`p.meta.n`, `p.in.a`) are not the failing part.
