@@ -315,6 +315,60 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         }
     }
 
+    /// The selector position a node names, live or frozen.
+    fn read_position(&self, item: AnyNodeId) -> Option<usize> {
+        match item {
+            AnyNodeId::Dynamic(node) => self.module.usize_value(node),
+            AnyNodeId::Static(sref) => match self
+                .module
+                .static_read(sref)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::USize(value)) => Some(value),
+                _ => None,
+            },
+        }
+    }
+
+    /// Element `k` of an array node, in the array's own graph.
+    fn item_of(&self, array: AnyNodeId, k: usize) -> Option<AnyNodeId> {
+        self.operand_items(array)?.get(k).copied()
+    }
+
+    /// Whether a node is the language's conditional or a view, in either graph.
+    fn selection_of(&self, node: AnyNodeId) -> Option<Selection> {
+        let (operator, operand) = self.node_operation(node)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let items = self.operand_items(operand?)?;
+        let (target, index) = (items.first()?, items.get(1)?);
+        if let Some(position) = self.read_position(*index) {
+            if let Some(element) = self.item_of(*target, position) {
+                return match element {
+                    AnyNodeId::Dynamic(element) => Some(Selection::Views(element)),
+                    AnyNodeId::Static(_) => None,
+                };
+            }
+            // A computed target at index 0 is a `value_of` peel: the result is the
+            // expr's value, so it names the operator.
+            if position == 0
+                && let AnyNodeId::Dynamic(target) = target
+                && self.node_operation(AnyNodeId::Dynamic(*target)).is_some()
+            {
+                return Some(Selection::Views(*target));
+            }
+            return None;
+        }
+        match self.operand_items(*target) {
+            Some(items) if items.len() >= 2 => Some(Selection::Computed),
+            _ => None,
+        }
+    }
+
     /// The function a `node`'s apply names, in either graph.
     fn callee_function(&self, node: AnyNodeId) -> Option<crate::AnyFunctionId> {
         let (operator, operand) = self.node_operation(node)?;
@@ -729,8 +783,9 @@ impl<P: Program> Spine<'_, P> {
         // (`docs/notes/loop-conversion.md`).
         let mut selection = selection;
         let mut seen = HashSet::new();
+        let graph = LoopGraph::new(self.module);
         while seen.insert(selection) {
-            match self.module.selection_of(selection) {
+            match graph.selection_of(AnyNodeId::Dynamic(selection)) {
                 Some(Selection::Views(view)) => selection = view,
                 _ => break,
             }
