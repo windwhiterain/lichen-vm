@@ -48,8 +48,10 @@ application bound the container, and the apply bound the value only
 
 `field_read_kinds.rs::a_formal_field_read_is_checked_against_the_argument_at_the_call`
 — the program above must be refused, and the message must name `Int` and
-`string`. The existing `field_read_kinds` refusals still pass: the tuple, array
-and table reads and the unresolved field read are unchanged.
+`string`. Its sibling `a_nested_formal_field_read_resolves_in_order` pins the
+chain (`x.a.b` answers `7: Int`). The existing `field_read_kinds` refusals still
+pass: the tuple, array and table reads and the unresolved field read are
+unchanged.
 
 ## 4. What slice 1 does not do
 
@@ -57,9 +59,9 @@ and table reads and the unresolved field read are unchanged.
   two structs whose field types differ unifies the same cell twice; the second
   application conflicts. Per-call cells — the spec's per-application clone of
   the body's check state — are slice 2.
-- **Nested reads stay deferred and refused.** In `x.a.b`, the outer read's
-  container is `x.a`, a read, not the formal; `direct` is false and the read is
-  refused. Slice 2 resolves the chain in order.
+- **Nested reads resolve while the chain is written inline.** `x.a.b`'s outer
+  read resolves from the inner read's field value, in order. A chain broken by a
+  local binding (`v := x.a; v.b`) is not rooted at the formal and is refused.
 - **The body beyond the read is still checked once.** The reconciliation covers
   the type the read's cell was bound to, not an independent re-check of every
   body expression per call.
@@ -69,9 +71,10 @@ and table reads and the unresolved field read are unchanged.
 
 1. **landed** — a direct formal field read deferred to the call and reconciled
    against the argument's value; an unresolved read refused at the end.
-2. Per-call cells for the deferred read (polymorphism): clone the read's type
+2. **landed** — a formal-rooted read chain (`x.a.b`) resolves in order: the
+   inner read's field value is the outer's container.
+3. Per-call cells for the deferred read (polymorphism): clone the read's type
    cell per application, as the signature clone does.
-3. Nested formal reads (`x.a.b`) resolved in order.
 4. The general per-application body check: the spec's `@clone` of the body's
    check state, if the body's own operations prove they need it.
 5. The unapplied policy, recursion, `@loop`, Check mode, and the diagnostics.

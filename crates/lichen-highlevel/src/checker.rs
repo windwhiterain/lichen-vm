@@ -147,8 +147,12 @@ struct DeferredFieldRead {
     read_loc: Loc,
     /// The container's location, which the undecided-read refusal names.
     container_loc: Loc,
-    /// Whether the container is the formal itself (slice 1 resolves these).
+    /// Whether the container is the formal itself.
     direct: bool,
+    /// The read's container expression: a nested read's chain is keyed by it.
+    container: ExprId,
+    /// The read's own expression, the key a nested read looks up.
+    expr: ExprId,
 }
 
 pub struct Checker<P: HighProgram + 'static>
@@ -221,8 +225,8 @@ where
     /// The formal field reads whose container type only the call decides.
     ///
     /// # Invariant
-    /// A direct formal's read is reconciled at each application and removed; one
-    /// no call resolved is refused at the end, exactly the undecided-read ruling
+    /// A formal-rooted read is reconciled at the call in chain order and removed;
+    /// one no call resolved is refused at the end, the undecided-read ruling
     /// (`docs/notes/per-application-body.md`).
     deferred_field_reads: HashMap<FunctionId, Vec<DeferredFieldRead>>,
     /// The attributes a body requires of its own parameter, replayed at each apply.
@@ -1294,22 +1298,21 @@ where
         }
     }
 
-    /// The field's declared type from a container's **type value**, the read the
-    /// call reconciles against.
-    fn resolved_field_type(
+    /// The field's declared type and value from a container's value.
+    fn resolved_field(
         &mut self,
         container_value: NodeId,
         name: &'static str,
-    ) -> Option<NodeId> {
+    ) -> Option<(NodeId, NodeId)> {
         let table = self.struct_name_table(container_value)?;
         let at = self.module.name_table_index(table, name)?;
         let index = self.usize_node(at + crate::shape::STRUCT_VALUE_FIELD_BASE);
-        let (_, _, ty) = self.value_slot_read(
+        let (_, value, ty) = self.value_slot_read(
             container_value,
             index,
             Some(at + crate::shape::STRUCT_VALUE_FIELD_BASE),
         );
-        Some(ty)
+        Some((ty, value))
     }
 
     /// Refuse every formal read no call resolved: the undecided-read ruling.

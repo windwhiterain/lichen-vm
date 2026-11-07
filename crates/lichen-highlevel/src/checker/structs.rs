@@ -274,6 +274,8 @@ where
                     read_loc: self.loc(e, 0),
                     container_loc: self.loc(container, 1),
                     direct: root == container,
+                    container,
+                    expr: e,
                 };
                 self.deferred_field_reads
                     .entry(function)

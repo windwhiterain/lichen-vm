@@ -265,6 +265,7 @@ site. The exploit above now refuses with `expected Int, found string`, measured
 by `field_read_kinds.rs::a_formal_field_read_is_checked_against_the_argument_at_the_call`.
 
 The refusal remains for a read no application resolves (the unapplied function),
-and for every form not rooted at a direct formal: the tuple/array/table reads and
-the nested `x.a.b` chain. [per-application-body](per-application-body.md) carries
+and for every form not rooted at a formal: the tuple/array/table reads, and a
+field chain broken by a local binding. An inline chain (`x.a.b`) resolves in
+order. [per-application-body](per-application-body.md) carries
 the slices that widen the deferral.

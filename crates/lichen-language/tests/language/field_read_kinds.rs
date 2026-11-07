@@ -56,6 +56,20 @@ f (S{.a \"s\"})",
     );
 }
 
+/// The chain: the outer read resolves from the inner's field value.
+#[test]
+fn a_nested_formal_field_read_resolves_in_order() {
+    assert_eq!(
+        output(
+            "Inner := {.b @any : Int}
+Outer := {.a @any}
+             h := 'o => { a := o.a.b; a }
+h (Outer{.a Inner{.b 7}})"
+        ),
+        "7: Int"
+    );
+}
+
 // --- `a(k)` is the tuple read --------------------------------------------
 
 /// A parameter container: the read is refused where it is checked, because

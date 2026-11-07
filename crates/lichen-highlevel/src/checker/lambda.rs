@@ -564,15 +564,24 @@ where
                     && let Some(reads) = self.deferred_field_reads.remove(&function)
                 {
                     let argument_value = self.value_of(argument);
+                    let mut resolved: std::collections::HashMap<ExprId, (NodeId, NodeId)> =
+                        std::collections::HashMap::new();
                     let mut remaining = Vec::new();
                     for read in reads {
-                        if !read.direct {
+                        let container_value = if read.direct {
+                            Some(argument_value)
+                        } else {
+                            resolved.get(&read.container).map(|&(_, value)| value)
+                        };
+                        let Some(container_value) = container_value else {
                             remaining.push(read);
                             continue;
-                        }
-                        let field_ty = self.resolved_field_type(argument_value, read.name);
-                        if let Some(field_ty) = field_ty {
+                        };
+                        if let Some((field_ty, field_value)) =
+                            self.resolved_field(container_value, read.name)
+                        {
                             self.check_unify(field_ty, read.ty, read.read_loc, DiagKind::Guard);
+                            resolved.insert(read.expr, (field_ty, field_value));
                         } else {
                             remaining.push(read);
                         }
