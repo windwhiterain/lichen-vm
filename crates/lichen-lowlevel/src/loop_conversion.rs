@@ -117,6 +117,200 @@ pub struct LoopExit {
     pub value: NodeId,
 }
 
+/// One view over the graphs the loop analysis reads, live and frozen.
+///
+/// # Invariant
+/// A frozen function is read in its **own** module's graph (the [`StaticModule`]
+/// its ref names), never through a dynamic `FunctionId`: an id is module-local,
+/// and a frozen module has its own arena.
+struct LoopGraph<'a, P: Program> {
+    module: &'a Module<P>,
+}
+
+impl<'a, P: Program> LoopGraph<'a, P> {
+    fn new(module: &'a Module<P>) -> Self {
+        Self { module }
+    }
+
+    /// The function's body nodes, in its own graph.
+    fn function_nodes(&self, function: crate::AnyFunctionId) -> Vec<AnyNodeId> {
+        match function {
+            crate::AnyFunctionId::Dynamic(function) => self.module.functions[function]
+                .nodes
+                .iter()
+                .copied()
+                .map(AnyNodeId::Dynamic)
+                .collect(),
+            crate::AnyFunctionId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                frozen.functions[sref.index.0]
+                    .nodes
+                    .iter()
+                    .map(|&index| {
+                        AnyNodeId::Static(crate::StaticNodeId {
+                            module: sref.module,
+                            index,
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// The function that lexically encloses `function`.
+    fn function_parent(&self, function: crate::AnyFunctionId) -> Option<crate::AnyFunctionId> {
+        match function {
+            crate::AnyFunctionId::Dynamic(function) => self.module.functions[function]
+                .parent
+                .map(crate::AnyFunctionId::Dynamic),
+            crate::AnyFunctionId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                frozen.functions[sref.index.0].parent.map(|parent| {
+                    crate::AnyFunctionId::Static(crate::StaticFunctionRef {
+                        module: sref.module,
+                        index: parent,
+                    })
+                })
+            }
+        }
+    }
+
+    /// Whether the function carries the `@loop` mark, and its state slot.
+    fn function_looping(&self, function: crate::AnyFunctionId) -> Option<usize> {
+        match function {
+            crate::AnyFunctionId::Dynamic(function) => self.module.functions[function].looping,
+            crate::AnyFunctionId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                frozen.functions[sref.index.0].looping
+            }
+        }
+    }
+
+    /// The node's operation and its operand node, in the node's own graph.
+    fn node_operation(&self, node: AnyNodeId) -> Option<(P::Operator, Option<AnyNodeId>)> {
+        match node {
+            AnyNodeId::Dynamic(node) => self.module.node_operation(node).map(|operation| {
+                (
+                    operation.operator,
+                    operation.operand.map(AnyNodeId::Dynamic),
+                )
+            }),
+            AnyNodeId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                frozen.static_operation(sref.index).map(|operation| {
+                    (
+                        operation.operator,
+                        operation.operand.map(|index| {
+                            AnyNodeId::Static(crate::StaticNodeId {
+                                module: sref.module,
+                                index,
+                            })
+                        }),
+                    )
+                })
+            }
+        }
+    }
+
+    /// The array items of `node`, in the node's own graph.
+    fn operand_items(&self, node: AnyNodeId) -> Option<Vec<AnyNodeId>> {
+        match node {
+            AnyNodeId::Dynamic(node) => {
+                // SAFETY: the node is a live node of this module.
+                let items = unsafe { self.module.array_items(node) }?;
+                Some(items.iter().map(|item| item.node).collect())
+            }
+            AnyNodeId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                let items = frozen.static_array_items(sref.index)?;
+                Some(
+                    items
+                        .into_iter()
+                        .map(|index| {
+                            AnyNodeId::Static(crate::StaticNodeId {
+                                module: sref.module,
+                                index,
+                            })
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// The value behind `node`, through the module's static facade.
+    fn node_value(&self, node: AnyNodeId) -> Option<P::Value> {
+        self.module.node_value(node)
+    }
+
+    /// The representative of `node`'s equality class, in the node's own graph.
+    fn class_root(&self, node: AnyNodeId) -> AnyNodeId {
+        match node {
+            AnyNodeId::Dynamic(node) => AnyNodeId::Dynamic(self.module.class_root(node)),
+            AnyNodeId::Static(sref) => {
+                let frozen = self.module.static_module(sref.module);
+                AnyNodeId::Static(crate::StaticNodeId {
+                    module: sref.module,
+                    index: frozen.static_class_root(sref.index),
+                })
+            }
+        }
+    }
+
+    /// The function a `node`'s apply names, in either graph.
+    fn callee_function(&self, node: AnyNodeId) -> Option<crate::AnyFunctionId> {
+        let (operator, operand) = self.node_operation(node)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operator),
+            Some(LowOperator::Apply)
+        ) {
+            return None;
+        }
+        let items = self.operand_items(operand?)?;
+        let callee = *items.first()?;
+        let value = self
+            .node_value(callee)
+            .or_else(|| self.node_value(self.class_root(callee)))?;
+        match AsEnum::<LowValue>::as_enum(&value) {
+            Some(LowValue::Function(function)) => Some(function),
+            _ => None,
+        }
+    }
+
+    /// Whether `h` is `g` or a closure nested in it.
+    fn nested_in(&self, h: crate::AnyFunctionId, g: crate::AnyFunctionId) -> bool {
+        let mut owner = Some(h);
+        while let Some(current) = owner {
+            if current == g {
+                return true;
+            }
+            owner = self.function_parent(current);
+        }
+        false
+    }
+
+    /// The marked functions `g`'s template subtree applies to — the edges of
+    /// the marked call graph, live and frozen.
+    fn marked_callees_of(&self, g: crate::AnyFunctionId) -> Vec<crate::AnyFunctionId> {
+        let mut out = Vec::new();
+        for h in self.module.functions.keys() {
+            let h = crate::AnyFunctionId::Dynamic(h);
+            if !self.nested_in(h, g) {
+                continue;
+            }
+            for node in self.function_nodes(h) {
+                if let Some(callee) = self.callee_function(node)
+                    && self.function_looping(callee).is_some()
+                    && !out.contains(&callee)
+                {
+                    out.push(callee);
+                }
+            }
+        }
+        out
+    }
+}
+
 impl<P: Program> Module<P> {
     /// The live function a frozen `@loop` callee names; `None` when it carries no
     /// mark.
@@ -358,27 +552,22 @@ impl<P: Program> Module<P> {
     /// ride the node or its equality class: the checker substitutes through
     /// unification.
     pub fn callee_function(&self, node: NodeId) -> Option<FunctionId> {
-        let operation = self.node_operation(node)?;
-        if !matches!(
-            AsEnum::<LowOperator>::as_enum(&operation.operator),
-            Some(LowOperator::Apply)
-        ) {
-            return None;
+        match self.graph().callee_function(AnyNodeId::Dynamic(node))? {
+            crate::AnyFunctionId::Dynamic(function) => Some(function),
+            crate::AnyFunctionId::Static(_) => None,
         }
-        let callee = *self.operands_of(node).ok()?.first()?;
-        let value = self
-            .node_value(AnyNodeId::Dynamic(callee))
-            .or_else(|| self.nodes[self.class_root(callee)].value)?;
-        match AsEnum::<LowValue>::as_enum(&value) {
-            Some(LowValue::Function(crate::AnyFunctionId::Dynamic(f))) => Some(f),
-            _ => None,
-        }
+    }
+
+    /// The graph view this module reads, live and frozen functions alike.
+    fn graph(&self) -> LoopGraph<'_, P> {
+        LoopGraph::new(self)
     }
 
     /// The marked component `function` belongs to: the `@loop` functions
     /// that reach it and reach back.
     fn loop_component(&self, function: FunctionId) -> Vec<FunctionId> {
-        let reachable = |from: FunctionId| {
+        let graph = self.graph();
+        let reachable = |from: crate::AnyFunctionId| {
             let mut seen = vec![];
             let mut stack = vec![from];
             while let Some(g) = stack.pop() {
@@ -386,7 +575,7 @@ impl<P: Program> Module<P> {
                     continue;
                 }
                 seen.push(g);
-                for callee in self.marked_callees_of(g) {
+                for callee in graph.marked_callees_of(g) {
                     if !seen.contains(&callee) {
                         stack.push(callee);
                     }
@@ -394,41 +583,15 @@ impl<P: Program> Module<P> {
             }
             seen
         };
-        let forward = reachable(function);
-        forward
+        let function = crate::AnyFunctionId::Dynamic(function);
+        reachable(function)
             .into_iter()
             .filter(|&g| reachable(g).contains(&function))
+            .filter_map(|g| match g {
+                crate::AnyFunctionId::Dynamic(function) => Some(function),
+                crate::AnyFunctionId::Static(_) => None,
+            })
             .collect()
-    }
-
-    /// The marked functions `g`'s template subtree applies to — the edges of
-    /// the marked call graph.
-    fn marked_callees_of(&self, g: FunctionId) -> Vec<FunctionId> {
-        let mut out = Vec::new();
-        for h in self.functions.keys() {
-            // `h` contributes when it is `g` itself or a closure nested in it.
-            let mut owner = Some(h);
-            let mut nested = false;
-            while let Some(current) = owner {
-                if current == g {
-                    nested = true;
-                    break;
-                }
-                owner = self.functions[current].parent;
-            }
-            if !nested {
-                continue;
-            }
-            for &node in &self.functions[h].nodes {
-                if let Some(callee) = self.callee_function(node)
-                    && self.functions[callee].looping.is_some()
-                    && !out.contains(&callee)
-                {
-                    out.push(callee);
-                }
-            }
-        }
-        out
     }
 }
 
