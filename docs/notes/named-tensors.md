@@ -526,17 +526,21 @@ the gap.
 
 What remains:
 
-1. **The dynamic-rank body is not yet writable.** `zz_dynamic_contract_probe` builds it and
-   refuses: the address fold inside the contraction fold's step cannot read the enclosing plan
-   (its SSA read lands in a block the entry does not dominate), the plan cannot ride the fold's
-   carried state (a non-scalar carried state, `loop-conversion.md` section 4), and carrying the
-   plan's entries as scalar state reaches a second dominance refusal at the second decode call.
-   The loop conversion's rule 2 now admits a `Buf` (a loop-invariant type and payload, a scalar
-   length), so the plan can ride the fold's state (`01e72b04`). The carry then reaches the
-   kernel's role walk, which refuses a read whose `.from` is the loop's state parameter: it is
-   not one of the parallel parameter's input buffers (`[[1, 0], [1, 1], [1, 2]]`). Teaching
-   the role walk that a state `Buf` is its parameter's buffer, then the wasm loop reader and
-   the device emitter, is the next step.
+1. **The dynamic-rank body is not yet writable.** `zz_dynamic_contract_probe` builds it and is
+   still refused, but the plan now rides the fold's `Buf` state and **passes the kernel's role
+   walk**. The loop conversion admits a loop-invariant `Buf` (`01e72b04`); the compute lowering
+   gives each loop instance its own value frame and re-seeds a block's state bindings when the
+   nest enters it (`f1699103`, `4e55fca7`); and a state read resolves value -> parameter -> the
+   call's argument (`110b6163`, `6ffce226`). The remaining refusal is the enclosing `dot` fold:
+   a `@loop` lambda at a kernel body's top level is applied through a **static/frozen** callee,
+   so `apply`'s frozen branch inlines it and its body hits a block-0 dominance refusal; the
+   freeze copies no `@loop` mark onto `StaticFunction` at the time it runs. The infrastructure
+   for a frozen conversion is in place (`StaticFunction.looping`,
+   `StaticModule.dynamic_functions`, `Module::static_dynamic_function`, and the `apply`
+   branch), but the frozen functions carry no mark. Wrapping the dot in a lambda template makes
+   the callee dynamic and converts the dot; the next refusal is then the frozen residual's
+   index placement: the inlined callee's parameter reads do not place against the caller's
+   domain (`parameter_path`'s base never matches the clone's parameter node).
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
 3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The
