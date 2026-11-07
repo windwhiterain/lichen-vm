@@ -2,11 +2,10 @@
 //!
 //! # Invariant
 //!
-//! Print-only, and currently refused. The plan holds four entries of (A stride, B stride,
-//! extent): `r0`/`c2` (the output dims) then `c0`/`c1` (the contraction), and the kernel decodes
-//! the linear output index through the first `rank` entries and folds the contraction through
-//! the rest. The fold inside the contraction's step is what measures the loop conversion's
-//! limits; `docs/notes/named-tensors.md` section 11 records the three refusals.
+//! Print-only, currently refused. The plan is four (A stride, B stride, extent) entries:
+//! `r0`/`c2` then `c0`/`c1`. The kernel decodes through the first `rank` entries and folds the
+//! contraction through the rest; the fold inside the step meets the loop conversion's
+//! non-scalar state and dominance limits, which `named-tensors.md` section 11 records.
 
 use lichen_compute::language::new_store;
 
