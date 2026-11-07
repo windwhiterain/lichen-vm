@@ -560,13 +560,35 @@ impl<P: Program> Spine<'_, P> {
             if matches!(
                 self.module.structural_value(*element),
                 Some(LowValue::Array(_) | LowValue::Function(_) | LowValue::Table(_))
-            ) {
+            ) && !self.carries_buffer(*element)
+            {
                 return Err(LoopRefusal::StateShape);
             }
         }
         let index = self.steps.len();
         self.steps.push(LoopStep { apply, next });
         Ok(index)
+    }
+
+    /// Whether `value` is a `Buf`: the struct whose `.native` payload is the `$buf` operator.
+    ///
+    /// # Invariant
+    /// The lowlevel cannot name the compute's operator type (the dependency runs the other
+    /// way), so the payload's debug label is the witness: `Buf` is the `$buf` op and nothing
+    /// else. A plain array's items carry no such operator.
+    fn carries_buffer(&self, value: NodeId) -> bool {
+        // SAFETY: `value` is a live node of the module.
+        let Some(items) = (unsafe { self.module.array_items(value) }) else {
+            return false;
+        };
+        items
+            .iter()
+            .filter_map(|item| match item.node {
+                AnyNodeId::Dynamic(node) => Some(node),
+                AnyNodeId::Static(_) => None,
+            })
+            .filter_map(|node| self.module.node_operation(node))
+            .any(|operation| format!("{:?}", operation.operator) == "Buf")
     }
 
     /// A base case: the branch's value half.

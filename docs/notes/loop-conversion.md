@@ -303,7 +303,7 @@ the two ceilings of §1 invisibly, which is the defect class
 | # | Rule | Why this one |
 |---|---|---|
 | 1 | Every recursive apply **in the cycle** is in **tail position** | a non-tail call forces a frame and poisons the whole nest's register allocation — measured, §2 |
-| 2 | Every carried value is a **kernel scalar** — `LowShape::USize` or `Float` | the carried value must live in a native local; a heap node cannot be a loop register. [`LowShape`](../../crates/lichen-lowlevel/src/lib.rs) already exists for exactly this read. **This rule also discharges what a strictness rule would have said** — see §5 |
+| 2 | Every carried value is a **kernel scalar** — `LowShape::USize` or `Float` — **or a `Buf`** whose `.type` and `.native` are loop-invariant and whose `.length` is a scalar | the carried value must live in a native local; a heap node cannot be a loop register. [`LowShape`](../../crates/lichen-lowlevel/src/lib.rs) already exists for exactly this read. **The `Buf` case is the plan buffer** a dynamic-rank kernel carries: its type and payload are the same every trip (rule 3 hoists them), and only the length rides a register — `lichen-compute`'s `zz_dynamic_contract_probe` measures it. **This rule also discharges what a strictness rule would have said** — see §5 |
 | 3 | The closure's **captured environment is loop-invariant**, and is hoisted out of the nest | otherwise the nest is not single-entry and the "outermost level" has no meaning |
 | 4 | **Strict**: the header's test is a forced comparison, and no lazy `~` crosses an iteration | the deepest obstacle, and lichen-specific — see §5 |
 | 5 | The component's **size is capped** (a compile-time constant) | a device wants statically shaped control flow; the depth is a property of the program, not of the data |
@@ -333,8 +333,9 @@ The chain, in the order it had to be unwound:
 **So adding `CondBr` does not add a semantics — it gives the source semantics
 back.** And with it the obligation disappears: the untaken arm does not exist, so
 there is nothing to force and no thunk to carry across an iteration boundary. The
-residue is rule 2, which already says the carried values are kernel scalars: a
-scalar on a register has no forcing time to get wrong.
+residue is rule 2, which already says the carried values are kernel scalars (or a
+loop-invariant `Buf`): a scalar on a register has no forcing time to get wrong, and the
+buffer's type and payload are the same every trip by rule 2's own condition.
 
 The cost of this finding is small and the benefit is large: the conversion's
 hardest-sounding rule was never a rule, and the flat IR — the thing Stage 1
