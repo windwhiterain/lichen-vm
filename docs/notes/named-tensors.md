@@ -526,9 +526,13 @@ the gap.
 
 What remains:
 
-1. **The dynamic-rank body is now writable**, because the address fold may sit in the
-   contraction fold's step. What it still wants is a plan buffer and the coordinate decode,
-   whose cost is unmeasured.
+1. **The dynamic-rank body is not yet writable.** `zz_dynamic_contract_probe` builds it and
+   refuses: the address fold inside the contraction fold's step cannot read the enclosing plan
+   (its SSA read lands in a block the entry does not dominate), the plan cannot ride the fold's
+   carried state (a non-scalar carried state, `loop-conversion.md` section 4), and carrying the
+   plan's entries as scalar state reaches a second dominance refusal at the second decode call.
+   The next step is the loop conversion's non-scalar state or the lowering's dominance, not the
+   program's spelling.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
 3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The

@@ -58,6 +58,7 @@ mod zz_nested_loop_probe;
 mod zz_tensor_probe;
 
 mod zz_argmax_probe;
+mod zz_dynamic_contract_probe;
 mod zz_dynamic_trip_probe;
 mod zz_fold_struct_probe;
 mod zz_fold_type_probe;
