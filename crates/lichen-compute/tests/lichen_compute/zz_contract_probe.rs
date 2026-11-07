@@ -57,63 +57,6 @@ fn probe_a_two_dimensional_contraction() {
     }
 }
 
-/// Two top-level `compute.buffer` values in a struct literal's fields.
-///
-/// # Invariant
-/// Print-only while the shape is open. The pair and the struct literal are the whole
-/// program; a refusal names the annotation or the field, not the contraction.
-const DIRECT_PAIR: &str = r#"
---- compute = import "compute.lichen" ---
-In := {.a (compute.Buf (compute.BufParam{.type Float, .length 4})), .b (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-a := (compute.buffer ([@any : Float, 4][1.0, 2.0, 3.0, 4.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length 4})))
-b := (compute.buffer ([@any : Float, 2][10.0, 20.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length 2})))
-x := (In){.a a, .b b}
-(compute.read ((compute.Read _){.from x.a, .at 0}) : Float, compute.read ((compute.Read _){.from x.b, .at 1}) : Float)
-"#;
-
-#[test]
-fn probe_a_direct_buffer_pair() {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    match lichen_language::run::evaluate_raw(DIRECT_PAIR, None, &mut store) {
-        Ok(text) => println!("[direct pair] {text}"),
-        Err(diagnostics) => println!(
-            "[direct pair] refused: {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
-                .collect::<Vec<_>>()
-        ),
-    }
-}
-
-/// The same pair through `compute.buf`, the wrapper the kernel bodies use.
-///
-/// # Invariant
-/// Check-only. The values are the wrapper's, not the array upload's, so a refusal here names
-/// the `Buf` type application, not the `buffer` native.
-const BUF_WRAPPER: &str = r#"
---- compute = import "compute.lichen" ---
-In := {.a (compute.Buf (compute.BufParam{.type Float, .length 4})), .b (compute.Buf (compute.BufParam{.type Float, .length 2}))}
-a := (compute.buf (compute.BufParam{.type Float, .length 4})) : (compute.Buf (compute.BufParam{.type Float, .length 4}))
-b := (compute.buf (compute.BufParam{.type Float, .length 2})) : (compute.Buf (compute.BufParam{.type Float, .length 2}))
-x := (In){.a a, .b b}
-x.a.length
-"#;
-
-#[test]
-fn probe_a_buf_wrapper_field() {
-    let report = common::check(BUF_WRAPPER);
-    println!(
-        "[buf wrapper] ok={} {:?}",
-        report.ok(),
-        report
-            .diagnostics
-            .iter()
-            .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
-            .collect::<Vec<_>>()
-    );
-}
-
 /// `compute.Buf` without the `.native` field: the same application and struct literal.
 ///
 /// # Invariant

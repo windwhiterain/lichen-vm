@@ -1,7 +1,9 @@
 # Kernels declare buffers; the pack places them
 
-> Status: **current design**, being implemented (the work is on a branch, not yet
-> merged into `dev`).
+> Status: **implemented**. The metadata comes from a buffer's `.type`/`.length`
+> (`476a352f`), and the array-to-buffer conversion is gone (`compute.buffer`). The branch this
+> line used to name (`serve-frontier`, `17d40c36`) is merged, and `bd360fac` standardized the
+> `Buf` surface to `@any : $buf_type(...)`.
 > Supersedes the `.out`-as-a-parameter-group model in
 > [compute-kernel-struct](compute-kernel-struct.md)'s "The parallel parameter struct".
 > Points at: `crates/lichen-compute/src/compute.lichen` (`BufParam`, `Buf`, `buf`),
@@ -175,9 +177,8 @@ fallback and `buffer_shape` / `is_buffer_type_any` are gone), and the compute su
 (250 tests). The fill kernel and the `buf` declaration path carry the metadata in those
 fields and work.
 
-The **legacy `compute.buffer`** (the array-to-buffer conversion this note already removes)
-still refuses the direct pair: its `.native` field carries the `$buf_type` term in the value
-slot, and a `compute.buffer` value's `.native` is that term rather than a `$buf` payload —
-the `buf` wrapper's is the payload. The direct top-level pair therefore still fails while the
-fill path answers; the remaining fix is the `.native` / payload placement in the new design,
-not the JIT's metadata read.
+The direct pair the probes used to run is **gone with `compute.buffer`**: the module has
+`buf` and `collect` only, so `compute.buffer` is a missing field on the module, and a
+host-level `compute.buf` is kernel-only. The live input paths are the fill kernel (the
+committed contraction probe) and the serve's host `RunArgument`s. The "expected Struct, found
+Buf" refusals were that removed operator, not the application/unify.

@@ -528,10 +528,10 @@ What remains:
    whose cost is unmeasured.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
-3. **The direct input spelling is open.** Two top-level `compute.buffer` values with the
-   `compute.Buf` annotation in a struct literal refuse on dev after the per-use fixes (the
-   gather probe refuses the same way, silently); the fill kernel is the working spelling, and
-   the host path passes `RunArgument`s. The serve contraction is host-driven.
+3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The
+   array-to-buffer conversion (`compute.buffer`) is removed; a host-level `compute.buf` is
+   kernel-only. The fill kernel is the language-level path; the serve's contraction is
+   host-driven.
 4. **The output** is a flat `Buf`; the caller wraps it with the result shape (the split form
    measured working).
 5. **The contracted extents' equality** is a value comparison: check-time when literal, the
@@ -542,26 +542,10 @@ What remains:
 `[91, 112, 217, 274]`, with `C`'s shape `{r0: 2, c1: 2}` from `merge`/`without`
 (`zz_contract_probe`). The kernel is plan-specialized: the extent, the contraction and both
 pitches are scalar leaves in the proven `.meta`/`.in` parameter, and the address unfolds inside
-the one fold. Its input buffers come from a fill kernel. The direct spelling is still open:
-a top-level `compute.buffer` carrying the `compute.Buf (BufParam{...})` annotation into a struct
-literal refuses (`no field with this name in the struct type Struct`,
-`expected Struct, found Buf`) at the annotation and at the field reads — on dev **after** the
-per-use fixes (`01936889`, `6626901f`), and the pre-existing gather probe (print-only, so the
-suite counted it as a pass) refuses the same way. Without the annotation the second
-`compute.buffer` misses the module's `buffer` key (`table lookup missed — no entry for key
-"buffer"`). The fill kernel's two buffers work, and the kernel body's formal chain reads
-(`p.meta.n`, `p.in.a`) are not the failing part.
-
-**The failing element is `Buf`'s `.native` field**, not the language's application path: the
-same function, module and struct literal **without** `.native` check (`Box2`, `ok=true`), and
-the core reduction (`probe_a_type_application_field`, a function over a parameter struct whose
-body reads its fields, applied in a type position and placed in a struct literal) checks as
-well. The `buffer` native is not the trigger — the `buf` wrapper fails identically.
-`Buf`'s `.native @any : $buf_type(x.type, x.length)` carries a native type term, and that
-term's per-use application and unify is what differs. The ruling: the JIT takes the element type and
-length from the buffer's `.type`/`.length`; `walk_role` now does (the `$buf_type` fallback
-and `buffer_shape`/`is_buffer_type_any` are gone) and the compute suite passes (250). What
-still refuses the direct pair is the **legacy `compute.buffer`**: its `.native` carries the
-`$buf_type` term in the value slot, and its buffer value's `.native` is that term, not a
-`$buf` payload (`buf`'s is). `kernel-buffer-declarations.md` removes that conversion; the fill
-kernel is the path, and it works.
+the one fold. Its input buffers come from a fill kernel. The direct spelling the probes used is **gone with `compute.buffer`**: the buffer-declarations
+design removes the array-to-buffer conversion, so the module has `buf` and `collect` only and
+`compute.buffer` is a missing field (`no field with this name in the struct type Struct`); a
+host-level `compute.buf` is kernel-only. The live input paths are the fill kernel (this probe)
+and the serve's host `RunArgument`s. The JIT's metadata now comes from `.type`/`.length`
+(`476a352f`), so the native type is a kind marker only; the earlier "expected Struct, found
+Buf" refusals were the removed operator, not the application/unify.
