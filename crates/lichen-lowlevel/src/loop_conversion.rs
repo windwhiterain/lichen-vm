@@ -298,10 +298,9 @@ impl<'a, P: Program> LoopGraph<'a, P> {
                 .map(|leaves| leaves.into_iter().map(AnyNodeId::Dynamic).collect()),
             AnyNodeId::Static(sref) => {
                 let frozen = self.module.static_module(sref.module);
-                let items = frozen.static_array_items(sref.index).ok_or_else(|| {
-                    "a frozen value's body is not an array, and a tuple-bodied return is a                      tuple of element slots"
-                        .to_string()
-                })?;
+                let Some(items) = frozen.static_array_items(sref.index) else {
+                    return Ok(vec![value]);
+                };
                 let mut out = Vec::with_capacity(items.len());
                 for index in items {
                     let element = AnyNodeId::Static(crate::StaticNodeId {
