@@ -387,7 +387,14 @@ where
         let mut resolved = node;
         let mut follow_origin = false;
         for _ in 0..8 {
-            if let Some(value) = self.lookup(resolved) {
+            // The entry may name an expression whose value cell is what was
+            // lowered; try the value cell before the expression.
+            let cell = self
+                .module
+                .element_value_node(AnyNodeId::Dynamic(resolved))
+                .and_then(|node| node.dynamic())
+                .unwrap_or(resolved);
+            if let Some(value) = self.lookup(cell) {
                 if let Some(entry) = self.loop_entries.get(&value).copied() {
                     resolved = entry;
                     follow_origin = true;
