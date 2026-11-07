@@ -1115,22 +1115,19 @@ impl<P: Program> Spine<'_, P> {
     /// inside a nested lambda is a self-application the spine does not own,
     /// found here rather than read as a function that never recurses.
     fn complete(&self) -> Result<(), LoopRefusal> {
+        let graph = LoopGraph::new(self.module);
         let steps: HashSet<NodeId> = self.steps.iter().map(|step| step.apply).collect();
+        let function = crate::AnyFunctionId::Dynamic(self.function);
         for h in self.module.functions.keys() {
-            let mut owner = Some(h);
-            let mut nested = false;
-            while let Some(current) = owner {
-                if current == self.function {
-                    nested = true;
-                    break;
-                }
-                owner = self.module.functions[current].parent;
-            }
-            if !nested {
+            let h = crate::AnyFunctionId::Dynamic(h);
+            if !graph.nested_in(h, function) {
                 continue;
             }
-            for &node in &self.module.functions[h].nodes {
-                if self.module.callee_function(node) == Some(self.function)
+            for node in graph.function_nodes(h) {
+                let Some(node) = node.dynamic() else {
+                    continue;
+                };
+                if graph.callee_function(AnyNodeId::Dynamic(node)) == Some(function)
                     && !steps.contains(&node)
                 {
                     return Err(LoopRefusal::NonTailCall);
@@ -1221,16 +1218,21 @@ impl<P: Program> Module<P> {
                 // parameter, not its own operands.
                 continue;
             }
-            if let Ok(operands) = self.operands_of(node) {
-                stack.extend(operands.into_iter().map(|operand| (operand, false)));
+            let graph = LoopGraph::new(self);
+            if let Some(operands) = graph.operands_of(AnyNodeId::Dynamic(node)) {
+                stack.extend(
+                    operands
+                        .into_iter()
+                        .filter_map(AnyNodeId::dynamic)
+                        .map(|operand| (operand, false)),
+                );
             }
             // A value's own items are its encoding, not a use of the state.
-            // SAFETY: `node` is a live node of `self`.
-            if let Some(items) = unsafe { self.array_items(node) } {
+            if let Some(items) = graph.operand_items(AnyNodeId::Dynamic(node)) {
                 stack.extend(
                     items
-                        .iter()
-                        .filter_map(|item| item.node.dynamic())
+                        .into_iter()
+                        .filter_map(AnyNodeId::dynamic)
                         .map(|item| (item, true)),
                 );
             }
