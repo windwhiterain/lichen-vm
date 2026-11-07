@@ -335,6 +335,11 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         self.operand_items(array)?.get(k).copied()
     }
 
+    /// The value node an element names, in either graph.
+    fn element_value_node(&self, node: AnyNodeId) -> Option<AnyNodeId> {
+        self.module.element_value_node(node)
+    }
+
     /// Whether `node`'s subtree applies `function`, in either graph.
     fn subtree_applies(&self, node: AnyNodeId, function: crate::AnyFunctionId) -> bool {
         let mut seen = HashSet::new();
@@ -345,6 +350,9 @@ impl<'a, P: Program> LoopGraph<'a, P> {
             }
             if self.callee_function(current) == Some(function) {
                 return true;
+            }
+            if let Some(items) = self.operands_of(current) {
+                stack.extend(items);
             }
             if let Some(items) = self.operand_items(current) {
                 stack.extend(items);
@@ -385,6 +393,12 @@ impl<'a, P: Program> LoopGraph<'a, P> {
             Some(items) if items.len() >= 2 => Some(Selection::Computed),
             _ => None,
         }
+    }
+
+    /// The items of a node's operation operand, in the node's own graph.
+    fn operands_of(&self, node: AnyNodeId) -> Option<Vec<AnyNodeId>> {
+        let (_, operand) = self.node_operation(node)?;
+        self.operand_items(operand?)
     }
 
     /// The function a `node`'s apply names, in either graph.
@@ -808,24 +822,25 @@ impl<P: Program> Spine<'_, P> {
                 _ => break,
             }
         }
-        let operands = self
-            .module
-            .operands_of(selection)
-            .map_err(|_| LoopRefusal::StateShape)?;
-        let (arms, condition) = (operands[0], operands[1]);
-        // SAFETY: `arms` is a live node of the module.
-        let arms =
-            unsafe { self.module.array_items(arms) }.ok_or_else(|| LoopRefusal::StateShape)?;
+        let operands = graph
+            .operands_of(AnyNodeId::Dynamic(selection))
+            .ok_or(LoopRefusal::StateShape)?;
+        let (Some(arms), Some(condition)) = (operands.first().copied(), operands.get(1).copied())
+        else {
+            return Err(LoopRefusal::StateShape);
+        };
+        let arms = graph.operand_items(arms).ok_or(LoopRefusal::StateShape)?;
         if arms.len() != 2 {
             return Err(LoopRefusal::StateShape);
         }
         let arm = |index: usize| {
             // An element is a complete slot: the arm is its value position.
-            match self.module.element_value_node(arms[index].node) {
+            match graph.element_value_node(arms[index]) {
                 Some(AnyNodeId::Dynamic(node)) => Ok(node),
                 _ => Err(LoopRefusal::StateShape),
             }
         };
+        let condition = condition.dynamic().ok_or(LoopRefusal::StateShape)?;
         // `[b, a][c]` is `if c then a else b`: element 1 answers the `1` edge.
         let on_zero = self.walk_arm(arm(0)?)?;
         let on_one = self.walk_arm(arm(1)?)?;
