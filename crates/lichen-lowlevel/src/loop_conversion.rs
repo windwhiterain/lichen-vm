@@ -335,6 +335,23 @@ impl<'a, P: Program> LoopGraph<'a, P> {
         self.operand_items(array)?.get(k).copied()
     }
 
+    /// The structural value behind `node`, in either graph.
+    fn structural_value(&self, node: AnyNodeId) -> Option<LowValue> {
+        let value = self.node_value(node)?;
+        AsEnum::<LowValue>::as_enum(&value)
+    }
+
+    /// Whether `node` is a `Buf`: its `.native` payload is the `$buf` operator.
+    fn carries_buffer(&self, node: AnyNodeId) -> bool {
+        let Some(items) = self.operand_items(node) else {
+            return false;
+        };
+        items
+            .into_iter()
+            .filter_map(|item| self.node_operation(item))
+            .any(|(operator, _)| format!("{operator:?}") == "Buf")
+    }
+
     /// The value node an element names, in either graph.
     fn element_value_node(&self, node: AnyNodeId) -> Option<AnyNodeId> {
         self.module.element_value_node(node)
@@ -888,36 +905,32 @@ impl<P: Program> Spine<'_, P> {
     /// A step's next state: the call's argument's elements, each a scalar
     /// cell; an aggregate or a function is not carryable.
     fn record_step(&mut self, apply: NodeId) -> Result<usize, LoopRefusal> {
-        let operands = self
-            .module
-            .operands_of(apply)
-            .map_err(|_| LoopRefusal::StateShape)?;
-        let argument = operands[1];
-        let value = self.module.expr_value_half(argument).unwrap_or(argument);
-        // SAFETY: `value` is a live node of the module.
-        let next: Vec<NodeId> = match unsafe { self.module.array_items(value) } {
+        let graph = LoopGraph::new(self.module);
+        let operands = graph
+            .operands_of(AnyNodeId::Dynamic(apply))
+            .ok_or(LoopRefusal::StateShape)?;
+        let argument = *operands.get(1).ok_or(LoopRefusal::StateShape)?;
+        let value = graph.expr_value_half(argument).unwrap_or(argument);
+        let next: Vec<NodeId> = match graph.operand_items(value) {
             Some(items) => items
-                .iter()
+                .into_iter()
                 .map(|item| {
                     // An element is a complete slot: the carried value is its first
                     // position.
-                    let item = self
-                        .module
-                        .element_value_node(item.node)
-                        .unwrap_or(item.node);
+                    let item = graph.element_value_node(item).unwrap_or(item);
                     match item {
                         AnyNodeId::Dynamic(node) => Ok(node),
                         AnyNodeId::Static(_) => Err(LoopRefusal::StateShape),
                     }
                 })
                 .collect::<Result<_, _>>()?,
-            None => vec![value],
+            None => vec![value.dynamic().ok_or(LoopRefusal::StateShape)?],
         };
         for element in &next {
             if matches!(
-                self.module.structural_value(*element),
+                graph.structural_value(AnyNodeId::Dynamic(*element)),
                 Some(LowValue::Array(_) | LowValue::Function(_) | LowValue::Table(_))
-            ) && !self.carries_buffer(*element)
+            ) && !graph.carries_buffer(AnyNodeId::Dynamic(*element))
             {
                 return Err(LoopRefusal::StateShape);
             }
