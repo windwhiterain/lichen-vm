@@ -7,6 +7,11 @@
 > wall found sits **beside** `keep` rather than in it (§2.4) and is a dominance rule about `@loop`,
 > not about gathering. §1 is read from the sources and commits nothing but citations.
 >
+> The programs below spell the buffer surface of their commit (the `.out` parameter group and
+> `compute.buffer`); the current surface declares outputs with `compute.buf` and fills inputs with
+> kernels. The arithmetic each shape rests on is unchanged, and `zz_gather_address_probe` reads
+> `[60, 10, 50, 20, 40, 30]` / `[60, 0, 50, 20, 40, 30]` over filled buffers.
+>
 > **§2.4's dominance rule was re-measured at `dev@eb3132ae`, because
 > `examples/topk.lichen` (`94cb6ad6`) contradicted it: the same refusal still reproduces, but the
 > condition this note gave for it was too strong, and §2.4 and §3 now state the measured one.**
