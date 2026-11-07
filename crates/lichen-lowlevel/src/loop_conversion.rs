@@ -580,9 +580,25 @@ impl<'a, P: Program> LoopGraph<'a, P> {
     /// The marked functions `g`'s template subtree applies to — the edges of
     /// the marked call graph, live and frozen.
     fn marked_callees_of(&self, g: crate::AnyFunctionId) -> Vec<crate::AnyFunctionId> {
+        let mut functions: Vec<crate::AnyFunctionId> = self
+            .module
+            .functions
+            .keys()
+            .map(crate::AnyFunctionId::Dynamic)
+            .collect();
+        // A frozen target's module functions join the scan: its recursion is
+        // static.
+        if let crate::AnyFunctionId::Static(sref) = g {
+            let frozen = self.module.static_module(sref.module);
+            functions.extend((0..frozen.functions.len()).map(|index| {
+                crate::AnyFunctionId::Static(crate::StaticFunctionRef {
+                    module: sref.module,
+                    index: crate::StaticFunctionId(index),
+                })
+            }));
+        }
         let mut out = Vec::new();
-        for h in self.module.functions.keys() {
-            let h = crate::AnyFunctionId::Dynamic(h);
+        for h in functions {
             if !self.nested_in(h, g) {
                 continue;
             }
