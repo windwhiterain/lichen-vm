@@ -382,6 +382,30 @@ where
         }
     }
 
+    /// Where a state read's entry chain ends: value -> param -> argument -> origin.
+    fn resolve_entry(&self, node: NodeId) -> NodeId {
+        let mut resolved = node;
+        let mut follow_origin = false;
+        for _ in 0..8 {
+            if let Some(value) = self.lookup(resolved) {
+                if let Some(entry) = self.loop_entries.get(&value).copied() {
+                    resolved = entry;
+                    follow_origin = true;
+                    continue;
+                }
+            }
+            if follow_origin
+                && let Some(origin) = self.module.node_origin(resolved)
+                && origin != resolved
+            {
+                resolved = origin;
+                continue;
+            }
+            break;
+        }
+        resolved
+    }
+
     fn value_inner(&mut self, node: NodeId) -> Result<ValueId, String> {
         // **Inside a `@loop` nest the roles are the binding**: a marked function's read
         // resolves to its block's parameters.
@@ -1799,8 +1823,9 @@ where
             if let Some(class) = class {
                 self.value_classes.insert(param, class);
             }
-            // The call's argument node is the entry a state read names.
-            let entry_slot = state[index].1;
+            // The call's argument node is the entry a state read names; it is
+            // resolved while the enclosing nest's bindings are still live.
+            let entry_slot = self.resolve_entry(state[index].1);
             self.loop_state_paths
                 .insert(param, conversion.state[index].clone());
             for state_node in self
@@ -2636,29 +2661,10 @@ where
         let raw = *buffer;
         let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(raw))?;
         // **A state read names its own entry**: value → param → the argument.
-        let mut resolved = buffer;
-        let mut follow_origin = false;
-        for _ in 0..8 {
-            let Some(node) = resolved.dynamic() else {
-                break;
-            };
-            if let Some(value) = self.lookup(node) {
-                if let Some(entry) = self.loop_entries.get(&value).copied() {
-                    resolved = AnyNodeId::Dynamic(entry);
-                    follow_origin = true;
-                    continue;
-                }
-            }
-            // The entry may be another nest's clone node: follow its origin.
-            if follow_origin
-                && let Some(origin) = self.module.node_origin(node)
-                && origin != node
-            {
-                resolved = AnyNodeId::Dynamic(origin);
-                continue;
-            }
-            break;
-        }
+        let resolved = buffer
+            .dynamic()
+            .map(|node| AnyNodeId::Dynamic(self.resolve_entry(node)))
+            .unwrap_or(buffer);
         // A loop state read names its slot's path, not a node across clone worlds.
         let from_state = buffer
             .dynamic()
