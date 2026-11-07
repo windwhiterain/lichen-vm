@@ -2024,14 +2024,16 @@ where
                     .element_value_node(element.into())
                     .and_then(|node| node.dynamic())
                     .unwrap_or(element);
-                let entry = exprs.get(index).copied().unwrap_or(element);
+                // **The lowered node is the entry**: it is the node whose value the
+                // record holds, so the role walk resolves it.
+                let _ = exprs.get(index);
                 // **A buffer slot is carried as a version token**: a buffer is named, not
                 // emitted (`docs/notes/loop-conversion.md` §6).
                 if super::write_chain_output_pos(self.module, self.params, value)?.is_some() {
-                    return Ok((self.version_token(), entry));
+                    return Ok((self.version_token(), value));
                 }
                 let lowered = self.value(value)?;
-                Ok((lowered, entry))
+                Ok((lowered, value))
             })
             .collect()
     }
