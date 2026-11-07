@@ -58,6 +58,16 @@ where
                 self.type_expr,
                 AnyNodeId::Dynamic(ty),
             )
+            || crate::shape::is_table_type_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(ty),
+            )
+            || crate::shape::is_set_type_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(ty),
+            )
     }
 
     fn requirement_is_open_any(&mut self, node: AnyNodeId, depth: usize) -> bool {
@@ -188,6 +198,14 @@ where
                 })
                 .collect()
         } else if crate::shape::is_tuple_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(ty),
+        ) || crate::shape::is_table_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(ty),
+        ) || crate::shape::is_set_type_any(
             &mut self.module,
             self.type_expr,
             AnyNodeId::Dynamic(ty),

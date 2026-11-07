@@ -2313,3 +2313,22 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
         "the depth-marked reads reach the arithmetic"
     );
 }
+
+#[test]
+fn probe_table_set_template_freshness() {
+    for source in [
+        "F := ('x = table{_, Int}) => x\n(F table(1 ==> 2), F table(\"a\" ==> 2))",
+        "G := ('x = set{_}) => x\n(G set(1), G set(\"a\"))",
+    ] {
+        let report = compile(source);
+        println!(
+            "ok={} {:?}",
+            report.ok(),
+            report
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}

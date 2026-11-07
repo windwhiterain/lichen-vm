@@ -431,6 +431,30 @@ where
         && universe_is_any(module, universe, ty)
 }
 
+/// Whether `ty` is the **table type marker** — the shared `[TableType, Type]`
+/// expression.
+pub fn is_table_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    template_is_any(module, ty, P::Value::table_type_marker(), false)
+        && universe_is_any(module, universe, ty)
+}
+
+/// Whether `ty` is the **set type marker** — the shared `[SetType, Type]`
+/// expression.
+pub fn is_set_type_any<P: Program>(module: &mut Module<P>, universe: NodeId, ty: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    template_is_any(module, ty, P::Value::set_type_marker(), false)
+        && universe_is_any(module, universe, ty)
+}
+
 /// Whether `ty` holds the marker `marker` at its value slot.
 fn template_is_any<P: Program>(
     module: &Module<P>,
