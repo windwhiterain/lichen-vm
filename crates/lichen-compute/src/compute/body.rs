@@ -1735,7 +1735,17 @@ where
             .iter()
             .zip(self.body.blocks[header].params.clone().iter())
         {
-            if let Some(class) = self.value_classes.get(&slot).copied() {
+            // A state slot's class is its entry value's: the buffer's own class is
+            // the `Buffer` one, and a read of the slot keeps it (the role walk's
+            // class-root comparison depends on it).
+            let params = self.params.to_vec();
+            let class = self.value_classes.get(&slot).copied().or_else(|| {
+                params
+                    .iter()
+                    .position(|candidate| self.value(candidate.value).ok() == Some(slot))
+                    .map(|index| param_classes_of(&params)[index])
+            });
+            if let Some(class) = class {
                 self.value_classes.insert(param, class);
             }
         }
@@ -2530,7 +2540,24 @@ where
         // destructuring, so resolve it to the actual buffer node.
         let raw = *buffer;
         let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(raw))?;
-        let pos = parallel_buffer_pos(self.module, self.params, buffer)?.ok_or_else(|| {
+        // **A read of a loop-state parameter reads the buffer the loop entered
+        // with**: the state parameter is a fresh SSA value, so the position is
+        // resolved through the nest's entry instead of the parameter's own class.
+        let resolved = buffer
+            .dynamic()
+            .and_then(|node| self.values.get(&node).copied())
+            .and_then(|value| {
+                self.loops.iter().rev().find_map(|active| {
+                    active
+                        .block_slots
+                        .iter()
+                        .position(|slot| *slot == value)
+                        .map(|_| active.state)
+                })
+            })
+            .map(AnyNodeId::Dynamic)
+            .unwrap_or(buffer);
+        let pos = parallel_buffer_pos(self.module, self.params, resolved)?.ok_or_else(|| {
             let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
                 Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
                 None => "the parameter declares no inputs".to_string(),

@@ -5238,102 +5238,108 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(slot) = params.first() else {
-        return Ok(None);
-    };
-    // A position is a read of the parameter, the caller's own node: a frozen node
-    // names no position.
-    let Some(node) = node.dynamic() else {
-        return Ok(None);
-    };
-    if let Some(roles) = &slot.roles {
-        // The peeled node names the buffer; the wrapper's own projection chain does not.
-        if let Some(path) = param_path(module, slot.expr, node)? {
-            let mut as_field = vec![0];
-            as_field.extend(path.iter().copied());
-            if let Some(position) = roles.input_pos(&as_field) {
-                return Ok(Some(position));
-            }
-            if let Some(position) = roles.input_pos(&path) {
-                return Ok(Some(position));
-            }
-            if let Some(logical) = physical_param_path::<P>(module, slot.expr, &path)
-                && let Some(position) = roles.input_pos(&logical)
-            {
-                return Ok(Some(position));
-            }
-        }
-        // A field read and the parameter's field are one class, though the chain differs.
-        if let Some(root) = expr_value(module, slot.expr) {
-            let read_root = module.class_root(node);
-            for (position, path) in roles.inputs.iter().enumerate() {
-                let Some(Some(field)) = value_at_path::<P>(module, root, path).map(|f| f.dynamic())
-                else {
-                    continue;
-                };
-                if module.class_root(field) == read_root {
+    // **Every slot is tried**: the kernel's parameter is a struct, so its `.meta`
+    // slot declares no inputs and its `.in` slot declares them all; a position is
+    // an input's ordinal over the whole parameter, not the first slot's.
+    for slot in params {
+        // A position is a read of the parameter, the caller's own node: a frozen node
+        // names no position.
+        let Some(node) = node.dynamic() else {
+            return Ok(None);
+        };
+        if let Some(roles) = &slot.roles {
+            // The peeled node names the buffer; the wrapper's own projection chain does not.
+            if let Some(path) = param_path(module, slot.expr, node)? {
+                let mut as_field = vec![0];
+                as_field.extend(path.iter().copied());
+                if let Some(position) = roles.input_pos(&as_field) {
+                    return Ok(Some(position));
+                }
+                if let Some(position) = roles.input_pos(&path) {
+                    return Ok(Some(position));
+                }
+                if let Some(logical) = physical_param_path::<P>(module, slot.expr, &path)
+                    && let Some(position) = roles.input_pos(&logical)
+                {
                     return Ok(Some(position));
                 }
             }
+            // A field read and the parameter's field are one class, though the chain differs.
+            if let Some(root) = expr_value(module, slot.expr) {
+                let read_root = module.class_root(node);
+                for (position, path) in roles.inputs.iter().enumerate() {
+                    let Some(Some(field)) =
+                        value_at_path::<P>(module, root, path).map(|f| f.dynamic())
+                    else {
+                        continue;
+                    };
+                    if module.class_root(field) == read_root {
+                        return Ok(Some(position));
+                    }
+                }
+            }
+            if source_depth < 8
+                && let Some(source) = field_source_of(module, node)
+            {
+                let found = parallel_buffer_pos_inner(
+                    module,
+                    params,
+                    AnyNodeId::Dynamic(source),
+                    source_depth + 1,
+                )?;
+                if found.is_some() {
+                    return Ok(found);
+                }
+            }
+            continue;
         }
-        if source_depth < 8
-            && let Some(source) = field_source_of(module, node)
+        let cfg_value = slot.value;
+        let operation = match module.node_operation(node) {
+            Some(operation) => operation,
+            None => continue,
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            continue;
+        }
+        let Some((target, index)) = operand_expr(module, operation.operand).ok() else {
+            continue;
+        };
+        let Some(k) = usize_value(module, index) else {
+            continue;
+        };
+        let Some(target) = target.dynamic() else {
+            continue;
+        };
+        let Some(target_op) = module.node_operation(target) else {
+            continue;
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&target_op.operator),
+            Some(LowOperator::Index)
+        ) {
+            continue;
+        }
+        let Some((tt, ti)) = operand_expr(module, target_op.operand).ok() else {
+            continue;
+        };
+        // The body's cfg reads go through `Index(cfg_expr, 0)`: compare the two
+        // slots by equality class, not node identity.
+        let Some(tt) = tt.dynamic() else {
+            continue;
+        };
+        if shape::is_same_value(
+            module,
+            AnyNodeId::Dynamic(tt),
+            AnyNodeId::Dynamic(cfg_value),
+        ) && usize_value(module, ti) == Some(1)
         {
-            return parallel_buffer_pos_inner(
-                module,
-                params,
-                AnyNodeId::Dynamic(source),
-                source_depth + 1,
-            );
+            return Ok(Some(k));
         }
-        return Ok(None);
     }
-    let cfg_value = slot.value;
-    let operation = match module.node_operation(node) {
-        Some(operation) => operation,
-        None => return Ok(None),
-    };
-    if !matches!(
-        AsEnum::<LowOperator>::as_enum(&operation.operator),
-        Some(LowOperator::Index)
-    ) {
-        return Ok(None);
-    }
-    let Some((target, index)) = operand_expr(module, operation.operand).ok() else {
-        return Ok(None);
-    };
-    let Some(k) = usize_value(module, index) else {
-        return Ok(None);
-    };
-    let Some(target) = target.dynamic() else {
-        return Ok(None);
-    };
-    let Some(target_op) = module.node_operation(target) else {
-        return Ok(None);
-    };
-    if !matches!(
-        AsEnum::<LowOperator>::as_enum(&target_op.operator),
-        Some(LowOperator::Index)
-    ) {
-        return Ok(None);
-    }
-    let Some((tt, ti)) = operand_expr(module, target_op.operand).ok() else {
-        return Ok(None);
-    };
-    // The body's cfg reads go through `Index(cfg_expr, 0)`: compare the two
-    // slots by equality class, not node identity.
-    let Some(tt) = tt.dynamic() else {
-        return Ok(None);
-    };
-    if !shape::is_same_value(
-        module,
-        AnyNodeId::Dynamic(tt),
-        AnyNodeId::Dynamic(cfg_value),
-    ) || usize_value(module, ti) != Some(1)
-    {
-        return Ok(None);
-    }
-    Ok(Some(k))
+    Ok(None)
 }
 
 /// The output position `node` names in a parallel kernel.
