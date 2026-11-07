@@ -46,6 +46,21 @@ no table/set branch before this step: `is_compound_type` covered only the
 struct, array and tuple, and `is_table_type_any`/`is_set_type_any` did not
 exist.
 
+Two further measurements bound the design. Making the set value's **type** the
+shared kind (as the array instance's type is) fixes the two-call `set{_}`
+requirement, but it fails on a two-member set — `('x = set{_}) => x; x set(1, 2)`
+— with `expected SetType, found SetType`, because the requirement's value is the
+one-element shape and the argument's value is the two-member array: the `=`
+match compares the value lengths. It also refuses `('x = set{Int}) => x;
+x set("a")`, so the element is enforced only through that same value compare.
+The array's template avoids both because its type carries the **length**
+(`[_, 2]` has two holes). A set has no count — one type, any member count — so
+the set's match must compare the **element slot** against each member, not the
+array lengths, the rule `compound-element-slots.md` states for the set. The
+`=` match is therefore the design point: the array's shape cannot be reused
+verbatim. The set's kind change was measured and reverted; the type-level step
+(the predicates, `is_compound_type`, the instantiation branch) is what landed.
+
 ## 3. The target
 
 - A table's value is `[key template, value template, entries…]`, a set's is

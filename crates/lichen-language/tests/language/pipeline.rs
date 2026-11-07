@@ -2319,6 +2319,12 @@ fn probe_table_set_template_freshness() {
     for source in [
         "F := ('x = table{_, Int}) => x\n(F table(1 ==> 2), F table(\"a\" ==> 2))",
         "G := ('x = set{_}) => x\n(G set(1), G set(\"a\"))",
+        "G := ('x = set{_}) => x
+G set(1, 2)",
+        "G := ('x = set{Int}) => x
+G set(\"a\")",
+        "H := ('x = [_, 2]) => x
+(H [1, 2], H [\"a\", \"b\"])",
     ] {
         let report = compile(source);
         println!(
