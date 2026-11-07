@@ -100,7 +100,11 @@ where
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
-        let ops = self.array_node(self.current_block, &[container_value, key_value]);
+        // A table value is `[key slot, value slot, raw table]`: the read takes
+        // the raw item.
+        let two = self.usize_node(2);
+        let raw = self.index_of(container_value, two);
+        let ops = self.array_node(self.current_block, &[raw, key_value]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::TableGet),
@@ -341,12 +345,17 @@ where
                 DiagKind::ArrayElement,
             );
         }
-        let value = self.array_node(self.current_block, &vals);
-        // A set's element position is a **slot**, as an array's is.
+        // A set is `[element template, raw set]`; the raw is an instance.
         let element = self.element_slot(None, Some(element_ty), None);
-        let shape = self.array_node(self.current_block, &[element]);
+        let mut raw_items: Vec<NodeId> = Vec::with_capacity(vals.len() + 1);
+        raw_items.push(element);
+        raw_items.extend(vals);
+        let raw_mask = vec![false; raw_items.len()];
+        let raw = self.array_instance_node(self.current_block, &raw_items, &raw_mask);
+        let mask = [false, false];
+        let value = self.array_instance_node(self.current_block, &[element, raw], &mask);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let ty_node = kind;
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
@@ -391,17 +400,17 @@ where
             );
         }
         let table = self.module.build_table(&exprs, self.current_block);
-        let value = self.alloc_node(
+        let raw = self.alloc_node(
             self.current_block,
             None,
             Some(P::Value::from(LowValue::Table(table))),
         );
-        // A table's two positions are **slots**, as a tuple's elements are.
+        // A table is `[key slot, value slot, raw table]`; the type is the kind.
         let key = self.element_slot(None, Some(key_ty), None);
-        let value_ty = self.element_slot(None, Some(value_ty), None);
-        let shape = self.array_node(self.current_block, &[key, value_ty]);
+        let value_slot = self.element_slot(None, Some(value_ty), None);
+        let value = self.array_node(self.current_block, &[key, value_slot, raw]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let ty_node = self.slot_expr(self.current_block, shape, kind);
+        let ty_node = kind;
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
@@ -520,7 +529,7 @@ where
         let elements = self.range_children(e);
         let element = elements[0];
         let slot = self.element_slot_of(element);
-        let shape = self.array_node(self.current_block, &[slot]);
+        let shape = self.array_node(self.current_block, &[slot, self.any_value]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
         let expr = self.slot_expr(self.current_block, shape, kind);
         self.state[e].term = Some(expr);
@@ -538,7 +547,7 @@ where
         let elements = self.range_children(e);
         let key = self.element_slot_of(elements[0]);
         let value = self.element_slot_of(elements[1]);
-        let shape = self.array_node(self.current_block, &[key, value]);
+        let shape = self.array_node(self.current_block, &[key, value, self.any_value]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let expr = self.slot_expr(self.current_block, shape, kind);
         self.state[e].term = Some(expr);

@@ -1,6 +1,6 @@
 # The table and set are templates, like the array
 
-> Status: **proposal; the type-level step landed.** Points at
+> Status: **the raw encoding landed; the suites are green.** Points at
 > `crates/lichen-highlevel/src/shape.rs` (`is_table_type_any`,
 > `is_set_type_any`), `checker/templates.rs` (`is_compound_type`,
 > `requirement_is_open`, `instantiate_requirement`), and
@@ -97,3 +97,67 @@ verbatim. The set's kind change was measured and reverted; the type-level step
    five operators, the type kind, the codec and the GC.
 4. The persist/compute/serve paths.
 5. The examples and the book blocks.
+
+## 6. The raw encoding, and what it broke
+
+The user's encoding: a set value is `[element template, raw set]`; a table
+value is `[key template, value template, raw table]`; the **type** value carries
+the same slots with `@any` in the raw position, so the template match compares
+the template slots and never the payload — the set's member count and the
+table's entry count stay out of the type. This landed in the checker's
+construction, the table read (`TableGet` over the raw), the table operators (the
+raw operands, the wrapped result value), the prefix reads, and
+`set::members` (the raw set's items).
+
+Measured after the change: the compiler passes; the language suite is **red with
+17 failures**. Most are not table programs — package loading refuses with
+`does not satisfy {Float, Type, @any, @any, @any}`, and the recursion, closure,
+merge-carry and persist areas fail — so the first suspect is the shared
+`@any`/type-shape change reaching the package signatures, not the table reads.
+`pipeline::a_table_removal_drops_one_entry_and_names_a_miss` also fails. The
+branch is a WIP; the next step is that diagnosis before any merge.
+
+## 7. The core's set is the root of the red suite
+
+Bisect: `c931d4c7` (the type predicates only) is green at 283; `e4bead9e` (the
+construction) is **49 failed**; `2430365e` (construction plus the read/operator
+consumers) is **17 failed**. The construction alone explains the wide failures.
+
+`crates/lichen-language/src/core.lichen` is eleven lines and starts with
+
+```lichen
+Num := set(Int, Float)
+in_num := 't => t @in Num; let Pair := (@any ! in_num, @any ! in_num)
+```
+
+so `Num` is a **set**, `in_num` is its `@in` refinement and `Pair` carries it.
+The set's type moving from the element shape to the shared kind changed the
+core package's exported requirement — the importer renders it
+`{Float, Type, @any, @any, @any}` — and every program that imports the prelude
+fails to resolve it. The stores are fresh in-memory instances
+(`PackageStore::new()` per run), so this is the signature, not a stale cache.
+
+The next step is the core's `Num`/`in_num`/`Pair` signature under the new
+encoding: either the importer's expectation follows the kind, or the set's type
+value keeps `[element, @any]` for the signature while the `=` match reads the
+template slots. The table removal test is the one table failure left after the
+consumers.
+
+## 8. The set is the array's layout
+
+The red suite was the set's members read: a set value is
+`[element template, raw set]` and the raw set is an **array instance** — the
+element template, then the members — so `set::members` reads the array's own
+elements after the template, exactly the array's convention. A plain array —
+the arithmetic refinement's `[int, float]` domain — has no template slot and is
+its own members. With that, the core's `Num`/`in_num`/`Pair` check again and the
+package, recursion, closure, merge-carry and block areas pass.
+
+The table removal's right operand is its **key**, not a second table; it was
+being indexed at slot 2 like a table and the removal missed. Measured: the
+language suite is **283/283**, the highlevel **136/136**, and the compute
+**247/247 (1 ignored)** plus its 14 unit tests.
+
+The set/table encoding the user stated is in place: a set
+`[element template, raw set]`, a table `[key template, value template, raw
+table]`, with the type's raw position the wildcard.

@@ -31,6 +31,8 @@ where
         let right_ty = self.state[right].ty.unwrap();
         let mut arithmetic = None;
         let mut table_result = None;
+        let mut table_cells: Option<(NodeId, NodeId)> = None;
+        let mut table_right = false;
         match operator {
             // Generalized equality: the operands must be the same type.
             BinOp::Eq | BinOp::Neq => {
@@ -51,12 +53,8 @@ where
                 if !self.type_is_concrete(right_ty) && !self.is_loop_state(right) {
                     return self.refuse_undecided_container(e, right, right_ty, "set membership");
                 }
-                let element_cell = self.fresh_cell();
-                // A set's element position is a slot, as an array's is.
-                let element = self.element_slot(None, Some(element_cell), None);
-                let shape = self.array_node(self.current_block, &[element]);
-                let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-                let set_ty = self.slot_expr(self.current_block, shape, kind);
+                // A set's type is the shared kind; the element rides in the value.
+                let set_ty = self.kind_expr(self.current_block, self.markers.set_type_marker);
                 self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
             // `a @table_merge b` — both operands are tables of one key/value
@@ -75,6 +73,8 @@ where
                 self.check_unify(left_key, right_key, self.loc(right, 1), DiagKind::BinOp);
                 self.check_unify(left_value, right_value, self.loc(right, 1), DiagKind::BinOp);
                 table_result = Some(self.table_type(left_key, left_value));
+                table_cells = Some((left_key, left_value));
+                table_right = true;
             }
             // `t @table_without k` — the right operand is a key of `t`'s table
             // type, and the result is that table type.
@@ -85,6 +85,7 @@ where
                 };
                 self.check_unify(right_ty, key, self.loc(right, 1), DiagKind::BinOp);
                 table_result = Some(self.table_type(key, value));
+                table_cells = Some((key, value));
             }
             BinOp::Add
             | BinOp::Sub
@@ -117,8 +118,28 @@ where
         };
         let left = self.value_of(left);
         let right = self.value_of(right);
-        let operands = self.array_node(self.current_block, &[left, right]);
-        let value = self.op_node(self.current_block, operator, Some(operands));
+        let operands = if table_cells.is_some() {
+            let two = self.usize_node(2);
+            let left_raw = self.index_of(left, two);
+            // A merge's right is a table too; a removal's right is its key.
+            let right_operand = if table_right {
+                self.index_of(right, two)
+            } else {
+                right
+            };
+            self.array_node(self.current_block, &[left_raw, right_operand])
+        } else {
+            self.array_node(self.current_block, &[left, right])
+        };
+        let table_raw = self.op_node(self.current_block, operator, Some(operands));
+        let value = match table_cells {
+            Some((key, value_cell)) => {
+                let key_slot = self.element_slot(None, Some(key), None);
+                let value_slot = self.element_slot(None, Some(value_cell), None);
+                self.array_node(self.current_block, &[key_slot, value_slot, table_raw])
+            }
+            None => table_raw,
+        };
         let expr = self.expr_of(value, result);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value);
@@ -144,20 +165,26 @@ where
         if !self.type_is_concrete(container_ty) && !self.is_loop_state(container) {
             return Err(self.refuse_undecided_container(e, container, container_ty, read));
         }
-        let key = self.fresh_cell();
-        let value = self.fresh_cell();
-        let table = self.table_type(key, value);
-        self.check_unify(container_ty, table, self.loc(container, 1), DiagKind::Guard);
-        Ok((key, value, table))
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
+        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
+        // The value is `[key slot, value slot, raw table]`: the slots state the
+        // type, as an array's element slot does.
+        let container_value = self.value_of(container);
+        let key = self.slot_type_at(container_value, 0);
+        let value = self.slot_type_at(container_value, 1);
+        Ok((key, value, kind))
+    }
+
+    /// The type of a compound value's slot at `at`.
+    fn slot_type_at(&mut self, container_value: NodeId, at: usize) -> NodeId {
+        let index = self.usize_node(at);
+        let (_, _, ty) = self.value_slot_read(container_value, index, Some(at));
+        ty
     }
 
     /// The `table{K, V}` type whose slots are `key` and `value`.
-    pub(super) fn table_type(&mut self, key: NodeId, value: NodeId) -> NodeId {
-        let key_slot = self.element_slot(None, Some(key), None);
-        let value_slot = self.element_slot(None, Some(value), None);
-        let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
-        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        self.slot_expr(self.current_block, shape, kind)
+    pub(super) fn table_type(&mut self, _key: NodeId, _value: NodeId) -> NodeId {
+        self.kind_expr(self.current_block, self.markers.table_type_marker)
     }
 
     /// The class two arithmetic operands share, and the assert that keeps it a numeric one.
@@ -268,6 +295,7 @@ where
             self.check_expr(operand);
         }
         let types: Vec<NodeId> = ids.iter().map(|&id| self.state[id].ty.unwrap()).collect();
+        let mut table_prefix = false;
         let (result, operator): (NodeId, P::Operator) = match operator {
             PrefixOp::Int2Float => {
                 self.unify_stated_class(ids[0], types[0], self.int_type);
@@ -300,6 +328,7 @@ where
             }
             // `@table_count t` — the entry count, a machine scalar.
             PrefixOp::TableCount => {
+                table_prefix = true;
                 let (_, _, _) = match self.pin_table(e, ids[0], types[0], "table count") {
                     Ok(cells) => cells,
                     Err(refused) => return refused,
@@ -311,6 +340,7 @@ where
             }
             // `@table_key t i` — the `i`-th key, in the table's stored order.
             PrefixOp::TableKey => {
+                table_prefix = true;
                 let (key, _, _) = match self.pin_table(e, ids[0], types[0], "table key") {
                     Ok(cells) => cells,
                     Err(refused) => return refused,
@@ -328,7 +358,12 @@ where
             }
         };
         // The operand array is the source's own list, in the order it was written.
-        let values: Vec<NodeId> = ids.iter().map(|&id| self.value_of(id)).collect();
+        let mut values: Vec<NodeId> = ids.iter().map(|&id| self.value_of(id)).collect();
+        // A table prefix reads the raw item, not the template array.
+        if table_prefix {
+            let two = self.usize_node(2);
+            values[0] = self.index_of(values[0], two);
+        }
         let operands = self.array_node(self.current_block, &values);
         let node = self.op_node(self.current_block, operator, Some(operands));
         let expr = self.expr_of(node, result);

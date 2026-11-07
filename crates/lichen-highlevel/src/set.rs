@@ -15,9 +15,21 @@ where
     // SAFETY: `value` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, value) }?;
+    // A set is `[element template, raw set]`: the raw's elements are the members;
+    // a plain array is its own members.
+    let members: &[lichen_lowlevel::ArrayItem] = if items.first().is_some_and(|item| item.template)
+    {
+        let raw = items.get(1)?.node.dynamic()?;
+        // SAFETY: the raw set is a live node of the same module.
+        let raw_items = unsafe { array_items(module, AnyNodeId::Dynamic(raw)) }?;
+        // The raw set's elements, after its own element template.
+        raw_items.get(1..)?
+    } else {
+        items
+    };
     // A member is a complete slot: the member's value is its first position.
     Some(
-        items
+        members
             .iter()
             .map(|item| module.element_value_node(item.node).unwrap_or(item.node))
             .collect(),
