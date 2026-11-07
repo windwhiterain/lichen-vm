@@ -1,4 +1,4 @@
-//! The `table(k ==> v)` literal and the `t <== k` read; see
+//! The `table(k => v)` literal and the `t <== k` read; see
 //! record-program.md.
 
 use lichen_highlevel::diagnostic::DiagKind;

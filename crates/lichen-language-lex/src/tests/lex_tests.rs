@@ -24,11 +24,11 @@ fn lex_one(source: &str) -> Token {
 #[test]
 fn tokens_of_a_small_program() {
     assert_eq!(
-        kinds("'x => 5 : Int"),
+        kinds("'x -> 5 : Int"),
         vec![
             TokenKind::Prime,
             TokenKind::Name("x".to_string()),
-            TokenKind::FatArrow,
+            TokenKind::ThinArrow,
             TokenKind::Int(5),
             TokenKind::Colon,
             TokenKind::KwInt,
@@ -40,12 +40,12 @@ fn tokens_of_a_small_program() {
 #[test]
 fn a_table_arrow_separates_a_table_entry() {
     assert_eq!(
-        kinds("table( 1 ==> 2 )"),
+        kinds("table( 1 => 2 )"),
         vec![
             TokenKind::KwTable,
             TokenKind::LParen,
             TokenKind::Int(1),
-            TokenKind::TableArrow,
+            TokenKind::FatArrow,
             TokenKind::Int(2),
             TokenKind::RParen,
             TokenKind::Eof,
@@ -77,7 +77,7 @@ fn a_table_arrow_separates_a_table_entry() {
 #[test]
 fn arrows_and_punctuation() {
     assert_eq!(
-        kinds("(a, b) : A ==> B <3>"),
+        kinds("(a, b) : A => B <3>"),
         vec![
             TokenKind::LParen,
             TokenKind::Name("a".to_string()),
@@ -85,7 +85,7 @@ fn arrows_and_punctuation() {
             TokenKind::RParen,
             TokenKind::Colon,
             TokenKind::Name("A".to_string()),
-            TokenKind::TableArrow,
+            TokenKind::FatArrow,
             TokenKind::Name("B".to_string()),
             TokenKind::LAngle,
             TokenKind::Int(3),
@@ -182,13 +182,13 @@ fn a_newline_is_a_separator() {
 #[test]
 fn operators_and_keywords_lex() {
     assert_eq!(
-        kinds("let fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
+        kinds("let fib = n -> if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
         vec![
             TokenKind::KwLet,
             TokenKind::Name("fib".to_string()),
             TokenKind::Equals,
             TokenKind::Name("n".to_string()),
-            TokenKind::FatArrow,
+            TokenKind::ThinArrow,
             TokenKind::KwIf,
             TokenKind::Name("n".to_string()),
             TokenKind::Leq,
@@ -548,7 +548,7 @@ fn incremental_resume_matches_full_relex() {
         // Delete a separator (merge two statements onto one line).
         ("a = 1\nb = 2", 5, 6, ""),
         // Append at the very end.
-        ("a = 1\'nf = x => a + x", 20, 20, "\nf 2"),
+        ("a = 1\'nf = x -> a + x", 20, 20, "\nf 2"),
         // Insert an integer literal's digit.
         ("a = 12\nb = 3", 4, 4, "3"),
         // Insert a parenthesis so a `(` becomes glued to the previous token.
@@ -592,7 +592,7 @@ fn incremental_resume_matches_full_relex_with_a_base_offset() {
         // Insert a newline mid-file: shifts the suffix and its line numbers.
         ("a = 1\nb = 2\nc = 3", 6, 6, "\n"),
         // Append at the very end.
-        ("a = 1\'nf = x => a + x", 20, 20, "\nf 2"),
+        ("a = 1\'nf = x -> a + x", 20, 20, "\nf 2"),
     ];
     // Two prefixes with different line structure, so the base is not a whole
     // number of lines in one of them.

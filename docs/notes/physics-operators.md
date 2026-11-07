@@ -133,7 +133,7 @@ of an expr it does not have.
     `crates/lichen-compute/tests/lichen_compute/zz_fold_type_probe.rs`, whose four readings are
     `[straight]` (control, typed), `[loop]` (`?a`), `[loop_root_annotated]` (`(out : array{Float, 6})`,
     typed) and `[loop_recursion_annotated]`
-    (`(('s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`, typed).
+    (`(('s -> …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`, typed).
   - **state is the `XOut` struct, with the recursive function annotated** (`tuple{Int, XOut} -> XOut`):
     it works exactly as the array state does — same six numbers, typed `array{Float, 6}`. **Unannotated**
     it prints `raw none: array{Float, 6}` and records **no diagnostic at all**, which is worse than the
@@ -146,8 +146,8 @@ of an expr it does not have.
     Seed the loop with a real kernel result's `.y` instead.
 
   **Answered: the `?a` is the recursion-annotation rule, not the dispatch.** A loop whose body
-  contains no dispatch at all prints the same shape — unannotated `@loop r = 's => … r (s(0) - 1, 7)`
-  gives `r: ?a -> ?b` and `out: raw 7: ?c`, while `@loop r = (('s => …) : tuple{Int, Int} -> Int)`
+  contains no dispatch at all prints the same shape — unannotated `@loop r = 's -> … r (s(0) - 1, 7)`
+  gives `r: ?a -> ?b` and `out: raw 7: ?c`, while `@loop r = (('s -> …) : tuple{Int, Int} -> Int)`
   gives `r: tuple{Int, Int} -> Int` and `out: Int` (the type system's owner measured both on a toy
   loop, with and without an application in the body). A recursive function's type follows from its
   annotation (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so the

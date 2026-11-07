@@ -26,12 +26,12 @@ the fusion machinery. Chapter 17.
 Chapter 4.
 
 **constructor** — a *parameterized* constructor, the one form that stays a
-function: `F := 'I => {.in I}`. It is applied explicitly where it is used,
+function: `F := 'I -> {.in I}`. It is applied explicitly where it is used,
 as `(F _){…}` or `(F _)`. A zero-parameter constructor over a compound
 body is a **template**. Chapter 7.
 
 **currying** — writing a multi-argument function as nested one-argument
-lambdas; `'x => 'y => …`. Chapter 4.
+lambdas; `'x -> 'y -> …`. Chapter 4.
 
 **cycle cut** — the `…` in a printed type or value, marking a node the walk
 has already shown. Chapter 12.
@@ -50,7 +50,7 @@ and the lambda binds the bare name `x` in its body. A name without a prime
 is an expression of the enclosing scope. Chapter 4.
 
 **function template** — a function written where a function would be, used
-as the requirement of a plain `=` unification: `'_x : Int => _: Int`.
+as the requirement of a plain `=` unification: `'_x : Int -> _: Int`.
 Chapter 4.
 
 **function type** — the shared `FunctionType` marker every function value's

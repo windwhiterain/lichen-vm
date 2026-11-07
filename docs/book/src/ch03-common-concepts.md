@@ -38,8 +38,8 @@ before any of its values are compiled, so a value may use a binding
 written later, and two values may use each other:
 
 ```lichen
-is_even := 'n => if n == 0 then 1 else is_odd (n - 1)
-is_odd := 'n => if n == 0 then 0 else is_even (n - 1)
+is_even := 'n -> if n == 0 then 1 else is_odd (n - 1)
+is_odd := 'n -> if n == 0 then 0 else is_even (n - 1)
 (is_even 10, is_odd 10)
 ```
 
@@ -348,7 +348,7 @@ The operators, from loosest to tightest, are:
 
 | level | forms | associativity |
 |---|---|---|
-| lambda | `'x => e` | right |
+| lambda | `'x -> e` | right |
 | annotations | `e : T`, `e # p`, `e ! p`, `e ? d`, `e ~ "text"` | right |
 | unify | `a = b` | left |
 | table read | `t <== k` | left |
@@ -410,7 +410,7 @@ the maximum of the atoms `a` and `b`, and `max (a + 1) b` needs its
 parentheses.
 
 ```lichen
-f := 'x => x + 1
+f := 'x -> x + 1
 (f 1 * 2, max 1 2 * 3)
 ```
 
@@ -425,7 +425,7 @@ whitespace: `f x`. Application is left-associative, and a function that
 returns a function is applied again: `add 1 2` is `(add 1) 2`.
 
 ```lichen
-add := 'x => 'y => x + y
+add := 'x -> 'y -> x + y
 add 1 2
 ```
 
@@ -439,7 +439,7 @@ two-argument function is partial application, and it produces a usable
 function:
 
 ```lichen
-add := 'x => 'y => x + y
+add := 'x -> 'y -> x + y
 add1 := add 1
 add1 2
 ```
@@ -451,8 +451,8 @@ add1 2
 A function can be passed to another function and returned from one:
 
 ```lichen
-twice := 'f => 'x => f (f x)
-inc := 'x => x + 1
+twice := 'f -> 'x -> f (f x)
+inc := 'x -> x + 1
 twice inc 5
 ```
 
@@ -469,7 +469,7 @@ shared layout type `Tuple`, and the elements' own types are decided by
 the body:
 
 ```lichen
-addpair := ('p : Tuple) => p(0) + p(1)
+addpair := ('p : Tuple) -> p(0) + p(1)
 addpair (1, 2)
 ```
 
@@ -490,7 +490,7 @@ is one.
 Parentheses group, and they also make a difference in application:
 
 ```lichen
-add := 'x => 'y => x + y
+add := 'x -> 'y -> x + y
 (add 1 (2 + 3), add (1 + 2) 3)
 ```
 
@@ -572,7 +572,7 @@ Because a block is an expression, it can be an argument, with no
 parentheses needed:
 
 ```lichen
-f := 'x => x + 1
+f := 'x -> x + 1
 f { a := 1; a }
 ```
 
@@ -606,9 +606,9 @@ Chapter 8 covers that form.
 
 1. Write a program that prints `(0 - 1 > 1, 0 - 1 < 1)` and explain both
    values in terms of unsigned arithmetic.
-2. Write `average := 'a => 'b => (int2float a + int2float b) / 2.0` and
+2. Write `average := 'a -> 'b -> (int2float a + int2float b) / 2.0` and
    evaluate it at `(3, 4)`. Why is the conversion needed on both operands?
-3. Write a curried function `compose := 'f => 'g => 'x => f (g x)` and use it to
+3. Write a curried function `compose := 'f -> 'g -> 'x -> f (g x)` and use it to
    compose `inc` with itself. (The standard library has one.)
 4. Explain why `add 1 * 2` is not `add (1 * 2)`, and check your answer
    with the compiler.

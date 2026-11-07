@@ -42,28 +42,28 @@ fn program() -> String {
 In   := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutM := {{.m (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParM := {{.n @any : Int, .in In}}
-rowmax_raw := ('k = ParM) => {{
+rowmax_raw := ('k = ParM) -> {{
   i := compute.range k.n
   m := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
   ((OutM){{.m (compute.write ((compute.Write _){{.to m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")}}))}})
 }}
 rowmax := compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu" OutM
 Soft := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .m (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutS := {{.s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParS := {{.n @any : Int, .in Soft}}
-shifted_raw := ('k = ParS) => {{
+shifted_raw := ('k = ParS) -> {{
   i := compute.range k.n
   m := (compute.read ((compute.Read _){{.from k.in.m, .at 0}}) : Float)
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float) - m) ~ "element")) ~ "combine"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float) - m) ~ "element")) ~ "combine"))
   ((OutS){{.s (compute.write ((compute.Write _){{.to y, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
 shifted := compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutS
 Norm := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .m (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .s (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutY := {{.y (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 ParY := {{.n @any : Int, .in Norm}}
-norm_raw := ('k = ParY) => {{
+norm_raw := ('k = ParY) -> {{
   i := compute.range k.n
   m := (compute.read ((compute.Read _){{.from k.in.m, .at 0}}) : Float)
   s := (compute.read ((compute.Read _){{.from k.in.s, .at 0}}) : Float)
@@ -72,7 +72,7 @@ norm_raw := ('k = ParY) => {{
 }}
 norm := compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg := {{.n @any : Int, .in In}}
-step := ('s = GArg) => {{
+step := ('s = GArg) -> {{
   mx := (compute.plrun rowmax ((compute.A _){{.n s.n, .I In{{.d s.in.d}}}}) : Struct)
   tot := (compute.plrun shifted ((compute.A _){{.n s.n, .I Soft{{.d s.in.d, .m mx.m}}}}) : Struct)
   compute.plrun norm ((compute.A _){{.n s.n, .I Norm{{.d s.in.d, .m mx.m, .s tot.s}}}}) : Struct

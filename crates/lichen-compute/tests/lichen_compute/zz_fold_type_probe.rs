@@ -17,7 +17,7 @@ XIn  := {.x (compute.Buf (compute.BufParam{.type Float, .length _}))}
 XOut := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
 XPar := {.n @any : Int, .alpha @any : Float, .in XIn, .out XOut}
 XArg := {.n @any : Int, .alpha @any : Float, .I XIn}
-ring_raw := ('c = XPar) => {
+ring_raw := ('c = XPar) -> {
   i := compute.range c.n
   centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
   left := if i == 0 then ((compute.read ((compute.Read _){.from c.in.x, .at (c.n - 1)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float))
@@ -39,7 +39,7 @@ compute.collect s3.y : Array
 /// The same three steps as a top-level fold over an `array{Float, 6}` state.
 const LOOP: &str = r#"
 seed := (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct).y : Array)
-@loop run := 's => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array))
+@loop run := 's -> if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array))
 out := run (2, seed)
 out
 "#;
@@ -47,7 +47,7 @@ out
 /// The same fold with its root annotated: does the annotation reach the container cell?
 const LOOP_ANNOTATED: &str = r#"
 seed := (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct).y : Array)
-@loop run := 's => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array))
+@loop run := 's -> if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array))
 out := run (2, seed)
 (out : Array)
 "#;
@@ -55,7 +55,7 @@ out := run (2, seed)
 /// The same fold with the **recursive function** annotated, which is the rule the type system states.
 const LOOP_RECURSION_ANNOTATED: &str = r#"
 seed := (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x x}}) : Struct).y : Array)
-@loop run := ((s = (('_x => (@any : Int, @any : Array)) _)) => if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array)))
+@loop run := ((s = (('_x -> (@any : Int, @any : Array)) _)) -> if s(0) == 0 then s(1) else run (s(0) - 1, (compute.collect (compute.plrun ring ((XArg){.n 6, .alpha 0.25, .I XIn{.x (compute.buffer (s(1)) : (compute.Buf (compute.BufParam{.type Float, .length _})))}}) : Struct).y : Array)))
 out := run (2, seed)
 out
 "#;

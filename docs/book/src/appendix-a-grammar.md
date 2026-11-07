@@ -27,7 +27,7 @@ name is a lowercase or mixed-case identifier.
 ## Punctuation
 
 ```text
-= := => : # ? ! ~ $ ==> <== @
+= := -> : # ? ! ~ $ => <== @
 + - * / % < > <= >= == != & | ^
 ( ) [ ] { } , ; and newline
 ```
@@ -36,7 +36,7 @@ The three separators — newline, `;`, `,` — are the same token; their
 quantity never matters. `---` opens and closes the header block and is
 reserved elsewhere.
 
-There is **no** `->`: a function's signature is written with `=>`, and
+There is **no** `==>`: a function's signature is written with `->`, and
 a constraint on one is a function template unified with plain `=`
 (Chapter 4).
 
@@ -60,7 +60,7 @@ blocks are elided:
 
 ```text
 expr      := lambda
-lambda    := annotated ('=>' expr)?                  right
+lambda    := annotated ('->' expr)?                  right
 annotated := unify (((':' | '#' | '!' | '?') unify) | ('~' string))*
 unify     := find ('=' find)*                         left
 find      := cmp ('<==' cmp)*                         table read
@@ -89,12 +89,12 @@ postfix   := glued '[' expr ']'        -- array read, or array instance
            | glued '{' fields '}'      -- struct instance
            | '.' name                  -- struct field read
 element   := ['@shallow' ['(' n ')']] glued-expr
-expr      := expr '==>' expr
+expr      := expr '=>' expr
 ```
 
 The prime is a **prefix on a name** and it is written against it: `'x` is
 the formal reference `x`, and `' x` is not a spelling. A prime declares a
-parameter, and only on the **parameter side** of a `=>`; the lambda binds
+parameter, and only on the **parameter side** of a `->`; the lambda binds
 the bare name in its body. A name on the parameter side without a prime is
 an expression of the enclosing scope.
 

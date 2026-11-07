@@ -129,7 +129,7 @@ attribute requirement against the default. That is the lowlevel expr unify, fixe
 to `0..2`.
 
 **The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
-type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) => f i`,
+type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) -> f i`,
 span line 3 col 3), and the probe that reads both sides of `unify_declared_value` shows them equal
 (`declared USize(32)`, `found` the expr whose value is `32`), so the attribute compare is not the
 one failing. The failing unify is the apply's **type** check: `f`'s parameter type is written
@@ -141,8 +141,8 @@ and green.
 
 **The six language failures are `29692f39`'s own, and their diagnostic names the side that is a
 type.** The parallel commit added `self.state[parameter].attr = Some(declared)` ("the body sees
-the parameter's declared slot") and six tests; the tests `f = (x : Int # 32) => x` /
-`g = (i : Int # 32) => f i` / `g 0` and `f = x # 4 => x; f 5` are refused with **`expected Int,
+the parameter's declared slot") and six tests; the tests `f = (x : Int # 32) -> x` /
+`g = (i : Int # 32) -> f i` / `g 0` and `f = x # 4 -> x; f 5` are refused with **`expected Int,
 found Int`** — a comparison of two *type* values where the attribute's *numbers* belong. Both
 sides reach `slot_value_node`, so one side's slot is a type term instead of the number: the
 `declared` expr is `state[parameter_attribute].term` (correctly `[32, Int]`), which leaves the
@@ -231,7 +231,7 @@ this is a **substitution** gap in the struct instantiation, not a class-seeding 
 **The four open `element` cells split in two, and only one half is a bug.** Probing each `Buf`
 wrapper struct's `element` node with its `origin` and function: the four that read `None` are
 - **`520` and `763`**, `origin: None` — the **definition's own** structs, where `element` is the
-  parameter `T` of `Buf = T => struct{…}`. An open `T` is the truth there, so a test that demands
+  parameter `T` of `Buf = T -> struct{…}`. An open `T` is the truth there, so a test that demands
   `Float` of them over-asserts;
 - **`576` and `822`**, `origin: Some(564)` / `Some(810)` — the **instances** `compute.Buf Float`,
   whose element cell is a clone and yet is **its own class root** with no shape: the apply's
@@ -296,7 +296,7 @@ order-dependent tests still swing the count by one).
 
 **The call arm takes the same gate, and the sub-tuple program still reaches no dispatch.**
 `6ad0e53f` gives `ComputeOperator::Call` the same `argument_decided` gate the launch has; measured
-**neutral (219/7)**. The reason is the next layer down: `k1 = compute.jit (r => k0 r(1))`'s outer
+**neutral (219/7)**. The reason is the next layer down: `k1 = compute.jit (r -> k0 r(1))`'s outer
 `compute.launch k1 (…)` evaluates the jit body, whose `k0 r(1)` is a **`Call` whose kernel operand
 is not a `ComputeValue::Kernel` yet** — `k0` is the jit's own value, decided only when the outer
 launch runs the kernel — so the call arm's first `let … else { return None }` defers it and the
@@ -308,7 +308,7 @@ launch was refused by name before its parameter could be supplied; `argument_dec
 argument and separates an **empty** position (undecided → the launch stays lazy) from a **wrong
 value** (decided → the refusal is the answer), and the launch arm returns `None` on the former.
 `jit_cross_kernel_tuple_argument_through_the_wrapper` passes. The first test of the expr still
-dispatches nothing: `k1 = compute.jit (r => k0 r(1))` is a cross-kernel *call*, so its outer
+dispatches nothing: `k1 = compute.jit (r -> k0 r(1))` is a cross-kernel *call*, so its outer
 `compute.launch` reaches no dispatch at all.
 
 **Two compute tests need the launch's deferral, not a reader fix.** With the dereference fixed,
@@ -321,7 +321,7 @@ refuses instead of **re-running** it once its own argument (`x = 5`) is known. T
 refused by name — "argument element 0 is no value, not a concrete Int or Float" — because that
 inner `compute.launch k0 (x, 1)` runs while `x` is still the wrapper's undecided argument cell.
 The first dispatches nothing at all for the same reason: `k1 = compute.jit
-(r => k0 r(1))` is a cross-kernel *call*, and the outer `compute.launch k1 (…)` never reaches a
+(r -> k0 r(1))` is a cross-kernel *call*, and the outer `compute.launch k1 (…)` never reaches a
 dispatch. That is the deferral machinery's line, and rewriting the first test as a dispatch
 assertion was measured wrong (`stubs.calls()` stays empty) and reverted.
 
@@ -1144,7 +1144,7 @@ path does unify the parameter with the argument, so the next probe is the nested
 argument binding.
 
 **The inlined body is `greater_or_equal`, and the emitter reaches it as a `definition`.**
-`core.lichen` writes `greater_or_equal = operands => { operands : array{(_ ! in_num), 2};
+`core.lichen` writes `greater_or_equal = operands -> { operands : array{(_ ! in_num), 2};
 operands[0] >= operands[1] }`, so `s(0) >= 7` becomes an apply whose single argument is the
 expr, and the `Geq` node is that body's `BinOp`, cloned into the caller by
 `static_function_type_apply`'s `static_node_apply(r#return, …)` with the signature's

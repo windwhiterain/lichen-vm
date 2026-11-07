@@ -94,7 +94,7 @@ creation. On top of it:
 
    ```
    Mma = struct{.s string, .a (Buf Int), .b (Buf Int), .c (Buf Int)}
-   mma = (x : Mma # warp) => ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # 0)
+   mma = (x : Mma # warp) -> ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # 0)
    ```
 
    The backend is a required field, as `parallel`'s backend argument is: a program says

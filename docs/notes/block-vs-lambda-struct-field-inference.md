@@ -5,14 +5,14 @@
 ## 1. The disagreement
 
 ```lichen
-K = _x => struct{.x _}
+K = _x -> struct{.x _}
 j1 = {T = _; 1: T; (K _)(.x T)}
 j1
 ```
 
 ```lichen
-K = _x => struct{.x _}
-j = x => {T = _; x: T; (K _)(.x T) }
+K = _x -> struct{.x _}
+j = x -> {T = _; x: T; (K _)(.x T) }
 j 1
 ```
 
@@ -31,10 +31,10 @@ fallback and means the field's type node is not a readable type at all.
 Two smaller programs isolate the same hole without any lambda:
 
 ```lichen
-h  = X => struct{.x _}
+h  = X -> struct{.x _}
 h Int        -- prints struct{.x raw[?a, ?b]}
 
-h2 = X => struct{.x X}
+h2 = X -> struct{.x X}
 h2 Int       -- prints struct{.x Int}
 ```
 
@@ -173,7 +173,7 @@ and writes `Type` into the field's value cell immediately.
 
 **The constraint survives per call exactly when its unify partner is a template
 member.** That is why the same body with no `K` at all works:
-`j = x => {T = _; x: T; struct{.x _}(.x T) }; j 1` prints `struct{.x Type}`,
+`j = x -> {T = _; x: T; struct{.x _}(.x T) }; j 1` prints `struct{.x Type}`,
 because the field expr is a member of `j`'s own template and the topology rebuild
 re-establishes the check-time merge among the per-call clones.
 
@@ -229,14 +229,14 @@ concrete when its field cells bound at check time.
 
 | program | expected |
 |---|---|
-| `K = _x => struct{.x _}` / `j1 = {T = _; 1: T; (K _)(.x T)}` / `j1` | `(Int,): struct{.x Type}` (unchanged) |
-| the same body inside `j = x => {…}` / `j 1` | `(Int,): struct{.x Type}` (**the fix**) |
-| no `K`: `j = x => {T = _; x: T; struct{.x _}(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
-| `K = _x => struct{.x _}` / `j = x => {T = _; x: T; 1: T; (K _)(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
-| `K = _x => struct{.x Int}` / `j = x => (K _)(.x x)` / `j 1` | `(1,): struct{.x Int}` (unchanged) |
+| `K = _x -> struct{.x _}` / `j1 = {T = _; 1: T; (K _)(.x T)}` / `j1` | `(Int,): struct{.x Type}` (unchanged) |
+| the same body inside `j = x -> {…}` / `j 1` | `(Int,): struct{.x Type}` (**the fix**) |
+| no `K`: `j = x -> {T = _; x: T; struct{.x _}(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
+| `K = _x -> struct{.x _}` / `j = x -> {T = _; x: T; 1: T; (K _)(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
+| `K = _x -> struct{.x Int}` / `j = x -> (K _)(.x x)` / `j 1` | `(1,): struct{.x Int}` (unchanged) |
 | the same / `j "s"` | `expected Int, found string` (unchanged) |
-| `h = X => struct{.x _}` / `h Int` | `struct{.x raw[?a, ?b]}: TypeStruct` (unchanged — a genuinely unconstrained hole stays raw) |
-| `h2 = X => struct{.x X}` / `h2 Int` | `struct{.x Int}: TypeStruct` (unchanged) |
+| `h = X -> struct{.x _}` / `h Int` | `struct{.x raw[?a, ?b]}: TypeStruct` (unchanged — a genuinely unconstrained hole stays raw) |
+| `h2 = X -> struct{.x X}` / `h2 Int` | `struct{.x Int}: TypeStruct` (unchanged) |
 
 ## 9. The alternatives, and what must keep working
 
@@ -257,7 +257,7 @@ block (a single batch, bound at check time), and the ascribe-before variant
 (`1: T` before the instantiate, inside the same body), where the check-time batch
 is bound, the deep pass proves the instantiate's value concrete, and the clone is
 baked rather than recomputed. And a genuinely unconstrained hole
-(`h = X => struct{.x _}; h Int`) must stay raw: nothing decides it, and the
+(`h = X -> struct{.x _}; h Int`) must stay raw: nothing decides it, and the
 printer's mark is the honest answer.
 
 ## Recovered measurements
@@ -281,7 +281,7 @@ print `(Int,): struct{.x Type}` — the block and the applied lambda agree — s
 what the printer reads. Re-measured again on `dev@1afc7d93`: same answer, both `(Int,): struct{.x Type}`.
 
 The two smaller programs stay as they are, and the maintainer ruled that this is expected: in
-`h = X => struct{.x _}` the field's type is a **hole**, which is never unified with the parameter `X`, so
+`h = X -> struct{.x _}` the field's type is a **hole**, which is never unified with the parameter `X`, so
 `h Int` has no effect on it and the field stays undecided. The note's own reading of those two programs as a
 second symptom was wrong, and this paragraph replaces it.
 

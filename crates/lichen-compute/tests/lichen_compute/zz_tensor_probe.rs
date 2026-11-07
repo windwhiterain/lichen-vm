@@ -17,7 +17,7 @@ Par := {.n @any : Int, .in In}
 Arg := {.n @any : Int, .I In}
 w := (compute.buffer ([@any : Int, 6][1, 2, 3, 4, 5, 6] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 6})))
 x := (compute.buffer ([@any : Int, 3][10, 20, 30] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 3})))
-body := ('k = Par) => {
+body := ('k = Par) -> {
   i := compute.range k.n
   a := (compute.read ((compute.Read _){.from k.in.w, .at i}) : Int)
   b := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Int)
@@ -40,7 +40,7 @@ Par  := {.n @any : Int, .in In}
 Arg  := {.n @any : Int, .I In}
 w := (compute.buffer ([@any : Int, 6][1, 2, 3, 4, 5, 6] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 6})))
 x := (compute.buffer ([@any : Int, 3][1, 1, 1] : Array) : (compute.Buf (compute.BufParam{.type Int, .length 3})))
-body := ('k = Par) => {
+body := ('k = Par) -> {
   i := compute.range k.n
   wb := k.in.w
   xb := k.in.x
@@ -50,7 +50,7 @@ body := ('k = Par) => {
   wsc := wd.stride.column
   xsc := xd.stride.column
   wc := wd.shape.column
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (((compute.read ((compute.Read _){.from wb, .at (i * wsr + (s(0) - 1) * wsc)})) : Int) * ((compute.read ((compute.Read _){.from xb, .at ((s(0) - 1) * xsc)})) : Int))))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (((compute.read ((compute.Read _){.from wb, .at (i * wsr + (s(0) - 1) * wsc)})) : Int) * ((compute.read ((compute.Read _){.from xb, .at ((s(0) - 1) * xsc)})) : Int))))
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value (fold (wc, 0))}))})
 }
@@ -97,7 +97,7 @@ const SELECTOR: &str = r#"
 Pair := {.row @any : Int, .column @any : Int}
 Dims := {.shape Pair, .stride Pair}
 x := Dims{.shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}}
-sel := 'i => (x.shape.row, x.shape.column)
+sel := 'i -> (x.shape.row, x.shape.column)
 (sel 0)(1)
 "#;
 
@@ -124,19 +124,19 @@ fn probe_a_selector_closure() {
 /// does not, and the third only defines it. A determined `TableGet` is supposed to be
 /// evaluated at the use; a miss is `EvalError::TableMiss`, not "undecided".
 const SHAPE_TABLE: &str = r#"
-pick := ('s : (table{Int, Int})) => s <== 1
-pick (table(1 ==> 10, 2 ==> 20))
+pick := ('s : (table{Int, Int})) -> s <== 1
+pick (table(1 => 10, 2 => 20))
 "#;
 
 const SHAPE_TABLE_MISS: &str = r#"
-pick := ('s : (table{Int, Int})) => s <== 1
-pick (table(2 ==> 20))
+pick := ('s : (table{Int, Int})) -> s <== 1
+pick (table(2 => 20))
 "#;
 
 /// The same selector over a concrete tensor's shape table — the call-site capture.
 const SHAPE_TABLE_CAPTURE: &str = r#"
-shape := table("r0" ==> 2, "c0" ==> 3)
-sel := 'i => shape <== "r0"
+shape := table("r0" => 2, "c0" => 3)
+sel := 'i -> shape <== "r0"
 sel 0
 "#;
 
@@ -168,16 +168,16 @@ fn probe_a_shape_table() {
 /// operands, drop the contracted labels); the second puts that computed shape into a
 /// type and reads a label back through the type — the `contract` result type's question.
 const CONTRACT_SHAPE: &str = r#"
-a := table("r0" ==> 2, "c0" ==> 3)
-b := table("r1" ==> 3, "c1" ==> 4)
+a := table("r0" => 2, "c0" => 3)
+b := table("r1" => 3, "c1" => 4)
 c := a @table_merge b @table_without "c0" @table_without "r1"
 (c <== "r0", c <== "c1")
 "#;
 
 const CONTRACT_TYPE: &str = r#"
-Tensor := 's => {.shape s, .value @any : Int}
-a := table("r0" ==> 2, "c0" ==> 3)
-b := table("r1" ==> 3, "c1" ==> 4)
+Tensor := 's -> {.shape s, .value @any : Int}
+a := table("r0" => 2, "c0" => 3)
+b := table("r1" => 3, "c1" => 4)
 shape := a @table_merge b @table_without "c0" @table_without "r1"
 t := (Tensor shape){.shape shape, .value 1}
 t.shape <== "r0"

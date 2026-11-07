@@ -29,12 +29,12 @@ Measured on the branch's first step (the type predicates and the compound set
 landed; the value shapes did not change):
 
 ```lichen
-F := ('x = table{_, Int}) => x
-(F table(1 ==> 2), F table("a" ==> 2))
+F := ('x = table{_, Int}) -> x
+(F table(1 => 2), F table("a" => 2))
 # expected ?, found table{Int, Int}
 # expected ?, found raw[raw[@any, Int], raw[@any, Int]]
 
-G := ('x = set{_}) => x
+G := ('x = set{_}) -> x
 (G set(1), G set("a"))
 # expected SetType, found set{Int}
 # expected SetType, found set{string}
@@ -48,10 +48,10 @@ exist.
 
 Two further measurements bound the design. Making the set value's **type** the
 shared kind (as the array instance's type is) fixes the two-call `set{_}`
-requirement, but it fails on a two-member set — `('x = set{_}) => x; x set(1, 2)`
+requirement, but it fails on a two-member set — `('x = set{_}) -> x; x set(1, 2)`
 — with `expected SetType, found SetType`, because the requirement's value is the
 one-element shape and the argument's value is the two-member array: the `=`
-match compares the value lengths. It also refuses `('x = set{Int}) => x;
+match compares the value lengths. It also refuses `('x = set{Int}) -> x;
 x set("a")`, so the element is enforced only through that same value compare.
 The array's template avoids both because its type carries the **length**
 (`[_, 2]` has two holes). A set has no count — one type, any member count — so
@@ -127,7 +127,7 @@ consumers) is **17 failed**. The construction alone explains the wide failures.
 
 ```lichen
 Num := set(Int, Float)
-in_num := 't => t @in Num; let Pair := (@any ! in_num, @any ! in_num)
+in_num := 't -> t @in Num; let Pair := (@any ! in_num, @any ! in_num)
 ```
 
 so `Num` is a **set**, `in_num` is its `@in` refinement and `Pair` carries it.
@@ -176,6 +176,6 @@ Measured after the change: language **283/283**, highlevel **136/136**, compute
 
 Still not the spec's surface, and the next slice: the instances take their type
 explicitly (`table(t)(k => v, …)`, `set(t)(e, …)`), the arrows are `->` for the
-lambda and `=>` for the entry (the implementation still uses `=>` and `==>`),
-and an instance's type is still the shared kind rather than the type value the
+lambda and `=>` for the entry — the spelling the implementation now uses — and
+an instance's type is still the shared kind rather than the type value the
 spec's `set{t}`/`table{kt, vt}` names.

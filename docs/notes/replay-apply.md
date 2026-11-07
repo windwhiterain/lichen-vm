@@ -9,7 +9,7 @@
 
 ## The problem
 
-`f = ('i <: I => _)` with `f` still undecided. A direct `Unify(f, template)` is
+`f = ('i <: I -> _)` with `f` still undecided. A direct `Unify(f, template)` is
 the undecided-vs-decided write arm: it writes the **template** into `f`'s value
 class. A later `$parallel(f)`/`$jit(f)` then compiles the template record, not
 the caller's function. Measurements, `lichen-compute` integration:
@@ -49,7 +49,7 @@ place, and deleting it was measured on the one-node, one-entry apply:
 | branch deleted | 164/1 | 274/1 | 66/174 |
 
 - The language loss is `frozen_function_type`'s second case —
-  `apply := 'x = ('x : Int => _: Int) => x 1; apply ('y : Int => y + y)` answers
+  `apply := 'x = ('x : Int -> _: Int) -> x 1; apply ('y : Int -> y + y)` answers
   `none` instead of `2`. Nothing else links an undecided actual to the template:
   the replay's callee is the actual's own cell, which stays empty.
 - Compute moves to the shape the replay targets: 171 of the failures become
@@ -205,7 +205,7 @@ artifact format moves to 29 because the old per-node mark is removed.
 The minimal probe remains:
 
 ```lichen
-id := ('x : Int) => {
+id := ('x : Int) -> {
   x = @any : Int
   x
 }
@@ -224,7 +224,7 @@ The compute reproduction exposes a gap in the open-return condition above. In
 
 ```lichen
 a := 42
-k := compute.jit ('x => x + a)
+k := compute.jit ('x -> x + a)
 compute.launch k 1
 ```
 
@@ -239,8 +239,8 @@ empty `597` and defers, leaving `none: Int`.
 This is not specific to freezing. The control
 
 ```lichen
-choose := 'x => if x == 0 then 1 else 2
-launch2 := 'k <: compute.K => 'a => {
+choose := 'x -> if x == 0 then 1 else 2
+launch2 := 'k <: compute.K -> 'a -> {
   a <: k.I
   r := choose a
   r = k.O
@@ -335,7 +335,7 @@ unified `f`, the parameter type is a decided struct, and the op compiles. See
   chain or a scope hit; the parameter check binds the placeholder and the
   original return links the replay instance's applied return.
 - **Landed**: the deferred `Unify` is gone from every producer. The function
-  template (`f = ('i <: I => _)`), the struct-layout term and a struct instance's
+  template (`f = ('i <: I -> _)`), the struct-layout term and a struct instance's
   field-read argument now record a **requirement** (`Module::requirements`: cell →
   template) and emit no node; a callee with no value of its own resolves through
   that record (`function_apply_function`'s `recorded_requirement`). The link is

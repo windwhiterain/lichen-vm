@@ -13,9 +13,9 @@
 Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Sums := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .in (Row)}
-sumsq_raw := ParS{.'n : Int, .'in} => {
+sumsq_raw := ParS{.'n : Int, .'in} -> {
   i := compute.range n
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float) * (compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float) * (compute.read ((compute.Read _){.from in.x, .at s(0) - 1}) : Float))) ~ "combine" ~ "element"))
   b_s := compute.buf (compute.BufParam{.type Float, .length n})
   Sums{.s (compute.write ((compute.Write _){.to b_s, .at i, .value fold (n + 0, 0.0 ~ "identity")}))}
 }
@@ -23,7 +23,7 @@ sumsq := compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element
 Scale := {.x (compute.Buf (compute.BufParam{.type Float, .length 4})), .w (compute.Buf (compute.BufParam{.type Float, .length 4})), .s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 OutY := {.y (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParY := {.n @any : Int, .in (Scale)}
-rescale_raw := ParY{.'n : Int, .'in} => {
+rescale_raw := ParY{.'n : Int, .'in} -> {
   i := compute.range n
   x := (compute.read ((compute.Read _){.from in.x, .at i}) : Float)
   w := (compute.read ((compute.Read _){.from in.w, .at i}) : Float)
@@ -34,7 +34,7 @@ rescale_raw := ParY{.'n : Int, .'in} => {
 rescale := compute.parallel (rescale_raw ~ "claim:Reduction(element)") "cpu" (OutY)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_x_raw := Fill{.'n : Int} => {
+fill_x_raw := Fill{.'n : Int} -> {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 7.0 else 0.0) + (if i == 1 then 3.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 2.0 else 0.0)
@@ -43,7 +43,7 @@ fill_x_raw := Fill{.'n : Int} => {
 fill_x := compute.parallel fill_x_raw "cpu" (xBuf)
 x := (compute.plrun fill_x Fill{.n 4} = xBuf).x
 wBuf := {.w (compute.Buf (compute.BufParam{.type Float, .length 4}))}
-fill_w_raw := Fill{.'n : Int} => {
+fill_w_raw := Fill{.'n : Int} -> {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 4})
   v := (if i == 0 then 2.0 else 0.0) + (if i == 1 then 4.0 else 0.0) + (if i == 2 then 8.0 else 0.0) + (if i == 3 then 16.0 else 0.0)

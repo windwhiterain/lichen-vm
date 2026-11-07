@@ -35,7 +35,7 @@ At `dev@554560d2`:
     compute = import "compute.lichen"
   ---
   a := 42
-  k := compute.jit (x => x + a)
+  k := compute.jit (x -> x + a)
   compute.launch k 1
   ```
 
@@ -98,10 +98,10 @@ Use this minimal compile-only reproduction:
 ---
   compute = import "compute.lichen"
 ---
-In := _x => {.d (compute.Buf (compute.BufParam{.type Float, .length 1}))}
-OutE := _x => {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
-Par := _x => {.n @any : Int, .in In _}
-raw := (lane <: Par) => {
+In := _x -> {.d (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+OutE := _x -> {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
+Par := _x -> {.n @any : Int, .in In _}
+raw := (lane <: Par) -> {
   e := compute.buf (compute.BufParam{.type Float, .length lane.n})
   ((OutE){.e (compute.write (compute.Write{.to e, .at 0, .value (compute.read (compute.Read{.from lane.in.d, .at 0}) : Float)}))})
 }
@@ -154,7 +154,7 @@ Relevant code:
 | `$jit` wrapper applies `f` to a placeholder and native inspects the cloned return | `$jit` compiles. This validates the native-inspection idea only; launch execution and parallel provenance are separate. |
 | The same pair for `$parallel`, without replay | **73/167**. The read still had no corresponding instance. Reverted. |
 | Raw apply container instead of `applied_exprs` cloned return | No improvement over the cloned-return form. |
-| Pre-apply a launch runner, then return `x => {x = a; O}` | Still `none`; the computation return is met before the actual argument binds the runner placeholder. |
+| Pre-apply a launch runner, then return `x -> {x = a; O}` | Still `none`; the computation return is met before the actual argument binds the runner placeholder. |
 | Explicit native replay plus native pair | **107/133**, worse than `554560d2`'s 113/127. Reverted. |
 | Recursively replay every nested `Apply` | Minimal read refusal unchanged. Reverted. |
 | Broaden replay to every operation/open nested cell | Caused lowlevel recursion hangs and `expected Struct, found Struct` package failures. Reverted. |
@@ -219,7 +219,7 @@ The measured chain is no longer just "node 1283 was never replayed":
   experiment is rejected, not a new replay rule.
 - `p <: Buf` still constructs a fresh `Buf`. `p : (Buf _)` hits a Struct/Struct
   type conflict. Neither is the source-preserving spelling.
-- An experimental `Read := p => {.from p, …}` does preserve the source equality
+- An experimental `Read := p -> {.from p, …}` does preserve the source equality
   class. A class member then has physical slot path `[3, 2]`; following the two
   actual struct values turns it into logical input path `[1, 0]` (two struct
   headers). A class-member path fallback plus this wrapper makes the smaller

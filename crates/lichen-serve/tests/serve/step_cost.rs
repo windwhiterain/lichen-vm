@@ -8,7 +8,7 @@ const KERNEL: &str = r#"
 Inc = struct{.d (compute.Buf Float)}
 Out = struct{.e (compute.Buf Float)}
 Par = struct{.n Int, .in Inc, .out Out}
-double_raw = ('k : Par) => {
+double_raw = ('k : Par) -> {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0)))
 }

@@ -18,11 +18,11 @@ surface is an embedded `compute.lichen` that re-exports a small namespace:
 
 ```
 --- compute = import "compute.lichen" ---
-k = compute.jit ('x : Int => x + 1)  -- jit: compile the lambda to a kernel (via `$jit`)
+k = compute.jit ('x : Int -> x + 1)  -- jit: compile the lambda to a kernel (via `$jit`)
 compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 
-A **kernel is a plain struct** `K = '_x => struct{.native _, .I _, .O _}` — the
+A **kernel is a plain struct** `K = '_x -> struct{.native _, .I _, .O _}` — the
 `.native` field holds the opaque compiled wasm artifact (a `Kernel`/`ParKernel`
 value), and `.I` (the domain) and `.O` (the codomain) carry the function
 signature. There is **no** `TypeKernel`/`TypeParKernel` kind marker in the
@@ -33,7 +33,7 @@ kernel type, a `jit` result renders as the raw struct
 (`struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}`) rather than the
 old `Kernel : Int -> Int` — the concrete signature lives in `.I`/`.O`, where the
 language's shared struct printer spells it. A **buffer** is the same kind of
-wrapper, `Buf = 'T => struct{.native _, .element T}` (no `TypeBuffer`/`TypeWrite`
+wrapper, `Buf = 'T -> struct{.native _, .element T}` (no `TypeBuffer`/`TypeWrite`
 marker, and no `BufferId`): the packed payload rides in `.native` and the element
 type in `.element`.
 
@@ -85,27 +85,27 @@ not callee-type dispatch:
   the kernel struct.
 
 ```
-let type_of = 'x => {t = _; x: t; t}
-KT = '_x => struct{.I _, .O _}
-K = '_x => struct{.native _, .I _, .O _}
-A = 'I => struct{.n Int, .I I}
-P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
-S = T: KT _ => A T.I -> T.O
-Buf = 'T => struct{.native _, .element T}
-jit = 'f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
-launch = 'k: (K _) => 'a: k.I => {r = $launch(k.native, a); r: k.O; r}
-call = 'k: (K _) => 'a: k.I => {r = $call(k.native, a); r: k.O; r}
-parallel = 'f => 'b: string => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O I::out)}
-plrun = 'k: (K _) => 'a: k.I => {r = $plrun(k.native, a); r: k.O; r}
-range = 'x: Int => $range(x): Int
-Read = 'T => struct{.from (Buf T), .at Int}
-Write = 'T => struct{.to (Buf T), .at Int, .value T}
-read = ('x : (Read _)) => $read(x.from, x.at): x.from.element
-write = ('x : (Write _)) => $write(x.to, x.at, x.value)
-collect = ('b : (Buf _)) => $collect(b)
-buffer = ('xs : array{_, _}) => ($buffer(xs) : (Buf _))
-graph = 'f => {f: _ -> _; $graph(f)}
-graphrun = 'g => 'a => $graphrun(g, a)
+let type_of = 'x -> {t = _; x: t; t}
+KT = '_x -> struct{.I _, .O _}
+K = '_x -> struct{.native _, .I _, .O _}
+A = 'I -> struct{.n Int, .I I}
+P = T: KT _ -> struct{.n Int, .in T.I, .out T.O}
+S = T: KT _ -> A T.I -> T.O
+Buf = 'T -> struct{.native _, .element T}
+jit = 'f -> {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
+launch = 'k: (K _) -> 'a: k.I -> {r = $launch(k.native, a); r: k.O; r}
+call = 'k: (K _) -> 'a: k.I -> {r = $call(k.native, a); r: k.O; r}
+parallel = 'f -> 'b: string -> {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O I::out)}
+plrun = 'k: (K _) -> 'a: k.I -> {r = $plrun(k.native, a); r: k.O; r}
+range = 'x: Int -> $range(x): Int
+Read = 'T -> struct{.from (Buf T), .at Int}
+Write = 'T -> struct{.to (Buf T), .at Int, .value T}
+read = ('x : (Read _)) -> $read(x.from, x.at): x.from.element
+write = ('x : (Write _)) -> $write(x.to, x.at, x.value)
+collect = ('b : (Buf _)) -> $collect(b)
+buffer = ('xs : array{_, _}) -> ($buffer(xs) : (Buf _))
+graph = 'f -> {f: _ -> _; $graph(f)}
+graphrun = 'g -> 'a -> $graphrun(g, a)
 ```
 
 (The listing is `crates/lichen-compute/src/compute.lichen` — its `type_of`
@@ -371,7 +371,7 @@ snapshotting of a bound argument and no class-rep routing, so the launch-argumen
 typechecker" guarantee holds because the checker's gates run first; the JIT only lowers a
 graph the checker has already accepted.
 
-A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : tuple{Int, Int} =>
+A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : tuple{Int, Int} ->
 p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
 **low type** — seeded from the parameter's type cell by the encoding authority, then read
 back off the parameter's class (see [compute-jit-low-types](compute-jit-low-types.md)) — which
@@ -381,7 +381,7 @@ drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element
 `flatten_offset`. On the launch side the tuple argument is unwrapped by `collect_args` and
 the now multi-arity `main` is called through the dynamic `wasmi::Func::call` API.
 
-A **tuple codomain** is the mirror: `compute.jit (p : tuple{Int, Int} => (p(0), p(1)))`
+A **tuple codomain** is the mirror: `compute.jit (p : tuple{Int, Int} -> (p(0), p(1)))`
 compiles to wasm `(i64, i64) -> (i64, i64)`. `codomain_leaves` resolves the body's
 return value into the leaves to emit — a bare value is the one-leaf form, a
 materialized tuple value one leaf per element, in source order — and each leaf is

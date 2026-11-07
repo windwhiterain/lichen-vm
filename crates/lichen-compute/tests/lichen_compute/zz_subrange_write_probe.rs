@@ -17,7 +17,7 @@ PIn  := {.x (compute.Buf (compute.BufParam{.type Int, .length _}))}
 POut := {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
 PPar := {.n @any : Int, .off @any : Int, .in PIn, .out POut}
 PArg := {.n @any : Int, .off @any : Int, .I PIn}
-append_raw := ('c = PPar) => {
+append_raw := ('c = PPar) -> {
   i := compute.range c.n
   v := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Int)
   compute.write ((compute.Write _){.to c.out.y, .at (i + c.off), .value v})

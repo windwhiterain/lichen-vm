@@ -85,7 +85,7 @@ primitive, not a bigger version of this one.
 
 **Recursion is the other way to write a loop, and it already works** — on
 unmodified `dev`. `square (i + 1)` in a kernel body gives `[1, 4, 9, 16]`, and a
-self-recursive `steps = k => if k == 0 then 0 else steps (k - 1) + 1` applied
+self-recursive `steps = k -> if k == 0 then 0 else steps (k - 1) + 1` applied
 as `steps 4` gives `4 : Int`. The deep pass reduces a same-module call and
 unifies the substituted parameter with the argument *before* the emitter walks
 the body, so there is no call left to expand — see
@@ -107,7 +107,7 @@ The symptom is worse than a missing feature, because it is **silent**:
 
 ```lichen
 data = [3, 1, 4, 1, 5, 9, 2, 6]
-k = cfg => { n = cfg(0); i = compute.range n
+k = cfg -> { n = cfg(0); i = compute.range n
              compute.write ((compute.Write _)(.to n, .at i, .value compute.read ((compute.Read _)(.from cfg(1)(0), .at i)) + 1)) }
 out = compute.plrun k (8, (data,))
 compute.collect out
@@ -147,7 +147,7 @@ a constant; `alpha * xv` with `alpha` a program value does not.
 ### 5. A scatter-accumulate is silently wrong
 
 ```lichen
-hist = cfg => { n = cfg(0); i = compute.range n
+hist = cfg -> { n = cfg(0); i = compute.range n
                 key = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
                 compute.write ((compute.Write _)(.to 3, .at key, .value 1)) }
 ```
@@ -272,7 +272,7 @@ self-recursive call in a conditional's branch is refused as
 `expected Int, found Int`**:
 
 ```lichen
-loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+loop = f -> n -> x -> if n == 0 then x else loop f (n - 1) (f x)
 -- expected Int -> Int, found Int -> Int
 ```
 
@@ -283,9 +283,9 @@ two-argument one is the trigger. And it records the escape, which is the whole
 difference:
 
 ```lichen
-loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
+loop = (f -> n -> x -> if n == 0 then x else loop f (n - 1) (f x))
      : (Int -> Int) -> Int -> Int -> Int
-inc = x => x + 1
+inc = x -> x + 1
 (loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): tuple{Int, Int, Int}
 ```
 

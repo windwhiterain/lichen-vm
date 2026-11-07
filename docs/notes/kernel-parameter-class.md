@@ -63,8 +63,8 @@ Two files, no operator, no `.native`, no `jit` — `b.lichen` is frozen because 
 is imported:
 
 ```lichen
-S = '_x => struct{.I _, .O _}
-mk = 'x => (S _)(.I x, .O x)
+S = '_x -> struct{.I _, .O _}
+mk = 'x -> (S _)(.I x, .O x)
 ```
 
 `main.lichen`:
@@ -147,7 +147,7 @@ Measured structure of the parameter's type cell:
 **The arrow's node shape is the variable, not freezing**: the same node was
 `Unknown` in a local module. Downstream, `compile_fragment` seeds from
 `low_type_of_slot` and `kernel_domain` refused with `UNDECIDED_DOMAIN`, so
-`compute.jit (p : tuple{Int, Int -> Float} => p(0))` was refused **at the `jit`** even
+`compute.jit (p : tuple{Int, Int -> Float} -> p(0))` was refused **at the `jit`** even
 though the parameter was annotated and its first position *is* decided.
 
 **The fix.** `Module::function_type_signature` reads the function type's domain
@@ -161,9 +161,9 @@ mutable borrow. Measured, the refusal moves to where it can name a position:
 
 | program | before | after |
 |---|---|---|
-| `jit (p : tuple{Int, Int -> Float} => p(0))` | `UNDECIDED_DOMAIN`, at the `jit` | `kernel_launch: argument element 1 is a function, not a concrete Int or Float` |
-| `jit (p : tuple{Int -> Float, Int} => p(1))` | `UNDECIDED_DOMAIN` | the same, at **element 0** |
-| `jit (p : Int -> Float => p)` | `UNDECIDED_DOMAIN` | `kernel domain must be a scalar or a tuple of scalars` |
+| `jit (p : tuple{Int, Int -> Float} -> p(0))` | `UNDECIDED_DOMAIN`, at the `jit` | `kernel_launch: argument element 1 is a function, not a concrete Int or Float` |
+| `jit (p : tuple{Int -> Float, Int} -> p(1))` | `UNDECIDED_DOMAIN` | the same, at **element 0** |
+| `jit (p : Int -> Float -> p)` | `UNDECIDED_DOMAIN` | `kernel domain must be a scalar or a tuple of scalars` |
 | a float-domain kernel, an unannotated parameter, the scalar control, the function-codomain program, the frozen two-file probe | — | **unchanged** |
 
 **The frozen half of the same decode.** A frozen module's function type is the same
@@ -210,6 +210,6 @@ Gating it was what left a frozen function type decoding as
 
 **Three measured `DomainStatement` shapes, and why the refusal reads the type cell
 rather than the decoded shape.** `p : In` (a struct) decodes to
-`Array(Unknown, 2)`; an unannotated `'y => y + y` to `Array(Array(Unknown, 2), 2)`;
+`Array(Unknown, 2)`; an unannotated `'y -> y + y` to `Array(Array(Unknown, 2), 2)`;
 `p : tuple{Int, _}` to `Tuple([USize, Unknown])`. Only the third says a position is
 missing, and only the first says the domain is a struct.

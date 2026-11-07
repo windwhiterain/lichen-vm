@@ -47,7 +47,7 @@ let application =
         .boxed();               // fix 1: base of the precedence chain
 // … precedence chain (unary → arith → cmp → arrow → annotation → lambda) …
 let parser = term4
-    .then(/* `=>` chain */)
+    .then(/* `->` chain */)
     .map(/* … */)
     .validate(/* … */)
     .boxed();                  // fix 2: top of the chain, handed to `recursive`

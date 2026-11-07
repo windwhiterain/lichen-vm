@@ -8,10 +8,10 @@ functions.
 
 ## A lambda is a value
 
-A function is written `'parameter => body`:
+A function is written `'parameter -> body`:
 
 ```lichen
-inc := 'x => x + 1
+inc := 'x -> x + 1
 inc
 ```
 
@@ -19,20 +19,20 @@ inc
 Int => Int: Int => Int
 ```
 
-The text `'x => x + 1` is a **lambda**: `'x` is its parameter side and
+The text `'x -> x + 1` is a **lambda**: `'x` is its parameter side and
 `x + 1` its body. The prime is a **prefix** on the name and it is written
 against it: `'x` names the formal `x`, and `' x` — with a space — is not a
 spelling at all. The lambda binds `x` in its body, so the body writes the
 bare name `x` while the parameter side writes `'x`.
 
-The body is everything to the right of the `=>` up to the end
-of the expression, so `'x => x + 1` is `'x => (x + 1)`. To limit the body,
+The body is everything to the right of the `->` up to the end
+of the expression, so `'x -> x + 1` is `'x -> (x + 1)`. To limit the body,
 parenthesize it.
 
 A lambda is an expression, so it can be a whole program:
 
 ```lichen
-'x => x + 1
+'x -> x + 1
 ```
 
 ```text
@@ -47,7 +47,7 @@ The identity function shows what the compiler does with a function whose
 parameter has no decided type yet:
 
 ```lichen
-id := 'x => x
+id := 'x -> x
 id
 ```
 
@@ -62,7 +62,7 @@ one type, and it is not known yet".
 
 ### The parameter side is an expression
 
-The left of a `=>` is an ordinary **expression**, and only a **primed**
+The left of a `->` is an ordinary **expression**, and only a **primed**
 name in it declares a parameter. A name written there without a prime is
 an expression of the enclosing scope: it resolves where it was written,
 not bound here. That is why the `gcd` further down writes its template as
@@ -79,7 +79,7 @@ not two arguments and not an implicit currying: the function still takes
 one argument, and the argument is the whole expression.
 
 ```lichen
-sum := ('a, 'b) => a + b
+sum := ('a, 'b) -> a + b
 sum (1, 2)
 ```
 
@@ -91,7 +91,7 @@ One name primed more than once is one formal: its occurrences share it,
 and the body reads the same one.
 
 A prime belongs to a parameter side — the expression on the left of a
-`=>`. Written anywhere else it is refused, rather than quietly bound by
+`->`. Written anywhere else it is refused, rather than quietly bound by
 an enclosing lambda.
 
 ## A function's value and its type
@@ -106,7 +106,7 @@ The consequence is that annotating a function is not adding a check
 beside it. The annotation writes the function's own cells:
 
 ```lichen
-inc := ('x : Int) => x + 1
+inc := ('x : Int) -> x + 1
 inc
 ```
 
@@ -115,19 +115,19 @@ Int => Int: Int => Int
 ```
 
 A whole signature is stated with a **function template**: a parameter with
-its type, `=>`, and the result. The template is written where a function
+its type, `->`, and the result. The template is written where a function
 would be, and it is unified with plain `=`:
 
 ```lichen
-inc := ('x : Int) => x + 1
-inc = '_x : Int => _: Int
+inc := ('x : Int) -> x + 1
+inc = '_x : Int -> _: Int
 ```
 
 ```text
 Int => Int: Int => Int
 ```
 
-The template `'_x : Int => _: Int` says: a function whose parameter is
+The template `'_x : Int -> _: Int` says: a function whose parameter is
 annotated `Int`, and whose result is a placeholder of type `Int`. The `=`
 asks the actual's **signature** to agree with it — and the actual's own body
 is kept; only its signature is constrained. There is no separate
@@ -144,7 +144,7 @@ A function's parameter is instantiated fresh at every application. That
 is what lets one binding be used at two different types:
 
 ```lichen
-id := 'x => x
+id := 'x -> x
 (id 5, id Int)
 ```
 
@@ -163,9 +163,9 @@ the function is returned from that block, it keeps them:
 
 ```lichen
 a := 1
-f1 := 'x => {
+f1 := 'x -> {
     b := 2
-    f2 := 'y => (a, b, x, y)
+    f2 := 'y -> (a, b, x, y)
     f2
 }
 f1 3 4
@@ -186,7 +186,7 @@ argument to a two-argument function leaves a function that has captured
 the first.
 
 ```lichen
-make := 'a => 'b => a + b
+make := 'a -> 'b -> a + b
 add2 := make 2
 add2 3
 ```
@@ -206,7 +206,7 @@ A binding may name itself as the head of a call. That is recursion, and it
 is the only self-reference the language admits in a value (Chapter 3).
 
 ```lichen
-fact := 'n => if n == 0 then 1 else n * fact (n - 1)
+fact := 'n -> if n == 0 then 1 else n * fact (n - 1)
 fact 5
 ```
 
@@ -221,7 +221,7 @@ Recursion can select the branch lazily. This `fib` builds both futures of
 `x` as a two-element tuple and reads the one the comparison selects:
 
 ```lichen
-fib := 'x => (fib (x - 1) + fib (x - 2), x)(x <= 1)
+fib := 'x -> (fib (x - 1) + fib (x - 2), x)(x <= 1)
 fib 10
 ```
 
@@ -238,8 +238,8 @@ Two functions may call each other, because a block's names are in scope
 throughout it:
 
 ```lichen
-is_even := 'n => if n == 0 then 1 else is_odd (n - 1)
-is_odd := 'n => if n == 0 then 0 else is_even (n - 1)
+is_even := 'n -> if n == 0 then 1 else is_odd (n - 1)
+is_odd := 'n -> if n == 0 then 0 else is_even (n - 1)
 (is_even 10, is_odd 10)
 ```
 
@@ -254,7 +254,7 @@ own signature. This `gcd` says nothing about the shape of `p`, so the
 checker cannot read it:
 
 ```lichen
-gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
 gcd (48, 18)
 ```
 
@@ -262,27 +262,27 @@ gcd (48, 18)
 error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
   --> 1:8
    |
- 1 | gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+ 1 | gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
    |        ^
 error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
   --> 1:8
    |
- 1 | gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+ 1 | gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
    |        ^
 error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
   --> 1:8
    |
- 1 | gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+ 1 | gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
    |        ^
 error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
   --> 1:8
    |
- 1 | gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+ 1 | gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
    |        ^
 error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
   --> 1:8
    |
- 1 | gcd := 'p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+ 1 | gcd := 'p -> if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
    |        ^
 ```
 
@@ -295,7 +295,7 @@ positions require an `Int` — and the result follows from it:
 
 ```lichen
 T := (@any : Int, @any : Int)
-gcd := ('p = T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+gcd := ('p = T) -> ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
 ```
 
@@ -335,7 +335,7 @@ Two marks may precede a binding's name. `@cache` marks a retained cell
 loop rather than unroll:
 
 ```lichen
-@loop fact := 'n => if n == 0 then 1 else n * fact (n - 1)
+@loop fact := 'n -> if n == 0 then 1 else n * fact (n - 1)
 fact 5
 ```
 
@@ -352,8 +352,8 @@ recursion into a loop nest when the shape allows it.
 A function that takes a function is ordinary:
 
 ```lichen
-twice := 'f => 'x => f (f x)
-inc := 'x => x + 1
+twice := 'f -> 'x -> f (f x)
+inc := 'x -> x + 1
 twice inc 5
 ```
 
@@ -364,8 +364,8 @@ twice inc 5
 Composition is the same shape:
 
 ```lichen
-compose := 'f => 'g => 'x => f (g x)
-inc := 'x => x + 1
+compose := 'f -> 'g -> 'x -> f (g x)
+inc := 'x -> x + 1
 compose inc inc 5
 ```
 
@@ -377,7 +377,7 @@ Functions can be stored in a compound, because a compound is an ordinary
 value:
 
 ```lichen
-inc := 'x => x + 1
+inc := 'x -> x + 1
 fs := (inc, inc)
 fs(0) 5
 ```
@@ -394,8 +394,8 @@ There is no map over an array. An array's length is part of its
 iteration over an array is written by carrying the count in a recursion:
 
 ```lichen
-apply_n := 'n => 'f => 'x => if n == 0 then x else apply_n (n - 1) f (f x)
-inc := 'x => x + 1
+apply_n := 'n -> 'f -> 'x -> if n == 0 then x else apply_n (n - 1) f (f x)
+inc := 'x -> x + 1
 apply_n 3 inc 0
 ```
 
@@ -408,7 +408,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 
 ## Summary
 
-- A function is an expression, `'x => body`, and a value like any other.
+- A function is an expression, `'x -> body`, and a value like any other.
 - The prime is a prefix on the name: `'x` declares the formal `x`, and the
   lambda binds `x` in its body.
 - The parameter side is an expression; an unprimed name on it is read from
@@ -416,7 +416,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
   parameter expression rather than several arguments.
 - A function's type is the shared `FunctionType` marker; the **value**
   prints the signature, written with `=>`.
-- A signature is stated with a **function template** — `'_x : Int => _: Int`
+- A signature is stated with a **function template** — `'_x : Int -> _: Int`
   — and unified with plain `=`, which applies nothing; there is no thin
   arrow.
 - An application instantiates the parameter fresh, so a binding is
@@ -434,7 +434,7 @@ The standard library ships `id`, `succ`, `add`, `double`, `compose`,
 
 1. Write `apply_n n f x`, which applies `f` to `x` `n` times, and check
    `apply_n 3 inc 0`.
-2. Write `compose3 := 'f => 'g => 'h => 'x => f (g (h x))` and use it.
+2. Write `compose3 := 'f -> 'g -> 'h -> 'x -> f (g (h x))` and use it.
 3. Explain why `fib 0` terminates, in terms of what the tuple's elements
    evaluate.
 4. Remove the template from the `gcd` above and compare the output.

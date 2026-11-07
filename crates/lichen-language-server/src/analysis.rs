@@ -1501,10 +1501,15 @@ fn classify_token_kind(
         | TokenKind::KwGc => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
-        // Operators: lambda/table arrows, annotations, fields, and math.
-        TokenKind::FatArrow
-        | TokenKind::TableArrow
+        // Operators: lambda/table arrows, table operators, annotations, fields,
+        // and math.
+        TokenKind::ThinArrow
+        | TokenKind::FatArrow
         | TokenKind::TableFindArrow
+        | TokenKind::KwTableMerge
+        | TokenKind::KwTableWithout
+        | TokenKind::KwTableCount
+        | TokenKind::KwTableKey
         | TokenKind::Colon
         // `:=` binds a name.
         | TokenKind::ColonEquals
@@ -2468,7 +2473,7 @@ mod tests {
     fn unresolved_name_without_a_close_candidate_stays_plain() {
         // `y` shares no first character with the in-scope `x`, so the message
         // stays plain.
-        let d = doc("x => y");
+        let d = doc("x -> y");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
             .iter()
@@ -2604,7 +2609,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "succ := 'x => x + 1\nadd := 'x => 'y => x + y\n",
+            "succ := 'x -> x + 1\nadd := 'x -> 'y -> x + y\n",
         );
         let main_path = write(
             &dir,
@@ -2726,7 +2731,7 @@ mod tests {
     fn hover_on_a_non_binding_definition_reports_its_line() {
         // A lambda parameter is a definition but not a top-level statement, so
         // there is no `value : type` snapshot.
-        let d = doc("f := 'x => x\nf 1\n");
+        let d = doc("f := 'x -> x\nf 1\n");
         let (msg, _) = d
             .hover_at(Position {
                 line: 0,
@@ -2822,7 +2827,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_classify_literals_operators_and_declarations() {
-        let d = doc("f := 'x => x + 1\nf 7\n");
+        let d = doc("f := 'x -> x + 1\nf 7\n");
         let toks = d.semantic_tokens();
         let types = |t: &crate::lsp::SemanticTokenType| toks.iter().any(|x| &x.token_type == t);
         assert!(
@@ -2891,12 +2896,12 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "---output = \"(Int => Int, Int => Int -> Int): Struct\"---\nsucc := 'x => x + 1\nadd := 'x => 'y => x + y\n",
+            "---output = \"(Int => Int, Int => Int -> Int): Struct\"---\nsucc := 'x -> x + 1\nadd := 'x -> 'y -> x + y\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "---math = import \"math.lichen\"\noutput = \"(Int => Int, Int => Int): Struct\"---\ndouble := 'x => math.add x x\ninc_twice := 'x => math.succ (math.succ x)\n",
+            "---math = import \"math.lichen\"\noutput = \"(Int => Int, Int => Int): Struct\"---\ndouble := 'x -> math.add x x\ninc_twice := 'x -> math.succ (math.succ x)\n",
         );
         let main_path = write(
             &dir,
@@ -2919,7 +2924,7 @@ mod tests {
     fn new_with_cache_writes_imports_to_the_lichen_home() {
         // The settled imports are compiled into the device cache at `cache_root`.
         let dir = temp_dir("cachewrite");
-        write(&dir, "math.lichen", "succ := 'x => x + 1\n");
+        write(&dir, "math.lichen", "succ := 'x -> x + 1\n");
         let main_path = write(
             &dir,
             "main.lichen",
@@ -2961,7 +2966,7 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "succ := 'x => x + 1\nadd := 'x => 'y => x + y\n",
+            "succ := 'x -> x + 1\nadd := 'x -> 'y -> x + y\n",
         );
         let main_path = write(
             &dir,
@@ -3125,7 +3130,7 @@ mod tests {
         let math_path = write(
             &dir,
             "math.lichen",
-            "succ := 'x => x + 1\nadd := 'x => 'y => x + y\n",
+            "succ := 'x -> x + 1\nadd := 'x -> 'y -> x + y\n",
         );
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&math_path).unwrap(),

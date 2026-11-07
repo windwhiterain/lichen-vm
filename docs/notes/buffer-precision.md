@@ -62,7 +62,7 @@ tree must not keep, whatever else changes.
 
 Measured, in the current tree:
 
-1. `Buf = 'T => struct{.native _, .element T}` (`crates/lichen-compute/src/compute.lichen`), so
+1. `Buf = 'T -> struct{.native _, .element T}` (`crates/lichen-compute/src/compute.lichen`), so
    the class comes from the **element type**, and the core types are `Num = set(Int, Float)`
    (`crates/lichen-language/src/core.lichen:1`).
 2. `ScalarClass` is derived from `LowShape` — `compute.rs:314`, `2908` — and

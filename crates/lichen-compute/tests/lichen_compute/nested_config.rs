@@ -56,7 +56,7 @@ Out   := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {ROWS}}}))}}
 Par   := {{.meta Meta, .in In2}}
 Arg   := {{.meta Meta, .I In2}}
 GA    := {ga}
-nested_raw := ('k = Par) => {{
+nested_raw := ('k = Par) -> {{
   i := compute.range k.meta.rows
   v := (compute.read ((compute.Read _){{.from k.in.a, .at i}}) : {kind})
   w := (compute.read ((compute.Read _){{.from k.in.b, .at i}}) : {kind})
@@ -64,7 +64,7 @@ nested_raw := ('k = Par) => {{
   ((Out){{.z (compute.write ((compute.Write _){{.to z, .at i, .value ((v * k.meta.cols + w) ~ "element")}}))}})
 }}
 nested := compute.parallel (nested_raw ~ "claim:Elementwise(element)") "gpu" Out
-step := ('s = GA) => {{
+step := ('s = GA) -> {{
   compute.plrun nested ((Arg){{.meta Meta{{.rows s.rows, .cols {cols}}}, .I In2{{.a s.in.a, .b s.in.b}}}}) : Struct
 }}
 built := compute.graph step
@@ -89,7 +89,7 @@ Out1  := {{.z (compute.Buf (compute.BufParam{{.type Int, .length {ROWS}}}))}}
 Par3  := {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1}}
 Arg3  := {{.n @any : Int, .K @any : Int, .cols @any : Int, .I In1}}
 GA3   := {{.n @any : Int, .K @any : Int, .cols @any : Int, .in In1}}
-shape_raw := ('k = Par3) => {{
+shape_raw := ('k = Par3) -> {{
   i := compute.range k.n
   r := i / k.cols
   c := i % k.cols
@@ -98,7 +98,7 @@ shape_raw := ('k = Par3) => {{
   ((Out1){{.z (compute.write ((compute.Write _){{.to z, .at i, .value (v ~ "element")}}))}})
 }}
 shape := compute.parallel (shape_raw ~ "claim:Elementwise(element)") "gpu" Out1
-step3 := ('s = GA3) => {{
+step3 := ('s = GA3) -> {{
   compute.plrun shape ((Arg3){{.n s.n, .K s.K, .cols s.cols, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built3 := compute.graph step3
@@ -135,7 +135,7 @@ fn filled(shape: &str, kind: &str, offsets: &[usize]) -> String {
     format!(
         r#"
 Fill := {{.n @any : Int}}
-fill := ('c = Fill) => {{
+fill := ('c = Fill) -> {{
   i := compute.range c.n
 {declarations}  (({shape}){{{writes}}})
 }}
@@ -427,14 +427,14 @@ In2  := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Out  := {.z (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Par  := {.n @any : Int, .in In2, .spare (compute.Buf (compute.BufParam{.type Int, .length 4}))}
 Arg  := {.n @any : Int, .in In2, .spare (compute.Buf (compute.BufParam{.type Int, .length 4}))}
-stray_raw := ('k = Par) => {
+stray_raw := ('k = Par) -> {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.a, .at i}) : Int)
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value (v ~ "element")}))})
 }
 stray := compute.parallel (stray_raw ~ "claim:Elementwise(element)") "gpu" Out
-built := compute.graph (('s = Arg) => {
+built := compute.graph (('s = Arg) -> {
   compute.plrun stray ((Arg){.n s.n, .in In2{.a s.in.a}, .spare s.spare}) : Struct
 })
 built

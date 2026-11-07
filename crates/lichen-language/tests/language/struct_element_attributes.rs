@@ -32,9 +32,9 @@ fn a_field_requirement_refuses_an_argument_that_misses_it() {
 #[test]
 fn a_perspective_parameter_takes_a_value_that_refines_it() {
     // `declared ⊑ value`: equal and finer both hold, and only a coarser is refused.
-    assert_eq!(output("f := ('x : Int # 4) => x\nf (1 # 4)"), "1: Int");
-    assert_eq!(output("f := ('x : Int # 4) => x\nf (1 # 8)"), "1: Int");
-    let (message, kind) = refused("f := ('x : Int # 4) => x\nf (1 # 2)");
+    assert_eq!(output("f := ('x : Int # 4) -> x\nf (1 # 4)"), "1: Int");
+    assert_eq!(output("f := ('x : Int # 4) -> x\nf (1 # 8)"), "1: Int");
+    let (message, kind) = refused("f := ('x : Int # 4) -> x\nf (1 # 2)");
     assert_eq!(kind, DiagKind::Attribute);
     assert_eq!(message, "expected 4, found 2");
 }
@@ -74,8 +74,8 @@ fn a_recursive_struct_type_reconciles_and_terminates() {
         output(
             "A := {.f @any : Int, .g B}
              B := {.f @any : Type, .g A}
-             AT := '_x => A
-             BT := '_x => B
+             AT := '_x -> A
+             BT := '_x -> B
              a := (AT _){.f 1, .g b}
              b := (BT _){.f Int, .g a}
              (a, b)"

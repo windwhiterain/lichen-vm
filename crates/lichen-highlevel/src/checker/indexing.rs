@@ -359,7 +359,7 @@ where
         expr
     }
 
-    /// A constant table literal `table(k1 ==> v1, …)`, typed by
+    /// A constant table literal `table(k1 => v1, …)`, typed by
     /// `[[key type, value type], [TypeTable, Type]]`.
     ///
     /// # Invariant

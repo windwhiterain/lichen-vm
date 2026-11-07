@@ -44,7 +44,7 @@ In   := {.a (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Out  := {.b (compute.Buf (compute.BufParam{.type Int, .length L}))}
 Par  := {.n @any : Int, .cols @any : Int, .in In}
 Arg  := {.n @any : Int, .cols @any : Int, .I In}
-strip_raw := ('k = Par) => {
+strip_raw := ('k = Par) -> {
   i := compute.range k.n
   r := i / k.cols
   c := i % k.cols
@@ -77,7 +77,7 @@ fn control_kernel(name: &str, body: &str) -> String {
 fn recording() -> String {
     format!(
         "{HEAD}\nstrip := compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
-         GA := {{.n @any : Int, .cols @any : Int, .in In}}\nstep := ('s = GA) => {{\n  \
+         GA := {{.n @any : Int, .cols @any : Int, .in In}}\nstep := ('s = GA) -> {{\n  \
          compute.plrun strip ((Arg){{.n s.n, .cols s.cols, .I In{{.a s.in.a}}}}) : Struct\n}}\n\
          built := compute.graph step\nbuilt\n"
     )
@@ -98,7 +98,7 @@ fn fill() -> String {
         .join(" + ");
     format!(
         "Data := {{.a (compute.Buf (compute.BufParam{{.type Int, .length L}}))}}\n\
-         Fill := {{.n @any : Int}}\nfill := ('c = Fill) => {{\n  i := compute.range c.n\n  \
+         Fill := {{.n @any : Int}}\nfill := ('c = Fill) -> {{\n  i := compute.range c.n\n  \
          y := compute.buf (compute.BufParam{{.type Int, .length L}})\n  v := {table}\n  \
          ((Data){{.a (compute.write ((compute.Write _){{.to y, .at i, .value v}}))}})\n}}\n\
          filler := compute.parallel fill \"cpu\" Data\n",
@@ -267,7 +267,7 @@ fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
 #[test]
 fn what_makes_a_second_extent_admissible_does_not_depend_on_the_reads() {
     let both = r#"
-both_raw := ('k = Par2) => {
+both_raw := ('k = Par2) -> {
   i := compute.range k.n
   x := (compute.read ((compute.Read _){.from k.in.a, .at i}) : Int)
   y := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
@@ -276,7 +276,7 @@ both_raw := ('k = Par2) => {
 }
 "#;
     let only_b = r#"
-only_b_raw := ('k = Par2) => {
+only_b_raw := ('k = Par2) -> {
   i := compute.range k.n
   y := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
@@ -284,7 +284,7 @@ only_b_raw := ('k = Par2) => {
 }
 "#;
     let neither = r#"
-neither_raw := ('k = Par2) => {
+neither_raw := ('k = Par2) -> {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Int, .length k.n})
   ((Out2){.z (compute.write ((compute.Write _){.to z, .at i, .value (k.cols ~ "element")}))})
@@ -292,7 +292,7 @@ neither_raw := ('k = Par2) => {
 "#;
     let step = || {
         format!(
-            "GA := {{.n @any : Int, .cols @any : Int, .in In2}}\nstep := ('s = GA) => {{\n  \
+            "GA := {{.n @any : Int, .cols @any : Int, .in In2}}\nstep := ('s = GA) -> {{\n  \
              compute.plrun kernel ((Arg2){{.n s.n, .cols s.cols, .I In2{{.a s.in.a, .b s.in.b}}}}) \
              : Struct\n}}\nbuilt := compute.graph step\nbuilt\n"
         )
@@ -336,12 +336,12 @@ fn a_second_runtime_scalar_is_carried_beside_the_extent() {
     let source = format!(
         "{HEAD}\nPar3 := {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In}}\n\
          Arg3 := {{.n @any : Int, .cols @any : Int, .rows @any : Int, .I In}}\n\
-         three_raw := ('k = Par3) => {{\n  i := compute.range k.n\n  \
+         three_raw := ('k = Par3) -> {{\n  i := compute.range k.n\n  \
          v := (compute.read ((compute.Read _){{.from k.in.a, .at (i / k.cols)}}) : Int)\n  \
          b := compute.buf (compute.BufParam{{.type Int, .length k.n}})\n  \
          ((Out){{.b (compute.write ((compute.Write _){{.to b, .at i, .value ((v + k.rows) ~ \"element\")}}))}})\n}}\n\
          three := compute.parallel (three_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
-         GA := {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In}}\nstep := ('s = GA) => {{\n  \
+         GA := {{.n @any : Int, .cols @any : Int, .rows @any : Int, .in In}}\nstep := ('s = GA) -> {{\n  \
          compute.plrun three ((Arg3){{.n s.n, .cols s.cols, .rows s.rows, .I In{{.a s.in.a}}}}) : Struct\n}}\n\
          built := compute.graph step\nbuilt\n"
     );

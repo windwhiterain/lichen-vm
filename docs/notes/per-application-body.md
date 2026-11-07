@@ -18,7 +18,7 @@ measured exploit is not a mismatch but an error:
 
 ```lichen
 S := {.a @any : string}
-f := 'x => { a := x.a; a : Int; a }
+f := 'x -> { a := x.a; a : Int; a }
 f (S{.a "s"})          # expected Int, found string
 ```
 

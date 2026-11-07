@@ -3,7 +3,7 @@
 > Status: **fixed.** §27 records the repair as landed: every one of the twenty-two failing programs answers its
 > correct value, and none of the other four hundred and seven answers moved. What follows is the derivation,
 > kept because the mechanisms it refuted are what a later reader needs.
-> **In one paragraph.** `mk = x => y => x; f = n => (mk n) 1; f 3` answers `none` because the
+> **In one paragraph.** `mk = x -> y -> x; f = n -> (mk n) 1; f 3` answers `none` because the
 > checker evaluates **every function's return node once, by design** ("so its checks fire even
 > unapplied"), and for this shape that node *is* the body's apply — so the pass **runs the call with
 > the parameter unbound**, mints the closure generation whose cells stay empty, and its own invariant
@@ -18,7 +18,7 @@
 > what is ruled out, and §28 for how to reproduce any line.
 >
 > Status: **cause found**. This note is the coordination document for the second
-> `none`: `mk = x => y => x; f = n => mk n 1; f 3` answers `none` where `dev`
+> `none`: `mk = x -> y -> x; f = n -> mk n 1; f 3` answers `none` where `dev`
 > refuses it. It is **not** the cause of [function-unify](function-unify.md): that one needed a clone to
 > meet its template in one class, and this program has no such merge — every merge of two decided
 > closures in it is clone against clone — and the repair that removed the capture loss leaves it
@@ -30,20 +30,20 @@
 
 ## 1. The shape that fails, narrowed by measurement
 
-`mk = x => y => x` unless stated otherwise. Every line below is the program's answer on
+`mk = x -> y -> x` unless stated otherwise. Every line below is the program's answer on
 this branch, `dev` refusing all of them with `expected ?a => Int, found ?b => Int`.
 
 | program | answer |
 | --- | --- |
 | `mk 3 1` | `3` |
 | `(mk 3) 1` — the returned closure applied on the spot | `3` |
-| `g = n => (mk 3) 1; g 0` — the same inside a lambda body | `3` |
-| `f = n => { c = mk n; c 1 }; f 3` — the returned closure bound to a local first | `3` |
-| `f = n => { w = n; (mk w) 1 }; f 3` — the argument read into a local first | `3` |
-| `f = n => { z = 0; (mk n) 1 }; f 3` — any other statement in the body | `3` |
-| `f = n => { (mk n) 1 }; f 3` — the body's value is that apply and nothing else | **`none`** |
-| `f = n => (mk n) 1; f 3` — the same with a bare expression body | **`none`** |
-| `g = x => y => 2; f = n => (g n) 1; f 3` — the returned closure reads no capture | `2` |
+| `g = n -> (mk 3) 1; g 0` — the same inside a lambda body | `3` |
+| `f = n -> { c = mk n; c 1 }; f 3` — the returned closure bound to a local first | `3` |
+| `f = n -> { w = n; (mk w) 1 }; f 3` — the argument read into a local first | `3` |
+| `f = n -> { z = 0; (mk n) 1 }; f 3` — any other statement in the body | `3` |
+| `f = n -> { (mk n) 1 }; f 3` — the body's value is that apply and nothing else | **`none`** |
+| `f = n -> (mk n) 1; f 3` — the same with a bare expression body | **`none`** |
+| `g = x -> y -> 2; f = n -> (g n) 1; f 3` — the returned closure reads no capture | `2` |
 
 So the failing shape is: **the lambda's value is an apply whose callee is another apply
 that took the lambda's parameter, with no other statement in the body.** One other
@@ -56,9 +56,9 @@ statement does:
 
 | program | answer |
 | --- | --- |
-| `f = n => { 0; (mk n) 1 }; f 3` — a bare, value-less statement first | `3` |
-| `f = n => { n; (mk n) 1 }; f 3` — a bare read of the parameter first | `3` |
-| `f = n => { (mk n) 1 }; f 3` — a block whose only statement is that apply | **`none`** |
+| `f = n -> { 0; (mk n) 1 }; f 3` — a bare, value-less statement first | `3` |
+| `f = n -> { n; (mk n) 1 }; f 3` — a bare read of the parameter first | `3` |
+| `f = n -> { (mk n) 1 }; f 3` — a block whose only statement is that apply | **`none`** |
 
 So the trigger is that the lambda's **value node is the outer apply node itself**: add any
 second statement and the body's value becomes its own cell, and the answer is right. That
@@ -70,10 +70,10 @@ program with the closure written inline answers correctly.
 
 | program | answer |
 | --- | --- |
-| `f = n => ((x => y => x) n) 1; f 3` — the callee is an inline lambda | `3` |
-| `f = n => ((x => y => x) 3) 1; f 0` — inline, and a literal argument | `3` |
-| `mk = x => y => x; f = n => (mk n) 1; f 3` — the callee is a **binding** | **`none`** |
-| `mk = x => y => x; f = n => (mk 3) 1; f 0` — binding, literal argument | `3` |
+| `f = n -> ((x -> y -> x) n) 1; f 3` — the callee is an inline lambda | `3` |
+| `f = n -> ((x -> y -> x) 3) 1; f 0` — inline, and a literal argument | `3` |
+| `mk = x -> y -> x; f = n -> (mk n) 1; f 3` — the callee is a **binding** | **`none`** |
+| `mk = x -> y -> x; f = n -> (mk 3) 1; f 0` — binding, literal argument | `3` |
 
 So the loss needs a **binding** as the callee *and* the parameter as its argument *and* the
 body's value to be that apply. A binding is what the apply's callee reference resolves
@@ -87,7 +87,7 @@ closure's.
   leaves every program above unchanged.
 - Not the type fallback of `apply_callee_type`: traced runs of the failing shape show no
   `f : f` fallback (no undecided callee read) at all, so the apply never takes that path.
-- Not a bare expression body by itself: `f = n => { (mk n) 1 }` fails with a block body
+- Not a bare expression body by itself: `f = n -> { (mk n) 1 }` fails with a block body
   too, and `n1c`'s bare body with a literal argument answers `3`.
 - Not the callee's kind: the outer apply of the failing shape never reaches the arm that
   matches on a callee value, which places the loss at the operand array read.
@@ -126,7 +126,7 @@ failing form, and the failing run **stops** at that instantiation while the work
 form continues into further ones.
 
 **But the wiring is necessary and not sufficient**, and the note says so rather than
-promoting it: the inline-callee program (`f = n => ((x => y => x) n) 1`, which answers `3`)
+promoting it: the inline-callee program (`f = n -> ((x -> y -> x) n) 1`, which answers `3`)
 has a bare apply body too, so it carries the same operation-wired return. What separates the
 two must therefore be what the **binding** contributes — the reference the callee resolves
 through — and not the return's shape.
@@ -492,7 +492,7 @@ the loss, every program with one would lose it — and these do not:
 | program | answer | window instantiations | of which operation-wired |
 | --- | --- | --- | --- |
 | `m4` | `none` | 3 | 1 |
-| `t1` (`f = n => (mk 3) 1`) | `3` | 1 | **1** |
+| `t1` (`f = n -> (mk 3) 1`) | `3` | 1 | **1** |
 | `z1` (inline callee) | `3` | 3 | **1** |
 | `r1` (`0 + (…)`) | `3` | 3 | **1** |
 | `r4` (`[…]`) | `[3]` | 3 | 0 |
@@ -704,7 +704,7 @@ shape discriminator this note measured (§1). What remains open is narrower and 
 programs (`h1`, `k4`) share the pinned generation and still answer correctly, and one more (`m2`-family)
 reading of the two instances' cells is unexamined.
 
-**Why `f = n => (mk n) 1; f 3` answers `none`, end to end.** Each step is measured or read in code, and
+**Why `f = n -> (mk n) 1; f 3` answers `none`, end to end.** Each step is measured or read in code, and
 the question the investigation was opened for is answered by them:
 
 1. the root expression is an apply, and the checker deep-evaluates the root term at site 9 (measured);
@@ -828,8 +828,8 @@ which holds on the failing program and on both of the programs that answer corre
 purpose only:
 
 ```
-w2 = mk = x => y => x ; f = n => (mk n) 1 ; 7        answers 7    — f is never called
-w4 = mk = x => y => x ; f = n => (mk n) 1 ; g = n => (mk n) 2 ; f 3   answers none — two such functions
+w2 = mk = x -> y -> x ; f = n -> (mk n) 1 ; 7        answers 7    — f is never called
+w4 = mk = x -> y -> x ; f = n -> (mk n) 1 ; g = n -> (mk n) 2 ; f 3   answers none — two such functions
 ```
 
 The second says the pass is per function and by shape, and the first says its run is inert unless
@@ -840,9 +840,9 @@ support the mechanism has, since neither program was used to build it.
 **Three more, and one of them tests the mechanism's own internal claim.**
 
 ```
-w6 = mk = x => y => x ; h = t => { f = n => (mk n) 1 ; f 3 } ; h 0     answers 3
-w7 = mk = x => y => x ; f = n => (mk n) 1 ; (f 3, f 4)                 answers (none, none)
-w8 = mk = x => y => x ; f = n => (mk n) 1 ; h = k => k 3 ; h f         answers none
+w6 = mk = x -> y -> x ; h = t -> { f = n -> (mk n) 1 ; f 3 } ; h 0     answers 3
+w7 = mk = x -> y -> x ; f = n -> (mk n) 1 ; (f 3, f 4)                 answers (none, none)
+w8 = mk = x -> y -> x ; f = n -> (mk n) 1 ; h = k -> k 3 ; h f         answers none
 ```
 
 `w6` carries the **identical failing body** and answers `3`, only because its lambda is a **local**
@@ -853,8 +853,8 @@ argument too. Five predictions made on programs the mechanism was not derived fr
 has failed.
 
 **The antecedent holds in every failing program.** Reading the set as it stood when this was checked: of
-those nineteen, eleven have a lambda whose value *is* the apply (`f = n => mk n 1`), and eight have a block
-whose value is (`f = n => { a = n + 1; b = add a a; b }`), so in **nineteen of nineteen** some function's
+those nineteen, eleven have a lambda whose value *is* the apply (`f = n -> mk n 1`), and eight have a block
+whose value is (`f = n -> { a = n + 1; b = add a a; b }`), so in **nineteen of nineteen** some function's
 return node is the apply the checker's pass then runs unapplied — and the three programs that have joined
 the corpus since are the same shape. That is the mechanism's necessary half, checked on the whole failing
 set rather than on the three programs it was derived from; the sufficient half is the read-side signature,
@@ -958,9 +958,9 @@ examined was fitted to the first:
 
 | family | programs | text |
 | --- | --- | --- |
-| **A** | `j2`, `k6`, `m2`, `m4`, `o2`, `o9`, `p1a`, `s2`, `s3`, `u2`, `v4` | the closure's body reads only its capture (`mk = x => y => x`) and the lambda's value is that apply |
-| **B** | `g2`, `g3`, `h3`, `h5`, `h6`, `b6`, `b7` | a block with a local hop: `f = n => { a = n + 1; b = add a a; b }` |
-| **C** | `i7` | the closure is returned and applied in another call: `f = n => add n; g = f 3; g 4` |
+| **A** | `j2`, `k6`, `m2`, `m4`, `o2`, `o9`, `p1a`, `s2`, `s3`, `u2`, `v4` | the closure's body reads only its capture (`mk = x -> y -> x`) and the lambda's value is that apply |
+| **B** | `g2`, `g3`, `h3`, `h5`, `h6`, `b6`, `b7` | a block with a local hop: `f = n -> { a = n + 1; b = add a a; b }` |
+| **C** | `i7` | the closure is returned and applied in another call: `f = n -> add n; g = f 3; g 4` |
 
 Those are the nineteen programs the corpus's fingerprint scan reports, and three of them — `b6`,
 `b7` and `v4` — are programs this note's own experiments added while it was written, which is why an
@@ -988,10 +988,10 @@ Minimising family B by behaviour alone gives one rule, and it is a different rul
 
 | program | text | answer |
 | --- | --- | --- |
-| `h2` | `f = n => { b = add n n; b }` — the closure's own parameter comes from **the parameter** | `6` |
-| `g3` | `f = n => { a = n + 1; b = add a a; b }` | `none` |
-| `b6` | `f = n => { a = 1; add n a }` — a **literal-bound local**, no hop | `none` |
-| `b7` | `f = n => { a = n + 1; add a a }` — no hop at all | `none` |
+| `h2` | `f = n -> { b = add n n; b }` — the closure's own parameter comes from **the parameter** | `6` |
+| `g3` | `f = n -> { a = n + 1; b = add a a; b }` | `none` |
+| `b6` | `f = n -> { a = 1; add n a }` — a **literal-bound local**, no hop | `none` |
+| `b7` | `f = n -> { a = n + 1; add a a }` — no hop at all | `none` |
 
 So in family B the failure needs only that the **closure's own parameter be supplied from a local
 cell**: whether that cell holds a literal (`b6`), a computation (`b7`, `g3`) or the parameter itself
@@ -1340,7 +1340,7 @@ twenty-two are correct, **zero** of the other four hundred and seven answers mov
 whose type is still undecided are `b7`, `g2`, `g3`, `h5` (an undecided expr) and `w5` (an undecided
 scalar).
 
-**Capture/run-stamp follow-up.** An independent probe of `mk := f => { g := y => f 1; g 1 }`
+**Capture/run-stamp follow-up.** An independent probe of `mk := f -> { g := y -> f 1; g 1 }`
 verified the exact boundary rather than only the returned value. The enclosing capture's node
 chain kept `runned=false` and was never cloned; the body's `f 1` went from template node 51 to
 255/455 and then 280/480 on successive calls, each a fresh Apply evaluated with its own argument.

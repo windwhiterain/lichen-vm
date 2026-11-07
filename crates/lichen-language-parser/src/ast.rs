@@ -273,7 +273,7 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: Span,
     },
-    /// `table(k ==> v)` — a constant table literal; a key that is not
+    /// `table(k => v)` — a constant table literal; a key that is not
     /// concrete is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
     /// `set(a, b)` — a set of ordinary values

@@ -321,7 +321,7 @@ where
         None
     }
 
-    /// A table instance: the handle's entries, `table(k ==> v, …)`.
+    /// A table instance: the handle's entries, `table(k => v, …)`.
     ///
     /// # Invariant
     /// The shape is `[key slot, value slot]`, so an entry's key and value read
@@ -349,7 +349,7 @@ where
         for item in items {
             let key = self.element_any(item.key, key_ty);
             let entry = self.element_any(item.value, value_ty);
-            entries.push(format!("{key} ==> {entry}"));
+            entries.push(format!("{key} => {entry}"));
         }
         Some(format!("table({})", entries.join(", ")))
     }

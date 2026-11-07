@@ -24,7 +24,7 @@ the operand's type, so `5 : std.type_of (5)` checks.  It is an ordinary lichen
 function —
 
 ```lichen
-type_of := x => {t := _; x: t; t}
+type_of := x -> {t := _; x: t; t}
 ```
 
 — the placeholder binds the cell, the annotation unifies it with the

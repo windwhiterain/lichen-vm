@@ -41,7 +41,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | partly fixed — the message names the shared fact and lists the three shapes; the missing apply (a kernel compiled against an applied body) is parked under `compute-jit-low-types.md` |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
-| P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
+| P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s -> if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -130,8 +130,8 @@ the only symptom is a process that dies having printed nothing wrong.
 `crates/lichen-compute/examples/recursion.rs`.
 
 ```text
-k0 = compute.jit (v : Int => v + 1)
-p = compute.parallel (cfg => {
+k0 = compute.jit (v : Int -> v + 1)
+p = compute.parallel (cfg -> {
   n = cfg(0)
   i = compute.range n
   compute.write ((compute.Write _)(.to n, .at i, .value compute.call k0 i))
@@ -147,7 +147,7 @@ one names its own cause — `CONDITIONAL_WRITE`, `UNDECIDED_DOMAIN`, `CALLEE_ARG
 the `SpirvRefusal` variants. This one reported a `NodeId`, a compiler-internal
 number, which tells a reader nothing they can act on.
 
-**The same call works in a scalar body.** `k1 = compute.jit (v : Int =>
+**The same call works in a scalar body.** `k1 = compute.jit (v : Int ->
 compute.call k0 v + 1)` compiles and runs, answering `5 : Int`. So "one kernel
 body calls another" is solved in one of the two body shapes and not the other,
 and the difference was not named either.
@@ -789,8 +789,8 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
 - **D17 — Is a `compute.write` the codomain does not reach a silently dropped
   effect, or a dead expression? — DECIDED: a dead expression; `P1-42` is
-  `wontfix`.** The index function's type settles it. `S = T: KT _ => A T.I -> T.O`
-  and `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, so an index function takes
+  `wontfix`.** The index function's type settles it. `S = T: KT _ -> A T.I -> T.O`
+  and `P = T: KT _ -> struct{.n Int, .in T.I, .out T.O}`, so an index function takes
   the extent, the inputs **and the outputs**, and returns the outputs. Walking the
   returned value therefore necessarily covers every declared output, and two gates
   already enforce that they are the same set: each codomain position must reduce to a
@@ -833,11 +833,11 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   the workgroup, so reachability from the codomain is not the test.
 - **D18 — Can an un-annotated recursive function's result type be decided? — DECIDED:
   no; the parameter's **shape** is the annotation the language requires, and `P1-50` is
-  `wontfix`.** Measured at `dev@575ad0be`: without any annotation `g = s => s(1)` prints
+  `wontfix`.** Measured at `dev@575ad0be`: without any annotation `g = s -> s(1)` prints
   `?a -> ?b` — the **arity** of a tuple a recursive function destructures cannot be
   inferred from its uses — while the **field types** can: annotating the shape alone,
-  `@loop f = ((s : tuple{_, _}) => …)`, makes the application decide them
-  (`(f (0, S(.y 3))).y` answers `3: Int`, `(s : tuple{_, _}) => s(1)` applied to `(0, 7)`
+  `@loop f = ((s : tuple{_, _}) -> …)`, makes the application decide them
+  (`(f (0, S(.y 3))).y` answers `3: Int`, `(s : tuple{_, _}) -> s(1)` applied to `(0, 7)`
   answers `7: Int`, and `tuple{Int, _}` / `tuple{Int, S}` behave the same). So the
   contract is: **a recursive function whose result type must be known states its
   parameter's shape**, and every field type may stay `_`. The inference itself is not the
@@ -860,7 +860,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
 - **D20 — May a template's own scope be collected at compile time? — DECIDED: yes, and the
   per-call scope is then not promised.** A body whose `@gc` value does not depend on its
   parameters decides during the definition pass, so a trigger on the read releases the
-  template scope there: measured, `f = n => @gc { a = 1; a }` leaves 7 blocks / 5 declared
+  template scope there: measured, `f = n -> @gc { a = 1; a }` leaves 7 blocks / 5 declared
   scopes after compile and 2 / 0 after the run. *Rejected — skip a block whose parent is a
   function's template body:* it keeps a whole scope alive for the module's lifetime to serve
   calls that may never come.

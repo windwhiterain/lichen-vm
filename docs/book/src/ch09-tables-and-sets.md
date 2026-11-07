@@ -8,15 +8,15 @@ with their own type forms.
 
 ## Tables
 
-A table is a constant mapping written with `==>` exprs:
+A table is a constant mapping written with `=>` exprs:
 
 ```lichen
-t := table(1 ==> 10, 2 ==> 20)
+t := table(1 => 10, 2 => 20)
 t
 ```
 
 ```text
-table(1 ==> 10, 2 ==> 20): table{Int, Int}
+table(1 => 10, 2 => 20): table{Int, Int}
 ```
 
 The type is `table{K, V}`: the key and value **slots**, one type each.
@@ -25,7 +25,7 @@ a table is homogeneous in both directions. A table's keys and values may
 be any values, including tuples and type values:
 
 ```lichen
-t := table((1, 2) ==> 10, (3, 4) ==> 20)
+t := table((1, 2) => 10, (3, 4) => 20)
 (t <== (1, 2), t <== (3, 4))
 ```
 
@@ -39,7 +39,7 @@ t := table((1, 2) ==> 10, (3, 4) ==> 20)
 equal to `k`:
 
 ```lichen
-t := table((1, 2) ==> "expr", (3, 4) ==> "other")
+t := table((1, 2) => "expr", (3, 4) => "other")
 (t <== (1, 2), t <== (3, 4))
 ```
 
@@ -58,7 +58,7 @@ and arrays compare by **content**, a nested table compares by
 tuples are the same key, while two separately built tables are not:
 
 ```lichen
-t := table(table() ==> 1)
+t := table(table() => 1)
 t <== table()
 ```
 
@@ -74,8 +74,8 @@ The fresh `table()` is a different object from the stored one, so it is a
 different key. A function, on the other hand, is found by its identity:
 
 ```lichen
-f := 'x => x
-t := table(f ==> 1)
+f := 'x -> x
+t := table(f => 1)
 t <== f
 ```
 
@@ -89,7 +89,7 @@ Looking up a key that is not in the table is refused where the read is
 written:
 
 ```lichen
-t := table(1 ==> 10, 2 ==> 20)
+t := table(1 => 10, 2 => 20)
 t <== 9
 ```
 
@@ -113,7 +113,7 @@ binary level — looser than a comparison, so its key is a whole comparison
 expression:
 
 ```lichen
-t := table(1 ==> 10, 2 ==> 20)
+t := table(1 => 10, 2 => 20)
 t <== 1 + 1
 ```
 
@@ -217,7 +217,7 @@ about writing such contracts yourself.
 
 ## Summary
 
-- `table(k ==> v, …)` is a constant lookup; its type is `table{K, V}`, one
+- `table(k => v, …)` is a constant lookup; its type is `table{K, V}`, one
   slot for keys and one for values, so both are homogeneous.
 - `t <== k` reads the entry whose key equals `k`; a miss is a diagnostic and
   there is no default.

@@ -112,7 +112,7 @@ store loaded and was refused only in a bare build
 **not** the meet of `(to, at, value)` — under the meet, a write at a lane-varying index
 would certify `# 1`, and the later read's `Read.from # warp` requirement would refuse the
 buffer, so no kernel could write then read. The vocabulary therefore writes
-`perspective_of` the way `type_of` is written — `'x => {p = _; x # p; p}` — and the return
+`perspective_of` the way `type_of` is written — `'x -> {p = _; x # p; p}` — and the return
 spells `# (perspective_of x.to)`. The checker recognizes the **shape**, never the callee's
 name: a call whose argument is the enclosing parameter (or one of its fields) is a
 **reference** (`Checker::attribute_reference`). The applied clone's return expr states the
@@ -254,8 +254,8 @@ uniformity requirement**:
 | program | result |
 |---|---|
 | `x = 5 # 4; (x : Int) # 4` | ✓ — the annotation names a type, not a width |
-| `g = 'x => (x # 2); y = (g 3 : Int); y # 4` | ✗ — the call's certificate survives the annotation |
-| `f = ('x : Int # 4) => x; f (1 # 2)` | ✗ — a *parameter* requirement is a requirement |
+| `g = 'x -> (x # 2); y = (g 3 : Int); y # 4` | ✗ — the call's certificate survives the annotation |
+| `f = ('x : Int # 4) -> x; f (1 # 2)` | ✗ — a *parameter* requirement is a requirement |
 
 A plain type used to demand the absent top of the value it annotated (the type's
 missing slot was reconciled as `0` against the value's `# 1`), which refused every
@@ -273,14 +273,14 @@ provider uniform over 32-groups (`32 | 0`, `32 | 64`) and refuses a lane-varying
 
 | program | result |
 |---|---|
-| `warp = 32; f = ('acc : Int # warp) => acc; f 7` | ✓ — a uniform value satisfies the group |
+| `warp = 32; f = ('acc : Int # warp) -> acc; f 7` | ✓ — a uniform value satisfies the group |
 | `f (x # 64)` | ✓ — uniform over 64-groups implies uniform over 32 |
 | `f (0 # 1)` | ✗ — `expected 32, found 1` |
 | `f (0 # 6)` | ✗ — `expected 32, found 6` (divisibility, not order) |
 
 **The shipping vocabulary names the width**: [compute.lichen](../../crates/lichen-compute/src/compute.lichen)
 binds `warp = 32` (the backend's `SUBGROUP_WIDTH`), so a GPU program writes
-`f = ('x : Int # compute.warp) => x` and gets the same four readings under `Mode::Check`
+`f = ('x : Int # compute.warp) -> x` and gets the same four readings under `Mode::Check`
 — `f 7` ✓, `f (0 # 64)` ✓, `f (0 # 1)` → `expected 32, found 1`, `f (0 # 6)` →
 `expected 32, found 6`. Nothing in the runtime reads `warp` yet; it is the width an
 annotation may name.
@@ -349,10 +349,10 @@ The `perspective.rs` integration tests encode this table.
 | `((1 # 4) + (2 # 6)) # 5` | `2 ≢ 5` ✗ |
 | `((1 # 4) + 2) # 4` | `gcd(4,0) = 4` ✓ |
 | `id (5 # 4)` | ✓ — a parameter without `# p` states nothing, as a parameter without a type does |
-| `f = 'x # 4 => x; f 5` | `4 \| 0` ✓ (a uniform value satisfies a `#4` requirement) |
-| `f = 'x # 2 => x; f (5 # 4)` | `2 \| 4` ✓ (real subtype relaxation) |
-| `f = 'x # 4 => x; f (5 # 2)` | `4 ∤ 2` ✗ |
-| `f = ('x : Int # _) => x; f (5 # 8); f (5 # 2)` | ✓ — a wildcard states nothing, so no call pins the template |
+| `f = 'x # 4 -> x; f 5` | `4 \| 0` ✓ (a uniform value satisfies a `#4` requirement) |
+| `f = 'x # 2 -> x; f (5 # 4)` | `2 \| 4` ✓ (real subtype relaxation) |
+| `f = 'x # 4 -> x; f (5 # 2)` | `4 ∤ 2` ✗ |
+| `f = ('x : Int # _) -> x; f (5 # 8); f (5 # 2)` | ✓ — a wildcard states nothing, so no call pins the template |
 
 **An absent requirement states none, and `#_` spells it.** A parameter without a
 perspective is unconstrained — the same reading a parameter without a type has — so
@@ -398,13 +398,13 @@ then carries no attribute and its value reads as the absent form.
 
 | program | result |
 |---|---|
-| `g = 'x => (x # 2); (g 3) # 4` | `4 ∤ 2` ✗ → "expected 4, found 2" |
-| `g = 'x => (x # 2); (g 3) # 2` | `2 \| 2` ✓ |
-| `g = 'x => (x # 2); (g 3) # 1` | `1 \| 2` ✓ |
-| `h = 'y => (g y); (h 3) # 4` | ✗ — the certificate is copied at each hop |
-| `g = 'x => x; (g 3) # 4` | ✓ — a plain argument provides the absent top |
-| `id := 'x => x; (id (5 # 1)) # 32` | ✗ — a markerless parameter takes the caller's slot (`expected 32, found 1`) |
-| `id := 'x => x; (id (5 # 4)) # 4` | ✓ — the same reading, accepted |
+| `g = 'x -> (x # 2); (g 3) # 4` | `4 ∤ 2` ✗ → "expected 4, found 2" |
+| `g = 'x -> (x # 2); (g 3) # 2` | `2 \| 2` ✓ |
+| `g = 'x -> (x # 2); (g 3) # 1` | `1 \| 2` ✓ |
+| `h = 'y -> (g y); (h 3) # 4` | ✗ — the certificate is copied at each hop |
+| `g = 'x -> x; (g 3) # 4` | ✓ — a plain argument provides the absent top |
+| `id := 'x -> x; (id (5 # 1)) # 32` | ✗ — a markerless parameter takes the caller's slot (`expected 32, found 1`) |
+| `id := 'x -> x; (id (5 # 4)) # 4` | ✓ — the same reading, accepted |
 
 **A markerless parameter takes the caller's slot, so an identity is transparent.**
 `2c809363`: `check_app` read the argument's provided slot only when the callee's parameter
@@ -414,7 +414,7 @@ own merged tail**, so `id (5 # 1)`'s result is `# 1`. Measured at `c3eefe04`, wh
 what the last two rows above pin: a *plain* argument cannot tell the two readings apart,
 and a subject-carrying one can.
 
-**A parameter's requirement is not a return attribute.** `f = 'x # 4 => x` checks
+**A parameter's requirement is not a return attribute.** `f = 'x # 4 -> x` checks
 every argument against `4` at the call, but its result states nothing: a perspective
 on a parameter is a requirement on the caller's value, not a promise about what the
 body returns. The body's reference to `x` is the parameter's own slot, and copying it
@@ -425,7 +425,7 @@ does restate, because that is the caller's value and not the callee's promise.
 
 **What it does not do.** A **certificate** — the attribute an expression *carries* — still
 needs a statement; only the **provider** is derived. So the certificate reaches the call
-site, not through a compound the caller builds: `h = 'y => (g y) + 1` states nothing,
+site, not through a compound the caller builds: `h = 'y -> (g y) + 1` states nothing,
 because its returned expression is an unannotated `+`, and a consumer of `h` reads `h`'s
 own call (whose provider is `h`'s argument) rather than descending into the body. Deriving
 a certificate for an arbitrary expression is the inference this note does **not** have,
@@ -451,7 +451,7 @@ larger the annotation the less it constrained:
 |---|---|---|
 | `((1 # 4) + (2 # 6)) # 5` | checks — `2 ≢ 5` is never compared | refused, "expected 5, found 2" |
 | `((1 # 2) + (2 # 2)) # 4` | checks | refused, "expected 4, found 2" |
-| `f = 'x # 4 => x; f (5 # [1,2][3])` | refused, but spelled "expected none, found none" | refused, "expected 4, found none" |
+| `f = 'x # 4 -> x; f (5 # [1,2][3])` | refused, but spelled "expected none, found none" | refused, "expected 4, found none" |
 
 The third row is the same cause read from the render side: with the provider
 unreadable, both sides of the mismatch read as undecided, so the two values the
@@ -461,7 +461,7 @@ declared side print `4` and the failed read print its own `none`.
 
 A **leaf** annotation never showed this: its slot is a literal, decided when the
 checker builds it. That is why the defect only ever appeared on a compound, and
-why `f = 'x # 4 => x; f (5 # 2)` was refused correctly all along.
+why `f = 'x # 4 -> x; f (5 # 2)` was refused correctly all along.
 
 **The same step is one shared rule, and the type gate takes it too.** It is
 `Checker::compute_operands` (`checker/diagnostics.rs`), and the checker's two
@@ -473,7 +473,7 @@ rewritten** rather than compared: the annotation's type was written into the
 instance's type cell, and
 
 ```lichen
-A  = 'I => struct{.n Int, .I I}
+A  = 'I -> struct{.n Int, .I I}
 S1 = A Int
 S2 = A Float
 x  = S1(.n 3, .I 5)
@@ -514,7 +514,7 @@ it is unreachable from the value it annotates, so graph fusion's interface claim
 
 `expr [: expr] [# expr] [? expr]` — `:` fills the type slot, `#` fills the
 perspective (constraint) slot, `?` fills the doc (label) slot. A
-`'x # n => e` parameter (and `'x : T # n => e`) is accepted; the annotation
+`'x # n -> e` parameter (and `'x : T # n -> e`) is accepted; the annotation
 stays in the expression — the parameter side is an ordinary expression — and
 the frontend keeps the declared type and attribute on
 `ExprKind::Function.parameter_attribute`. See the

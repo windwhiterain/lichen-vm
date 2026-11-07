@@ -23,7 +23,7 @@ fn a_gc_block_evaluates_to_its_tail() {
 
 #[test]
 fn a_gc_marker_over_an_application_evaluates_the_call() {
-    let out = run::evaluate("f := 'n => n + 1\n@gc f 41").expect("the program runs");
+    let out = run::evaluate("f := 'n -> n + 1\n@gc f 41").expect("the program runs");
     assert_eq!(out, "42: Int");
 }
 
@@ -40,7 +40,7 @@ fn a_gc_block_releases_its_scope() {
 
 #[test]
 fn a_released_expression_reads_as_having_no_slot() {
-    let build = build("x := @gc { f := 'y => y + 1\n5 }\nx");
+    let build = build("x := @gc { f := 'y -> y + 1\n5 }\nx");
     // The scope's root survives: the enclosing block reads it.
     assert!(
         build.state.iter().any(|state| state.term.is_some()),
@@ -57,7 +57,7 @@ fn a_released_expression_reads_as_having_no_slot() {
 
 #[test]
 fn a_gc_scope_inside_a_body_is_cloned_per_call() {
-    let out = run::evaluate("f := 'n => @gc { a := n + 1\nb := a * 2\nb }\nf 3 + f 4")
+    let out = run::evaluate("f := 'n -> @gc { a := n + 1\nb := a * 2\nb }\nf 3 + f 4")
         .expect("the program runs");
     assert_eq!(out, "18: Int", "each call collects its own scope");
 }
@@ -82,7 +82,7 @@ fn an_undecided_scope_is_not_collected() {
 #[test]
 fn a_closure_released_from_a_scope_is_still_callable() {
     // The closure's template lives in the scope's block; the release must move it too.
-    let out = run::evaluate("mk := 'n => @gc { f := 'x => x + n\nf }\na := mk 1\nb := a 2\nb")
+    let out = run::evaluate("mk := 'n -> @gc { f := 'x -> x + n\nf }\na := mk 1\nb := a 2\nb")
         .expect("the program runs");
     assert_eq!(out, "3: Int", "the escaped closure still calls");
 }
@@ -90,7 +90,7 @@ fn a_closure_released_from_a_scope_is_still_callable() {
 #[test]
 fn a_closure_stored_in_an_outside_array_is_still_callable() {
     // The scope's value is stored outside it: the closure must still call afterwards.
-    let out = run::evaluate("A := [@any, 1]\ny := A[@gc ('x => x + 1),]\n(y[0]) 3")
+    let out = run::evaluate("A := [@any, 1]\ny := A[@gc ('x -> x + 1),]\n(y[0]) 3")
         .expect("the program runs");
     assert_eq!(out, "4: Int");
 }
@@ -99,7 +99,7 @@ fn a_closure_stored_in_an_outside_array_is_still_callable() {
 fn a_gc_block_calls_a_curried_binding_per_element() {
     // The example's program: a @gc block calling a curried expr, twice in one array.
     let out = run::evaluate(
-        "A := [@any, 2]\nadd := 'x => 'y => x + y\ndouble := 'n => @gc { a := n + 1\nb := add a a\nb }\n@gc A[double 3, double 7]",
+        "A := [@any, 2]\nadd := 'x -> 'y -> x + y\ndouble := 'n -> @gc { a := n + 1\nb := add a a\nb }\n@gc A[double 3, double 7]",
     )
     .expect("the program runs");
     assert_eq!(out, "[8, 16]: Array");

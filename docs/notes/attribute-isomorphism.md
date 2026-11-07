@@ -100,7 +100,7 @@ Tried and rejected while finding it:
 ## Closed mechanism 2a — a jitted kernel's class reads undecided
 
 `compute.jit` refuses with `UNDECIDED_DOMAIN` for
-`k = compute.jit ('x => helper x + 1)`, which must check.
+`k = compute.jit ('x -> helper x + 1)`, which must check.
 
 **Bisected: `5d585047` is the commit that opens it** (green at `aeac9efe`, red at
 `5d585047`, on `jit_inline_lichen_function`). The commit removed the `slot == 1`
@@ -150,7 +150,7 @@ no second owner to defer to.
 
 ## Mechanism 2b — a kernel's codomain stays open (the state of the hunt)
 
-`a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} => p(0)`;
+`a_float_domain_...` fails on `type_is_int` after `p : tuple{Int, Float} -> p(0)`;
 `a_jit_kernel_crosses...` fails on `type_is_float`/`type_is_int` over its five cases.
 Both tests pass at `aeac9efe`, so `5d585047` opened them: it made the type position ride
 the same rule as every other (the isomorphism), and the clone that rule installs is one

@@ -16,7 +16,7 @@ Out  := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 Par  := {.meta Meta, .in In}
 Arg  := {.meta Meta, .I In}
 Fill := {.n @any : Int}
-fill := ('f = Fill) => {
+fill := ('f = Fill) -> {
   i := compute.range f.n
   a := compute.buf (compute.BufParam{.type Float, .length 12})
   b := compute.buf (compute.BufParam{.type Float, .length 12})
@@ -24,17 +24,17 @@ fill := ('f = Fill) => {
 }
 filler := compute.parallel fill "cpu" In
 data := (compute.plrun filler ((Fill){.n 12}) : Struct)
-body := ('p = Par) => {
+body := ('p = Par) -> {
   i := compute.range p.meta.n
   row := i / p.meta.c1
   col := i - row * p.meta.c1
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (row * p.meta.ar + (s(0) - 1) * p.meta.ac)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at ((s(0) - 1) * p.meta.br + col * p.meta.bc)}) : Float))))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (row * p.meta.ar + (s(0) - 1) * p.meta.ac)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at ((s(0) - 1) * p.meta.br + col * p.meta.bc)}) : Float))))
   o := compute.buf (compute.BufParam{.type Float, .length p.meta.n})
   ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value (fold (p.meta.k, 0.0))}))})
 }
 kernel := compute.parallel body "cpu" Out
-a_shape := table("r0" ==> 2, "c0" ==> 6)
-b_shape := table("r1" ==> 6, "c1" ==> 2)
+a_shape := table("r0" => 2, "c0" => 6)
+b_shape := table("r1" => 6, "c1" => 2)
 c_shape := a_shape @table_merge b_shape @table_without "c0" @table_without "r1"
 out := (compute.plrun kernel ((Arg){.meta Meta{.n ((c_shape <== "r0") * (c_shape <== "c1")), .k (a_shape <== "c0"), .c1 (c_shape <== "c1"), .ar (a_shape <== "c0"), .ac 1, .br (b_shape <== "c1"), .bc 1}, .I In{.a data.a, .b data.b}}) : Struct)
 (compute.collect out.c : Array, c_shape <== "r0", c_shape <== "c1")

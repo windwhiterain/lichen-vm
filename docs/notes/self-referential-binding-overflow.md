@@ -40,7 +40,7 @@ involved at all**:
 In  = struct{.a (compute.Buf Float)}
 Out = struct{.y (compute.Buf Float)}
 P   = compute.P (compute.KT Float)(.I In, .O Out)
-body = (k : P) => {
+body = (k : P) -> {
   i = compute.range k.n
   qb = 3.0
   rc = rc * 2.0
@@ -227,7 +227,7 @@ was a **consumer of** that cycle on a path the promise did not name.
 > with them. It **may not name the binding it binds**: the name **is** the value's own node in the
 > graph, so such a value is its own input, and it is a **resolve diagnostic** at the name. A
 > rebinding is written with `let` … The one self-reference the language admits is the **recursive
-> call**: a binding named as the head of an apply inside a `=>` body … because that edge is a call
+> call**: a binding named as the head of an apply inside a `->` body … because that edge is a call
 > and not a value read.
 
 **Two further sentences carried the same claim and were corrected with it** — the IR table's *"a
@@ -291,7 +291,7 @@ about the tree:
 §3 measures the consequence. **The budget alone does not make the walk survivable; the annotation
 was the half that made the refusal reachable.** Its own before/after table is a trip-count probe,
 which is the one instrument that does **not** reproduce here: on today's tree a hand-written
-finite recursion `f = n => if n <= 0 then 0.0 else 1.0 + f (n - 1)` at **trip 400** lowers
+finite recursion `f = n -> if n <= 0 then 0.0 else 1.0 + f (n - 1)` at **trip 400** lowers
 cleanly on a **1 MiB** stack, where the note records ~7 MiB. So the walk got cheaper in the SSA
 refactor and the trip probe no longer separates anything — **but the cyclic case still needs more
 than 1 MiB to reach its own budget**, which is why the note's figure could not be re-used as the
@@ -409,7 +409,7 @@ scope rules"* — so that is where the rule lands, and the refusal is one named 
 > it binds, because the name **is** the value's own node in the IR graph, so the value would be its
 > own input. Write the rebinding with `let`, which compiles the value before the name enters scope,
 > so `let rc = …` reads the **outer** `rc` and binds a new one — recursion is spelled the same way,
-> with the reference under a `=>` parameter (`f = n => … f (n - 1)`), which is a call rather than a
+> with the reference under a `->` parameter (`f = n -> … f (n - 1)`), which is a call rather than a
 > self-reference.
 
 **Measured, `cpu` backend, one case per process. The "was" column is this note's own §1–§3.**
@@ -422,22 +422,22 @@ scope rules"* — so that is where the rule lands, and the refusal is one named 
 | `rc = rc` (bare) | refused by the kernel walk | refused by the resolver, at the same span |
 | `rc = id (rc * 2.0)` — **through a call** | **`0xC00000FD`** | refused, exit `0` |
 | `rc = [rc * 2.0][0]` — **through an array read** | **`0xC00000FD`** | refused, exit `0` |
-| `rc = (n => rc * n) (qb * 2.0)` — **self-reference under a lambda** | **`0xC00000FD`** | refused, exit `0` |
-| `rc = (n => rc * n) ((n => rc * n) (qb * 2.0))` | **`0xC00000FD`** | refused, exit `0` |
+| `rc = (n -> rc * n) (qb * 2.0)` — **self-reference under a lambda** | **`0xC00000FD`** | refused, exit `0` |
+| `rc = (n -> rc * n) ((n -> rc * n) (qb * 2.0))` | **`0xC00000FD`** | refused, exit `0` |
 | `rc = 1.0/qb; let rc = rc * 2.0` | runs | **runs**, `[0.6666667, 0.6666667, 0.6666667, 0.6666667]` |
 | `qb = 3.0; rc = qb * 2.0` (no self-reference) | runs | **runs**, `[6.0, 6.0, 6.0, 6.0]` |
 | the two-name quotient `rc0 = 1.0/qb; rc = rc0 * (2.0 - qb*rc0)` | runs | **runs**, `[0.33333334, …]` |
 | the forward reference `rc = qb * 2.0; qb = 3.0` | runs | **runs**, `[6.0, …]` |
-| `f = n => … f (n - 1); rc = f 3` (the recursive call) | runs | **runs**, `[4.0, …]` |
+| `f = n -> … f (n - 1); rc = f 3` (the recursive call) | runs | **runs**, `[4.0, …]` |
 | `even`/`odd`, mutual recursion | runs | **runs**, `[0.0, …]` |
-| `f = n => … f (n - 1); rc = f 400` (trip 400) | runs | **runs**, `[400.0, …]` |
+| `f = n -> … f (n - 1); rc = f 400` (trip 400) | runs | **runs**, `[400.0, …]` |
 
 **The last four rows are the rule's edge, and they are why the refusal is not "under a lambda".**
-A self-reference is legal exactly when it is **the head of an apply inside a `=>` body** — the
+A self-reference is legal exactly when it is **the head of an apply inside a `->` body** — the
 recursive call, which is a call edge and not a value read. Every spelling in the tree is that
-shape (`fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]`,
-`@loop dot = s => … dot (s(0) - 1, …)`, `sum_to = s => … sum_to (…, …)`), so all of them keep
-running. **`rc = (n => rc * n) (qb * 2.0)` is the same self-reference wearing recursion's clothes**
+shape (`fib = x -> [fib (x - 1) + fib (x - 2), x][x <= 1]`,
+`@loop dot = s -> … dot (s(0) - 1, …)`, `sum_to = s -> … sum_to (…, …)`), so all of them keep
+running. **`rc = (n -> rc * n) (qb * 2.0)` is the same self-reference wearing recursion's clothes**
 — it crashed before this slice and is refused now, and a rule that stopped at "under a lambda"
 would have let it through.
 
@@ -474,8 +474,8 @@ correctly.
 | `a = 1.0; let a = a + 1.0; a` | **`2.0: Float`** — a `let` over a block-wide binding |
 | `{ a = 1.0; let a = a + 1.0; a }` | **`2.0: Float`** — shadowing inside a block |
 | `let a = a + 1.0; a` | refused as **`unresolved name 'a'`** — with no outer `a`, `let` has nothing to read, and that is the documented behaviour, unchanged |
-| `f = n => { t = if n == 0 then 0.0 else f (n - 1); t + 1.0 }; f 4` | **`5.0: Float`** — the recursive call inside a block-bodied function |
-| `f = n => if n <= 0 then 0.0 else 1.0 + f (n - 1); f 4` | **`4.0: Float`** |
+| `f = n -> { t = if n == 0 then 0.0 else f (n - 1); t + 1.0 }; f 4` | **`5.0: Float`** — the recursive call inside a block-bodied function |
+| `f = n -> if n <= 0 then 0.0 else 1.0 + f (n - 1); f 4` | **`4.0: Float`** |
 | `even`/`odd` mutual recursion | **`1.0: Float`** |
 | `a = b * 2.0; b = 3.0; a` (forward) | **`6.0: Float`** |
 | `a = b; a = 1.0; b = a; (a, b)` (mutual, later wins) | **`(1.0, 1.0): tuple{Float, Float}`** |
@@ -632,7 +632,7 @@ cut their own cycle, as the mutually-recursive-structs tests measure.
 | `rc = rc * 2.0` | refused by name (§11.1) | refused by name, unchanged |
 | `rc = 1.0/qb; let rc = rc * 2.0` | runs `0.6666667` | runs `[0.6666667, …]: array{Float, 4}` |
 | `rc = qb * 2.0` | runs `6.0` | runs `[6.0, …]: array{Float, 4}` |
-| `f = n => … f (n - 1); rc = f 400` | runs `400.0` (§6) | runs `[400.0, …]: array{Float, 4}` |
+| `f = n -> … f (n - 1); rc = f 400` | runs `400.0` (§6) | runs `[400.0, …]: array{Float, 4}` |
 | the same at `f 500` | not measured | **the checker's work-budget refusal** (*"applied a function more than 2000 times"*), exit 1 — not the kernel depth budget, and not a crash |
 
 **So the crash this note opened is closed without the `#[stacksafe]` annotation**, because the shapes

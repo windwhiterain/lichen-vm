@@ -70,7 +70,7 @@ signature is stated, the recursive calls read it and the result follows:
 
 ```lichen
 T := (@any : Int, @any : Int)
-gcd := ('p = T) => ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
+gcd := ('p = T) -> ((if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : Int)
 gcd (48, 18)
 ```
 
@@ -91,7 +91,7 @@ evaluates the program to decide types. The trick is a tuple whose
 positions hold different things:
 
 ```lichen
-a := 'x => (1, Int)(x)
+a := 'x -> (1, Int)(x)
 (a 0, a 1)
 ```
 
@@ -159,7 +159,7 @@ inputs.
 2. Explain why a template that names itself is refused while the `A`/`B`
    pair is not.
 3. Write `gcd` with and without its template and compare the two outputs.
-4. Write `a := 'x => (1, "a", Int)(x)` and call it at each of the three
+4. Write `a := 'x -> (1, "a", Int)(x)` and call it at each of the three
    indices. What type does each call have?
 5. Explain what `?a => ?b: ?a => ?b` says about the function `a`, and why
    the signature cannot be more specific.

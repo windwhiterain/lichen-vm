@@ -69,7 +69,7 @@ is a statement about the codomain's *positions* and says nothing about how many 
 `examples/decode_loop.lichen`'s sixth kernel, verbatim:
 
 ```text
-keep_raw = ('k : ParT) => {
+keep_raw = ('k : ParT) -> {
   lane = compute.range k.n
   base = k.j * k.dim
   held = compute.read ((compute.Read _)(.from k.in.x, .at lane))
@@ -148,7 +148,7 @@ lanes**, and its whole body is:
   row = lane % k.rows
   base = row * k.w
   first = float2int (compute.read ((compute.Read _)(.from k.in.p, .at row)))
-  @loop next = 's => … (s(1) + ((((1 * ((float2int (…at (base + s(0) - 1))) >= s(1))) * (1 * ((s(0) - 1) != first))) * ((float2int (…at (base + s(0) - 1))) - s(1)))) ~ "combine", (s(2) + (…)) ~ "combine")
+  @loop next = 's -> … (s(1) + ((((1 * ((float2int (…at (base + s(0) - 1))) >= s(1))) * (1 * ((s(0) - 1) != first))) * ((float2int (…at (base + s(0) - 1))) - s(1)))) ~ "combine", (s(2) + (…)) ~ "combine")
   mine = if rank == 0 then first else (next (k.w, 0, 0))
   at_m = rank * k.rows + row
   at_t = row * k.ranks + rank
@@ -267,7 +267,7 @@ body is §2.1's with one more read and one more guard:
 ```text
   p0 = float2int (compute.read ((compute.Read _)(.from k.in.p, .at (0 * k.rows + row))))
   p1 = float2int (compute.read ((compute.Read _)(.from k.in.p, .at (1 * k.rows + row))))
-  @loop next = 's => … (((1 * (ri >= s(1))) * (1 * ((s(0) - 1) != p0)) * (1 * ((s(0) - 1) != p1))) * …)
+  @loop next = 's -> … (((1 * (ri >= s(1))) * (1 * ((s(0) - 1) != p0)) * (1 * ((s(0) - 1) != p1))) * …)
   mine = if rank == 0 then p0 else (if rank == 1 then p1 else (next (k.w, 0, 0)))
   compute.write ((compute.Write _)(.to k.out.m, .at (rank * k.rows + row), .value (int2float mine ~ "element")))
 ```

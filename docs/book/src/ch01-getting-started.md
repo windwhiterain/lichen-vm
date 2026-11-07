@@ -98,7 +98,7 @@ The quantity of separators never matters: blank lines and trailing
 separators are tolerated. The end of the file is not itself a separator;
 it simply ends the block. What a separator *cannot* do is appear in the
 middle of an expression. An expression ends where a separator begins, so
-a lambda body has to start on the same line as its `=>`. Chapter 3 goes
+a lambda body has to start on the same line as its `->`. Chapter 3 goes
 through the consequences.
 
 A binding is not an assignment. `x := 2` gives the name `x` the value of

@@ -535,7 +535,7 @@ fn prefix_op<'a, Er: GrammarError<'a>>(
         .boxed()
 }
 
-/// The precedence chain over atoms, with `=>` as the loosest operator.
+/// The precedence chain over atoms, with `->` as the loosest operator.
 fn expression<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
 ) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
@@ -802,11 +802,11 @@ fn expression<'a, Er: GrammarError<'a>>(
                 }),
         ));
 
-        // `=>`, the loosest operator, right-associative: the body is a whole
-        // expression, so `x => y => z` nests in `x`'s body.
+        // `->`, the loosest operator, right-associative: the body is a whole
+        // expression, so `x -> y -> z` nests in `x`'s body.
         term4
             .then(
-                token(TokenKind::FatArrow)
+                token(TokenKind::ThinArrow)
                     .ignore_then(operand(tokens, expr.clone()))
                     .repeated()
                     // Only the first body is the lambda's; the repetition
@@ -840,7 +840,7 @@ fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
     }
 }
 
-/// Keep the first body of a `=>` chain and drop the rest.
+/// Keep the first body of a `->` chain and drop the rest.
 ///
 /// # Invariant
 ///
@@ -924,7 +924,7 @@ fn atom_parser<'a, Er: GrammarError<'a>>(
 ///
 /// # Invariant
 /// A bracket-led keyword leads both a value and a type — `set(…)` and `set{E}`,
-/// `table(k ==> v)` and `table{K, V}` — so the opening delimiter, never the
+/// `table(k => v)` and `table{K, V}` — so the opening delimiter, never the
 /// word, selects the form.
 fn kw_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
@@ -1334,7 +1334,7 @@ fn struct_value<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// `(k ==> v, …)` — the body of a constant table literal, `==>` separating the
+/// `(k => v, …)` — the body of a constant table literal, `=>` separating the
 /// expr unambiguously.
 fn table_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
@@ -1343,7 +1343,7 @@ fn table_value_atom<'a, Er: GrammarError<'a>>(
     let entry = expr
         .clone()
         .then(
-            token(TokenKind::TableArrow)
+            token(TokenKind::FatArrow)
                 .ignore_then(operand(tokens, expr.clone()))
                 .or_not(),
         )
@@ -1352,7 +1352,7 @@ fn table_value_atom<'a, Er: GrammarError<'a>>(
             None => {
                 emit.emit(Er::message(
                     me.span(),
-                    "a table entry must be a `key ==> value` expr",
+                    "a table entry must be a `key => value` expr",
                 ));
                 // Recover like any parse error: the entry's key compiles,
                 // its value is a masked error block.

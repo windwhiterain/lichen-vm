@@ -215,7 +215,7 @@ The other current findings:
   the whole `fan_out_merge` module (**4 passed / 0 failed**) are green.
 - For the three perspective/cooperative failures, the SPEC's clone rule is that
   an out-of-scope undecided node is a **reference**. A measurement of an ordinary
-  imported `c := 32; f := x => c` answers `32: Int`, so a blanket freeze-time
+  imported `c := 32; f := x -> c` answers `32: Int`, so a blanket freeze-time
   capture materialization is not justified and would add semantics rather than
   repair this path. The remaining work belongs to the attribute certificate /
   requirement instantiation path; do not change the Any or capture invariants.
@@ -231,8 +231,8 @@ reading is a pair of inline programs:
 
 | program | before | after |
 |---|---|---|
-| `g := x => (x # 32); (g 0) # 64` | refused `expected 64, found 32` | unchanged |
-| `g := x => {r := x; r = (r # 32)}; (g 0) # 64` | **accepted** | refused `expected 64, found 32` |
+| `g := x -> (x # 32); (g 0) # 64` | refused `expected 64, found 32` | unchanged |
+| `g := x -> {r := x; r = (r # 32)}; (g 0) # 64` | **accepted** | refused `expected 64, found 32` |
 
 So this half was never a package-boundary or freeze problem: a statement's stated
 attribute did not reach the value it names at all, because the returned expr's
@@ -417,7 +417,7 @@ its global unnecessity.
 - **The attribute `Any` is minted at the expr's birth** (`slot_expr`:
   `items.push(self.any())`), and the statement's unify does not overwrite it.
 - **The annotated side's expr also carries `Any`.** Measured on
-  `g := x => {r := x; r = (r # 32)}`: the expr for `(r # 32)` is five items whose
+  `g := x -> {r := x; r = (r # 32)}`: the expr for `(r # 32)` is five items whose
   positions 2–4 are `NodeId(135/136/137)`, all `own=Some(LowValue(Any))`. The
   settled slot exists only in `Checker::state[annotated].attr` (`Some(NodeId(448))`
   for that program).
@@ -477,7 +477,7 @@ against a *decided* right side writes nothing.
 Measured consequences (with instrumentation, then reverted):
 
 - With `adopt_stated_attributes` **removed**, the statement program
-  `g := x => {r := x; r = (r # 32)}` / `(g 0) # 64` still refuses
+  `g := x -> {r := x; r = (r # 32)}` / `(g 0) # 64` still refuses
   `expected 64, found 32`. So the erasure is **not** the statement-attribute
   mechanism — this confirms round 31's refutation by a second route.
 - The applied expr's Perspective position for that call holds an expression array
@@ -507,7 +507,7 @@ never applied: the `adopt_stated_attributes` call was edited with a scripted
 replace that silently did not match, so the "removal" measurement ran the
 unchanged binary. Re-measured with the edit verified against `git diff`:
 
-- With adoption **disabled**, `g := x => {r := x; r = (r # 32)}` / `(g 0) # 64` is
+- With adoption **disabled**, `g := x -> {r := x; r = (r # 32)}` / `(g 0) # 64` is
   **admitted** (`ok=true`).
 - With adoption **enabled** (the tip), it is refused `expected 64, found 32`.
 
@@ -565,7 +565,7 @@ is clean at `2ad755f1` with compute **240/2**.
 **The artifact's binding value names the function.** The export item the resolver
 reads is a `Static` node holding `LowValue::Function(AnyFunctionId::Static(..))`:
 export[10] (`jit`) → `StaticFunctionId(7)`, export[11] (`launch`) →
-`StaticFunctionId(10)`. The offsets are the nested lambdas (each `f => b => …`
+`StaticFunctionId(10)`. The offsets are the nested lambdas (each `f -> b -> …`
 creates a closure entry), so `jit`=7 is consistent with `type_of`=0,
 `perspective_of`=1, `A`=2, `P`=3, `S`=4 (+its inner), `Buf`=6.
 
@@ -610,12 +610,12 @@ right:
 | call | resolved | declared return type, element 0 |
 |---|---|---|
 | `compute.jit (…)` (twice) | `StaticFunctionId(7)` | `TypeValue(TypeStruct)` — `jit` returns `K{…}`, a struct ✓ |
-| `compute.launch` | `StaticFunctionId(10)` | `TypeValue(TypeFunction)` — `launch` returns `a => …` ✓ |
+| `compute.launch` | `StaticFunctionId(10)` | `TypeValue(TypeFunction)` — `launch` returns `a -> …` ✓ |
 
 **So the six `jit_cross_kernel_*` failures are not a resolver defect.** With the
 resolver, `compute.jit`'s result type becomes known (`K`, a struct), and the guard
 in `check_app` — "a decided non-function callee is refused" — then fires on
-`k1 := compute.jit ((x : Int) => k0 x)`, whose body applies the jitted value
+`k1 := compute.jit ((x : Int) -> k0 x)`, whose body applies the jitted value
 `k0` to `x`. The program is legitimate in this vocabulary: `K{…}` is exactly what
 `compute.launch` and `compute.call` apply, so a `K` value **is callable** even
 though its type is a struct. The baseline passes only because the callee's type is

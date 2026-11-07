@@ -72,21 +72,21 @@ fn program(step: &str) -> String {
 In   := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutR := {{.r (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par  := {{.n @any : Int, .in In}}
-producer_raw := ('k = Par) => {{
+producer_raw := ('k = Par) -> {{
   i := compute.range k.n
   d := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) ~ "combine"))
   ((OutR){{.r (compute.write ((compute.Write _){{.to d, .at i, .value fold (k.n, 0.0 ~ "identity")}}))}})
 }}
 producer := compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  := {{.d (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}})), .p (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 OutZ := {{.z (compute.Buf (compute.BufParam{{.type Float, .length {COUNT}}}))}}
 Par2 := {{.n @any : Int, .in In2}}
-consumer_raw := ('k = Par2) => {{
+consumer_raw := ('k = Par2) -> {{
   i := compute.range k.n
   d := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   r := (compute.read ((compute.Read _){{.from k.in.p, .at 0}}) : Float)
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) - r) ~ "element")) ~ "combine")
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _){{.from k.in.d, .at s(0) - 1}}) : Float)) - r) ~ "element")) ~ "combine")
   ((OutZ){{.z (compute.write ((compute.Write _){{.to d, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")}}))}})
 }}
 consumer := compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
@@ -99,7 +99,7 @@ built := compute.graph step
 
 /// The one producer and one consumer whose output the function returns.
 fn two_stage() -> &'static str {
-    r#"step := ('s = GArg) => {
+    r#"step := ('s = GArg) -> {
   first := (compute.plrun producer ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
   compute.plrun consumer ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.r}})
 }"#
@@ -131,7 +131,7 @@ fn filled() -> String {
     format!(
         r#"
 Fill := {{.n @any : Int}}
-fill := ('c = Fill) => {{
+fill := ('c = Fill) -> {{
   i := compute.range c.n
   d := compute.buf (compute.BufParam{{.type Float, .length {COUNT}}})
   ((OutR){{.r (compute.write ((compute.Write _){{.to d, .at i, .value (int2float i + 1.0)}}))}})
@@ -146,7 +146,7 @@ fn fan_out() -> String {
     format!(
         "{}(producer, consumer, built)\n",
         program(
-            r#"step := ('s = GArg) => {
+            r#"step := ('s = GArg) -> {
   first := (compute.plrun producer ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct)
   left := (compute.plrun consumer ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.r}}) : Struct)
   right := (compute.plrun consumer ((compute.A _){.n s.n, .I In2{.d s.in.d, .p first.r}}) : Struct)

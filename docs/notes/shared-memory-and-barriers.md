@@ -799,8 +799,8 @@ one type looks like two nominals, and the difference between the two spellings i
 ```lichen
 -- the paper's cases, not lichen surface: `compute.lichen` spells one `Buf`, `Shared` and
 -- `view` name no type there, and a written `DP` is surface the lowering does not have yet (§10)
-Shared = 'T => struct{.native _, .element T, .n Int}   -- the paper's shared(T, N): Buf at block[1]
-Buf    = 'T => struct{.native _, .element T}           -- the paper's ptr(T, N): Buf at grid[1]
+Shared = 'T -> struct{.native _, .element T, .n Int}   -- the paper's shared(T, N): Buf at block[1]
+Buf    = 'T -> struct{.native _, .element T}           -- the paper's ptr(T, N): Buf at grid[1]
 ```
 
 `view(T, N, DP)` is that type with the argument written rather than implied, and `Shared`
@@ -867,7 +867,7 @@ At the surface the change is two lines and one new type:
 
 ```lichen
 State = struct{}
-write = ('x : (Write _)) => $write(x.to, x.at, x.value): State
+write = ('x : (Write _)) -> $write(x.to, x.at, x.value): State
 ```
 
 `struct{}` is the zero-field struct form the parser already accepted, so the token
@@ -918,7 +918,7 @@ opens the first.
 
 A codomain position must reduce to a `compute.write`, and the one non-write leaf
 that gate tolerates is a `Selection::Computed` conditional (`compute.rs:2316`) — a
-`@loop` head is an `Apply`, so `@loop pass = 's => if s(0) == 0 then write(…) else
+`@loop` head is an `Apply`, so `@loop pass = 's -> if s(0) == 0 then write(…) else
 pass(…)` *as* the codomain is refused before the lowering runs. With the loop inside
 a codomain write's value instead, `buffer_write` takes its ordinal before it lowers
 its operands (`body.rs:1574`), so the nest's own write bills a second ordinal and

@@ -42,7 +42,7 @@ pub enum TokenKind {
     KwArray,
     /// The `Struct` template constant — the builtin struct template.
     KwStruct,
-    /// The `table` keyword — the table value `table(k ==> v)` and the table
+    /// The `table` keyword — the table value `table(k => v)` and the table
     /// type `table{K, V}` (`docs/language-spec.md` §2).
     KwTable,
     /// The `set` keyword — the set value `set(a, b)` and the set type
@@ -118,14 +118,14 @@ pub enum TokenKind {
     /// The `ln` keyword — the natural logarithm of one `Float`, at the prefix level
     /// (`crates/lichen-kernel-ir/src/unary.rs`).
     KwLn,
-    /// '=>' -- a lambda.
+    /// '->' -- a lambda.
+    ThinArrow,
+    /// '=>' -- the table entry's key/value separator (`table(k => v)`).
     FatArrow,
     /// ':' -- an annotation.
     Colon,
     /// ':=' -- the core binding: `name := expr`.
     ColonEquals,
-    /// '==>' -- the table entry's key/value separator (`table(k ==> v)`).
-    TableArrow,
     /// '<==' -- the table read's container/key separator (`t <== k`).
     TableFindArrow,
     /// '#' -- the perspective annotation.
@@ -250,10 +250,10 @@ impl TokenKind {
             TokenKind::KwSin => "'sin'",
             TokenKind::KwCos => "'cos'",
             TokenKind::KwLn => "'ln'",
+            TokenKind::ThinArrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
             TokenKind::ColonEquals => "':='",
-            TokenKind::TableArrow => "'==>'",
             TokenKind::TableFindArrow => "'<=='",
             TokenKind::Hash => "'#'",
             TokenKind::Question => "'?'",
@@ -396,10 +396,10 @@ enum RawToken {
     KwLn,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
+    #[token("->")]
+    ThinArrow,
     #[token("=>")]
     FatArrow,
-    #[token("==>")]
-    TableArrow,
     #[token("<==")]
     TableFindArrow,
     #[token(":")]
@@ -874,8 +874,8 @@ fn raw_to_kind(
         RawToken::KwSin => Some(TokenKind::KwSin),
         RawToken::KwCos => Some(TokenKind::KwCos),
         RawToken::KwLn => Some(TokenKind::KwLn),
+        RawToken::ThinArrow => Some(TokenKind::ThinArrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
-        RawToken::TableArrow => Some(TokenKind::TableArrow),
         RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::ColonEquals => Some(TokenKind::ColonEquals),

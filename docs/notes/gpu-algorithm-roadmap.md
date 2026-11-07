@@ -128,8 +128,8 @@ reduced case already works.** Measured, on unmodified `dev`:
 
 ```lichen
 --- compute = import "compute.lichen" ---
-square = x => x * x
-p = compute.parallel (cfg => {
+square = x -> x * x
+p = compute.parallel (cfg -> {
   n = cfg(0)
   i = compute.range n
   compute.write ((compute.Write _)(.to n, .at i, .value square (i + 1)))
@@ -137,7 +137,7 @@ p = compute.parallel (cfg => {
 -- [1, 4, 9, 16]
 ```
 
-and `square 3` gives `[9, 9, 9, 9]`, and a self-recursive `steps = k => if k == 0
+and `square 3` gives `[9, 9, 9, 9]`, and a self-recursive `steps = k -> if k == 0
 then 0 else steps (k - 1) + 1` applied as `steps 4` gives `4 : Int` — **all
 three before any change.** A same-module call in a kernel body is already
 inlined, and recursion with a decidable trip count already works.
@@ -340,7 +340,7 @@ proved uniform over 6 lanes is not automatically uniform over 4, and the program
 would not know which answer it got. This is §7's first open question.
 
 **What the lattice already checks, and what it does not.** A lane-group requirement is
-buildable today: `warp = 32; f = (acc : Int # warp) => acc` accepts a value uniform over
+buildable today: `warp = 32; f = (acc : Int # warp) -> acc` accepts a value uniform over
 32-groups (`7`, `# 64`) and refuses a lane-varying one (`# 1` → `expected 32, found 1`) or
 an incomparable width (`# 6` → `expected 32, found 6`, the divisibility finding above
 made executable — [attributes](attributes.md) §"A lane-group requirement"). That is the
@@ -389,7 +389,7 @@ the unroll, and it is the largest single item in this roadmap:
 > rather than in a new buffer *kind*, because a buffer is already a struct
 > wrapper. The one bullet below that the note **corrects** is "a new buffer
 > kind": it is not a second wrapper but the one buffer type at `block[1]`,
-> `Shared = T => struct{.native _, .element T, .n Int}` — the paper's
+> `Shared = T -> struct{.native _, .element T, .n Int}` — the paper's
 > `view(T, N, DP)` with the argument written. The note removes that bullet's
 > other two shapes as well: the language layer keeps one `write` and one
 > `read`, because a space is the plan's and the `DP` is the type's and neither
@@ -800,7 +800,7 @@ probe confirms it from the program side (`crates/lichen-compute/examples/recursi
 **A `loop` combinator as one line of lichen.**
 
 ```lichen
-loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+loop = f -> n -> x -> if n == 0 then x else loop f (n - 1) (f x)
 ```
 
 If that works in a kernel body the whole feature is free for a decided trip count,

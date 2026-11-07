@@ -46,15 +46,15 @@ All measured through the CLI on `dev` before the ruling. Each program is
 accepted (exit 0) and prints an expr whose value is not of its type:
 
 ```lichen
-f = 'x => { a = x(0); a : Int; a }
+f = 'x -> { a = x(0); a : Int; a }
 f ("a", 2)                    -- "a": Int     value string, type Int
-f = 'x => { a = x[0]; a : Int; a }
+f = 'x -> { a = x[0]; a : Int; a }
 f ["a"]                       -- "a": Int
-f = 'x => { a = x(0); a : string; a }
+f = 'x -> { a = x(0); a : string; a }
 f (1, 2)                      -- 1: string
-f = 'x => { a = x.a; a : Int; a }
+f = 'x -> { a = x.a; a : Int; a }
 f (S(.a "s"))                 -- "s": Int     (S = struct{.a string})
-f = 'x => { a = (g x)(0); a : Int; a }; g = 'x => ("s", 2); f 1
+f = 'x -> { a = (g x)(0); a : Int; a }; g = 'x -> ("s", 2); f 1
                               -- "s": Int     the container is a call result
 ```
 
@@ -70,12 +70,12 @@ the container's **kind** (tuple/array/struct), never the element's or field's
 type, so nothing reconciled the two slots. The table read did not have the
 hole: `check_table_find` pins the container's whole type to
 `table{?, ?}`, and the apply's argument unify checks the pinned value type
-(measured: `f = 'x => { a = x <== 1; a : Int; a }; f (table(1 ==> "a"))` is
+(measured: `f = 'x -> { a = x <== 1; a : Int; a }; f (table(1 => "a"))` is
 refused with `expected table{?a, Int}, found table{Int, string}`). It was a
 deferral nonetheless, and the author strictified it with its set sibling (§4).
 
 The access-caused `raw` answers were the same failure: before the ruling,
-`addpair = 'p => p(0) + p(1); addpair (1, 2)` printed
+`addpair = 'p -> p(0) + p(1); addpair (1, 2)` printed
 `raw 3: raw[?a, ?b]`. After the ruling it is refused at `p(0)`.
 
 ## 3. What the checker does now
@@ -111,7 +111,7 @@ cannot be checked: …`, `this set membership cannot be checked: …`). The pins
 stay for the decided case: the container's type is unified with a fresh
 `table{key, value}` (whose value cell is the read's type) or `set{element}`,
 so a decided non-table/non-set is still refused by the pin. Measured:
-`f = 't => t <== 1` and `f = 's => 1 @in s` are refused at the read; a literal
+`f = 't -> t <== 1` and `f = 's -> 1 @in s` are refused at the read; a literal
 container or an annotated parameter is checked as before.
 
 The `@loop` state read is the remaining deferral: the conversion derives the
@@ -125,15 +125,15 @@ checker asks the engine for the call's **own instance** of the callee's
 signature (the same per-call clone the runtime applies, with the parameter
 check skipped) and binds the result cell to that instance's codomain, so
 `(f 1).y` reads `f`'s return type directly. Measured: `S = struct{.y Int};
-f = ('x : Int) => S(.y x); (f 1).y` answers `1: Int` (previously refused), and
-the old deferred-read exploit `f = 'x => { a = (g x)(0); a : Int; a }; g = 'x =>
+f = ('x : Int) -> S(.y x); (f 1).y` answers `1: Int` (previously refused), and
+the old deferred-read exploit `f = 'x -> { a = (g x)(0); a : Int; a }; g = 'x ->
 ("s", 2); f 1` is now refused at the read with `expected Int, found string`
 instead of printing a string as `Int`.
 
 The residual: a call to a function **still under check** is skipped (its
 signature is not built, and a clone would disconnect a recursive result from
 it), and an undecided callee's type is not a function type at all, so its
-result stays a cell and the read is refused (`f = 'g => (g 1).y` still needs the
+result stays a cell and the read is refused (`f = 'g -> (g 1).y` still needs the
 call-expression annotation). A call on a cyclic signature shows the instance's
 open cells instead of the shared cut; the spec's §5 states that.
 
@@ -146,7 +146,7 @@ open cells instead of the shared cut; the spec's §5 states that.
   output type) is passed instead:
 
   ```lichen
-  parallel = 'f => 'b: string => 'o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
+  parallel = 'f -> 'b: string -> 'o: _ -> {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
   ```
 
   and every call site passes its output type (`compute.parallel (body ~
@@ -154,9 +154,9 @@ open cells instead of the shared cut; the spec's §5 states that.
   updated with the wrapper; the three compute tests whose programs build a
   kernel pass their output type the same way.
 - `read` typed its result from the buffer value's `.element` field,
-  `read = ('x : (Read _)) => $read(x.from, x.at): x.from.element`. That field
+  `read = ('x : (Read _)) -> $read(x.from, x.at): x.from.element`. That field
   holds the element *type* as a value while its declared type is the element
-  class (`Buf = 'T => struct{.native _, .element T}`), so the annotation's
+  class (`Buf = 'T -> struct{.native _, .element T}`), so the annotation's
   type expression has the class as its static type, not `Type`, and the
   strict annotation check refuses the value-as-type read. The wrapper now
   returns the native value and the **caller** states the element type at the
@@ -184,7 +184,7 @@ open cells instead of the shared cut; the spec's §5 states that.
 - the wildcard-root frontier: an **undecided value** and its type now print
   the same class name from one table (the author's encoding ruling), so the
   answer shows the unification topology instead of a dump. Measured:
-  `f = 'n => if n == 0 then (_, _) else f (n - 1); f 3` prints
+  `f = 'n -> if n == 0 then (_, _) else f (n - 1); f 3` prints
   `(?a, ?b): tuple{?a, ?b}`; `x = _; (x, x)` prints `(?a, ?a): tuple{?a, ?a}`
   (one hole, one name); `(1, _)` prints `(1, ?a): tuple{Int, ?a}`. The `raw`
   mark is left for a **decided** type the value cannot be read through, and

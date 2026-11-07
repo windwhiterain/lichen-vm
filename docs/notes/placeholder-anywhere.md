@@ -21,7 +21,7 @@ discard binding and not a parameter.
   the value stays underdetermined (an empty slot).
 - `f _`, `(1, _)` — a value hole the context unifies.
 - `_ = 5` — a **parse error**: `_` cannot be bound.
-- `_ => e` — a lambda whose parameter side is a hole, so it declares **no**
+- `_ -> e` — a lambda whose parameter side is a hole, so it declares **no**
   parameter: a parameter is a *primed* name (`'x`), and a placeholder is not a
   name and cannot take a prime.
 

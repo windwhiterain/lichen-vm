@@ -88,9 +88,9 @@ The discriminators, each measured by running one program through the CLI:
 | `n = 5` ; `n < 5` | `raw 0: ?a` |
 | `n = 5` ; `n == 5` | `1: Int` |
 | `n = 5` ; `n + 1` | `6: Int` |
-| `f = x => x + 10` ; `f 5` | `15: Int` |
-| `f = x => x <= 10` ; `f 5` | `raw 1: ?a` |
-| `f = (x : Int) => x <= 10` ; `f 5` | `raw 1: ?a` |
+| `f = x -> x + 10` ; `f 5` | `15: Int` |
+| `f = x -> x <= 10` ; `f 5` | `raw 1: ?a` |
+| `f = (x : Int) -> x <= 10` ; `f 5` | `raw 1: ?a` |
 | `add [1, 2]` | `3: Int` |
 | `sub [5, 2]` | `3: Int` |
 | `mul [3, 4]` | `12: Int` |
@@ -108,13 +108,13 @@ Ruled out by measurement, each with the program that rules it out:
   condition's answer, it does not decide one.
 - **`@loop` / unmarked recursion.** The finding recorded one slice ago — that a
   marker is what gives an undecided trip count its `Int` — **does not transfer to
-  any of these four.** `@loop f = x => [x, @shallow f (x + 1)]` … prints
+  any of these four.** `@loop f = x -> [x, @shallow f (x + 1)]` … prints
   `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`, identical to the unmarked program, and
-  `@loop f = x => x <= 10` ; `f 5` prints `raw 1: ?a`, identical to the unmarked one.
+  `@loop f = x -> x <= 10` ; `f 5` prints `raw 1: ?a`, identical to the unmarked one.
   The marker is not the lever here.
 - **`@shallow` by itself.** `xs = [1, @shallow [2, 3]]` ; `xs(0)` prints `1: Int`.
 - **A stale declaration.** §1: the CLI prints the same string as the suite.
-- **An annotation on the parameter.** `f = (x : Int) => x <= 10` ; `f 5` is still
+- **An annotation on the parameter.** `f = (x : Int) -> x <= 10` ; `f 5` is still
   `raw 1: ?a`.
 
 ## 4. The three families, and which exprs differ
@@ -202,7 +202,7 @@ step.
 Discriminator, measured: the same read decides when the container comes from a
 literal binding and does not when it comes through a function application.
 `xs = [1, @shallow [2, 3]]` ; `xs(1)` prints `[2, 3]: array{Int, 2}`, while
-`f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` prints
+`f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` prints
 `[raw 1, raw 2]: array{?a, 2}`. The undecided cell is the array's **element type
 position**, and the read path is the one
 [compound-element-slots](compound-element-slots.md) §"The read path" describes.
@@ -225,7 +225,7 @@ stay undecided.
 
 Discriminator, measured: the frozen-module boundary is necessary but not
 sufficient. `math.succ 41` through an `import` prints `raw 42: ?a`, while
-`succ = x => x + 1` ; `inc_twice = x => succ (succ x)` ; `inc_twice 5` prints
+`succ = x -> x + 1` ; `inc_twice = x -> succ (succ x)` ; `inc_twice 5` prints
 `7: Int` and `inc_twice 5` through the import prints `raw 7`. Inside the *same*
 frozen module `geo.double 5` prints `10: Int` while `math.succ 41` does not, so the
 boundary alone cannot be the whole cause.
@@ -590,10 +590,10 @@ Measured, one program each:
 | program | prints |
 |---|---|
 | `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | `[1, 2]: array{Int, 2}` — stated operand, decided at check time |
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — unstated operand, open class cell |
-| `f = x => [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` — a bare read of `x` decides, so `@shallow` is **not** the discriminator |
-| `f = (x : Int) => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — an annotation does not reach it |
-| `f = x => [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `error: expected Int, found array{?a, 2}` — **not** a drift; dropping `@shallow` does not produce the declared output either |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — unstated operand, open class cell |
+| `f = x -> [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` — a bare read of `x` decides, so `@shallow` is **not** the discriminator |
+| `f = (x : Int) -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — an annotation does not reach it |
+| `f = x -> [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `error: expected Int, found array{?a, 2}` — **not** a drift; dropping `@shallow` does not produce the declared output either |
 
 So B's undecided cell holds an **open class the run never closes**, not a declared type
 a join failed to carry. **§10's fix does not apply to B and was not expected to.** B is
@@ -660,7 +660,7 @@ geometry.lichen  (raw[?a, ?b] => …, Function): struct{.double raw[?a, ?b] -> �
 ```
 
 Those two already **declare** `?a` in their `output =`. That records a polymorphic
-lambda's exported signature (`math.add = x => y => x + y` has no stated operand) — the
+lambda's exported signature (`math.add = x -> y -> x + y` has no stated operand) — the
 same open class B is about, at the level of a module's type — not this defect, so it is
 left as it stands rather than re-declared.
 

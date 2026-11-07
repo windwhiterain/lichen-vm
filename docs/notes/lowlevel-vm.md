@@ -278,7 +278,7 @@ replaced by another one.
 
 The consequence worth stating plainly: a class never holds two different values, because the
 only moment two classes could start doing so is a merge, and the merge does not do it. That
-is why `('n => ([1,2,3] : array{Int, n})) 5` is still refused — the apply compares a pinned
+is why `('n -> ([1,2,3] : array{Int, n})) 5` is still refused — the apply compares a pinned
 `3` against the argument `5`, and neither ever entered the other's class.
 
 `class_root` walks the union-find without path compression so a read can hold a

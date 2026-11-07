@@ -1,9 +1,9 @@
 ---
   order = "3"
-  output = "Tuple => Int: TypeFunction"
+  output = "Tuple -> Int: TypeFunction"
 ---
-f1 := 'x => x : Int
-f2 := 'x => {
+f1 := 'x -> x : Int
+f2 := 'x -> {
     x = (@any : Type, @any : _)
     f1 x(1)
 }

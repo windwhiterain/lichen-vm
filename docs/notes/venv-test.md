@@ -32,7 +32,7 @@ This pins the shipping compiler's `run`/`build`/persist path (see
 [`artifact-cache.md`](artifact-cache.md)).
 
 **Leg 2 — a real `.lichen` git dependency.** A tiny `file://` git fixture repo
-holds a `.lichen` library (`_.lichen` = `'x => x + 1`); a project `depend`s it
+holds a `.lichen` library (`_.lichen` = `'x -> x + 1`); a project `depend`s it
 and `import`s it. `lichen fetch` clones it into `sources/math`, then `lichen run`
 resolves the import and prints `Function: Int -> Int`. Fully offline — this is
 the package manager's dependency-fetch + import-resolution path (see

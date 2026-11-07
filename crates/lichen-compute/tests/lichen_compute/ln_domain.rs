@@ -65,8 +65,8 @@ fn emitted(operands: &[f32]) -> Vec<f32> {
 ---
 Args := {{.x (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
 Out  := {{.v (compute.Buf (compute.BufParam{{.type Float, .length _}}))}}
-Par  := '_x => compute.P compute.KT{{.I Args, .O Out}}
-applied := (k = (Par _)) => {{
+Par  := '_x -> compute.P compute.KT{{.I Args, .O Out}}
+applied := (k = (Par _)) -> {{
   i := compute.range k.n
   x := (compute.read ((compute.Read _){{.from k.in.x, .at i}}) : Float)
   compute.write ((compute.Write _){{.to k.out.v, .at i, .value (ln x ~ "element")}})

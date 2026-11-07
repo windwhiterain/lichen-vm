@@ -74,5 +74,5 @@ written only in a plugin's own source.
   them are the logical connectives.
 - There is no ternary; `if` is the lazy read of one element of a
   two-element tuple.
-- There is no thin arrow; a function's signature is written with `=>` and
+- There is no `==>`; a function's signature is written with `->` and
   unified with plain `=` against a function template.

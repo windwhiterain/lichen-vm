@@ -43,7 +43,7 @@ fn kernel(declarations: &str, written: &str, argument: &str) -> String {
 Src := {{.a @any : Int}}
 SrcOut := {{.z (compute.Buf (compute.BufParam{{.type Float, .length 3}}))}}
 SrcPar := {{.n @any : Int, .in Src}}
-fill := ('k = SrcPar) => {{
+fill := ('k = SrcPar) -> {{
   i := compute.range k.n
   z := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((SrcOut){{.z (compute.write ((compute.Write _){{.to z, .at i, .value int2float (i + 10)}}))}})
@@ -51,7 +51,7 @@ fill := ('k = SrcPar) => {{
 source_kernel := compute.parallel fill "cpu" SrcOut
 inbuf := (compute.plrun source_kernel ((compute.A _){{.n 3, .I Src{{.a 0}}}}) : Struct)
 {declarations}
-f := ('k = Par) => {{
+f := ('k = Par) -> {{
   i := compute.range k.n
   w := compute.buf (compute.BufParam{{.type Float, .length k.n}})
   ((Out){{.w (compute.write ((compute.Write _){{.to w, .at i, .value {written}}}))}})

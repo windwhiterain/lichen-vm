@@ -557,7 +557,7 @@ pub enum ExprKind<L> {
     /// the members and the set's identity is its type, so no value-level tag is
     /// needed.
     Set(ChildRange),
-    /// A constant table `table(k1 ==> v1, …)`, interleaved in [`IR::children`].
+    /// A constant table `table(k1 => v1, …)`, interleaved in [`IR::children`].
     ///
     /// # Invariant
     /// Every key shares one key type and every value one value type. The checker

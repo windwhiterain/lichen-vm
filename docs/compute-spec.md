@@ -105,7 +105,7 @@ Types:
 
 Genre: behaviour.
 
-- Scalar: compile a function, run it on one argument — `compute.launch (compute.jit ('x => x + 1)) 5` answers `6 : Int`, typed `Int`
+- Scalar: compile a function, run it on one argument — `compute.launch (compute.jit ('x -> x + 1)) 5` answers `6 : Int`, typed `Int`
   at the root. One runnable witness: `examples/compute_jit.lichen`, `output = "6: Int"`; the same shape through
   `tests/lichen_compute/compute.rs` (`jit_then_launch_scalar`).
 

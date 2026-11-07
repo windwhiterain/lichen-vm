@@ -4,7 +4,7 @@
 > rejected.** The ruling (recorded in
 > [function-normalization](function-normalization.md) §3.7): *"normalize时函数类型检查
 > 就应当确定。旧的依赖lazy的检查方式要被淘汰了。"* An instantiation whose callee
-> struct type is not determined at normalize — `g = c => c(.a 1, .b 2)` — is
+> struct type is not determined at normalize — `g = c -> c(.a 1, .b 2)` — is
 > **refused**; the lazy reorder that resolves at the apply is retired, not extended.
 > So the designs below (§4) are moot, the questions (§5) are answered by the ruling,
 > and the measured matrix (§0–§3) is kept as the reason: every defect this note
@@ -38,18 +38,18 @@ S(.a 5 # 4, .b 2)        -- accepted: `(5, 2)` — the perspective is
 S(.a 1, .b 2, 3)         -- refused: `too many fields ...`      (arity)
 S(.a 1 # 4,)             -- refused: `missing field b ...`      (arity)
 
-g = c => c(.a 1 # 2, .b 2)
+g = c -> c(.a 1 # 2, .b 2)
 g S                      -- accepted: the `# 2` is never compared
-g = c => c(.a 1, .b 2)
+g = c -> c(.a 1, .b 2)
 g S                      -- accepted, and `S`'s fields are two: correct
-g = c => c(.a 1)
+g = c -> c(.a 1)
 g S                      -- accepted with a one-element instance
-g = c => c(.z 1)
+g = c -> c(.z 1)
 g S                      -- the miss names the arguments (`no argument is named a —
                          -- the arguments are named z`)
 ```
 
-The **pin** (`S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S`) is accepted the
+The **pin** (`S = struct{.a 5 : Int}` ; `g = c -> c(.a 6)` ; `g S`) is accepted the
 same way, and `v = g S; v.a` answers `6` — the pinned `5` is not enforced on this
 path.
 

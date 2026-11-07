@@ -33,7 +33,7 @@ A plugin may expose operations that are not expressible in the bare
 language. Its own source calls them with the `$` form:
 
 ```lichen std.lichen
-sort := 'a : Array => {r := $sort(a); r : Array; r}
+sort := 'a : Array -> {r := $sort(a); r : Array; r}
 ```
 
 This is the whole of `lichen-std-native`'s source: `$sort` is a native
@@ -49,7 +49,7 @@ registry of the module being compiled**. The shipping compiler has no
 error: unresolved native operator 'sort' — this module composes no plugin registering it
   --> 1:29
    |
- 1 | sort := 'a : Array => {r := $sort(a); r : Array; r}
+ 1 | sort := 'a : Array -> {r := $sort(a); r : Array; r}
    |                             ^
 ```
 

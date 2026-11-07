@@ -123,11 +123,11 @@ build. And nothing registers it: only the **bare** arm pushes to `shallow_types`
 ## 2 Who spells `@shallow(n)`
 
 Enumerated, by grep over `examples/` and `tests/`, then read — the spelling `@shallow(` is
-**not** the discriminator, because `@shallow (2)` is the element `(2)` and `@shallow(x => x + 1)`
+**not** the discriminator, because `@shallow (2)` is the element `(2)` and `@shallow(x -> x + 1)`
 is the bare mark on a parenthesised element.
 
 **In `examples/`: zero depth-form sites.** `examples/` spells the marker exactly once —
-`examples/lazy_infinite.lichen:5`, `f = x => [x, @shallow f (x + 1)]`, the **bare** form.
+`examples/lazy_infinite.lichen:5`, `f = x -> [x, @shallow f (x + 1)]`, the **bare** form.
 **Not one example program spells the depth form**, so every example's declared `output =`
 is unaffected by anything §5 does.
 
@@ -137,7 +137,7 @@ lexer and grammar corpora:
 | site | spelling | what it is |
 |---|---|---|
 | `crates/lichen-language/tests/language/pipeline.rs:2406` | `([1, @shallow(2) [2, 3]])(1)(0)` | the depth-2 read of §3's first test |
-| `crates/lichen-language/tests/language/pipeline.rs:2426` | `f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; …` | the depth-1 recursive tail of §3's second test |
+| `crates/lichen-language/tests/language/pipeline.rs:2426` | `f = x -> [x, @shallow(1) f (x + 1)]; inf = f 0; …` | the depth-1 recursive tail of §3's second test |
 | `crates/lichen-language-lex/src/tests/lex_tests.rs:300` | `[1, @shallow f (x + 1), @shallow(2) y]` | lexing only |
 | `crates/lichen-language-lex/src/tests/lex_tests.rs:321` | `@shallow(0) x` | lexing only — see §4.3 |
 | `crates/lichen-language-lex/src/tests/lex_tests.rs:334` | `@shallow(2) x` | lexing only |
@@ -146,7 +146,7 @@ lexer and grammar corpora:
 | `tree-sitter-lichen/tests/samples.rs:93` | `z = [1, @shallow 2, @shallow(3) 4]` | grammar corpus |
 
 Two greps that look like sites and are not: `crates/lichen-highlevel/tests/highlevel/checker.rs:2032`
-and `:2055` write `@shallow(x => x + 1) 5`, which is the **bare** mark on a parenthesised
+and `:2055` write `@shallow(x -> x + 1) 5`, which is the **bare** mark on a parenthesised
 element. `crates/lichen-testkit/src/writer.rs:493` names the form in a doc comment only.
 
 **The weight this carries: the depth form's entire footprint in the repository is two
@@ -197,7 +197,7 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     // The compile-time wrap cannot descend the undecided spine, so the
     // definition pass terminates.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
+        "f = x -> [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     );
     // The reads stay lazy under the mark, so the tuple's elements are
     // underdetermined cells rather than pinned scalars.
@@ -262,14 +262,14 @@ baseline §5 must be compared against. This run's build was in a private
 | `([1, @shallow(2) [2, 3]])(1)(0)` | `raw[raw 2, raw 3]: ?a` |
 | `([1, @shallow(2) [2, 3]])(1)` | `raw[raw[raw 2, raw 3], raw[raw[raw[raw @any, raw[raw Int, raw[raw Type, …]], raw @any, raw @any, raw @any], raw 2], raw[raw TypeArray, raw[raw Type, …]]]]: ?a` |
 | `([1, @shallow(3) [[2], [3]]])(1)(0)(1)` | `raw[raw 3]: ?a` |
-| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` |
+| `f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` |
 | the same with `@shallow(2)`, two reads | `(raw[raw 1, raw[raw none, raw none]], raw none): tuple{?a, ?b}` |
-| `f = x => [x, @shallow(1) f (x + 1.5)]` ; `inf = f 0.0` ; two reads | `(raw[raw 1.5, raw[raw none, raw none]], raw none): tuple{?a, ?b}` |
-| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf` | `(0, raw[raw none, raw none]): tuple{Int, ?a}` |
-| `f = x => [x, @shallow(1) f 1]` ; `inf = f 0` ; `inf(1)` | `raw[raw none, raw none]: ?a` |
-| `@loop f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw[raw 1, raw[raw none, raw none]]: ?a` |
-| **control** — the bare mark, Int: `f = x => [x, @shallow f (x + 1)]` ; three reads | `(1, 2, 3): tuple{Int, Int, Int}` |
-| **control** — the bare mark, **Float**: `f = x => [x, @shallow f (x + 1.5)]` ; two reads | `(1.5, 3.0): tuple{Float, Float}` |
+| `f = x -> [x, @shallow(1) f (x + 1.5)]` ; `inf = f 0.0` ; two reads | `(raw[raw 1.5, raw[raw none, raw none]], raw none): tuple{?a, ?b}` |
+| `f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf` | `(0, raw[raw none, raw none]): tuple{Int, ?a}` |
+| `f = x -> [x, @shallow(1) f 1]` ; `inf = f 0` ; `inf(1)` | `raw[raw none, raw none]: ?a` |
+| `@loop f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw[raw 1, raw[raw none, raw none]]: ?a` |
+| **control** — the bare mark, Int: `f = x -> [x, @shallow f (x + 1)]` ; three reads | `(1, 2, 3): tuple{Int, Int, Int}` |
+| **control** — the bare mark, **Float**: `f = x -> [x, @shallow f (x + 1.5)]` ; two reads | `(1.5, 3.0): tuple{Float, Float}` |
 
 Two readings to carry into §5. First, every depth-form row reads `raw`, including at
 `n = 2` and `n = 3`: the **value** never becomes concrete under a depth mark, only a read
@@ -286,9 +286,9 @@ the bound had it reached it:
 
 | program | wall | exit | stdout | peak RSS |
 |---|---|---|---|---|
-| `f = x => [x, @shallow(0) f (x + 1)]; inf = f 0; inf` | 1.10 s | 1 | 2505 lines = 501 errors | 23.5 MB |
+| `f = x -> [x, @shallow(0) f (x + 1)]; inf = f 0; inf` | 1.10 s | 1 | 2505 lines = 501 errors | 23.5 MB |
 | the same with the marker **deleted** | 0.88 s | 1 | 2505 lines = 501 errors, identical but for the echoed source line | 22.8 MB |
-| `g = x => [x, @shallow(0) g (x * x)]; a = g 1; a` | 1.69 s | 1 | one `NonTerminating` refusal | 25.6 MB |
+| `g = x -> [x, @shallow(0) g (x * x)]; a = g 1; a` | 1.69 s | 1 | one `NonTerminating` refusal | 25.6 MB |
 | the same with the marker **deleted** | 2.17 s | 1 | the same refusal, byte-identical | 25.6 MB |
 
 No run reached the bound, none grew in memory, and none printed nothing: **every one
@@ -407,12 +407,12 @@ with the diff of §5.1 applied. **`changed` marks a reading that is not byte-ide
 | `([1, @shallow(2) [2, 3]])(1)(0)` | `raw[raw 2, raw 3]: ?a` | unchanged |
 | `([1, @shallow(3) [[2], [3]]])(1)(0)(1)` | `raw[raw 3]: ?a` | unchanged |
 | `([1, @shallow(2) [2, 3]])(1)` | `raw[raw[raw 2, raw 3], raw[…]]: ?a` | unchanged |
-| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | **changed** — top-level types still `tuple{?a, ?b, ?c}`; the graph behind the mark now carries `raw Int`, `raw TypeTuple` where it stopped at `raw none` |
+| `f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | **changed** — top-level types still `tuple{?a, ?b, ?c}`; the graph behind the mark now carries `raw Int`, `raw TypeTuple` where it stopped at `raw none` |
 | the same with `@shallow(2)`, two reads | `(raw[raw 1, raw[raw none, raw none]], raw none): tuple{?a, ?b}` | **changed** — same shape of change |
-| `f = x => [x, @shallow(1) f (x + 1.5)]` ; `inf = f 0.0` ; two reads | `(raw[raw 1.5, raw[raw none, raw none]], raw none): tuple{?a, ?b}` | **changed** — and `raw Float` is now inside, against `?b` at the top level |
-| `f = x => [x, @shallow(1) f 1]` ; `inf = f 0` ; `inf(1)` (cyclic-tail control) | `raw[raw none, raw none]: ?a` | **changed** — same shape |
-| `@loop f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw[raw 1, raw[raw none, raw none]]: ?a` | **changed** — same shape |
-| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf` | `(0, raw[raw none, raw none]): tuple{Int, ?a}` | **changed** — top level still `tuple{Int, ?a}` |
+| `f = x -> [x, @shallow(1) f (x + 1.5)]` ; `inf = f 0.0` ; two reads | `(raw[raw 1.5, raw[raw none, raw none]], raw none): tuple{?a, ?b}` | **changed** — and `raw Float` is now inside, against `?b` at the top level |
+| `f = x -> [x, @shallow(1) f 1]` ; `inf = f 0` ; `inf(1)` (cyclic-tail control) | `raw[raw none, raw none]: ?a` | **changed** — same shape |
+| `@loop f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw[raw 1, raw[raw none, raw none]]: ?a` | **changed** — same shape |
+| `f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf` | `(0, raw[raw none, raw none]): tuple{Int, ?a}` | **changed** — top level still `tuple{Int, ?a}` |
 | **control**, the bare mark, Int | `(1, 2, 3): tuple{Int, Int, Int}` | **unchanged** |
 | **control**, the bare mark, **Float**, the same read | `(1.5, 3.0): tuple{Float, Float}` | **unchanged** |
 

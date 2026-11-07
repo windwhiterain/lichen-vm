@@ -29,7 +29,7 @@ fn a_named_type_function_parameter_and_its_field_reads() {
     assert_eq!(
         output(
             "Param := {.type @any, .length @any}\n\
-             buf := ('x = Param) => (x.type, x.length)\n\
+             buf := ('x = Param) -> (x.type, x.length)\n\
              buf (Param{.type Float, .length 192})"
         ),
         "(Float, 192): Tuple",
@@ -44,8 +44,8 @@ fn an_instantiation_whose_callee_is_inferred() {
     assert_eq!(
         output(
             "Param := {.type @any, .length @any}\n\
-             BufT  := ('x = Param) => {.type x.type, .length x.length}\n\
-             buf   := ('x = Param) => x\n\
+             BufT  := ('x = Param) -> {.type x.type, .length x.length}\n\
+             buf   := ('x = Param) -> x\n\
              e     := buf _{.type Float, .length 192}\n\
              e"
         ),
@@ -67,7 +67,7 @@ fn an_instantiation_whose_callee_is_not_decided_is_refused() {
          type where the instantiation is written"
     );
     // A decided expected type that is not a struct is a non-struct callee.
-    let (message, kind) = refused("f := ('x : Int) => x\ne := f _{.a 1}");
+    let (message, kind) = refused("f := ('x : Int) -> x\ne := f _{.a 1}");
     assert_eq!(kind, DiagKind::InstantiateCallee);
     assert!(
         message.contains("must be a struct type"),

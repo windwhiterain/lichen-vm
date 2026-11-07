@@ -18,8 +18,8 @@ the exported bindings.
 This means a library file exports its bindings *directly*, with no wrapping block:
 
 ```lichen
-succ = 'x => x + 1
-add = 'x => 'y => x + y
+succ = 'x -> x + 1
+add = 'x -> 'y -> x + y
 ```
 
 which `import "math.lichen"` resolves to the same anonymous struct as an explicit

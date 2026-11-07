@@ -295,8 +295,8 @@ record program: its value is the anonymous struct of the file's bindings.
 That is how a lichen library file exports its names.
 
 ```lichen
-succ := 'x => x + 1
-double := ('x : Int) => x + x
+succ := 'x -> x + 1
+double := ('x : Int) -> x + x
 ```
 
 ```text
@@ -307,7 +307,7 @@ A block that binds functions and is itself bound gives the same thing as
 a value:
 
 ```lichen
-m := { succ := 'x => x + 1; double := ('x : Int) => x + x }
+m := { succ := 'x -> x + 1; double := ('x : Int) -> x + x }
 m.double 3
 ```
 
@@ -349,6 +349,6 @@ whose value is its record.
    fields the record has.
 4. Write a record program that exports two functions and read one of them
    through a block-bound name.
-5. Write `mk = ('x : Int) => S{.y x + 1, .z x + 2}` for a template `S` and
+5. Write `mk = ('x : Int) -> S{.y x + 1, .z x + 2}` for a template `S` and
    read the fields after binding the call's result. What does the same
    read answer without the binding?

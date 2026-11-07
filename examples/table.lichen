@@ -3,5 +3,5 @@
   output = "(10, 20): Tuple"
 ---
 Any2 := [@any, 2]
-t := table(Any2[1, 2] ==> 10, Any2[3, 4] ==> 20)
+t := table(Any2[1, 2] => 10, Any2[3, 4] => 20)
 (t <== Any2[1, 2], t <== Any2[3, 4])

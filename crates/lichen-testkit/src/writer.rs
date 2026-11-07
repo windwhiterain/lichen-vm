@@ -348,7 +348,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.range(name, &[key, value], ExprKind::TypeTable)
     }
 
-    /// `name = table(k ==> v, …)` — keys and values interleaved.
+    /// `name = table(k => v, …)` — keys and values interleaved.
     pub fn table(&self, name: &str, entries: &[(ExprId, ExprId)]) -> ExprId {
         let interleaved: Vec<ExprId> = entries
             .iter()

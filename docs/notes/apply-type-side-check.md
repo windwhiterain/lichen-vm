@@ -20,7 +20,7 @@
 cell** `c`: `apply_type` bound `c` to the call's own codomain when it ran, and
 the value side bound it too. Until then `c` was an undecided cell, and
 `Check` — which decides every expression's type slot and runs no body — read
-the cell and learned nothing. `f = ('x : Int) => x; f "s"` therefore reported
+the cell and learned nothing. `f = ('x : Int) -> x; f "s"` therefore reported
 `expected Int, found string` in `Evaluate` (the value side's parameter check)
 and **nothing** in `Check`: the conflict was only ever seen by the value
 apply, and a body never ran.
@@ -78,7 +78,7 @@ every shape that shared one instantiation was measured and rejected:
 
 The lost program is the same in every variant:
 `language::gc_block::a_gc_block_calls_a_curried_binding_per_element`
-(`A := '_x => [@any, 2]; add := 'x => 'y => x + y; double := 'n => @gc { a := n + 1;
+(`A := '_x -> [@any, 2]; add := 'x -> 'y -> x + y; double := 'n -> @gc { a := n + 1;
 b := add a a; b }; @gc A[double 3, double 7]`) answers `[none, none]` instead of
 `[8, 16]`. A traced run shows every apply **deciding** at run time, so the loss is
 not in the apply: the body's nodes were evaluated once with the argument open and
@@ -90,7 +90,7 @@ lost).
 
 ## 3. Measurements
 
-`Evaluate` keeps today's answers: `f = ('x : Int) => x; f "s"` reports **one**
+`Evaluate` keeps today's answers: `f = ('x : Int) -> x; f "s"` reports **one**
 `expected Int, found string` with the caret on `"s"`; `n = 2 + 3;
 array{Int, n}` prints `array{Int, 5}` and two different computed lengths print
 `(array{Int, 5}, array{Int, 6})`. Language 265/0, highlevel 136/0, compute
@@ -126,7 +126,7 @@ signature-only clone and the value side reports.
 `Checker::Mode::Check` gates the definition pass and the top-level statement evaluation, and
 sets `Module::set_type_side_reporting(true)` so the type-apply reports instead of truncating;
 its own pass then decides every expression's type slot. Measured on the merge tip: `f = ('x :
-Int) => x; f "s"` reports `expected Int, found string` once in both modes, the caret on the
+Int) -> x; f "s"` reports `expected Int, found string` once in both modes, the caret on the
 argument, and the computed-type programs (`array{Int, 2 + 3}`) read the same in both.
 `BufferSession::set_mode` exposes the choice; a `Check` session loads and writes no cells.
 `editor-check-mode.md` records the editor's use of the mode: it analyses in `Check` and
@@ -164,6 +164,6 @@ scope of the forcing is the part that had to be measured:
 Measured on the merge tip with the shipping vocabulary, `Mode::Check`: `x = add ["a", "b"]`
 reports `the refinement's predicate did not answer 1` and `does not satisfy {Int, Float}`,
 attributed to `core.lichen`'s own source (the prelude's file) — `add [1, 2]` is clean;
-`f = ('x : Int) => x; f "s"` reports its one diagnostic in both modes; the two-existing
+`f = ('x : Int) -> x; f "s"` reports its one diagnostic in both modes; the two-existing
 per-call assert tests read one error each, not two; the lazy program's Check build answers
 in 0.05 s, with `paradox` still `None`.

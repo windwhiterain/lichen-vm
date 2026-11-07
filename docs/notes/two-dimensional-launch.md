@@ -65,7 +65,7 @@ dimension is an additive field plus whoever reads that field.
 
 | site | what it assumes |
 |---|---|
-| `lichen-compute/src/compute.lichen:13` | `range = x: Int => $range(x): Int`. The **argument is typed and then ignored** by the lowering. `compute.range k.cols` checks and answers the *invocation*. |
+| `lichen-compute/src/compute.lichen:13` | `range = x: Int -> $range(x): Int`. The **argument is typed and then ignored** by the lowering. `compute.range k.cols` checks and answers the *invocation*. |
 | `lichen-compute/src/compute.rs:6970-6976` — `RangeOp` | "a parallel fragment's **two** scalar parameters are both that class" — a sentence written for a config that has exactly two scalars, which a config with `(n, cols)` already has. |
 | `lichen-compute/src/compute.rs:5749-5757` — `run_parallel_kernel` | "The ABI's first leaf is the launch extent, the one ordinal this side needs"; `count = leaves.first()`. |
 | `lichen-compute/src/compute.rs:5623-5629` — `run_on_installed_backend` | `runtime_scalars = leaves[1..]` — **every** leaf after the first is a scalar, by `zip`, with no bound on how many. |

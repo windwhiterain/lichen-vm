@@ -96,9 +96,9 @@ string literal. Spike spelling:
 
 ```lichen
 -- the claim: which interface this kernel implements, and the roles it requires
-producer_raw = (k : Par) => {
+producer_raw = (k : Par) -> {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1)
+  @loop fold = s -> if s(0) == 0 then s(1)
     else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (6, 0.0 ~ "identity")))
 }
@@ -197,7 +197,7 @@ five findings, and what this one did with each:
   payload is still a string rather than a record: text is what keeps the mark out of
   the expr layout, so a record payload is a later decision, not a smaller one.
 - **A scalar element kernel's class is its body's** — *unchanged, and not the mark
-  channel's business*. `(p : tuple{Float, Float}) => p(0) * p(1)` lowers its leaves in
+  channel's business*. `(p : tuple{Float, Float}) -> p(0) * p(1)` lowers its leaves in
   `Int`, because the body states no concrete float operand, so the bridge refuses the
   projection by name (see [floating-point](floating-point.md) §5.1). An element
   function that must be `Float` has to carry a float operand of its own.

@@ -124,7 +124,7 @@ struct Resolver {
 /// A block-wide binding whose value is being resolved right now.
 struct OpenBinding {
     binder: BinderId,
-    /// The lambda depth the value started at, so a reference under a `=>` body is not this one.
+    /// The lambda depth the value started at, so a reference under a `->` body is not this one.
     depth: u32,
     /// Whether this binding has already been refused, so it speaks once.
     refused: bool,
@@ -274,7 +274,7 @@ impl Resolver {
         let Some(open) = self.open_bindings.iter_mut().find(|open| open.binder == id) else {
             return;
         };
-        // A binding named as the head of an apply inside a `=>` body is calling itself.
+        // A binding named as the head of an apply inside a `->` body is calling itself.
         if depth > open.depth && head == Some(depth) {
             return;
         }

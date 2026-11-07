@@ -167,7 +167,7 @@ accidental:
 | program | container of the read | its type cell | printed |
 |---|---|---|---|
 | `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | a literal | **decided** | `[1, 2]: array{Int, 2}` |
-| `f = x => [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | element 1 of a literal | **undecided, by construction** | `raw 1: ?a` |
+| `f = x -> [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | element 1 of a literal | **undecided, by construction** | `raw 1: ?a` |
 
 ## 3. Why it is reached for one shape and not another
 
@@ -352,7 +352,7 @@ further read follow the same closed cell rather than a fresh one.
 **The guard is what keeps this from being an assertion.** Only an *undecided* tail
 position is closed, and only after the type application decided the head: a tail
 that already names a type states it, and an undecided head has nothing to close.
-So `f = x => [x, @shallow f 1]` — where the tail's type is `Int` and is decided —
+So `f = x -> [x, @shallow f 1]` — where the tail's type is `Int` and is decided —
 is left alone.
 
 ### 7.3 The blast radius, measured separately
@@ -363,17 +363,17 @@ survey and the suite counts.
 | program | `dev` | type application alone | + `close_shallow_tail` |
 |---|---|---|---|
 | `examples/lazy_infinite.lichen` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | `(1, raw 2, raw 3): tuple{Int, ?a, ?b}` | **`(1, 2, 3): tuple{Int, Int, Int}`** |
-| `f = x => [x, @shallow f (x + 1.5)]` ; `inf = f 0.0` ; `(inf(1)(0), inf(1)(1)(0))` | `(raw 1.5, raw 3.0): tuple{?a, ?b}` | `(1.5, raw 3.0): tuple{Float, ?a}` | **`(1.5, 3.0): tuple{Float, Float}`** — `Float` through the same read, decided as `Float` |
-| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `(0.0, raw none): tuple{Float, ?a}` | `(0.0, raw none): tuple{Float, tuple{Float, ?a}}` | `(0.0, raw none): tuple{Float, tuple{Float, tuple{Float, …}}}` — the coinductive type, rendered with its own `…` (§7.6) |
-| `@loop f = x => [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw 1: ?a` | `1: Int` | `1: Int` |
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | **unchanged** — see §7.4 |
+| `f = x -> [x, @shallow f (x + 1.5)]` ; `inf = f 0.0` ; `(inf(1)(0), inf(1)(1)(0))` | `(raw 1.5, raw 3.0): tuple{?a, ?b}` | `(1.5, raw 3.0): tuple{Float, ?a}` | **`(1.5, 3.0): tuple{Float, Float}`** — `Float` through the same read, decided as `Float` |
+| `f = x -> [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `(0.0, raw none): tuple{Float, ?a}` | `(0.0, raw none): tuple{Float, tuple{Float, ?a}}` | `(0.0, raw none): tuple{Float, tuple{Float, tuple{Float, …}}}` — the coinductive type, rendered with its own `…` (§7.6) |
+| `@loop f = x -> [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw 1: ?a` | `1: Int` | `1: Int` |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | **unchanged** — see §7.4 |
 | the same with `(x : Int)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | unchanged |
-| `f = x => [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` | unchanged | unchanged |
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g` | `(0, [raw none, raw none]): tuple{Int, array{?a, 2}}` | unchanged | unchanged |
+| `f = x -> [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` | unchanged | unchanged |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g` | `(0, [raw none, raw none]): tuple{Int, array{?a, 2}}` | unchanged | unchanged |
 | `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | `[1, 2]: array{Int, 2}` | unchanged | unchanged |
 | `xs = [1, @shallow [2, 3]]` ; `xs(0)` / `xs(1)` | `1: Int` / `[2, 3]: array{Int, 2}` | unchanged | unchanged |
-| `f = x => [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` (no marker) | `error: expected Int, found array{?a, 2}` | unchanged | unchanged |
-| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | unchanged | **unchanged** — `@shallow(n)` is a different mark, §7.5 |
+| `f = x -> [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` (no marker) | `error: expected Int, found array{?a, 2}` | unchanged | unchanged |
+| `f = x -> [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | unchanged | **unchanged** — `@shallow(n)` is a different mark, §7.5 |
 | `([1, @shallow(2) [2, 3]])(1)(0)` | `raw[raw 2, raw 3]: ?a` | unchanged | unchanged |
 
 The **survey**, `cargo test -p lichen-compute --test lichen_compute
@@ -405,7 +405,7 @@ edited; the language came to match it.
 
 ### 7.4 The control that correctly stays undecided
 
-`f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` still prints
+`f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` still prints
 `[raw 1, raw 2]: array{?a, 2}`, and that is the **right** answer under the new
 semantics, not an omission. The marked element there is an array **literal**: there
 is no apply, so there is no type application to run and no tail cell to close, and
@@ -459,17 +459,17 @@ cites it rather than restating it.
 
 | program | `9ddbbed5` | `b8444708` and after |
 |---|---|---|
-| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, …}}}` |
+| `f = x -> [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, …}}}` |
 | `xs = [@shallow xs]` ; `xs` | — | `tuple{tuple{…}}` — the same cut on a one-element list spine |
-| `g = f => [f, @shallow g f]` ; `inf = g g` ; `inf` | `tuple{?a -> tuple{?a, ?b}, ?c}` | `?a -> tuple{?a, tuple{?a, tuple{?a, …}}}` — the cut inside an **arrow** |
-| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating expr ends on the **cut**, beside a decided field list (see "The `…` in `tuple{?a, …}`" below) |
+| `g = f -> [f, @shallow g f]` ; `inf = g g` ; `inf` | `tuple{?a -> tuple{?a, ?b}, ?c}` | `?a -> tuple{?a, tuple{?a, tuple{?a, …}}}` — the cut inside an **arrow** |
+| `f = x -> [x, @shallow g x]` ; `g = y -> [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating expr ends on the **cut**, beside a decided field list (see "The `…` in `tuple{?a, …}`" below) |
 | `A = struct{.f Int, .g A}` ; `A` | `struct{.f Int, .g struct{.f Int, .g …}}` | **unchanged** — pre-existing, and pinned by `examples/struct_recursion.lichen`'s declared `output` |
 | `A = struct{.g B}; B = struct{.g C}; C = struct{.g A}` ; `A` | — | `struct{.g struct{.g struct{.g struct{.g …}}}}` — a 3-cycle, cut after four levels |
 | the same over `A…E` (a 5-cycle) | — | `struct{.g struct{.g struct{.g struct{.g struct{.g struct{.g …}}}}}}` |
-| `f = x => [@shallow f x]` ; `inf = f 0.0` ; `inf` | `tuple{?a}` | `tuple{tuple{?a}}` — **finite**, no cut |
-| `f = x => [[x, @shallow f x]]` ; `inf = f 0.0` ; `inf` | `array{tuple{Float, ?a}, 1}` | `array{tuple{Float, array{tuple{Float, ?a}, 1}}, 1}` — **finite**, no cut |
+| `f = x -> [@shallow f x]` ; `inf = f 0.0` ; `inf` | `tuple{?a}` | `tuple{tuple{?a}}` — **finite**, no cut |
+| `f = x -> [[x, @shallow f x]]` ; `inf = f 0.0` ; `inf` | `array{tuple{Float, ?a}, 1}` | `array{tuple{Float, array{tuple{Float, ?a}, 1}}, 1}` — **finite**, no cut |
 | `is_even`/`is_old` (`examples/mutual_recursion.lichen`) | `(0, 1): tuple{Int, Int}` | unchanged — a mutual *value* cycle whose reads decide the type |
-| `f = x => x` ; `f` | `?a => ?a: ?a -> ?a` | unchanged — a function's own type prints `?a -> ?a`, with no cut |
+| `f = x -> x` ; `f` | `?a => ?a: ?a -> ?a` | unchanged — a function's own type prints `?a -> ?a`, with no cut |
 | `(Type, Type : Type, (1, Type))` | no `…` | unchanged — the universe's self-loop is cut by the head collapse, so `Type` prints `Type` |
 
 So **the cut itself is pre-existing** and the §7 change is not new rendering

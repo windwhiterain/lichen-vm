@@ -29,7 +29,7 @@
 >
 > ```lichen
 > --- compute = import "compute.lichen" ---
-> step = 'ins => compute.plrun doubler (ins(0), ins(1))
+> step = 'ins -> compute.plrun doubler (ins(0), ins(1))
 > built = compute.graph step
 > compute.graphrun built (4, data)
 > ```
@@ -572,7 +572,7 @@ used to cause.
 
 **The unannotated parameter is still supported, and one test depends on it.**
 `build_graph` falls back to the flat ceiling when a recorded body's parameter is
-not a named struct, which is what an unannotated `step = 'ins => …` gets — so a
+not a named struct, which is what an unannotated `step = 'ins -> …` gets — so a
 body that reads `ins(0)` still records and runs. That form is not leftover
 spelling: the named struct types the count, so a closed-over buffer in the count
 position becomes a *type* error and the graph's own count filter never speaks,
@@ -712,10 +712,10 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   graph inputs, `2a + b + 1` answered over both). The rule is narrower than the buffer
   count: **every buffer a step's argument names must sit under a group named `in` or
   `out`** — the same rule a kernel parameter has, spelled `compute.lichen:5`'s
-  `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`. Two buffers under `.in` record; a
+  `P = T: KT _ -> struct{.n Int, .in T.I, .out T.O}`. Two buffers under `.in` record; a
   buffer beside `.in` does not.
   **The surface says it now** (`8cb866aa`): the author annotates the step's own parameter
-  (`step = ('s : GArg) => …` with `GArg = struct{.n Int, .in Expr}` — the language's existing
+  (`step = ('s : GArg) -> …` with `GArg = struct{.n Int, .in Expr}` — the language's existing
   form, because a parameterised `graph` signature steers nothing and would make the type
   required). The declared type **checks**; it does not steer, so `build_graph` still derives
   the roles and only the refused answer changes channel: the record carries
@@ -732,7 +732,7 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   refuses it — what it buys is that the recording is entered and the fallback's own wording is
   what such a step hears. **The claim that this refusal had no source span does not reproduce.**
   The paragraph here used to say a lambda's value node has no `node_edges` entry, so `node_loc`
-  answers `None`. Measured on `dev@1662d376` with `step = ('n : Int) => n + 1` ;
+  answers `None`. Measured on `dev@1662d376` with `step = ('n : Int) -> n + 1` ;
   `built = compute.graph step` — the "this function's return is not a value a graph can hand
   back" refusal: the report carries `span: Some((4, 9))` (`3, 9` in a body without the metadata
   header) and `check.loc = Some(Loc { expr: 12, path: [] })`, and the span is the same whether or

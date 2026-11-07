@@ -19,7 +19,7 @@ The whole program, as the tests write it:
 In := {.d (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Par := {.n @any : Int, .in In}
-raw := (k = Par) => {
+raw := (k = Par) -> {
   i := compute.range k.n
   v := (compute.read ((compute.Read _){.from k.in.d, .at i}) : Float)
   y := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -28,7 +28,7 @@ raw := (k = Par) => {
 kern := compute.parallel raw "cpu" Out
 
 Fill := {.n @any : Int}
-fill_raw := (c = Fill) => {
+fill_raw := (c = Fill) -> {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   Out{.z (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))}
@@ -37,7 +37,7 @@ filler := compute.parallel fill_raw "cpu" Out
 data := (compute.plrun filler ((Fill){.n 8}) : Struct)
 
 GA := {.n @any : Int, .in In}
-step := (s = GA) => {
+step := (s = GA) -> {
   compute.plrun kern ((compute.A _){.n s.n, .I In{.d s.in.d}}) : Struct
 }
 built := compute.graph step

@@ -58,7 +58,7 @@ expr]` shape for both. So applying a curried lambda to a variable inside another
 lambda is refused by the value comparison, not by a type disagreement:
 
 ```lichen
-f = n => (x => y => x) n
+f = n -> (x -> y -> x) n
 f 3
 ```
 
@@ -84,14 +84,14 @@ answers are gone and the answers agree with dev —
 
 | program | dev | branch |
 |---|---|---|
-| `f = n => (x => y => x) n; f 3` | refused | `?a => Int: ?a -> Int` |
-| `f = n => (x => y => x + y) n n; f 3` | refused | `3: Int` |
-| `add = x => y => x + y; f = n => add n n; f 3` | refused | `6: Int` |
-| `f = n => (x => x) n; f 3` | `3` | `3` |
-| `f = n => (x => x + 0) n; f 3` | `3` | `3` |
-| `f1 = x => y => [1, 2, x, y]; f1 3 4` | `[1, 2, 3, 4]` | `[1, 2, 3, 4]` |
-| `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` | `[1, 2, 3, 4]` | `[1, 2, none, 4]` |
-| `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` | refused | `(1, 1)` |
+| `f = n -> (x -> y -> x) n; f 3` | refused | `?a => Int: ?a -> Int` |
+| `f = n -> (x -> y -> x + y) n n; f 3` | refused | `3: Int` |
+| `add = x -> y -> x + y; f = n -> add n n; f 3` | refused | `6: Int` |
+| `f = n -> (x -> x) n; f 3` | `3` | `3` |
+| `f = n -> (x -> x + 0) n; f 3` | `3` | `3` |
+| `f1 = x -> y -> [1, 2, x, y]; f1 3 4` | `[1, 2, 3, 4]` | `[1, 2, 3, 4]` |
+| `a = 1; f1 = x -> { b = 2; f2 = y -> [a, b, x, y]; f2 }; f1 3 4` | `[1, 2, 3, 4]` | `[1, 2, none, 4]` |
+| `mk = x -> y -> x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` | refused | `(1, 1)` |
 
 Suite state: `lichen-lowlevel` 160/0, `lichen-highlevel` 86/1, `lichen-language`
 pipeline 140/1, `lichen-render`, `lichen-language-server` green. The two failures
@@ -110,11 +110,11 @@ parameter value cell and `signature_node`'s parameter/return value cells:
 
 - One shared node aliases: `node_apply`'s wildcard rule mints one cell per node, so
   two `@any` positions in one instantiation become one cell and
-  `f1 = x => y => [1, 2, x, y]; f1 3 4` answers `expected Int, found Int`. Minting per
+  `f1 = x -> y -> [1, 2, x, y]; f1 3 4` answers `expected Int, found Int`. Minting per
   reach (no `remap` entry) fixes that.
 - Every operation over an applied parameter then answers
-  `this value is not a container — it has no element to read`: `f = n => (x => x + 0)
-  n; f 3`, `f = n => (x => succ n)`, `add n n`. Suites: pipeline 139/2, a target
+  `this value is not a container — it has no element to read`: `f = n -> (x -> x + 0)
+  n; f 3`, `f = n -> (x -> succ n)`, `add n n`. Suites: pipeline 139/2, a target
   12/10, a target 2/2, an assertion failure inside `core.lichen`.
 - **The crossing is the prelude's operand array, not the clone.** The CLI compiles
   with the core prelude, so `x + 0` is core's `add`, which indexes its operand array;
@@ -140,11 +140,11 @@ everything else in §2:
 
 | program | with `@any` | reverted | dev |
 |---|---|---|---|
-| `f = n => (x => x + 0) n; f 3` | error | `3` | `3` |
-| `f = n => (x => succ n)` | error | `4` | `4` |
-| `f = n => (x => y => x + y) 1 2; f 3` | error | `3` | `3` |
-| `add = x => y => x + y; f = n => add n n; f 3` | error | `6` | refused |
-| `f = n => (x => y => x) n; f 3` | ok | ok | refused |
+| `f = n -> (x -> x + 0) n; f 3` | error | `3` | `3` |
+| `f = n -> (x -> succ n)` | error | `4` | `4` |
+| `f = n -> (x -> y -> x + y) 1 2; f 3` | error | `3` | `3` |
+| `add = x -> y -> x + y; f = n -> add n n; f 3` | error | `6` | refused |
+| `f = n -> (x -> y -> x) n; f 3` | ok | ok | refused |
 
 Every "not a container" regression is gone and the fixes for the refusals stay. The
 mechanism is `node_apply`'s `depends_on_parameter`: a node whose value is empty is
@@ -154,7 +154,7 @@ what made per-call freshness.
 ## 5. What is open
 
 - **A closure that reads `none` for a captured parameter — diagnosed and repaired.**
-  `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` **used to** answer
+  `a = 1; f1 = x -> { b = 2; f2 = y -> [a, b, x, y]; f2 }; f1 3 4` **used to** answer
   `[1, 2, none, 4]` (dev: `[1, 2, 3, 4]`, pinned by
   `crates/lichen-language/tests/language/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`);
   it now answers `[1, 2, 3, 4]` and that test passes, the cause being the non-uniform
@@ -213,9 +213,9 @@ what made per-call freshness.
     ones `depends_on_parameter` is true for, i.e. the parameter itself or a cell that is not
     proven concrete — read by a closure whose class merged with its template's: u3 loses `x`
     while its `b = 2` survives, so the criterion is not "any captured cell read".
-    `y2 = a = 1; f1 = x => { b = 2; f2 = y => [a, b, c, x, y]; c = 3; f2 }; f1 3 4` answers
+    `y2 = a = 1; f1 = x -> { b = 2; f2 = y -> [a, b, c, x, y]; c = 3; f2 }; f1 3 4` answers
     `[1, 2, 3, none, 4]` — both constant captures survive and only the parameter is lost —
-    and `y1 = a = 1; f1 = x => { b = x + 1; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers
+    and `y1 = a = 1; f1 = x -> { b = x + 1; f2 = y -> [a, b, x, y]; f2 }; f1 3 4` answers
     `[1, none, none, 4]`, losing a captured local that must be cloned as well, so the rule is
     not parameter-specific. `dev` answers all three correctly (`[1, 2, 3, 4]`, `[1, 2, 3, 3,
     4]`, `[1, 4, 3, 4]`). Whole-log counts also vary a few percent between runs — the walk is
@@ -274,8 +274,8 @@ what made per-call freshness.
     everything derived from the parameter while whatever the body's own statements write
     stays: constant locals survive, the parameter and what depends on it do not.
   - **The mechanism predicts which positions lose their values.** Three programs written
-    from the cause (not from the measured set) and then run: `a = 1; f1 = x => { b = 2;
-    f2 = y => { c = 3; f3 = z => [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
+    from the cause (not from the measured set) and then run: `a = 1; f1 = x -> { b = 2;
+    f2 = y -> { c = 3; f3 = z -> [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
     `[1, 2, 3, none, none, 5]` — one lost cell per captured level, `x` and `y`; the same
     shape whose innermost body captures nothing (`[a, b, c, z]`) answers `[1, 2, 3, 5]`,
     correct; and the variant capturing only the middle parameter (`[a, b, c, y, z]`)
@@ -290,15 +290,15 @@ what made per-call freshness.
   return]` alone, and that is measured on both symptoms: for the capture loss the expr
   it declares equal is a clone against its template
   (`FN-ARM depth=2 a=44(Function(2) …) b=91(Function(3) …)`), and for the capture merge —
-  `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev
+  `mk = x -> y -> x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev
   refuses — it is two *calls* of one function
   (`FN-ARM depth=1 a=Function(3) origin=Some(NodeId(30)) b=Function(4) …` under
   `mk 1` / `mk 2`). Code agrees in both cases because a closure's identity here is its
   code half; the captured environment lives outside the two cells the arm compares.
   **Verified by intervention, not only by correlation**: with the arm's `add_equality`
   gated on the two ids being equal — distinct closures then agree and keep their own
-  classes — `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers
-  `[1, 2, 3, 4]` and `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers
+  classes — `a = 1; f1 = x -> { b = 2; f2 = y -> [a, b, x, y]; f2 }; f1 3 4` answers
+  `[1, 2, 3, 4]` and `mk = x -> y -> x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers
   `(1, 2)`, while every other measured program keeps its answer (including this
   branch's repaired refusals `n1`, `k3`, `k5`) and
   `a_nested_function_captures_the_applied_outer_parameter` passes. The gate was a
@@ -316,7 +316,7 @@ what made per-call freshness.
   the two links: the context-dependent in-place decision is what makes the mixed shape,
   hence the merge that loses the capture; the comparison rule alone is what merges two
   calls' closures. Both gates were diagnostics and are reverted.
-- **The same `none`, without a function merge.** `mk = x => y => x; f = n => mk n 1;
+- **The same `none`, without a function merge.** `mk = x -> y -> x; f = n -> mk n 1;
   f 3` (three spellings of it in the scratch set) answers `none` as well, and it is
   **not** this cause. Measured on the clone merges that carry a closure: u3 has a
   clone-against-template expr — `a=44(origin=None Function(2)) b=91(origin=Some(44)

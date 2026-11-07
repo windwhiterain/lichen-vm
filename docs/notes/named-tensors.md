@@ -68,7 +68,7 @@ w := (Tensor ...){.buffer wb, .shape Pair{.row 2, .column 3}, .stride Pair{.row 
 w_t := (Tensor ...){.buffer wb, .shape Pair{.row 2, .column 3}, .stride Pair{.row 1, .column 2}, .origin 0}
 
 # a named index is a struct value; the address is one expression
-at2 := 't => 'i => t.origin + i.row * t.stride.row + i.column * t.stride.column
+at2 := 't -> 'i -> t.origin + i.row * t.stride.row + i.column * t.stride.column
 ```
 
 A dense constructor derives the pitch from the shape (last dimension fastest), so the common
@@ -137,14 +137,14 @@ reads.
 
 ```lichen
 # one lane per `out` element; the fold walks `in` by the tensor's own pitch
-mv := ('k = Par) => {
+mv := ('k = Par) -> {
   i := compute.range k.n
   wb := k.in.w.buffer
   wsr := k.in.w.stride.row
   wsc := k.in.w.stride.column
   xb := k.in.x.buffer
   xsc := k.in.x.stride.column
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1,
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1,
     s(1) + read wb at (i * wsr + (s(0) - 1) * wsc) * read xb at ((s(0) - 1) * xsc))
   ...
 }
@@ -187,7 +187,7 @@ written "for any field" (there is no row polymorphism). The selector is an ordin
 
 ```lichen
 # the selector: an axis ordinal to the dim it names
-sel := 'i => if i == 0
+sel := 'i -> if i == 0
   then Dim{.extent x.shape.row, .stride x.stride.row}
   else Dim{.extent x.shape.column, .stride x.stride.column}
 
@@ -204,7 +204,7 @@ Measured:
 
 - a selector that **captures** the tensor at the call site reads its named fields and answers
   (`(sel 0)(1)` is `3`);
-- a selector whose parameter is only **typed** (`('d = Dims) => ...`) is refused: "this field
+- a selector whose parameter is only **typed** (`('d = Dims) -> ...`) is refused: "this field
   read cannot be checked: the container's type is not decided here" — the body is checked at
   definition, before the parameter's layout is bound;
 - a higher-order consumer needs the selector's function type stated, or its application is
@@ -299,10 +299,10 @@ a table value can stand in a type position.
 
 Measured, in the current table spelling:
 
-- a generic function over a **shape table** compiles (`pick := ('s : (table{Int, Int})) => s <== 1`), where the struct-field selector was refused — a table read needs only the container's *type*;
-- the determined read is evaluated at the use: `pick (table(1 ==> 10, 2 ==> 20))` answers `10`;
-- a miss is a check-time refusal: `pick (table(2 ==> 20))` refuses with "table lookup missed — no entry for key 1";
-- a call-site capture with string labels answers (`shape := table("r0" ==> 2, "c0" ==> 3); shape <== "r0"` is `2`).
+- a generic function over a **shape table** compiles (`pick := ('s : (table{Int, Int})) -> s <== 1`), where the struct-field selector was refused — a table read needs only the container's *type*;
+- the determined read is evaluated at the use: `pick (table(1 => 10, 2 => 20))` answers `10`;
+- a miss is a check-time refusal: `pick (table(2 => 20))` refuses with "table lookup missed — no entry for key 1";
+- a call-site capture with string labels answers (`shape := table("r0" => 2, "c0" => 3); shape <== "r0"` is `2`).
 
 **Landed for this slice**: `@table_merge` (the union, the right entry winning a duplicate key),
 `@table_without` (a table without one key; a miss is a named `TableRemoveMiss`), and the
@@ -314,10 +314,10 @@ entries are enumerable for the plan.
 
 Measured with the primitives:
 
-- `table(1 ==> 10, 2 ==> 20) @table_merge table(2 ==> 21, 3 ==> 30)` answers `10`, `21` and
+- `table(1 => 10, 2 => 20) @table_merge table(2 => 21, 3 => 30)` answers `10`, `21` and
   `30` for the keys `1`, `2`, `3` — the duplicate key takes the right entry;
-- `table("a" ==> 10, "b" ==> 20) @table_without "a"` answers `20` for `"b"`;
-- `table(1 ==> 10) @table_without 7` refuses at check time with "table removal missed — no
+- `table("a" => 10, "b" => 20) @table_without "a"` answers `20` for `"b"`;
+- `table(1 => 10) @table_without 7` refuses at check time with "table removal missed — no
   entry for key 7".
 
 Still open:
@@ -329,16 +329,16 @@ Still open:
 ### 5.6 A less ugly spelling for shapes
 
 The semantics can stay tables; the spelling should not. The current spellings are
-`table("r0" ==> 2048)`, `s <== "r0"` and `table{string, Int}`. A static-key table is a
+`table("r0" => 2048)`, `s <== "r0"` and `table{string, Int}`. A static-key table is a
 **record**: structural, named, and it is what a shape is. Proposal:
 
 | use | now | proposed |
 |---|---|---|
-| shape literal | `table("r0" ==> 2048, "c0" ==> 2048)` | `record{ .r0 2048, .c0 2048 }` |
+| shape literal | `table("r0" => 2048, "c0" => 2048)` | `record{ .r0 2048, .c0 2048 }` |
 | shape access | `s <== "r0"` | `s.r0` |
 | shape type | `table{string, Int}` | `record{ .r0 Int, .c0 Int }` |
 | tensor type | `Tensor (table(...)) Float` | `Tensor record{ .r0 2048, .c0 2048 } Float` |
-| dynamic literal | `table(k ==> v, ...)` | `table((k, v), ...)` |
+| dynamic literal | `table(k => v, ...)` | `table((k, v), ...)` |
 | dynamic read | `t <== k` | `t[k]` |
 | table type | `table{K, V}` | `table{K, V}` (unchanged) |
 
@@ -348,7 +348,7 @@ The semantics can stay tables; the spelling should not. The current spellings ar
 - **`s.r0`** is the struct access spelling; the checker resolves by the type — a record reads a
   key, a struct reads a field. The lookup is O(1) when the key is static.
 - **`t[k]`** for the dynamic table read shares the array access spelling; the checker resolves
-  by the type. This retires `t <== k` (and `k ==> v` for the literal, which becomes a pair).
+  by the type. This retires `t <== k` (and `k => v` for the literal, which becomes a pair).
 - The **library ops** (`merge`, `drop`, `rename`) take the key as a *value* — a string for the
   table API (`drop s "c0"`). Their key is checked by the determined evaluation, so a typo is a
   check-time `TableMiss`, not a silent miss. A label literal (`#c0`) is only needed if the ops

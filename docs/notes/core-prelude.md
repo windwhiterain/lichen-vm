@@ -18,9 +18,9 @@
 
 ```lichen
 Num := set(Int, Float)
-in_num := 't => t @in Num
+in_num := 't -> t @in Num
 let Pair := (@any ! in_num, @any ! in_num)
-add := 'operands => { operands = Pair; operands(0) + operands(1) }
+add := 'operands -> { operands = Pair; operands(0) + operands(1) }
 -- …and one binding per remaining polymorphic operator
 ```
 
@@ -30,7 +30,7 @@ the direct template `Pair`, and one per polymorphic operator (`add`, `sub`,
 is an ordinary lichen definition — no compiler support, no native call — and
 the **contract** is the class refinement `(_ ! in_num)` inside the operand
 tuple's two positions, whose predicate is applied to the operand's *type*
-(`in_num = 't => t @in Num`), so no type read is involved. `Pair` is a
+(`in_num = 't -> t @in Num`), so no type read is involved. `Pair` is a
 **direct template**: the match `operands = Pair` instantiates its two `@any`
 positions afresh, and those positions are the requirements the operands must
 meet. The
@@ -51,7 +51,7 @@ the prelude adds, not a second module).
   not something each program imports.
 - **It is shadowable, not reserved.** The prelude import is seeded **first**, so a
   program's own binding or import of the same name resolves later and wins:
-  `add = 'x => 'y => 99; add 1 2` is `99`. That is the opposite choice from `set`
+  `add = 'x -> 'y -> 99; add 1 2` is `99`. That is the opposite choice from `set`
   and `@in` (reserved words), and deliberately so — the prelude is *library*, and
   a program that wants different arithmetic must be able to say so.
 - **It is not a package the store counts.** `PackageStore::compiled` observes the
@@ -110,7 +110,7 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   error: assertion failed: expected 1, found 0
     --> ~/.lichen/compilers/<key>/builtin/core.lichen:3:39
      |
-   3 | add = 'operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
+   3 | add = 'operands -> { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
      |                                       ^
   ```
 

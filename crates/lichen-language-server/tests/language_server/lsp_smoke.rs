@@ -268,7 +268,7 @@ fn relative_imports_resolve_via_the_document_uri() {
     // A relative `@import` must resolve against the document's own directory
     // (from its `file://` URI), not the process CWD.
     let dir = temp_dir("import");
-    write(&dir, "math.lichen", "'x => x + 1\n");
+    write(&dir, "math.lichen", "'x -> x + 1\n");
     let main_path = write(
         &dir,
         "main.lichen",

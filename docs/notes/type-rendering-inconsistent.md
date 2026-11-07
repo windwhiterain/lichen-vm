@@ -15,7 +15,7 @@ Four analogous type values, each passed as the argument to a function whose
 parameter is `Int`, so each is the *found* side of the same diagnostic:
 
 ```lichen
-f = ('x : Int) => x
+f = ('x : Int) -> x
 ```
 
 | argument | what the message prints as the found side |
@@ -25,7 +25,7 @@ f = ('x : Int) => x
 | `Int -> Int` | `Int -> Int` — **fixed since this table was written** |
 | `(Int, Int)` | `tuple{Type, Type}` |
 
-Re-measured on `dev@16e50e6b`, with `f = ('x : Int) => x` and one call per row:
+Re-measured on `dev@16e50e6b`, with `f = ('x : Int) -> x` and one call per row:
 
 ```text
 f (struct{.a Int})   =>  error: expected Int, found TypeStruct

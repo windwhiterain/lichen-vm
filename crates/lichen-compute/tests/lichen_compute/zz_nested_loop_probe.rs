@@ -14,7 +14,7 @@ const PROGRAM: &str = r#"
 Src := {.a @any : Int}
 SrcOut := {.z (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 SrcPar := {.n @any : Int, .in Src}
-fill := ('k = SrcPar) => {
+fill := ('k = SrcPar) -> {
   i := compute.range k.n
   z := compute.buf (compute.BufParam{.type Float, .length k.n})
   ((SrcOut){.z (compute.write ((compute.Write _){.to z, .at i, .value (int2float (i + 1))}))})
@@ -24,10 +24,10 @@ inbuf := (compute.plrun source_kernel ((compute.A _){.n 3, .I Src{.a 0}}) : Stru
 In  := {.a (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Out := {.z (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Par := {.n @any : Int, .in In}
-body := ('k = Par) => {
+body := ('k = Par) -> {
   i := compute.range k.n
-  @loop inner := ('s => if s(0) == 0 then s(1) else inner (s(0) - 1, (s(1) + 1.0)))
-  @loop outer := ('t => if t(0) == 0 then t(1) else outer (t(0) - 1, (t(1) + (inner (k.n, 0.0)))))
+  @loop inner := ('s -> if s(0) == 0 then s(1) else inner (s(0) - 1, (s(1) + 1.0)))
+  @loop outer := ('t -> if t(0) == 0 then t(1) else outer (t(0) - 1, (t(1) + (inner (k.n, 0.0)))))
   z := outer (k.n, 0.0)
   o := compute.buf (compute.BufParam{.type Float, .length k.n})
   ((Out){.z (compute.write ((compute.Write _){.to o, .at i, .value z}))})

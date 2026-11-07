@@ -58,17 +58,17 @@ A := {{.a (compute.Buf (compute.BufParam{{.type Int, .length {a_length}}}))}}
 B := {{.b (compute.Buf (compute.BufParam{{.type Int, .length {b_length}}}))}}
 C := {{.c (compute.Buf (compute.BufParam{{.type Int, .length {c_length}}}))}}
 Fill := {{.n @any : Int}}
-fill_a := ('c = Fill) => {{
+fill_a := ('c = Fill) -> {{
   i := compute.range c.n
   a := compute.buf (compute.BufParam{{.type Int, .length c.n}})
   ((A){{.a (compute.write ((compute.Write _){{.to a, .at i, .value (i % 4)}}))}})
 }}
-fill_b := ('c = Fill) => {{
+fill_b := ('c = Fill) -> {{
   i := compute.range c.n
   b := compute.buf (compute.BufParam{{.type Int, .length c.n}})
   ((B){{.b (compute.write ((compute.Write _){{.to b, .at i, .value (i % 3)}}))}})
 }}
-fill_c := ('c = Fill) => {{
+fill_c := ('c = Fill) -> {{
   i := compute.range c.n
   cbuf := compute.buf (compute.BufParam{{.type Int, .length c.n}})
   ((C){{.c (compute.write ((compute.Write _){{.to cbuf, .at i, .value (i % 5)}}))}})

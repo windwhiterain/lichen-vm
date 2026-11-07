@@ -93,8 +93,8 @@ mechanism each requirement lands on; none of them is new.
 | requirement | mechanism | where |
 |---|---|---|
 | a lichen value that *is* a type | types are first-class values (`Type : Type`) | [overview](overview.md), `examples/struct_generic.lichen` |
-| a generic over a type, applied explicitly | `Box = t => struct{.f t}`; `sample Float` | `examples/dependent_type.lichen` |
-| a parameter whose type *is* the type argument | a dependent annotation `(x : t)` | `type_of = x => {t = _; x: t; t}` (`lichen-std/_.lichen`) |
+| a generic over a type, applied explicitly | `Box = t -> struct{.f t}`; `sample Float` | `examples/dependent_type.lichen` |
+| a parameter whose type *is* the type argument | a dependent annotation `(x : t)` | `type_of = x -> {t = _; x: t; t}` (`lichen-std/_.lichen`) |
 | a closed set of admitted type arguments | a **refinement parameter** `(t ! p)`, re-checked per application | [operator-polymorphism](operator-polymorphism.md) §3.4, `crates/lichen-highlevel/src/refinement.rs` |
 | the closed set itself | a `set` value: `set(Float, Int)` | `crates/lichen-highlevel/src/set.rs` |
 | a native op over several raw values | `ctx.array_node(&[…])` + `ctx.op_node` | `LaunchOp::build`, `compute.rs:7223` |
@@ -191,8 +191,8 @@ The surface the existing mechanisms express:
 ```lichen
 -- the wrapper source the library's manifest carries
 scalars = set(Float, Int)
-vbd_kind = t => t @in scalars
-sample = (t ! vbd_kind) => (x : t) => { r = $vbd_sample(t, x); r : t; r }
+vbd_kind = t -> t @in scalars
+sample = (t ! vbd_kind) -> (x : t) -> { r = $vbd_sample(t, x); r : t; r }
 ```
 
 **Measured (P0-c)** with `crates/lichen-language/tests/language/link_probe.rs` — a
@@ -412,7 +412,7 @@ whole chain in one run:
 2. `cargo build --release -p gen` builds it as a `dylib`;
 3. the host `libloading`s it and installs the entry in the process-wide table;
 4. the same declaration emits the lichen wrapper
-   (`sample = (t ! link_kind) => (x : t) => { r = $link_sample x; r : t; r }`);
+   (`sample = (t ! link_kind) -> (x : t) -> { r = $link_sample x; r : t; r }`);
 5. the program runs: `p.sample Float 1.5` → `2.5: Float`, `p.sample Int 3` →
    `4: Int`, `p.sample string "a"` → refused by the refinement.
 
@@ -696,7 +696,7 @@ The fix has three parts:
   value is a seed, and the clone's operator runs.
 
 Measured with a native package (the same engine path a linked wrapper takes),
-wrapper `twice = (x : Int) => { r = $expr(x, x); r : Int; r }`:
+wrapper `twice = (x : Int) -> { r = $expr(x, x); r : Int; r }`:
 
 ```text
 before:  item 31 -> None            # the definition pass answered anyway
@@ -734,7 +734,7 @@ fingerprints are unchanged across a rebuild.
 **What it settled.** The `$` call takes all of a family's arguments at once and
 the entry receives the whole argument array, but the **wrapper curries them**:
 the language writes a parameter's type in the parameter position and one
-parameter at a time, so `(tree : Int, envelope : Float) => …` does not parse.
+parameter at a time, so `(tree : Int, envelope : Float) -> …` does not parse.
 
 **Where it lives.** The dependency arrow points from the application to lichen,
 not the other way: a lichen-vm checkout builds and tests with no application
@@ -774,19 +774,19 @@ turn.
 
 lichen has **no multi-parameter lambda**, and its documented multi-argument
 idiom is **one parameter holding a tuple** — `docs/language-spec.md` §442–448
-(`add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }`,
+(`add = operands -> { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }`,
 "one argument rather than a curried expr because lichen has no multi-parameter
 lambda"; the repository README's "No Curry"). The documented family shape is
 therefore a type argument beside **one** parameter:
 
 ```lichen
-voxels = (t ! grid_kind) => args => { r = $voxels(t, args); r : Int; r }
+voxels = (t ! grid_kind) -> args -> { r = $voxels(t, args); r : Int; r }
 ```
 
 called as `voxels Float ("assets/cube.vdb", "ls_cube")`, whose operand holds
 **two items** — the type value and one tuple. `write_sphere (6.0, 0.25,
 "out/sphere.vdb", "ls_sphere")` is the same shape with one item, and it works.
-A curried chain `a => b => c => $f(a, b, c)` is **not** the documented surface;
+A curried chain `a -> b -> c -> $f(a, b, c)` is **not** the documented surface;
 it is kept in the probe only as a regression reading of the same root cause.
 
 ### What is measured
@@ -802,12 +802,12 @@ module). Ten consecutive processes, **before** the fix:
 
 | wrapper shape | operand | frozen | spliced |
 |---|---|---|---|
-| `sphere = args => …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | entry runs, every run | entry runs, every run |
-| `voxels = (t ! grid_kind) => args => …`, `voxels Float (path, name)` | 2 items, **type argument first** | **4 runs of 10 answer `none: Int`**, no entry trace | entry runs, every run, reads `TypeValue(TypeFloat)` and the tuple |
+| `sphere = args -> …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | entry runs, every run | entry runs, every run |
+| `voxels = (t ! grid_kind) -> args -> …`, `voxels Float (path, name)` | 2 items, **type argument first** | **4 runs of 10 answer `none: Int`**, no entry trace | entry runs, every run, reads `TypeValue(TypeFloat)` and the tuple |
 | `voxels Int (1, 2)` | 2 items, type first | 4 runs of 10 answer `none: Int` | entry runs, every run |
-| `two = a => b => …`, `p.two 1 2` | 2 items | entry runs, every run | entry runs, every run |
-| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | entry runs, every run | **never runs**, answers `none` |
-| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | **never runs**, answers `none: Int` | **never runs**, answers `none` |
+| `two = a -> b -> …`, `p.two 1 2` | 2 items | entry runs, every run | entry runs, every run |
+| `three = a -> b -> c -> …`, `p.three 1 2 3` | 3 items | entry runs, every run | **never runs**, answers `none` |
+| `four = a -> b -> c -> d -> …`, `p.four 1 2 3 4` | 4 items | **never runs**, answers `none: Int` | **never runs**, answers `none` |
 
 What the readings settled, and what they did not:
 
@@ -834,8 +834,8 @@ one of them, so **there is no minimal wrapper that turns the coin toss into a
 rule**: the outcome is decided per module instance, not by the wrapper's text.
 
 What *is* deterministic is the curried chain, and it is the same defect at one
-more parameter: `three = a => b => c => …` never ran on the spliced path and
-`four = a => b => c => d => …` never ran on the frozen path, 10 runs of 10 each.
+more parameter: `three = a -> b -> c -> …` never ran on the spliced path and
+`four = a -> b -> c -> d -> …` never ran on the frozen path, 10 runs of 10 each.
 Those two were the instrument, and they are what the fix is measured on.
 
 ### The join
@@ -897,13 +897,13 @@ Ten consecutive processes of the same probe, every case on both paths:
 
 | wrapper shape | operand | frozen | spliced |
 |---|---|---|---|
-| `sphere = args => …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | `0: Int`, 10 of 10 | `0: Int`, 10 of 10 |
+| `sphere = args -> …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | `0: Int`, 10 of 10 | `0: Int`, 10 of 10 |
 | `voxels Float (path, name)` | 2 items, type first | **`0: Int`, 10 of 10** | `0: Int`, 10 of 10 |
 | `voxels Int (1, 2)` | 2 items, type first | **`0: Int`, 10 of 10** | `0: Int`, 10 of 10 |
-| `one = (a : Int) => …`, `p.one 1` | 1 item | `1: Int`, 10 of 10 | `1: Int`, 10 of 10 |
-| `two = a => b => …`, `p.two 1 2` | 2 items | `3: Int`, 10 of 10 | `3: Int`, 10 of 10 |
-| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | `6: Int`, 10 of 10 | `6: Int`, 10 of 10 |
-| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | `10: Int`, 10 of 10 | `10: Int`, 10 of 10 |
+| `one = (a : Int) -> …`, `p.one 1` | 1 item | `1: Int`, 10 of 10 | `1: Int`, 10 of 10 |
+| `two = a -> b -> …`, `p.two 1 2` | 2 items | `3: Int`, 10 of 10 | `3: Int`, 10 of 10 |
+| `three = a -> b -> c -> …`, `p.three 1 2 3` | 3 items | `6: Int`, 10 of 10 | `6: Int`, 10 of 10 |
+| `four = a -> b -> c -> d -> …`, `p.four 1 2 3 4` | 4 items | `10: Int`, 10 of 10 | `10: Int`, 10 of 10 |
 
 §17's guard is untouched: an operand that is genuinely open still answers
 `ran_undecided`, and no entry runs on it.

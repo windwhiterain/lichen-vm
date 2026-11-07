@@ -98,8 +98,8 @@ fn an_unclosed_delimiter_is_reported_where_the_parse_stops() {
 fn a_delimiter_one_short_is_reported_past_the_line_that_lost_it() {
     // `examples/decode.lichen`'s edit, one `)` short: the unclosed `(` eats line 3.
     let body = "\
-softmax_raw := ('k : ParY) => {
-  @loop fold := 's => fold (s (0) - 1, (g (S{.at (s (0) - 1)}))
+softmax_raw := ('k : ParY) -> {
+  @loop fold := 's -> fold (s (0) - 1, (g (S{.at (s (0) - 1)}))
   total := fold (k.n, 0.0)
 }
 softmax_raw";

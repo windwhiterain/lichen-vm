@@ -1,7 +1,7 @@
 ---
   order = "1"
   math = import "math.lichen"
-  output = "(?a => ?a, Int => Int): Struct"
+  output = "(?a -> ?a, Int -> Int): Struct"
 ---
-double := 'x => math.add x x
-inc_twice := 'x => math.succ (math.succ x)
+double := 'x -> math.add x x
+inc_twice := 'x -> math.succ (math.succ x)

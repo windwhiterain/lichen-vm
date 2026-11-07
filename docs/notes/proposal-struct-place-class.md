@@ -155,7 +155,7 @@ clone exists, so all three are in the match's path:
    whole-term route.
 2. **A function's birth normalize** — the checker's normalization: after each top-level
    statement, every new lambda's value node is deep-evaluated before the definition pass
-   (`checker.rs`'s `build_with`). The SPEC's sugar `'x => {…; expr}` => `{…; @any = x}`
+   (`checker.rs`'s `build_with`). The SPEC's sugar `'x -> {…; expr}` => `{…; @any = x}`
    is that site. In the implementation the wildcard completion is a **write** of `Any`
    (`checker/lambda.rs`, the identity-return completion), which installs no declaration
    and therefore needs no gate today; any unify the normalize performs is the same

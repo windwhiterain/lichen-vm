@@ -14,7 +14,7 @@
 // The formal reference (`'x`) is the same kind of glued prefix: the prime mark
 // is written against the name it marks, so the grammar spells it
 // `token.immediate` too, and `' x` is not a spelling at all.  It is a suffix
-// on a **name** and nothing else — the parameter side of a `=>` is an
+// on a **name** and nothing else — the parameter side of a `->` is an
 // ordinary expression, and only a primed name in it declares a parameter.
 //
 // The value templates (`docs/notes/value-templates.md`): `Tuple`, `Array` and
@@ -128,14 +128,14 @@ module.exports = grammar({
       $.application,
     ),
 
-    // `param => body` (right-assoc).  The parameter side is a **full
+    // `param -> body` (right-assoc).  The parameter side is a **full
     // expression**, so the domain the argument is checked against is
-    // whatever that expression says — a typed param `'x : T => e` reads the
-    // `: T` annotation as part of the domain, and `f x => e` has `(f x)` as
-    // the parameter side, because application binds tighter than `=>`.
+    // whatever that expression says — a typed param `'x : T -> e` reads the
+    // `: T` annotation as part of the domain, and `f x -> e` has `(f x)` as
+    // the parameter side, because application binds tighter than `->`.
     lambda: $ => prec.right(PREC.lambda, seq(
       field('parameter', $.expression),
-      '=>',
+      '->',
       field('body', $.expression),
     )),
 
@@ -279,7 +279,7 @@ module.exports = grammar({
     // `'x` — the **formal reference**: the prime mark is a prefix on a name
     // and it is written against it, so the mark is `token.immediate` and
     // `' x` is not a spelling at all.  It is a prefix on a **name** and
-    // nothing else: the parameter side of a `=>` is an ordinary expression,
+    // nothing else: the parameter side of a `->` is an ordinary expression,
     // and only a primed name in it declares a parameter
     // (`docs/language-spec.md` §Syntax, sugar).
     formal: $ => seq("'", field('name', alias(token.immediate(IDENTIFIER), $.identifier))),
@@ -384,7 +384,7 @@ module.exports = grammar({
       '}',
     ),
 
-    // `table(k ==> v, ...)` — a constant table value.
+    // `table(k => v, ...)` — a constant table value.
     table_value: $ => seq(
       'table',
       '(',
@@ -398,7 +398,7 @@ module.exports = grammar({
 
     table_entry: $ => seq(
       field('key', $.expression),
-      '==>',
+      '=>',
       field('value', $.expression),
     ),
 

@@ -18,7 +18,7 @@ PIn  := {.x (compute.Buf (compute.BufParam{.type Int, .length _})), .tbl (comput
 POut := {.y (compute.Buf (compute.BufParam{.type Int, .length _}))}
 PPar := {.n @any : Int, .in PIn, .out POut}
 PArg := {.n @any : Int, .I PIn}
-gather_raw := ('k = PPar) => {
+gather_raw := ('k = PPar) -> {
   i := compute.range k.n
   j := (compute.read ((compute.Read _){.from k.in.tbl, .at i}) : Int)
   compute.write ((compute.Write _){.to k.out.y, .at i, .value ((compute.read ((compute.Read _){.from k.in.x, .at j}) : Int))})

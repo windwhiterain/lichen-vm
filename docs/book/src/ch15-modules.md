@@ -38,8 +38,8 @@ compiler ([a native link library](https://github.com/windwhiterain/lichen-vm/blo
 Two files in one directory:
 
 ```lichen math.lichen
-succ := 'x => x + 1
-add := ('x : Int) => ('y : Int) => x + y
+succ := 'x -> x + 1
+add := ('x : Int) -> ('y : Int) -> x + y
 ```
 
 ```lichen main.lichen
@@ -89,7 +89,7 @@ imports `math.lichen`, and the top-level program imports `geo.lichen`:
 ---
   math = import "math.lichen"
 ---
-double := 'x => math.add x x
+double := 'x -> math.add x x
 ```
 
 ```lichen uses-geo.lichen
@@ -172,7 +172,7 @@ The prelude is **shadowable, not reserved**: a program's own binding of a
 name replaces the prelude's for that program.
 
 ```lichen
-add := ('operands : Tuple) => operands(0) * operands(1)
+add := ('operands : Tuple) -> operands(0) * operands(1)
 add (5, 2)
 ```
 

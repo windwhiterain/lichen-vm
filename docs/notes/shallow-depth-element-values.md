@@ -54,14 +54,14 @@ The **depth-marked** program is the one under review,
 `pipeline::an_at_shallow_depth_one_on_a_recursive_tail_terminates`:
 
 ```rust
-"f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
+"f = x -> [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
 ```
 
 The **bare-mark control** is the neighbouring test that answers the arithmetic,
 `pipeline.rs:2391`, in `pipeline::a_shallow_marked_recursive_tail_stays_lazy`:
 
 ```rust
-"f = x => [x, @shallow f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
+"f = x -> [x, @shallow f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
 ```
 
 The definitions are the same recursive function over the same tail, the same `inf`,
@@ -250,7 +250,7 @@ Measured, through the suite's own `testing::usize_array` on the depth-marked pro
 with one extra `(0)` per read:
 
 ```rust
-"f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; \
+"f = x -> [x, @shallow(1) f (x + 1)]; inf = f 0; \
  (inf(1)(0)(0), inf(1)(0)(1)(0)(0), inf(1)(0)(1)(0)(1)(0)(0))"
 ```
 
@@ -467,7 +467,7 @@ in — the dereference node, not the expr.
 
 ## 10. The lazy peel's resolution (round sixteen)
 
-The one-depth chain (`f = x => [x, @shallow(1) f (x + 1)]`) is now read as a sequence
+The one-depth chain (`f = x -> [x, @shallow(1) f (x + 1)]`) is now read as a sequence
 of **constant selections through reads**: `selected_item` resolves `[v0, v1][k]`
 through a container that is itself a read, and a call's expr resolves to the callee's
 template return expr. Measured verdicts, in chain order: `inf(1)` — not a region (a
@@ -672,7 +672,7 @@ for every recursion level, four computed nodes referenced **in place**: `580`, `
 `589`, each with an origin in the template (`359`, `386`, `389`, `392`), `function = None`,
 block `1`. One of them is the condition `z <= 0`, decided `0` by the first call — so every
 level takes the else branch and the check stops on the apply-depth budget. The top-level
-countdown (`f = n => if n <= 0 then 0 else f (n - 1); f 5`) references **zero** computed
+countdown (`f = n -> if n <= 0 then 0 else f (n - 1); f 5`) references **zero** computed
 nodes in place: every level's nodes are fresh clones.
 
 **Why they are untagged.** The outermost call runs at the top level, so `instantiate_stamped`

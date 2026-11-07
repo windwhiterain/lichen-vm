@@ -14,7 +14,7 @@
 > to the members it adds, the paren read `a(k)` is the tuple read. `.a` does
 > **not** defer: a decided container keeps its kind unify, and an **undecided
 > one now has no read at all** — the read refuses and the container must be
-> annotated, so the old `f = (x : _) => x.a` shape is a diagnostic rather than
+> annotated, so the old `f = (x : _) -> x.a` shape is a diagnostic rather than
 > `1 : Int`. The
 > requirement node had to be **dropped rather than unified**: merging it into the
 > container's kind class made the empty requirement template the class's value, and
@@ -68,7 +68,7 @@ Each expr below differs **only in statement order**.
 
 ```lichen
 -- read first, annotate after                    -- annotate first, then read
-f = x => {                                       f = x => {
+f = x -> {                                       f = x -> {
   a = x(0) + x(0)                                p = x: tuple{Int, Int}
   p = x: tuple{Int, Int}                         a = x(0) + x(0)
   a                                                a
@@ -101,7 +101,7 @@ decision that read it — which is what §5.1 closes.
 
 ```lichen
 -- read first, annotate after                    -- annotate first, then read
-f = x => {                                       f = x => {
+f = x -> {                                       f = x -> {
   a = x(0) + x(0)                                p = x: array{Int, 3}
   p = x: array{Int, 3}                           a = x(0) + x(0)
   a                                                a
@@ -139,10 +139,10 @@ condition as a per-apply assert.  Neither path writes a tuple type into the
 cell, so no undecided cell is ever pinned to a `[?shape, [TypeTuple, K]]` expr.
 
 **The wording moved on (measured).** The tables of §2.2 and §2.4 quote what the
-requirement reads now, re-measured through the front end on `dev`: `f = x => x(0)`
+requirement reads now, re-measured through the front end on `dev`: `f = x -> x(0)`
 ; `f [10, 20]` refuses with `error: expected a tuple type, found array{Int, 2}`, the
 §2.2 expr refuses twice with `error: expected a tuple type, found array{Int, 3}`,
-and `f = x => x[0]` ; `f (10, 20)` with `error: expected an array type, found
+and `f = x -> x[0]` ; `f (10, 20)` with `error: expected an array type, found
 tuple{Int, Int}`. What these tables used to quote is the requirement **as a
 pattern**: `f4c2b93a` ("checker: a positional read requires the tuple *kind*, never
 binds the type") and `f660da9d` ("checker: an index read requires the array *kind*,
@@ -156,8 +156,8 @@ that printed it.
 ### 2.3 The contrast case: apply **is** caught in both orders
 
 ```lichen
-f = x => { a = x 1; p = x: Int; a }   -- read first
-f = x => { p = x: Int; a = x 1; a }   -- annotate first
+f = x -> { a = x 1; p = x: Int; a }   -- read first
+f = x -> { p = x: Int; a = x 1; a }   -- annotate first
 ```
 
 | order | output |
@@ -180,7 +180,7 @@ undecided. Measured with no annotation anywhere, so no statement order is
 involved:
 
 ```lichen
-f = x => x(0)      f = x => x[0]
+f = x -> x(0)      f = x -> x[0]
 f [10, 20]         f (10, 20)
 ```
 
@@ -393,7 +393,7 @@ silent for a struct — named or a block's record — through the same apply clo
 the decided tier remains the kind unify it was; and the refusal is **added to**,
 not instead of, the runtime table messages, because the apply never fails its
 parameter check and so still runs the body it refuses. Re-measured on
-`dev@790f907f`: `f = x => x.a` ; `f [10, 20]` reports **five** diagnostics — two
+`dev@790f907f`: `f = x -> x.a` ; `f [10, 20]` reports **five** diagnostics — two
 `this value is not a container`, two `table lookup missed`, and the condition's
 `expected a struct type, found array{Int, 2}` at the **definition's** read (`1:5`,
 not the call site) — while `f (S(.a 1))` answers `1: Int` and `t::a` over an array
@@ -407,7 +407,7 @@ design. Both blamed nodes carry a source position now: a read's derived nodes ar
 attributed at **creation**. `Checker::read_site` is set by `check_field`,
 `check_named_field` and `check_named_type_access` to the read's own location, and
 `name_node`, `lazy_index_path` and the read's slot node stamp `node_edges` through
-`stamp_read_node`. Measured: all four runtime messages on `f = x => x.a` ;
+`stamp_read_node`. Measured: all four runtime messages on `f = x -> x.a` ;
 `f [10, 20]` carry `--> 1:10` (the `.a` name) where they used to render
 unattributed. The earlier reading recorded here — each check minting fresh derived
 nodes (measured at `e=125`: `names=757`, `name=204`, `key=759`) against the
@@ -536,7 +536,7 @@ suite rather than trusting any number here.
 **The narrower kind-slot pin is inert — measured, not landed.** Stating `.a`'s
 requirement for the undecided tier as a unify on the container's **kind slot**
 alone (against a fresh struct kind — the decided tier's own statement) refuses
-nothing: `f = x => x.a; f [10, 20]` and its call-result form each keep the two
+nothing: `f = x -> x.a; f [10, 20]` and its call-result form each keep the two
 runtime table messages. The unify already **merges**, but the pin is invisible to
 the apply: `apply_parameter_check` unifies the parameter's `[value, type]` expr,
 whose type element is the container's own type cell, while the requirement node is
@@ -556,9 +556,9 @@ tier rather than unified (the end of this section); the assert route was withdra
 with it, and the whole-term pin stays the rejected one.
 
 **A call result's named read resolved nothing, and the fix is the chain's root.**
-`st = struct{.a Int}` ; `f = x => st(.a 7)` ; `(f 1).a` used to print `raw none: ?a`,
+`st = struct{.a Int}` ; `f = x -> st(.a 7)` ; `(f 1).a` used to print `raw none: ?a`,
 while the same read through a binding (`z = f 1` ; `z.a`) was `1: Int` and a
-positional read of an apply result worked (`f = x => (x, 2)` ; `(f 1)(0)` is
+positional read of an apply result worked (`f = x -> (x, 2)` ; `(f 1)(0)` is
 `1: Int`). The field's own value did not matter (`.a 7` above), so the argument was
 not the issue: the read's key chain — `TableGet(names(container_ty), name)` and the
 shape/field-type chain behind it — hung off the apply's **result-type cell**, and
@@ -578,7 +578,7 @@ field spellings are **still refused** after this fix, so they are a different it
 (see [compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item).
 
 **The `::` counterpart is a different gap: the guard asks a type item, and a type
-value's correct type is the universe.** `type_of = x => {t = _; x: t; t}` ;
+value's correct type is the universe.** `type_of = x -> {t = _; x: t; t}` ;
 `S1 = struct{.a Int}`. `S1` alone prints `struct{.a Int}: TypeStruct` and `S1::a` is
 `Int: Type`, but `T = type_of S1` prints its value as the struct type while its
 **type** is `Type` — and that is **correct**, the author's ruling: *"type_of Struct
@@ -598,7 +598,7 @@ layout work. The syntactic case works because the checker's item for a type
 *expression* is its kind, not because the value was consulted.
 
 **`::` already has the unify-first shape, measured after the `.a` migration.** The
-pin is a `unify` on the container's type, not an assert: `f = x => x::a` applied to
+pin is a `unify` on the container's type, not an assert: `f = x -> x::a` applied to
 `S1 = struct{.a Int}` is `Int: Type`, and applied to `[10, 20]` it is refused **at
 the application** with `expected TypeStruct, found array{Int, 2}` — the argument's
 binding fills the requirement's class and the conflict is recorded there.
@@ -635,7 +635,7 @@ names chain rooted at the type **cell** never evaluates the binding that fills i
 Rooting the `::` chains at the container **expr's type item** (`Index(expr, 1)`, the
 same shape as the `.a` fix) makes that evaluation force the binding: both programs
 now read `(1, 2, 1, 1)`, the two `registry` tests pass, and `S1::a` (a type
-expression) plus `f = x => x::a` applied to `S1` are unchanged at `Int: Type`.
+expression) plus `f = x -> x::a` applied to `S1` are unchanged at `Int: Type`.
 Language 271/1 — the one remaining is `gc_block`, the disabled read-path
 collection ([gc-trigger-disabled](gc-trigger-disabled.md), the maintainer's ruling).
 
@@ -650,7 +650,7 @@ Four `defer_pending` tests encoded exactly that meaningless read
 **The deferral cannot be borrowed naively, measured.** Giving `check_named_type_access`
 the named read's two-tier shape (an `IsStructType` assert when the container's item is
 undecided) turns `T::a`'s refusal into `expected a struct type, found Type`, but it
-**panics** for `f = x => x::a` ; `f [10, 20]`: the deferred names chain evaluates
+**panics** for `f = x -> x::a` ; `f [10, 20]`: the deferred names chain evaluates
 `TableGet` against a non-table and hits `unreachable!("TableGet target must be a
 table")` (`crates/lichen-lowlevel/src/evaluation.rs`). That `unreachable!` is
 protected by the checker never building a `TableGet` against a non-table, so a
@@ -734,18 +734,18 @@ errors — see [apply-type-side-check](apply-type-side-check.md).
 A lambda is a value, and a value nobody applied had a body nobody checked:
 
 ```lichen
-x => { x: Int -> Int; x 1.0 }    dev: Function: Int -> Int -> ?a     -- no report
+x -> { x: Int -> Int; x 1.0 }    dev: Function: Int -> Int -> ?a     -- no report
                                         expected Int, found Float      -- now
-inc = (x : Int -> Int) => x 1.0  dev: accepted, prints raw[Function, …]
+inc = (x : Int -> Int) -> x 1.0  dev: accepted, prints raw[Function, …]
                                         expected Int, found Float      -- now
-x => { x: Int -> Int; x 1 }      dev: … -> ?a    now: Int -> Int -> Int
+x -> { x: Int -> Int; x 1 }      dev: … -> ?a    now: Int -> Int -> Int
 (type_of (1), type_of Int)       (Int, Type)     (Int, Type)
 ```
 
 **The per-call clone is what keeps it sound, and the first attempt lacked it.**
 That attempt made the same two comparisons in `check_app`, against the
 template's **own** cells, so a call site *decided* them: with
-`type_of = x => {t = _; x: t; t}`, dev answers `(Int, Type)` for
+`type_of = x -> {t = _; x: t; t}`, dev answers `(Int, Type)` for
 `(type_of (1), type_of Int)` and the checker-side version answered
 `expected Int, found Type` — the template was monomorphic after its first call.
 Its failure also set `check_failed`, which skips the definition pass entirely,
@@ -816,7 +816,7 @@ the only thing that prints one.
   (`shape::field_type`) — the same node an `Index(Index(container_ty, 0), key)`
   would evaluate to, *one unify earlier*. That earliness is observable because a
   class question is asked of a **cell** (`shape::low_type_of_slot`), which cannot
-  see through an unevaluated `Index`: `(x : struct{.a Float}) => x.a + x.a` used to
+  see through an unevaluated `Index`: `(x : struct{.a Float}) -> x.a + x.a` used to
   find neither operand concretely `Float`, pin the operation to the `Int` default
   in `check_binop`, and then refuse both operands against it. A **frozen** field
   type is materialized as a leaf of the reading table, so a field read on an
@@ -895,9 +895,9 @@ the only thing that prints one.
   readers of the parameter see the annotated kind — an array annotation's length, a
   function annotation's arrow — while the parameter's type slot still performs the
   argument check at each apply: compiling in body scope changes what the body sees,
-  not what is checked. `parameter_attribute` (`x # n => e`) is compiled in body
-  scope for the same reason and is the optimization for the `x # n => e` →
-  `x => { x # n; e }` desugar (an unannotated body statement would otherwise
+  not what is checked. `parameter_attribute` (`x # n -> e`) is compiled in body
+  scope for the same reason and is the optimization for the `x # n -> e` →
+  `x -> { x # n; e }` desugar (an unannotated body statement would otherwise
   materialize a block); the field rides the `Function` node.
 - The `Loc` descent exists so the language layer need not re-derive the type
   grammar: the highlevel is deliberately source-blind — it never sees a source span

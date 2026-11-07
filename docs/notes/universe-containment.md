@@ -80,15 +80,15 @@ suite is green, and the minimal repro flips from
 
 ```lichen
 # mylib.lichen — registered native, i.e. frozen
-let type_of = 'x => {t = _; x: t; t}
-jit = 'f => {
+let type_of = 'x -> {t = _; x: t; t}
+jit = 'f -> {
   f : _ -> _
   (struct{.native _, .sig (type_of f)})(.native 0, .sig _)
 }
 
 # main
 --- lib = import "mylib.lichen" ---
-k = lib.jit ('y => y + y)
+k = lib.jit ('y -> y + y)
 k
 ```
 

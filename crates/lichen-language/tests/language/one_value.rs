@@ -14,7 +14,7 @@ use lichen_language::compile;
 /// A wrapper that returns a struct instance, bound once and used twice.
 const PROGRAM: &str = "\
 S := {.a @any : Int}
-f := ('x : Int) => S{.a x}
+f := ('x : Int) -> S{.a x}
 y := f 1
 (y, y)
 ";
@@ -50,8 +50,8 @@ fn a_call_site_in_a_body_yields_one_value() {
     let (first, second) = uses(
         "\
 S := {.a @any : Int}
-f := ('x : Int) => S{.a x}
-g := ('n : Int) => {
+f := ('x : Int) -> S{.a x}
+g := ('n : Int) -> {
   y := f n
   (y, y)
 }

@@ -92,7 +92,7 @@ refusal and not a fallback).
 Loosest to tightest, which is the ladder `parse.rs` builds bottom-up:
 
 ```
-=>            lambda
+->            lambda
 : # ?         annotations
 ->            function type
 < > <= >= == != @in   comparison and set membership
@@ -151,7 +151,7 @@ No form is displaced: what used to be an atom at a spaced `<` is still a
 comparison, and a glued `<` is now the same comparison.
 
 `<==` is the **table read** (`t <== k`), at the loosest **binary** level: above it
-sit only `->`, the annotation pieces and `=>`. It is left-associative, and its
+sit only `->`, the annotation pieces and `->`. It is left-associative, and its
 right operand is a whole comparison expression, so `t <== k + 1` reads the key
 `k + 1`, `t <== a <== b` reads `(t <== a) <== b`, and — the one asymmetry the
 choice creates — `t <== a == b` reads `t <== (a == b)`: the comparison to the right
@@ -385,15 +385,15 @@ three changes, and the first is the interesting one.
 - **The formal reference is a node of its own.** `'x` is a `formal`: the name
   plus a prime mark written against it, spelled `token.immediate("'")` so
   `' x` is not a spelling at all.  The prime is a prefix on a **name** and
-  nothing else, and the parameter side of a `=>` stays a full expression, so
-  `f x => e` parses with `(f x)` on the left of the arrow — a name there is
-  a parameter only when it is primed — and a typed parameter `'x : Int => e`
+  nothing else, and the parameter side of a `->` stays a full expression, so
+  `f x -> e` parses with `(f x)` on the left of the arrow — a name there is
+  a parameter only when it is primed — and a typed parameter `'x : Int -> e`
   reads its annotation as part of the domain.  The queries colour the prime
   mark; the name is an ordinary identifier.
 - **The retired syntax is gone.** The grammar models the current surface: the
   keyword-led braced types `tuple{…}`, `struct{…}`, `array{T, n}`, `set{E}` and
   `table{K, V}` ([no-type-mode](no-type-mode.md)); the parenthesised values
-  `set(a, b)` and `table(k1 ==> v1)`; the glued postfix reads `a(k)` and `a[i]`;
+  `set(a, b)` and `table(k1 => v1)`; the glued postfix reads `a(k)` and `a[i]`;
   the infix `t <== k`; `@in`, `@any`, `@shallow` and `@loop`;
   and §7's and §11's seven prefix keywords (`int2float`, `float2int`, `max`,
   `min`, `exp`, `sqrt`, `floor`). `struct<…>`, `array<…, n>`, the bare `<…>`

@@ -74,7 +74,7 @@ already did, so a reused cell reads against its frozen type chain and reaches th
 when the chain genuinely names no class (see `heavy-value-cache.md` §9.17).
 
 ```lichen
-P = 'ins => struct{.I ins.x, .O ins.y}
+P = 'ins -> struct{.I ins.x, .O ins.y}
 y = (P _)(.I Int, .O Int)
 ```
 
@@ -111,7 +111,7 @@ mark. Naming them is what makes the mark mean something: it says the printer
   wrote it, so its tail names **that** module's canonical `[Type, ↺]` rather than
   the replica itself. Requiring the tail to be the very node — the rule until this was
   measured — made every such expr fall back to `raw[…]`: a package's
-  `double = 'x => x + x` printed `(43, 44): tuple{raw[Int, Type], raw[Int, Type]}` where
+  `double = 'x -> x + x` printed `(43, 44): tuple{raw[Int, Type], raw[Int, Type]}` where
   the same program printed `tuple{Int, Int}` before the operator's contract was written
   in lichen. The head check is what keeps "is the universe" apart from "contains
   the universe" ([universe-containment](universe-containment.md) §2); the tail only

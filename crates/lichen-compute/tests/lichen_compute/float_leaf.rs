@@ -58,7 +58,7 @@ Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
 Par  := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .in In1}}
 Arg  := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .I In1}}
 GA   := {{.n @any : Int, .cols @any : Int, .scale @any : {kind}, .in In1}}
-scale_raw := ('k = Par) => {{
+scale_raw := ('k = Par) -> {{
   i := compute.range k.n
   r := i / k.cols
   c := i % k.cols
@@ -67,7 +67,7 @@ scale_raw := ('k = Par) => {{
   ((Out1){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (v * k.scale ~ "element")}}))}})
 }}
 scale := compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Out1
-step := ('s = GA) => {{
+step := ('s = GA) -> {{
   compute.plrun scale ((Arg){{.n s.n, .cols s.cols, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
@@ -96,13 +96,13 @@ Out1 := {{.z (compute.Buf (compute.BufParam{{.type {kind}, .length {rows}}}))}}
 Par  := {{.n @any : Int, .scale @any : {leaf}, .in In1}}
 Arg  := {{.n @any : Int, .scale @any : {leaf}, .I In1}}
 GA   := {{.n @any : Int, .scale @any : {leaf}, .in In1}}
-mismatch_raw := ('k = Par) => {{
+mismatch_raw := ('k = Par) -> {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type {kind}, .length {rows}}})
   ((Out1){{.z (compute.write ((compute.Write _){{.to y, .at i, .value (k.scale ~ "element")}}))}})
 }}
 mismatch := compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" Out1
-step := ('s = GA) => {{
+step := ('s = GA) -> {{
   compute.plrun mismatch ((Arg){{.n s.n, .scale s.scale, .I In1{{.a s.in.a}}}}) : Struct
 }}
 built := compute.graph step
@@ -146,7 +146,7 @@ fn filled(element: &str, data_at_i: &str) -> String {
         r#"
 FillOut := {{.z (compute.Buf (compute.BufParam{{.type {element}, .length {elements}}}))}}
 Fill  := {{.n @any : Int}}
-fill_raw := ('c = Fill) => {{
+fill_raw := ('c = Fill) -> {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type {element}, .length {elements}}})
   ((FillOut){{.z (compute.write ((compute.Write _){{.to y, .at i, .value ({data_at_i} ~ "element")}}))}})

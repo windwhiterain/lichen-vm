@@ -6,13 +6,13 @@ OutE := {.e (compute.Buf (compute.BufParam{.type Float, .length 1}))}
 Par := {.n @any : Int, .in In}
 Arg := {.n @any : Int, .I In}
 Fill := {.n @any : Int}
-fill := (c = Fill) => {
+fill := (c = Fill) -> {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 1})
   ((In){.k (compute.write ((compute.Write _){.to d, .at i, .value 1.0}))})
 }
 filler := compute.parallel fill "cpu" In
-raw := (lane = Par) => {
+raw := (lane = Par) -> {
   i := compute.range lane.n
   ((OutE){.e (compute.write ((compute.Write _){.to lane.in.k, .at i, .value (99.0 : Float)}))})
 }

@@ -46,8 +46,8 @@ Tuple *types* are written with the `tuple` keyword and value tuples with `(…)`
 so the two never depend on position, e.g.
 
 ```lichen
-compute.jit ('p : (Int, Int) => …)       // a tuple *value* of type-values
-compute.jit (p : tuple{Int, Int} => …)  // a tuple of two Ints
+compute.jit ('p : (Int, Int) -> …)       // a tuple *value* of type-values
+compute.jit (p : tuple{Int, Int} -> …)  // a tuple of two Ints
 ```
 
 The parse tests for the paren and `tuple{…}` spellings are the behavioural

@@ -108,10 +108,10 @@ fn declared_order_reads_the_block_anywhere() {
 
 #[test]
 fn an_output_comment_is_replaced_in_place() {
-    let source = "---order = \"2\"\noutput = \"stale\"---\nrec f = x => x\nf 5\n";
+    let source = "---order = \"2\"\noutput = \"stale\"---\nrec f = x -> x\nf 5\n";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "---\n  order = \"2\"\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
+        "---\n  order = \"2\"\n  output = \"5: Int\"\n---\nrec f = x -> x\nf 5\n"
     );
     // A multi-line output becomes a multi-line string.
     let source = "---output = \"x\ny\"---\nb";
@@ -123,16 +123,16 @@ fn an_output_comment_is_replaced_in_place() {
 
 #[test]
 fn a_missing_output_comment_is_appended() {
-    let source = "rec f = x => x\nf 5\n";
+    let source = "rec f = x -> x\nf 5\n";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "---\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
+        "---\n  output = \"5: Int\"\n---\nrec f = x -> x\nf 5\n"
     );
     // A file without a trailing newline still ends up clean.
-    let source = "rec f = x => x\nf 5";
+    let source = "rec f = x -> x\nf 5";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "---\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
+        "---\n  output = \"5: Int\"\n---\nrec f = x -> x\nf 5\n"
     );
 }
 

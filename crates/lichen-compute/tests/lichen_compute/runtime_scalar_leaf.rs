@@ -63,26 +63,26 @@ fn program(step: &str, bias: Option<f32>) -> String {
 Row   := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 Sums  := {{.s (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 ParS  := {{.n @any : Int, .in Row}}
-row_sum_raw := ('k = ParS) => {{
+row_sum_raw := ('k = ParS) -> {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine"))
   ((Sums){{.s (compute.write ((compute.Write _){{.to y, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
 row_sum := compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Sums
 Sumsq := {{.q (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 ParQ  := {{.n @any : Int, .in Row}}
-row_sumsq_raw := ('k = ParQ) => {{
+row_sumsq_raw := ('k = ParQ) -> {{
   i := compute.range k.n
   y := compute.buf (compute.BufParam{{.type Float, .length k.n}})
-  @loop fold := 's => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
+  @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float) * (compute.read ((compute.Read _){{.from k.in.x, .at s(0) - 1}}) : Float))) ~ "combine" ~ "element"))
   ((Sumsq){{.q (compute.write ((compute.Write _){{.to y, .at i, .value (fold (k.n, 0.0 ~ "identity"))}}))}})
 }}
 row_sumsq := compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sumsq
 Moments := {{.x (compute.Buf (compute.BufParam{{.type Float, .length {count}}})), .w (compute.Buf (compute.BufParam{{.type Float, .length {count}}})), .s (compute.Buf (compute.BufParam{{.type Float, .length {count}}})), .q (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 OutY    := {{.y (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
 ParY    := {{.n @any : Int, .eps @any : Float, .in Moments}}
-normalise_raw := ('k = ParY) => {{
+normalise_raw := ('k = ParY) -> {{
   i := compute.range k.n
   count := int2float k.n
   m := (compute.read ((compute.Read _){{.from k.in.s, .at 0}}) : Float) / count
@@ -111,7 +111,7 @@ built := compute.graph step
 /// edge of its own rather than as the literal it was written with — which is what a runtime scalar
 /// is: a number the launch supplies beside its extent.
 fn step() -> &'static str {
-    r#"step := ('s = GArg) => {
+    r#"step := ('s = GArg) -> {
   a := (compute.plrun row_sum ((compute.A _){.n s.n, .I Row{.x s.in.x}}) : Struct)
   b := (compute.plrun row_sumsq ((compute.A _){.n s.n, .I Row{.x s.in.x}}) : Struct)
   compute.plrun normalise ((ArgY){.n s.n, .eps s.eps, .I Moments{.x s.in.x, .w s.in.w, .s a.s, .q b.q}}) : Struct
@@ -141,12 +141,12 @@ fn filled() -> String {
         r#"
 Fill := {{.n @any : Int}}
 Weights := {{.w (compute.Buf (compute.BufParam{{.type Float, .length {count}}}))}}
-row_raw := ('c = Fill) => {{
+row_raw := ('c = Fill) -> {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {count}}})
   ((Row){{.x (compute.write ((compute.Write _){{.to y, .at i, .value {row}}}))}})
 }}
-weight_raw := ('c = Fill) => {{
+weight_raw := ('c = Fill) -> {{
   i := compute.range c.n
   y := compute.buf (compute.BufParam{{.type Float, .length {count}}})
   ((Weights){{.w (compute.write ((compute.Write _){{.to y, .at i, .value {weight}}}))}})

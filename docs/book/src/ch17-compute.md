@@ -23,7 +23,7 @@ the result back:
 In  := {.x (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 3}))}
 Par := {.n @any : Int, .in In}
-double_raw := ('k = Par) => {
+double_raw := ('k = Par) -> {
   i := compute.range k.n
   x := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
   y := compute.buf (compute.BufParam{.type Float, .length k.n})
@@ -31,7 +31,7 @@ double_raw := ('k = Par) => {
 }
 double := compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu" Out
 Fill := {.n @any : Int}
-fill_raw := ('c = Fill) => {
+fill_raw := ('c = Fill) -> {
   i := compute.range c.n
   d := compute.buf (compute.BufParam{.type Float, .length 3})
   v := 1.0 + int2float i
@@ -154,8 +154,8 @@ launched on its own:
 ---
   compute = import "compute.lichen"
 ---
-k_double := compute.jit ('y : Int => y + y)
-k_outer  := compute.jit ('x : Int => compute.launch k_double x)
+k_double := compute.jit ('y : Int -> y + y)
+k_outer  := compute.jit ('x : Int -> compute.launch k_double x)
 compute.launch k_outer 3
 ```
 
@@ -256,7 +256,7 @@ was measured and what is next.
   only way out.
 - **The parallel path is under repair**: a kernel body reads `k.in.x`, but
   `k.in` is the template `In` rather than an instance, so the compiler
-  refuses it with `expected Struct, 'found ?a => Struct`; the launch then loses
+  refuses it with `expected Struct, 'found ?a -> Struct`; the launch then loses
   its field names. The book's programs state their semantics; they do not print
   answers.
 - The backend is a string, `"cpu"` or `"gpu"`, and both run the same kernel.

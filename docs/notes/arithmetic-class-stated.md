@@ -75,9 +75,9 @@ named in the brief — a caller, a pass, a diagnostic, a later unify. Measured, 
 | candidate | verdict | evidence |
 |---|---|---|
 | **a pass** | **yes, and it is the enforcement** | `Module::check_asserts` (`crates/lichen-lowlevel/src/assert.rs:32-37`): *"An undecided condition records no error and stays pending: the template an apply clone re-checks per call."* Measured: `add ["a", "b"]` fails **twice**, both from the prelude — `assertion failed: expected 1, found 0` at `builtin/core.lichen:3:39` and `3:56`, the two `@in Num` conditions the `else` branch registered. Nothing else refuses that program. |
-| **a caller** | **yes, twice** | `max`/`min` — measured on `dev`: `f = x => y => max x y` prints `(?a => ?a -> ?a,): struct{.f ?a -> ?a -> ?a}`, `f 1 2` is `2: Int` and `f 1.5 2.5` is `2.5: Float`. The frozen prelude's `add` — measured: `add [1.5, 2.5]` is `4.0: Float`. |
+| **a caller** | **yes, twice** | `max`/`min` — measured on `dev`: `f = x -> y -> max x y` prints `(?a => ?a -> ?a,): struct{.f ?a -> ?a -> ?a}`, `f 1 2` is `2: Int` and `f 1.5 2.5` is `2.5: Float`. The frozen prelude's `add` — measured: `add [1.5, 2.5]` is `4.0: Float`. |
 | **a diagnostic** | **the refusal is, the *flavour* is not** | `AssertSpelling::Refinement { domain }` is registered, but it never reaches a message on this path. `diagnostic.rs:510-518` handles a failing assert whose template is an `AnyNodeId::Static` ref by pushing a `Diag` with **no** `assert_spelling`; the frozen prelude's asserts fail as static templates, so the measured message for `add ["a", "b"]` is the generic `assertion failed: expected 1, found 0`, never `does not satisfy {Int, Float}`. |
-| **a later unify** | **no** | Measured: the class is closed at the **apply**, by the argument. `f = x => x + 1` already states `Int -> Int` on `dev`, and `f 1.5` is refused there (`error: expected Int, found Float`, `2:3`) — the open class is not what admits a `Float` to a monomorphic addition. |
+| **a later unify** | **no** | Measured: the class is closed at the **apply**, by the argument. `f = x -> x + 1` already states `Int -> Int` on `dev`, and `f 1.5` is refused there (`error: expected Int, found Float`, `2:3`) — the open class is not what admits a `Float` to a monomorphic addition. |
 
 **So the answer that decides the slice: deciding earlier is an over-constraint, not
 a fix.** The gate is load-bearing for a pass and for two callers, and no later unify
@@ -107,7 +107,7 @@ no separate shared cell to decide without also deciding the operand.
 
 | program | cell | class | `n` | `decided` | members |
 |---|---|---|---|---|---|
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | the array's element cell | `44v1` | **3** | **0** | `44v1` (the `x + 1` apply's `c`), `29v1` (the element cell), `62v1` (the `x + 2` apply's `c`) |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | the array's element cell | `44v1` | **3** | **0** | `44v1` (the `x + 1` apply's `c`), `29v1` (the element cell), `62v1` (the `x + 2` apply's `c`) |
 | the same program, after the call | the cell that **prints** `?a` | `133v1` | **3** | **0** | `133v1`, `151v1`, `160v1` — the per-call clone of the class above |
 | the same, with `(x : Int)` | identical | `44v1` / `133v1` | 3 / 3 | 0 / 0 | identical |
 | `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | the array's element cell | `19v1` | 11 | **11** | every member decided |
@@ -139,15 +139,15 @@ after the run.
 | program | `dev` | with D1 |
 |---|---|---|
 | `examples/lazy_infinite.lichen` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | **unchanged** |
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | **unchanged** |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | **unchanged** |
 | the same with `(x : Int)` | `[raw 1, raw 2]: array{?a, 2}` | **unchanged** |
-| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g` | `(0, [raw none, raw none]): tuple{Int, array{?a, 2}}` | **unchanged** |
+| `f = x -> [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g` | `(0, [raw none, raw none]): tuple{Int, array{?a, 2}}` | **unchanged** |
 | `add [1.5, 2.5]` | `4.0: Float` | `error: expected array{Int, 2}, found array{Float, 2}` |
-| `poly = x => y => x + y` ; `poly 1.5 2.5` | `4.0: Float` | `error: expected Int, found Float` |
-| `f = x => y => max x y` ; `f 1.5 2.5` | `2.5: Float` | `error: expected Int, found Float` |
-| `f = x => y => max x y` (signature) | `?a -> ?a -> ?a` | `Int => Int -> Int` — decided, and **wrongly**: the class was polymorphic |
+| `poly = x -> y -> x + y` ; `poly 1.5 2.5` | `4.0: Float` | `error: expected Int, found Float` |
+| `f = x -> y -> max x y` ; `f 1.5 2.5` | `2.5: Float` | `error: expected Int, found Float` |
+| `f = x -> y -> max x y` (signature) | `?a -> ?a -> ?a` | `Int => Int -> Int` — decided, and **wrongly**: the class was polymorphic |
 | `add ["a", "b"]` | `assertion failed: expected 1, found 0` ×2, from `core.lichen:3` | `error: expected array{Int, 2}, found array{string, 2}` — the refinement's own refusal is gone |
-| `f = x => x + 1` (signature) | `(Int => Int,): struct{.f Int -> Int}` | `(Function,): struct{.f raw[Function, …]}` — **a printer regression**: the frozen signature stops rendering |
+| `f = x -> x + 1` (signature) | `(Int => Int,): struct{.f Int -> Int}` | `(Function,): struct{.f raw[Function, …]}` — **a printer regression**: the frozen signature stops rendering |
 | `add [1, 1.5]`, `max 1 1.5`, `f 1.5` | already refused | unchanged — the stated branch was never the question |
 
 `cargo test -p lichen-compute --test lichen_compute examples`, `--test-threads 2`:
@@ -167,7 +167,7 @@ lost: the `Float` add, the `Float` maximum, and the polymorphic `x + y`.
 
 **Why D1 cannot work, stated as a mechanism rather than as the table.** Deciding the
 branch decides the **prelude's** parameter cell. A user's cells are decided by the
-**argument** at the apply, which is why `f = x => x + 1` already reads `Int -> Int` on
+**argument** at the apply, which is why `f = x -> x + 1` already reads `Int -> Int` on
 `dev` without any help. Deciding the prelude's cell does not reach the clone's cells —
 the clone is built per call and its own class is closed by the argument, not by its
 template — so the user's `?a` is untouched. §2's table says the same thing from the
@@ -263,7 +263,7 @@ reproducing byte for byte; `clean=42 panicked=[] drifted=["lazy_infinite.lichen"
 branch fires eight times in the prelude's generation and **zero** in the user's, for
 all four controls and for `lazy_infinite.lichen`; `max`/`min` reaching it in user code;
 `add [1.5, 2.5]`, `poly 1.5 2.5`, `max x y` on `f 1.5 2.5`, `add ["a", "b"]`,
-`add [1, 1.5]`, `max 1 1.5`, `f 1.5`, and the `f = x => x + 1` signature, on `dev`; the
+`add [1, 1.5]`, `max 1 1.5`, `f 1.5`, and the `f = x -> x + 1` signature, on `dev`; the
 `Refinement` spelling not reaching a message, and `diagnostic.rs:510-518` as the reason;
 the whole of D1's table and its `examples` result.
 
@@ -282,7 +282,7 @@ what the chain needs is the type of a `@shallow` infinite tail — which the mar
 not the read, kept undecided. **§7 of that note changed the mark instead, by the
 user's decision, and `lazy_infinite.lichen` now reads its declared form.**
 `arithmetic_class` itself is untouched: the `?a` that remains on
-`f = x => [x, @shallow [x + 1, x + 2]]` is this note's own class, and D1's verdict
+`f = x -> [x, @shallow [x + 1, x + 2]]` is this note's own class, and D1's verdict
 over it stands.
 
 **Not this note's subject** — the `Refinement` *flavour* being unreachable. Measured,

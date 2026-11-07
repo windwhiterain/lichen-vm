@@ -27,7 +27,7 @@ reasons for them, and the measurements that now hold.
   fresh empty cells, while its types, attributes, name table and nominal id are
   shared. The actual fills the fresh slots, so the template itself is never
   specialized.
-- A parameterized constructor remains a function: `F := 'I => {.in I}`. It is
+- A parameterized constructor remains a function: `F := 'I -> {.in I}`. It is
   applied explicitly everywhere it is used: `x = (F I)`, `(F _){.in 1}`,
   `(F _)[…]`. A zero-parameter constructor is direct unless its body is a bare
   hole, a function, or another non-compound.
@@ -61,13 +61,13 @@ A signature is stated with plain `=`, and the unification keeps the actual's own
 body:
 
 ```text
-I := '_x => _
-f = (i = (I _) => _)
+I := '_x -> _
+f = (i = (I _) -> _)
 O := f (I _)
 r = O
 ```
 
-`f = (i = (I _) => _)` says that `f`'s parameter takes the requirement
+`f = (i = (I _) -> _)` says that `f`'s parameter takes the requirement
 applied from `I`, and that `f`'s result is a hole. `O := f (I _)` applies `f` to
 the same requirement, so `O` is the result the signature describes. The result
 is then reused with plain `=`: `r = O` for a local result and `r = k.O` for a
@@ -162,14 +162,14 @@ alternatives and the measurements.
 
 The compute package's own source follows the same model. A kernel struct is a
 direct template, `K := {.native @any, .I @any, .O @any}`, and a kernel is
-matched against it with plain `=` — `launch := 'k = K => …`.
+matched against it with plain `=` — `launch := 'k = K -> …`.
 
 A computed struct call **returns a value**; it is not an instantiation.
 `Buf x` returns the buffer struct, and the buffer is initialised by assigning
 into it:
 
 ```text
-buf := 'x = BufParam => { b := Buf x; b.native = $buf(x.type, x.length); b }
+buf := 'x = BufParam -> { b := Buf x; b.native = $buf(x.type, x.length); b }
 ```
 
 `(Buf x){…}` is not a supported second instantiation: the call has already
@@ -223,7 +223,7 @@ prelude:
   compute = import "compute.lichen"
 ---
 a := 42
-k := compute.jit ('x => x + a)
+k := compute.jit ('x -> x + a)
 compute.launch k 1
 ```
 
@@ -263,7 +263,7 @@ Why the frozen class of a body node reaches outside is the open question. The
 manifestation this slice can already name: `a <: k.I` in the frozen body is a
 `Unify` that joins the parameter's cell with the kernel struct's field class,
 whose owner is outside the closure — so the node is the closure's *own* and its
-class is not. The dynamic path does not split here (`launch := 'k <: K => 'a =>
+class is not. The dynamic path does not split here (`launch := 'k <: K -> 'a ->
 {a}` applied directly answers `3`), because every clone it makes is owned by
 the call.
 
@@ -395,8 +395,8 @@ After the direct-template migration on `dev@ffef59c8`:
 - `a_write_inside_a_conditional_is_refused` still reports an output-class error
   instead of the conditional-write cause.
 - A parameter annotation on a recursive array constructor still loses the array
-  result type: `nats := ('n : Int) => T[n, @shallow nats (n + 1)]` is refused
-  with `expected Array, found Int`; the unannotated `nats := 'n => …` runs. This
+  result type: `nats := ('n : Int) -> T[n, @shallow nats (n + 1)]` is refused
+  with `expected Array, found Int`; the unannotated `nats := 'n -> …` runs. This
   is the same source shape the book used to illustrate laziness, so the book
   now spells the working form.
 

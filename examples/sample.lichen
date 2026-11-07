@@ -138,17 +138,17 @@ Row := {.x (compute.Buf (compute.BufParam{.type Float, .length 20}))}
 Pick := {.p (compute.Buf (compute.BufParam{.type Float, .length 5}))}
 Par := {.n @any : Int, .w @any : Int, .in (Row)}
 Arg := {.n @any : Int, .w @any : Int, .I (Row)}
-greedy_raw := Par{.'n : Int, .'w : Int, .'in} => {
+greedy_raw := Par{.'n : Int, .'w : Int, .'in} -> {
   lane := compute.range n
   base := lane * w
-  @loop fold := 's => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold := 's -> if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _){.from in.x, .at (base + s(0) - 1)}) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   b_p := compute.buf (compute.BufParam{.type Float, .length n})
   Pick{.p (compute.write ((compute.Write _){.to b_p, .at lane, .value (int2float (fold (w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))}))}
 }
 greedy := compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" (Pick)
 Fill := {.n @any : Int}
 scoresBuf := {.scores (compute.Buf (compute.BufParam{.type Float, .length 20}))}
-fill_scores_raw := Fill{.'n : Int} => {
+fill_scores_raw := Fill{.'n : Int} -> {
   i := compute.range n
   d := compute.buf (compute.BufParam{.type Float, .length 20})
   v := (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)

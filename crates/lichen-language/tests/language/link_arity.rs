@@ -167,13 +167,13 @@ static ARITY_OPS: [(&str, &dyn NativeOp<HostProgram>); 1] = [("probe_family", &A
 /// tuple, a type argument beside it (`docs/language-spec.md` §442–448).
 /// `one`..`four` are regression readings for an operand of N items.
 const FAMILIES: &str = "scalars := set(Float, Int)\n\
-    grid_kind := 't => t @in scalars\n\
-    sphere := 'args => { r := $probe_family(args); r : Int; r }\n\
-    voxels := ('t ! grid_kind) => 'args => { r := $probe_family(t, args); r : Int; r }\n\
-    one := ('a : Int) => { r := $probe_family(a); r : Int; r }\n\
-    two := ('a : Int) => ('b : Int) => { r := $probe_family(a, b); r : Int; r }\n\
-    three := ('a : Int) => ('b : Int) => ('c : Int) => { r := $probe_family(a, b, c); r : Int; r }\n\
-    four := ('a : Int) => ('b : Int) => ('c : Int) => ('d : Int) => { r := $probe_family(a, b, c, d); r : Int; r }\n";
+    grid_kind := 't -> t @in scalars\n\
+    sphere := 'args -> { r := $probe_family(args); r : Int; r }\n\
+    voxels := ('t ! grid_kind) -> 'args -> { r := $probe_family(t, args); r : Int; r }\n\
+    one := ('a : Int) -> { r := $probe_family(a); r : Int; r }\n\
+    two := ('a : Int) -> ('b : Int) -> { r := $probe_family(a, b); r : Int; r }\n\
+    three := ('a : Int) -> ('b : Int) -> ('c : Int) -> { r := $probe_family(a, b, c); r : Int; r }\n\
+    four := ('a : Int) -> ('b : Int) -> ('c : Int) -> ('d : Int) -> { r := $probe_family(a, b, c, d); r : Int; r }\n";
 
 /// Three struct types, as the linked workbench's wrapper carries them.
 const STRUCTS: &str = "GridName := {.path @any : string, .name @any : string}\n\
@@ -181,9 +181,9 @@ const STRUCTS: &str = "GridName := {.path @any : string, .name @any : string}\n\
     Voxels := {.kind @any : Type, .path @any : string, .name @any : string}\n";
 
 /// Three more families, as the linked workbench's wrapper carries them.
-const MORE_FAMILIES: &str = "grid_count := 'path: string => { r := $probe_family(path); r : Int; r }\n\
-    write_sphere := 'args => { r := $probe_family(args); r : Int; r }\n\
-    vdb_stats := 'args => { r := $probe_family(args); r : Int; r }\n";
+const MORE_FAMILIES: &str = "grid_count := 'path: string -> { r := $probe_family(path); r : Int; r }\n\
+    write_sphere := 'args -> { r := $probe_family(args); r : Int; r }\n\
+    vdb_stats := 'args -> { r := $probe_family(args); r : Int; r }\n";
 
 /// The wrapper contents the type-first shape is measured against.
 ///

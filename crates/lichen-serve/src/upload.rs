@@ -18,7 +18,7 @@ In  = struct{.d (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
 Out = struct{.e (compute.Buf ((compute.BufParam _)(.type Float, .length _)))}
 Par = struct{.n Int, .in In}
 Arg = struct{.n Int, .I In}
-copy_raw = (k : Par) => {
+copy_raw = (k : Par) -> {
   i = compute.range k.n
   value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   b_e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
@@ -26,7 +26,7 @@ copy_raw = (k : Par) => {
 }
 copy = compute.parallel copy_raw "gpu" Out
 GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+step = (s : GArg) -> {
   (compute.plrun copy ((Arg)(.n s.n, .I In(.d s.in.d))) : Out)
 }
 built = compute.graph step

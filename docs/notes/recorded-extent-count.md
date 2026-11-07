@@ -30,13 +30,13 @@ kernels `crates/lichen-compute/tests/lichen_compute/graph_jit.rs`'s `KERNELS` fi
 In1  = struct{.a Int}
 Out1 = struct{.z (compute.Buf Int)}
 Par1 = compute.P (compute.KT Int)(.I In1, .O Out1)
-f1 = ('k : Par1) => { i = compute.range k.n
+f1 = ('k : Par1) -> { i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10)) }
 k1 = compute.parallel f1 "cpu"
 In2  = struct{.b (compute.Buf Int)}
 Out2 = struct{.w (compute.Buf Int)}
 Par2 = compute.P (compute.KT Int)(.I In2, .O Out2)
-f2 = ('k : Par2) => { i = compute.range k.n
+f2 = ('k : Par2) -> { i = compute.range k.n
   a = compute.read ((compute.Read _)(.from k.in.b, .at i))
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a)) }
 k2 = compute.parallel f2 "cpu"
@@ -44,7 +44,7 @@ held = compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0)))
 GArg = struct{.n Int, .in In1}
 ```
 
-`step = ('s : GArg) => { first = (compute.plrun k1 ((compute.A In1)(.n …, .I In1(.a 0))) : Out1) ; … }`,
+`step = ('s : GArg) -> { first = (compute.plrun k1 ((compute.A In1)(.n …, .I In1(.a 0))) : Out1) ; … }`,
 then `built = compute.graph step`. The body is a block whose first item's value is the recorded
 return, so the graph's return-value rule is satisfied whenever the body's own value is a value a
 graph can hand back — which is the whole point of the shapes below.
