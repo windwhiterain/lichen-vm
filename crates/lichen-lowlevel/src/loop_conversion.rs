@@ -118,6 +118,15 @@ pub struct LoopExit {
 }
 
 impl<P: Program> Module<P> {
+    /// The live function a frozen `@loop` callee names; `None` when it carries no
+    /// mark.
+    pub fn static_dynamic_function(&self, sref: crate::StaticFunctionRef) -> Option<FunctionId> {
+        let module = self.static_module(sref.module);
+        let index = sref.index.0;
+        module.functions.get(index)?.looping?;
+        module.dynamic_functions.get(index).copied().flatten()
+    }
+
     /// Whether `function`'s `@loop` recursion is convertible, and what it
     /// converts to. Read-only over the template.
     ///

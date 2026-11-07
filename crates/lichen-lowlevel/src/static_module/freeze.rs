@@ -284,10 +284,12 @@ impl<P: Program> StaticModule<P> {
         }
 
         // The open-capture verdict runs after phase 3: before it, every value is `None`.
+        let dynamic_functions = function_ids.iter().map(|id| Some(*id)).collect();
         let mut artifact = StaticModule {
             key,
             nodes,
             functions,
+            dynamic_functions,
             apply_result_owners: module
                 .apply_result_owners
                 .iter()

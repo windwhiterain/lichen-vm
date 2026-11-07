@@ -1703,6 +1703,19 @@ where
             .static_callee(callee, operands.get(3).map(|item| item.node))
             .is_some()
             || is_static_function(self.module, callee);
+        // **A frozen `@loop` callee converts like a live one**: the static ref
+        // names the live function.
+        if let Some(sref) = self.static_callee(callee, operands.get(3).map(|item| item.node))
+            && let Some(function) = self.module.static_dynamic_function(sref)
+        {
+            return match self.module.loop_conversion(function) {
+                Ok(conversion) => self.lower_loop(node, function, &conversion),
+                Err(refusal) => Err(format!(
+                    "a `@loop`-marked recursion this kernel body applies is not convertible,                      and a kernel body has no expansion to fall back on: the shape is {}                      (`docs/notes/loop-conversion.md` §4)",
+                    refusal.name()
+                )),
+            };
+        }
         if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);
         }
