@@ -545,9 +545,11 @@ What remains:
    Measured with module pointers: the `@loop` marks (`mark_looping`) land on the same module
    the compute lowering reads (one pointer, 33 functions), while the closure freeze that
    produced the callee's static ref ran **before** them — the module was frozen from a build
-   that had not yet normalized the kernel body's lambdas. So the static copy's `looping` is a
-   pre-normalization snapshot, not a static/semantic limit; a freeze taken after the kernel
-   body's normalization carries the mark. The fix direction is therefore two-part: normalize
+   that had not yet normalized the kernel body's lambdas. The freeze is the package build's
+   `Registry::freeze_mapped` (`crates/lichen-language/src/package.rs:739`), which runs before
+   the kernel body's lazy lowering. So the static copy's `looping` is a pre-normalization
+   snapshot, not a static/semantic limit; a freeze taken after the kernel body's normalization
+   carries the mark. The fix direction is therefore two-part: normalize
    (the kernel body's lambdas) before the freeze that produces the callee's static ref, and
    read the frozen function through one graph interface shared with the dynamic module
    (`loop_conversion` over both) instead of a cross-module `FunctionId` bridge.
