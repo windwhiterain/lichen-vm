@@ -307,7 +307,7 @@ impl<'a, P: Program> LoopGraph<'a, P> {
                         module: sref.module,
                         index,
                     });
-                    out.push(self.expr_value_half(element).unwrap_or(element));
+                    out.push(self.element_value_node(element).unwrap_or(element));
                 }
                 Ok(out)
             }
