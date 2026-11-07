@@ -551,3 +551,12 @@ suite counted it as a pass) refuses the same way. Without the annotation the sec
 `compute.buffer` misses the module's `buffer` key (`table lookup missed — no entry for key
 "buffer"`). The fill kernel's two buffers work, and the kernel body's formal chain reads
 (`p.meta.n`, `p.in.a`) are not the failing part.
+
+**The failing element is `Buf`'s `.native` field**, not the language's application path: the
+same function, module and struct literal **without** `.native` check (`Box2`, `ok=true`), and
+the core reduction (`probe_a_type_application_field`, a function over a parameter struct whose
+body reads its fields, applied in a type position and placed in a struct literal) checks as
+well. The `buffer` native is not the trigger — the `buf` wrapper fails identically.
+`Buf`'s `.native @any : $buf_type(x.type, x.length)` carries a native type term, and that
+term's per-use application and unify is what differs. The fix is at that boundary — the `Buf`
+definition or the native term's per-use handling — not the per-use field read.

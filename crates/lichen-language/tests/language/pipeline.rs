@@ -2338,3 +2338,30 @@ G set(set{string})(\"a\")",
         );
     }
 }
+
+#[test]
+fn probe_a_type_application_field() {
+    // Print-only: `Buf`'s shape without compute — the type application and the field.
+    let source = r#"
+Param := {.type @any, .length @any}
+Box := 'x = Param -> {.type x.type, .length x.length}
+In := {.a (Box (Param{.type Float, .length 4})), .b (Box (Param{.type Int, .length 2}))}
+a := (Box (Param{.type Float, .length 4})){.type Float, .length 4}
+b := (Box (Param{.type Int, .length 2})){.type Int, .length 2}
+x := (In){.a a, .b b}
+(x.a.length, x.b.length)
+"#;
+    let report = compile(source);
+    if !report.ok() {
+        println!(
+            "[type application] refused: {:?}",
+            report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>()
+        );
+        return;
+    }
+    println!("[type application] {:?}", evaluate(source));
+}

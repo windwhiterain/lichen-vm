@@ -6,6 +6,8 @@
 //! the contraction over `c0`/`r1` leaves `r0`/`c1`, so `C` is 2x2 and answers
 //! `[91, 112, 217, 274]`. Filled by a kernel, the proven `In`/`.meta` parameter, one fold.
 
+use super::common;
+
 use lichen_compute::language::new_store;
 
 const PROGRAM: &str = r#"
@@ -82,4 +84,61 @@ fn probe_a_direct_buffer_pair() {
                 .collect::<Vec<_>>()
         ),
     }
+}
+
+/// The same pair through `compute.buf`, the wrapper the kernel bodies use.
+///
+/// # Invariant
+/// Check-only. The values are the wrapper's, not the array upload's, so a refusal here names
+/// the `Buf` type application, not the `buffer` native.
+const BUF_WRAPPER: &str = r#"
+--- compute = import "compute.lichen" ---
+In := {.a (compute.Buf (compute.BufParam{.type Float, .length 4})), .b (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+a := (compute.buf (compute.BufParam{.type Float, .length 4})) : (compute.Buf (compute.BufParam{.type Float, .length 4}))
+b := (compute.buf (compute.BufParam{.type Float, .length 2})) : (compute.Buf (compute.BufParam{.type Float, .length 2}))
+x := (In){.a a, .b b}
+x.a.length
+"#;
+
+#[test]
+fn probe_a_buf_wrapper_field() {
+    let report = common::check(BUF_WRAPPER);
+    println!(
+        "[buf wrapper] ok={} {:?}",
+        report.ok(),
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `compute.Buf` without the `.native` field: the same application and struct literal.
+///
+/// # Invariant
+/// Check-only. It isolates the native `$buf_type` term in `Buf`'s `.native` field from the
+/// import, the module's `BufParam`, and the application, which are all still here.
+const PLAIN_BUF: &str = r#"
+--- compute = import "compute.lichen" ---
+Box2 := 'x = compute.BufParam -> {.type x.type, .length x.length}
+In := {.a (Box2 (compute.BufParam{.type Float, .length 4})), .b (Box2 (compute.BufParam{.type Float, .length 2}))}
+a := (Box2 (compute.BufParam{.type Float, .length 4})){.type Float, .length 4}
+b := (Box2 (compute.BufParam{.type Float, .length 2})){.type Float, .length 2}
+x := (In){.a a, .b b}
+(x.a.length, x.b.length)
+"#;
+
+#[test]
+fn probe_a_plain_buf_field() {
+    let report = common::check(PLAIN_BUF);
+    println!(
+        "[plain buf] ok={} {:?}",
+        report.ok(),
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+            .collect::<Vec<_>>()
+    );
 }
