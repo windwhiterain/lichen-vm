@@ -5238,9 +5238,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // **Every slot is tried**: the kernel's parameter is a struct, so its `.meta`
-    // slot declares no inputs and its `.in` slot declares them all; a position is
-    // an input's ordinal over the whole parameter, not the first slot's.
+    // Every slot is tried: the parameter's `.meta` declares no inputs and its `.in`
+    // declares them all.
     for slot in params {
         // A position is a read of the parameter, the caller's own node: a frozen node
         // names no position.

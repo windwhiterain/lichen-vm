@@ -1735,9 +1735,7 @@ where
             .iter()
             .zip(self.body.blocks[header].params.clone().iter())
         {
-            // A state slot's class is its entry value's: the buffer's own class is
-            // the `Buffer` one, and a read of the slot keeps it (the role walk's
-            // class-root comparison depends on it).
+            // A state slot's class is its entry value's; a read of the slot keeps it.
             let params = self.params.to_vec();
             let class = self.value_classes.get(&slot).copied().or_else(|| {
                 params
@@ -2540,9 +2538,8 @@ where
         // destructuring, so resolve it to the actual buffer node.
         let raw = *buffer;
         let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(raw))?;
-        // **A read of a loop-state parameter reads the buffer the loop entered
-        // with**: the state parameter is a fresh SSA value, so the position is
-        // resolved through the nest's entry instead of the parameter's own class.
+        // **A loop-state read reads the buffer the loop entered with**; the state
+        // parameter is a fresh SSA value.
         let resolved = buffer
             .dynamic()
             .and_then(|node| self.values.get(&node).copied())
