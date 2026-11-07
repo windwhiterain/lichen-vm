@@ -532,8 +532,11 @@ What remains:
    carried state (a non-scalar carried state, `loop-conversion.md` section 4), and carrying the
    plan's entries as scalar state reaches a second dominance refusal at the second decode call.
    The loop conversion's rule 2 now admits a `Buf` (a loop-invariant type and payload, a scalar
-   length), so the plan can ride the fold's state; carrying it through the body, the wasm loop
-   reader and the device emitter is the next step.
+   length), so the plan can ride the fold's state (`01e72b04`). The carry then reaches the
+   kernel's role walk, which refuses a read whose `.from` is the loop's state parameter: it is
+   not one of the parallel parameter's input buffers (`[[1, 0], [1, 1], [1, 2]]`). Teaching
+   the role walk that a state `Buf` is its parameter's buffer, then the wasm loop reader and
+   the device emitter, is the next step.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
 3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The
