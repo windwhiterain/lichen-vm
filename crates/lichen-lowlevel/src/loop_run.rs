@@ -117,7 +117,10 @@ impl<P: Program> Module<P> {
         let mut index = 0;
         loop {
             let test = conversion.tests[index];
-            let condition = instantiation.node_of(test.condition);
+            let AnyNodeId::Dynamic(condition) = test.condition else {
+                return Iteration::Refused;
+            };
+            let condition = instantiation.node_of(condition);
             let value = self.evaluate_node(Dyn(condition), Some(block));
             let Some(LowValue::USize(choice)) = value.and_then(|value| value.as_enum()) else {
                 return Iteration::Undecided;
@@ -139,7 +142,8 @@ impl<P: Program> Module<P> {
                     let next = conversion.steps[step]
                         .next
                         .iter()
-                        .map(|&value| instantiation.node_of(value))
+                        .filter_map(|value| value.dynamic())
+                        .map(|value| instantiation.node_of(value))
                         .collect();
                     return Iteration::Step(next);
                 }
@@ -149,8 +153,11 @@ impl<P: Program> Module<P> {
                     let r#type = self
                         .expr_type_half(self.functions[function].r#return)
                         .map(|r#type| instantiation.node_of(r#type));
+                    let AnyNodeId::Dynamic(base) = conversion.exits[exit].value else {
+                        return Iteration::Refused;
+                    };
                     return Iteration::Exit {
-                        value: instantiation.node_of(conversion.exits[exit].value),
+                        value: instantiation.node_of(base),
                         r#type,
                     };
                 }

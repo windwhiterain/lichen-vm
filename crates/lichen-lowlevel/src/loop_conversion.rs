@@ -51,7 +51,7 @@ impl LoopRefusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopConversion {
     /// The marked function.
-    pub function: FunctionId,
+    pub function: crate::AnyFunctionId,
     /// The carried state, in slot order.
     ///
     /// # Invariant
@@ -76,7 +76,7 @@ pub struct LoopConversion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoopTest {
     /// The selector node — the condition the iteration evaluates.
-    pub condition: NodeId,
+    pub condition: AnyNodeId,
     pub on_one: LoopArm,
     pub on_zero: LoopArm,
 }
@@ -96,10 +96,10 @@ pub enum LoopArm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopStep {
     /// The recursive call node itself.
-    pub apply: NodeId,
+    pub apply: AnyNodeId,
     /// The next state, in slot order — the call's argument's elements, each a
     /// computation over the state or a state read.
-    pub next: Vec<NodeId>,
+    pub next: Vec<AnyNodeId>,
 }
 
 /// One base case.
@@ -114,7 +114,7 @@ pub struct LoopExit {
     /// node, never by evaluating the function's return: the *untaken* step
     /// arm would otherwise stay in the graph for the next deep pass to walk
     /// (and unroll — see `loop_run.rs`).
-    pub value: NodeId,
+    pub value: AnyNodeId,
 }
 
 /// One view over the graphs the loop analysis reads, live and frozen.
@@ -618,12 +618,12 @@ impl<P: Program> Module<P> {
                 size: component.len(),
             });
         }
-        let mut spine = Spine::new(self, function);
+        let mut spine = Spine::new(self, crate::AnyFunctionId::Dynamic(function));
         spine.walk()?;
         let state = spine.state();
         let state = state?;
         Ok(LoopConversion {
-            function,
+            function: crate::AnyFunctionId::Dynamic(function),
             state,
             tests: spine.tests,
             steps: spine.steps,
@@ -862,14 +862,14 @@ impl<P: Program> Module<P> {
 /// state and the tail-position rule.
 struct Spine<'m, P: Program> {
     module: &'m Module<P>,
-    function: FunctionId,
+    function: crate::AnyFunctionId,
     tests: Vec<LoopTest>,
     steps: Vec<LoopStep>,
     exits: Vec<LoopExit>,
 }
 
 impl<P: Program> Spine<'_, P> {
-    fn new<'m>(module: &'m Module<P>, function: FunctionId) -> Spine<'m, P> {
+    fn new<'m>(module: &'m Module<P>, function: crate::AnyFunctionId) -> Spine<'m, P> {
         Spine {
             module,
             function,
@@ -883,9 +883,8 @@ impl<P: Program> Spine<'_, P> {
     /// anything else that recurses is not a tail call.
     fn walk(&mut self) -> Result<(), LoopRefusal> {
         let graph = LoopGraph::new(self.module);
-        let function = crate::AnyFunctionId::Dynamic(self.function);
         let ret = graph
-            .function_return(function)
+            .function_return(self.function)
             .ok_or(LoopRefusal::NotRecursive)?;
         let value = graph.expr_value_half(ret).unwrap_or(ret);
         let roots: Vec<NodeId> = graph
@@ -910,7 +909,7 @@ impl<P: Program> Spine<'_, P> {
             // A tuple-bodied return: a recursion hiding in an element is a
             // call the spine does not own.
             for &root in &roots {
-                if self.module.subtree_applies(root, self.function) {
+                if graph.subtree_applies(AnyNodeId::Dynamic(root), self.function) {
                     return Err(LoopRefusal::NonTailCall);
                 }
             }
@@ -965,7 +964,7 @@ impl<P: Program> Spine<'_, P> {
         let on_one = self.walk_arm(arm(1)?)?;
         let index = self.tests.len();
         self.tests.push(LoopTest {
-            condition,
+            condition: AnyNodeId::Dynamic(condition),
             on_one,
             on_zero,
         });
@@ -985,7 +984,7 @@ impl<P: Program> Spine<'_, P> {
     /// stays the arm's node, so a base keeps its read path.
     fn classify(&self, arm: NodeId) -> Result<Classified, LoopRefusal> {
         let graph = LoopGraph::new(self.module);
-        let function = crate::AnyFunctionId::Dynamic(self.function);
+        let function = self.function;
         let mut resolved = arm;
         let mut seen = HashSet::new();
         while seen.insert(resolved) {
@@ -1038,7 +1037,10 @@ impl<P: Program> Spine<'_, P> {
             }
         }
         let index = self.steps.len();
-        self.steps.push(LoopStep { apply, next });
+        self.steps.push(LoopStep {
+            apply: AnyNodeId::Dynamic(apply),
+            next: next.into_iter().map(AnyNodeId::Dynamic).collect(),
+        });
         Ok(index)
     }
 
@@ -1066,7 +1068,9 @@ impl<P: Program> Spine<'_, P> {
     /// A base case: the branch's value half.
     fn record_exit(&mut self, arm: NodeId) -> Result<usize, LoopRefusal> {
         let index = self.exits.len();
-        self.exits.push(LoopExit { value: arm });
+        self.exits.push(LoopExit {
+            value: AnyNodeId::Dynamic(arm),
+        });
         Ok(index)
     }
 
@@ -1116,8 +1120,8 @@ impl<P: Program> Spine<'_, P> {
     /// found here rather than read as a function that never recurses.
     fn complete(&self) -> Result<(), LoopRefusal> {
         let graph = LoopGraph::new(self.module);
-        let steps: HashSet<NodeId> = self.steps.iter().map(|step| step.apply).collect();
-        let function = crate::AnyFunctionId::Dynamic(self.function);
+        let steps: HashSet<AnyNodeId> = self.steps.iter().map(|step| step.apply).collect();
+        let function = self.function;
         for h in self.module.functions.keys() {
             let h = crate::AnyFunctionId::Dynamic(h);
             if !graph.nested_in(h, function) {
@@ -1128,7 +1132,7 @@ impl<P: Program> Spine<'_, P> {
                     continue;
                 };
                 if graph.callee_function(AnyNodeId::Dynamic(node)) == Some(function)
-                    && !steps.contains(&node)
+                    && !steps.contains(&AnyNodeId::Dynamic(node))
                 {
                     return Err(LoopRefusal::NonTailCall);
                 }
@@ -1182,8 +1186,8 @@ impl<P: Program> Module<P> {
     /// state; refuse a read the flat state cannot name.
     fn check_reads(
         &self,
-        function: FunctionId,
-        root: NodeId,
+        function: crate::AnyFunctionId,
+        root: AnyNodeId,
         arity: usize,
         tuple: &mut bool,
     ) -> Result<(), LoopRefusal> {
@@ -1193,10 +1197,7 @@ impl<P: Program> Module<P> {
             if !seen.insert(node) {
                 continue;
             }
-            if let Some(path) = LoopGraph::new(self).parameter_value_path(
-                crate::AnyFunctionId::Dynamic(function),
-                AnyNodeId::Dynamic(node),
-            ) {
+            if let Some(path) = LoopGraph::new(self).parameter_value_path(function, node) {
                 match path.as_slice() {
                     [] => {
                         if !structural && (*tuple || arity != 1) {
@@ -1219,22 +1220,12 @@ impl<P: Program> Module<P> {
                 continue;
             }
             let graph = LoopGraph::new(self);
-            if let Some(operands) = graph.operands_of(AnyNodeId::Dynamic(node)) {
-                stack.extend(
-                    operands
-                        .into_iter()
-                        .filter_map(AnyNodeId::dynamic)
-                        .map(|operand| (operand, false)),
-                );
+            if let Some(operands) = graph.operands_of(node) {
+                stack.extend(operands.into_iter().map(|operand| (operand, false)));
             }
             // A value's own items are its encoding, not a use of the state.
-            if let Some(items) = graph.operand_items(AnyNodeId::Dynamic(node)) {
-                stack.extend(
-                    items
-                        .into_iter()
-                        .filter_map(AnyNodeId::dynamic)
-                        .map(|item| (item, true)),
-                );
+            if let Some(items) = graph.operand_items(node) {
+                stack.extend(items.into_iter().map(|item| (item, true)));
             }
         }
         Ok(())

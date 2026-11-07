@@ -14,13 +14,20 @@ fn a_marked_tail_recursion_converts() {
     // value, one slot.
     assert_eq!(conversion.state, vec![Vec::<usize>::new()]);
     assert_eq!(conversion.tests.len(), 1);
-    assert_eq!(conversion.tests[0].condition, condition);
+    assert_eq!(conversion.tests[0].condition.dynamic(), Some(condition));
     assert_eq!(conversion.tests[0].on_one, LoopArm::Exit(0));
     assert_eq!(conversion.tests[0].on_zero, LoopArm::Step(0));
     assert_eq!(conversion.steps.len(), 1);
-    assert_eq!(conversion.steps[0].next, vec![decrement]);
+    assert_eq!(
+        conversion.steps[0]
+            .next
+            .iter()
+            .filter_map(|node| node.dynamic())
+            .collect::<Vec<_>>(),
+        vec![decrement]
+    );
     assert_eq!(conversion.exits.len(), 1);
-    assert_eq!(conversion.exits[0].value, param);
+    assert_eq!(conversion.exits[0].value.dynamic(), Some(param));
 }
 
 #[test]

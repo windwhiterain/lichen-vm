@@ -1853,10 +1853,15 @@ where
             let entry_slot = self.resolve_entry(state[index].1);
             self.loop_state_paths
                 .insert(param, conversion.state[index].clone());
-            for state_node in self
-                .module
-                .state_nodes(conversion.function, &conversion.state[index])
-            {
+            for state_node in self.module.state_nodes(
+                match conversion.function {
+                    lichen_lowlevel::AnyFunctionId::Dynamic(function) => function,
+                    lichen_lowlevel::AnyFunctionId::Static(_) => {
+                        return Err("a frozen loop function has no live state nodes".into());
+                    }
+                },
+                &conversion.state[index],
+            ) {
                 self.remember(state_node, param);
                 self.loop_entries.insert(param, entry_slot);
             }
@@ -2066,6 +2071,9 @@ where
             let block = self.loops[index].tests[position];
             self.enter_loop_block(index, block);
             let condition = self.loops[index].conversion.tests[position].condition;
+            let condition = condition
+                .dynamic()
+                .ok_or_else(|| "a frozen loop test's condition has no live node".to_string())?;
             let condition = self.value(condition)?;
             let test = self.loops[index].conversion.tests[position];
             let (if_true, if_false) = self.loop_arms(index, test.on_one, test.on_zero)?;
@@ -2090,7 +2098,12 @@ where
             let next = self.loops[index].conversion.steps[position].next.clone();
             let next: Vec<ValueId> = next
                 .into_iter()
-                .map(|value| self.value(value))
+                .map(|value| {
+                    value
+                        .dynamic()
+                        .ok_or_else(|| "a frozen step's next value has no live node".to_string())
+                        .and_then(|value| self.value(value))
+                })
                 .collect::<Result<_, _>>()?;
             let header = self.loops[index].header;
             // The backedge goes where the walk ended, not the step's own block.
@@ -2112,6 +2125,9 @@ where
             let block = self.loops[index].exits[position];
             self.enter_loop_block(index, block);
             let value = self.loops[index].conversion.exits[position].value;
+            let value = value
+                .dynamic()
+                .ok_or_else(|| "a frozen exit's value has no live node".to_string())?;
             let value = self.value(value)?;
             let merge = self.loops[index].merge;
             // The same rule as the tests' and the steps'.
@@ -2419,7 +2435,7 @@ where
                 .conversion
                 .tests
                 .iter()
-                .any(|test| test.condition == node)
+                .any(|test| test.condition == lichen_lowlevel::AnyNodeId::Dynamic(node))
         });
         if !is_loop_test && self.value_is_doubled_comparison(selector) {
             return Err(DOUBLED_COMPARISON.into());

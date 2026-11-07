@@ -206,22 +206,24 @@ fn probe_the_graph_a_loop_body_leaves() {
         };
         println!("  state {:?}", conversion.state);
         for (index, exit) in conversion.exits.iter().enumerate() {
+            let value = exit.value.dynamic().unwrap_or_default();
             println!(
                 "  exit {index} value {:?} path {:?}",
                 exit.value,
-                module.parameter_value_path(id, exit.value)
+                module.parameter_value_path(id, value)
             );
-            println!("    {}", describe(module, exit.value));
+            println!("    {}", describe(module, value));
         }
         for (index, step) in conversion.steps.iter().enumerate() {
             println!("  step {index} apply {:?}", step.apply);
             for next in &step.next {
+                let next = next.dynamic().unwrap_or_default();
                 println!(
                     "    next {:?} path {:?}",
                     next,
-                    module.parameter_value_path(id, *next)
+                    module.parameter_value_path(id, next)
                 );
-                println!("      {}", describe(module, *next));
+                println!("      {}", describe(module, next));
             }
         }
         for (index, test) in conversion.tests.iter().enumerate() {
