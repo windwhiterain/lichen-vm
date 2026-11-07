@@ -161,3 +161,21 @@ language suite is **283/283**, the highlevel **136/136**, and the compute
 The set/table encoding the user stated is in place: a set
 `[element template, raw set]`, a table `[key template, value template, raw
 table]`, with the type's raw position the wildcard.
+
+## 9. The spec's type values
+
+`docs/language-spec.md` (the maintainer's section split, in flight) states the
+shapes the implementation now uses: `set{t}` is `[t]`, `table{kt, vt}` is
+`[kt, vt]`, a set value is `[t, @raw Set(members…)]` and a table value
+`[kt, vt, @raw Table(…)]`. The type values previously carried an extra `@any`
+raw slot and the set's raw was an array instance; both were removed, so the
+type value and the instance's template positions agree.
+
+Measured after the change: language **283/283**, highlevel **136/136**, compute
+**247/247 (1 ignored)** plus its 14 unit tests.
+
+Still not the spec's surface, and the next slice: the instances take their type
+explicitly (`table(t)(k => v, …)`, `set(t)(e, …)`), the arrows are `->` for the
+lambda and `=>` for the entry (the implementation still uses `=>` and `==>`),
+and an instance's type is still the shared kind rather than the type value the
+spec's `set{t}`/`table{kt, vt}` names.

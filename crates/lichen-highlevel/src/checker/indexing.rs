@@ -345,13 +345,9 @@ where
                 DiagKind::ArrayElement,
             );
         }
-        // A set is `[element template, raw set]`; the raw is an instance.
+        // A set is `[t, @raw Set(members)]`: the template then the raw members.
         let element = self.element_slot(None, Some(element_ty), None);
-        let mut raw_items: Vec<NodeId> = Vec::with_capacity(vals.len() + 1);
-        raw_items.push(element);
-        raw_items.extend(vals);
-        let raw_mask = vec![false; raw_items.len()];
-        let raw = self.array_instance_node(self.current_block, &raw_items, &raw_mask);
+        let raw = self.array_node(self.current_block, &vals);
         let mask = [false, false];
         let value = self.array_instance_node(self.current_block, &[element, raw], &mask);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
@@ -529,7 +525,7 @@ where
         let elements = self.range_children(e);
         let element = elements[0];
         let slot = self.element_slot_of(element);
-        let shape = self.array_node(self.current_block, &[slot, self.any_value]);
+        let shape = self.array_node(self.current_block, &[slot]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
         let expr = self.slot_expr(self.current_block, shape, kind);
         self.state[e].term = Some(expr);
@@ -547,7 +543,7 @@ where
         let elements = self.range_children(e);
         let key = self.element_slot_of(elements[0]);
         let value = self.element_slot_of(elements[1]);
-        let shape = self.array_node(self.current_block, &[key, value, self.any_value]);
+        let shape = self.array_node(self.current_block, &[key, value]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let expr = self.slot_expr(self.current_block, shape, kind);
         self.state[e].term = Some(expr);
