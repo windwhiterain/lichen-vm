@@ -541,6 +541,16 @@ What remains:
    the callee dynamic and converts the dot; the next refusal is then the frozen residual's
    index placement: the inlined callee's parameter reads do not place against the caller's
    domain (`parameter_path`'s base never matches the clone's parameter node).
+
+   Measured with module pointers: the `@loop` marks (`mark_looping`) land on the same module
+   the compute lowering reads (one pointer, 33 functions), while the closure freeze that
+   produced the callee's static ref ran **before** them — the module was frozen from a build
+   that had not yet normalized the kernel body's lambdas. So the static copy's `looping` is a
+   pre-normalization snapshot, not a static/semantic limit; a freeze taken after the kernel
+   body's normalization carries the mark. The fix direction is therefore two-part: normalize
+   (the kernel body's lambdas) before the freeze that produces the callee's static ref, and
+   read the frozen function through one graph interface shared with the dynamic module
+   (`loop_conversion` over both) instead of a cross-module `FunctionId` bridge.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
 3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The
