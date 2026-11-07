@@ -841,6 +841,11 @@ impl<P: Program> Module<P> {
         self.functions[function].looping = Some(slot);
     }
 
+    /// Record the static function a live function is the form of.
+    pub fn set_static_origin(&mut self, function: FunctionId, origin: StaticFunctionRef) {
+        self.functions[function].static_origin = Some(origin);
+    }
+
     /// The parameter slot the mark states for `function`'s loop state.
     pub fn function_loop_slot(&self, function: FunctionId) -> Option<usize> {
         self.functions[function].looping

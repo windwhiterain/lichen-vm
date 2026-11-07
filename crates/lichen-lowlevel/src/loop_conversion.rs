@@ -120,11 +120,17 @@ pub struct LoopExit {
 impl<P: Program> Module<P> {
     /// The live function a frozen `@loop` callee names; `None` when it carries no
     /// mark.
+    ///
+    /// # Invariant
+    /// The mark is read from the live function, not the frozen copy: a freeze may
+    /// run before `mark_looping`, so the static function's `looping` is stale.
     pub fn static_dynamic_function(&self, sref: crate::StaticFunctionRef) -> Option<FunctionId> {
-        let module = self.static_module(sref.module);
-        let index = sref.index.0;
-        module.functions.get(index)?.looping?;
-        module.dynamic_functions.get(index).copied().flatten()
+        self.functions
+            .iter()
+            .find(|(_, function)| {
+                function.looping.is_some() && function.static_origin == Some(sref)
+            })
+            .map(|(id, _)| id)
     }
 
     /// Whether `function`'s `@loop` recursion is convertible, and what it
