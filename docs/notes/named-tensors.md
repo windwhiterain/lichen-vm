@@ -545,10 +545,10 @@ What remains:
 `[91, 112, 217, 274]`, with `C`'s shape `{r0: 2, c1: 2}` from `merge`/`without`
 (`zz_contract_probe`). The kernel is plan-specialized: the extent, the contraction and both
 pitches are scalar leaves in the proven `.meta`/`.in` parameter, and the address unfolds inside
-the one fold. Its input buffers come from a fill kernel. The direct spelling the probes used is **gone with `compute.buffer`**: the buffer-declarations
-design removes the array-to-buffer conversion, so the module has `buf` and `collect` only and
-`compute.buffer` is a missing field (`no field with this name in the struct type Struct`); a
-host-level `compute.buf` is kernel-only. The live input paths are the fill kernel (this probe)
-and the serve's host `RunArgument`s. The JIT's metadata now comes from `.type`/`.length`
-(`476a352f`), so the native type is a kind marker only; the earlier "expected Struct, found
-Buf" refusals were the removed operator, not the application/unify.
+the one fold. Its input buffers come from a fill kernel. The direct spelling the probes used is **gone with `compute.buffer`**: the module has `buf`
+and `collect` only, so `compute.buffer` is a missing field; a host-level `compute.buf` is
+kernel-only. The JIT's metadata now comes from `.type`/`.length`, and the native `$buf_type`
+is removed entirely (`Buf`'s `.native` is a plain `@any` slot). The serve example
+`contract_direct.rs` hands the step two host buffers of different lengths directly; it reaches
+the **language's** annotated direct template (`s : In`, `Arg`'s `.I In`) and is refused with
+`expected Struct, found In` — the per-use session's case, not the buffer type.

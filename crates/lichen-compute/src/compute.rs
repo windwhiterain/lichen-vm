@@ -9167,7 +9167,6 @@ macro_rules! compute_native_ops {
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static WRITE_ATOMIC: $crate::WriteAtomicOp = $crate::WriteAtomicOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
-        static BUF_TYPE: $crate::BufTypeOp = $crate::BufTypeOp;
         static BUF: $crate::BufOp = $crate::BufOp;
         static MMA: $crate::MmaOp = $crate::MmaOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
@@ -9188,7 +9187,6 @@ macro_rules! compute_native_ops {
                 &WRITE_ATOMIC as &dyn $crate::NativeOp<$program>,
             ),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
-            ("buf_type", &BUF_TYPE as &dyn $crate::NativeOp<$program>),
             ("buf", &BUF as &dyn $crate::NativeOp<$program>),
             ("mma", &MMA as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
@@ -9349,15 +9347,6 @@ pub struct WriteAtomicOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
 pub struct BufferCollectOp;
-
-/// `$buffer(array)` — copy an array's elements into a `Buf` payload.
-///
-/// # Invariant
-/// The result is the `Buf` wrapper itself, whose `.element` slot is the array's element
-/// type, so a buffer made here is the one buffer whose class is not a fresh cell. The
-/// wrapper's `.native` slot is the `Buffer` node, exactly as `compute.plrun`'s is: the
-/// read/write role walk and `buf_payload` know one carrier, not two.
-pub struct BufTypeOp;
 
 /// `(type, length)` — the native buffer **value**, kernel-only.
 pub struct BufOp;
@@ -9671,35 +9660,6 @@ where
         NativeApply {
             value: op,
             decided: false,
-        }
-    }
-}
-
-impl<P> NativeOp<P> for BufTypeOp
-where
-    P: HighProgram,
-    P::Value: ValueType + From<ComputeValue>,
-    P::Operator: From<ComputeOperator>,
-{
-    /// `$buf_type(type, length)` — the native buffer **kind marker** `$buf(T, L)`.
-    ///
-    /// # Invariant
-    /// The shape is the buffer marker's `[type, length]`, but the element and length are
-    /// read from a buffer's `.type`/`.length` fields; a type position reads only the kind,
-    /// and a type term never carries the metadata the JIT needs.
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        _e: ExprId,
-        args: &[NativeArg],
-        _loc: Loc,
-    ) -> NativeApply {
-        let shape = ctx.array_node(&[args[0].value, args[1].value]);
-        let kind = ctx.kind_expr(ctx.buffer_marker_node());
-        let term = ctx.expr(shape, kind);
-        NativeApply {
-            value: term,
-            decided: true,
         }
     }
 }

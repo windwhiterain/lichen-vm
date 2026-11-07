@@ -8,7 +8,7 @@ P := 'T = KT -> {.n @any : Int, .in T.I}
 S := 'T = KT -> ('i = (A T.I) -> _ : T.O)
 BufParam := {.type @any, .length @any}
 Buf := 'x = BufParam -> {
-  .native @any : $buf_type(x.type, x.length)
+  .native @any
   .type x.type
   .length x.length
 }

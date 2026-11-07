@@ -1,9 +1,9 @@
 # Kernels declare buffers; the pack places them
 
-> Status: **implemented**. The metadata comes from a buffer's `.type`/`.length`
-> (`476a352f`), and the array-to-buffer conversion is gone (`compute.buffer`). The branch this
-> line used to name (`serve-frontier`, `17d40c36`) is merged, and `bd360fac` standardized the
-> `Buf` surface to `@any : $buf_type(...)`.
+> Status: **implemented**. The metadata comes from a buffer's `.type`/`.length`, and the
+> array-to-buffer conversion is gone (`compute.buffer`). The `$buf_type` native, its op and its
+> static are removed too: `Buf`'s `.native` is a plain `@any` payload slot. The branch this line
+> used to name (`serve-frontier`, `17d40c36`) is merged.
 > Supersedes the `.out`-as-a-parameter-group model in
 > [compute-kernel-struct](compute-kernel-struct.md)'s "The parallel parameter struct".
 > Points at: `crates/lichen-compute/src/compute.lichen` (`BufParam`, `Buf`, `buf`),
@@ -180,5 +180,10 @@ fields and work.
 The direct pair the probes used to run is **gone with `compute.buffer`**: the module has
 `buf` and `collect` only, so `compute.buffer` is a missing field on the module, and a
 host-level `compute.buf` is kernel-only. The live input paths are the fill kernel (the
-committed contraction probe) and the serve's host `RunArgument`s. The "expected Struct, found
-Buf" refusals were that removed operator, not the application/unify.
+committed contraction probe) and the serve's host `RunArgument`s.
+
+The serve example `contract_direct.rs` now hands one prepared step two host buffers of
+different lengths (8 and 6) directly. It reaches a **language** case, not a buffer one: the
+step's annotated direct template (`s : In`, `Arg`'s `.I In`) is refused with
+`expected Struct, found In` — the per-use session's annotated-template case. The top-level
+fill contraction and the compute suite are unaffected.
