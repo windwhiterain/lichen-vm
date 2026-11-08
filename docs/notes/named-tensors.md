@@ -403,10 +403,12 @@ to prefer a type-carried shape.
    function whose parameter is annotated with the **imported** `Tensor` type reads the type's
    fields instead of the value's: `x.shape` answers `(@any, @any)` (the `Pair` type's own
    placeholders) and `x.origin` answers `none`, while the same literal's `lit.shape.row` answers
-   `2`. The trace: the formal's type cell is undecided when the annotation is frozen, so
-   `check_named_field` defers and the field's value is decided at definition over an undecided
-   container; a program-defined type of the same shape (concrete or `_` length) answers
-   correctly. And a tensor at a kernel's
+   `2`. The trace is sharper: a bare parameter (`plain_id`) hands back the literal's value, while
+   the annotated one (`'x = t.Tensor`) hands back the **type's** shape, so the annotation path
+   binds the formal's slot to the frozen type expression positionally and the value never comes
+   from the argument; a program-defined type of the same shape answers correctly. Reconstructing
+   the frozen type as its raw array does not work: it is a TypeFunction, not a Type. And a
+   tensor at a kernel's
    `.in.t` is walked as an input at `[1, 0, 0]`, while `read2`'s read of `p.in.t.buffer` is not
    recognized as that buffer.
 3. **Output tensors**: ruling 8.4; flat outputs first.
