@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `f07f231b` test: 冻结注解绑定类型而非值（更锐的成因）
   - `932867c2` test: 冻结类型的字段读成 @any（成因测量）
   - `24fd5d42` tensor: tensor.lichen 初稿与两个阻塞
   - `da52e00e` test: typed-only selector 作答（旧笔记的拒绝已过时）
@@ -115,12 +116,15 @@
 13. **tensor 库包初稿已落**（`crates/lichen-compute/src/tensor.lichen`，用户选的语言侧 tensor 库）：
     `Pair`、`Tensor`（buffer + shape + stride + origin）、`dense2`/`view2`、`at2`、`read2`/`write2`。
     包能编译、函数可调用，但两个阻塞已测量（`zz_tensor_probe` 的 `probe_the_tensor_library`）：
-    - **冻结类型作形参注解时形参类型未定**（已定位到成因）：`show := 'x = t.Tensor -> x.shape.row`
-      作用在 `t.Tensor{...}` 字面量上时，`x.shape` 得到的是**类型**的 `Pair`（`(@any, @any)`）、
-      `x.origin` 得到 `none`，而同一个字面量直接读 `lit.shape.row` 得 `2`。追查显示：形参的
-      类型格 class root 值为 `None`（`concrete=false`），于是 `check_named_field` 走延迟路径，
-      字段的值在定义处从**未定**的容器决定，得到类型侧的占位值。程序内定义的同类类型
-      （具体长度或 `_` 长度）都答对，所以分水岭是**冻结类型的注解**。
+    - **冻结类型作形参注解时，形参绑定的是实参的“类型”而不是值**（已定位到成因）：
+      `plain_id := 'x -> x` 作用在同一字面量上返回其值
+      `((Buffer,Float,6), (2,3), (3,1), 0)`；而 `show_id := 'x = t.Tensor -> x` 返回**类型**的
+      形状（开着的 buffer、`Pair` 类型的占位、`@any`）。所以注解路径把形参 slot 与冻结的
+      类型表达式按位置 unify 了，形参的值格从未绑定到实参值；`x.shape`/`x.origin` 从这个
+      slot 读，于是答 `(@any,@any)` / `none`。程序内定义的同形类型（具体或 `_` 长度）都答对。
+      **试过的失败方向**：在 `value_slot_read` 里把冻结项的 value（Array）写成 live 值，
+      类型就成了 `Type` 而不是 `TypeFunction`（`expected TypeFunction, found Type`），
+      证明冻结类型必须以**类型层值**（TypeFunction）重建，不能直接取原始数组。
     - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
       认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
       `read's buffer argument is not an input buffer of the parallel parameter`。
@@ -129,9 +133,9 @@
 ## 下一步（按用户裁定排序）
 
 1. **tensor 库的两个阻塞**（按用户选的 B）：
-   (a) 冻结类型注解：让被注解形参的类型格在注解处**decided**（冻结类型的值可读即可），
-   这样 `check_named_field` 不走延迟路径、字段值从实参读；或在形参有注解时跳过延迟，
-   让运行期在实参上求值。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
+   (a) 冻结类型注解：在 `check_unify_expr` 的注解路径上，把冻结的类型值当作
+   **requirement/template**（或重建为 TypeFunction）来 unify 形参的**类型格**，不要按位置
+   碰形参的值格；对照点是 live 类型注解（`Dims`）走 requirement 分支后工作正常。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
    与 `read2` 的读节点没有对上。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
