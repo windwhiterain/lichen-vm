@@ -749,9 +749,24 @@ impl<P: Program> Module<P> {
                 let Some(target) = items.first().and_then(|item| item.node.dynamic()) else {
                     continue;
                 };
-                if self.element_types.get(&target) != self.element_types.get(&value_cell)
-                    || self.element_types.get(&target).is_none()
-                {
+                let state_type = self.element_types.get(&value_cell).copied().or_else(|| {
+                    self.value_exprs(current).iter().find_map(|expr| {
+                        let operation = self.node_operation(*expr)?;
+                        if !matches!(
+                            AsEnum::<LowOperator>::as_enum(&operation.operator),
+                            Some(LowOperator::Index)
+                        ) {
+                            return None;
+                        }
+                        let items = self.operand_items(operation.operand?).ok()?;
+                        let target = items.first().and_then(|item| item.node.dynamic())?;
+                        self.element_types.get(&target).copied()
+                    })
+                });
+                let Some(state_type) = state_type else {
+                    continue;
+                };
+                if self.element_types.get(&target).copied() != Some(state_type) {
                     continue;
                 }
                 let Some(position) = items.get(1).and_then(|item| self.read_position(item.node))

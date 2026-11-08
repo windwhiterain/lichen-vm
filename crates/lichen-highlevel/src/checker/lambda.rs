@@ -58,6 +58,13 @@ where
         }
         // Predeclare each formal leaf's slot so body reads resolve to it.
         let formals = self.formal_leaves(parameter);
+        // **A formal's value states its type**: the loop state's element resolves
+        // through the value node.
+        for formal in &formals {
+            if let (Some(value), Some(r#type)) = (self.state[*formal].val, self.state[*formal].ty) {
+                self.module.record_element_type(value, r#type.into());
+            }
+        }
         let mut scope: HashMap<ExprId, Binding> = HashMap::new();
         for formal in &formals {
             // The formal's value position is unconstrained: the call supplies it.

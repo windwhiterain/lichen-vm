@@ -351,6 +351,9 @@ where
     /// The value `node` names, emitting its definition the first time it is asked
     /// for.
     fn value(&mut self, node: NodeId) -> Result<ValueId, String> {
+        if format!("{node:?}").contains("15734") {
+            eprintln!("[val] node={node:?} lookup={:?}", self.lookup(node));
+        }
         if !self.lowered_path.insert(node) {
             return Err(format!(
                 "a definition cycle: {node:?} is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)"
@@ -414,6 +417,29 @@ where
     }
 
     fn value_inner(&mut self, node: NodeId) -> Result<ValueId, String> {
+        if format!("{node:?}").contains("15734") {
+            eprintln!(
+                "[dbg] node={node:?} owner={:?} pvp20={:?} exprs={:?} states={:?}",
+                self.loop_owner(node),
+                self.loops
+                    .iter()
+                    .map(|active| {
+                        (
+                            format!("{:?}", active.function),
+                            self.module.parameter_value_path(active.function, node),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                self.module.value_exprs(node).to_vec(),
+                self.loops
+                    .iter()
+                    .map(|active| (
+                        format!("{:?}", active.function),
+                        active.conversion.state.clone()
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
         // **Inside a `@loop` nest the roles are the binding**: a marked function's read
         // resolves to its block's parameters.
         if let Some(index) = self.loop_owner(node)
@@ -661,7 +687,26 @@ where
     fn element_reader(&self, node: NodeId, function: FunctionId) -> Result<Option<NodeId>, String> {
         let parameter = self.module.functions[function].parameter;
         let value_cell = self.module.expr_value_half(parameter).unwrap_or(parameter);
-        let Some(state_type) = self.module.element_types.get(&value_cell).copied() else {
+        let state_type = self
+            .module
+            .element_types
+            .get(&value_cell)
+            .copied()
+            .or_else(|| {
+                self.module.value_exprs(node).iter().find_map(|expr| {
+                    let operation = self.module.node_operation(*expr)?;
+                    if !matches!(
+                        AsEnum::<lichen_lowlevel::LowOperator>::as_enum(&operation.operator),
+                        Some(lichen_lowlevel::LowOperator::Index)
+                    ) {
+                        return None;
+                    }
+                    let items = self.module.operand_items(operation.operand?).ok()?;
+                    let target = items.first().and_then(|item| item.node.dynamic())?;
+                    self.module.element_types.get(&target).copied()
+                })
+            });
+        let Some(state_type) = state_type else {
             return Ok(None);
         };
         for expr in self.module.value_exprs(node) {
