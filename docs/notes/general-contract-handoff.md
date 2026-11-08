@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `f6b9d3dc` test: 契约库端到端（包持有 dynamic-rank kernel）
   - `a4caf9c3` test: 冻结包的 kernel body 测量
   - `c813a2f1` loop: 移除冻结函数桥
   - `96b58a15` compute: 循环入口值与外部节点所在块
@@ -95,15 +96,21 @@
    `expected Struct, found Array`；包应以绑定结尾。
 10. **3 维实例也通过**（`zz_dynamic_contract_probe` 的 rank 3 / contract 1）：
     `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`，与独立参考实现一致；
-    2 维读数不变。## 下一步（按用户裁定排序）
+    2 维读数不变。
+11. **契约库端到端通过**（`zz_frozen_body_probe` 的 `contract` 读数）：包 `contract_lib.lichen`
+    持有 dynamic-rank 收缩的全部类型、body（5 层嵌套 `@loop`、plan 驱动地址）和 kernel；
+    包构建期转换循环并冻结已编译 kernel；程序用自己的 fill kernel 填三个 buffer、经 import
+    的类型建 Meta/Arg，`plrun lib.kernel` 答
+    `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`——与参考一致。
+    这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。## 下一步（按用户裁定排序）
 
-1. **把库形状写成可复用示例**：包内「类型 + kernel + step」、程序 import 后建参数并
-   `plrun`。落点：`examples/` 或 `crates/lichen-serve/examples/` 的一个真实形状（具名张量
-   的 stride/shape 表），并让 `docs/notes/named-tensors.md` 指向它。
-2. **3 维实例已在同一探针通过**（rank 3 / contract 1）。下一步把库形状与 3 维/dynamic-rank
-   组合成一个真实示例（具名张量的 shape/stride 表）。
-3. **契约函数（general contract API 的收尾）**：把 `contract`/`merge`/`without`/`count`/`key`
-   与拼好的 kernel 组成一个库函数，程序只需要类型与数据。
+1. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
+   stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
+   「形状表 → 地址」的最后一环。
+2. **契约函数收尾**：库导出 `contract := 'shape -> 'data -> ...`，内部生成 plan、跑 kernel、
+   返回结果与 merge/without 出来的形状；程序只给形状与数据。
+3. **落成真实示例**：`examples/` 会进 README 渲染（`lichen-tools` 的 readme 渲染器），
+   加之前先取得许可。
 4. 冻结函数作为 kernel body（v1 门）不再是库形状的必需项；若仍要做，需要
    `lower_loop`/`ActiveLoop` 持 `AnyFunctionId` 并从冻结图取状态节点（capture 边界见实测事实 7）。
 5. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
