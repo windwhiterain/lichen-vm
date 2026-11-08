@@ -62,6 +62,7 @@ mod zz_dynamic_contract_probe;
 mod zz_dynamic_trip_probe;
 mod zz_fold_struct_probe;
 mod zz_fold_type_probe;
+mod zz_frozen_body_probe;
 mod zz_gather_address_probe;
 mod zz_graph_argument_probe;
 mod zz_graph_bound_probe;
