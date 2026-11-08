@@ -123,6 +123,39 @@
       实测：`show_shape (2,3)`、`show_origin 0`、`show_row 2`、`show_id` 返回字面量的
       buffer/(2,3)/(3,1)/0，库函数 `t.at2` 对冻结 `Tensor` 字面量答 `5`。
       套件：compute 252、highlevel 136、lowlevel 167。
+    - **库构造器：已改成单参数描述符并量通**（`567d875d`）。柯里化构造器的后续应用在检查期
+      没有可解析的 callee（中间闭包的返回类型格未定），所以调用方对结果做字段读会被拒；
+      改成 `dense2 ('d = Dense)` / `view2 ('v = View)` 后，冻结注解修复能把类型带过去。
+      实测：`t.view2 t.View{…}` 造出的张量可读 `view.shape.row`，`t.at2 view t.Pair{…}` 答 `5`；
+      直接字面量与 frozen-type 读数不变。
+    - **kernel 里的 `read2` 仍停在嵌套 buffer 位置**（`(b)` 那个缺口）：`.in.t.buffer`
+      被走查认作输入 `[1,0,0]`，但读没有匹配上。
+9. 包以裸表达式结尾时 export 是那个表达式（如 Array），import 期望 Struct 就会在 import 行
+   `expected Struct, found Array`；包应以绑定结尾。
+10. **3 维实例也通过**（`zz_dynamic_contract_probe` 的 rank 3 / contract 1）：
+    `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`，与独立参考实现一致；
+    2 维读数不变。
+11. **契约库端到端通过**（`zz_frozen_body_probe` 的 `contract` / `contract3` 读数）：
+    包 `contract_lib.lichen` 持有 dynamic-rank 收缩的全部类型、body（5 层嵌套 `@loop`、
+    plan 驱动地址）和 kernel；包构建期转换循环并冻结已编译 kernel；程序用自己的 fill kernel
+    填三个 buffer、经 import 的类型建 Meta/Arg，`plrun lib.kernel` 在 rank 2/contract 2 答
+    `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`，在 rank 3/contract 1 答
+    `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`——都与参考一致。
+    这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。12. **typed-only selector 已可用**（`zz_tensor_probe` 的 `probe_a_typed_selector`）：
+    `dimsOf := ('d = Dims) -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
+    named-tensors §5.2 里「refused」的读数属旧版本；deferral 是 `01936889` 落的。
+    形状表选择器因此可以「写一次、所有张量共用」。
+
+13. **tensor 库包初稿已落**（`crates/lichen-compute/src/tensor.lichen`，用户选的语言侧 tensor 库）：
+    `Pair`、`Tensor`（buffer + shape + stride + origin）、`dense2`/`view2`、`at2`、`read2`/`write2`。
+    包能编译、函数可调用，但两个阻塞已测量（`zz_tensor_probe` 的 `probe_the_tensor_library`）：
+    - **冻结类型作形参注解：已修复**（`3081828f`）。此前注解路径把形参 slot 按位置
+      unify 到冻结的类型值上（`show_id` 返回类型形状、`x.shape` 答 `(@any,@any)`）。两条规则：
+      冻结数组（含 static item）在 `requirement_is_open` 里算“开放”，且
+      `instantiate_requirement_value` 让这样的数组留下 **fresh 槽**而不是冻结值本身。
+      实测：`show_shape (2,3)`、`show_origin 0`、`show_row 2`、`show_id` 返回字面量的
+      buffer/(2,3)/(3,1)/0，库函数 `t.at2` 对冻结 `Tensor` 字面量答 `5`。
+      套件：compute 252、highlevel 136、lowlevel 167。
     - **库构造器 `dense2`/`view2` 的返回类型仍未定**：给 body 加
       `(Tensor{…} : Tensor)` 会报 `expected Tensor…, found Struct`，所以调用方对
       `view2` 的结果做字段读仍会被拒；现在可以直接用 `t.Tensor{…}` 字面量绕开。
@@ -143,8 +176,7 @@
 ## 下一步（按用户裁定排序）
 
 1. **tensor 库剩余的两个口子**（按用户选的 B）：
-   (a) 库构造器的返回类型（`dense2`/`view2`）——两条路：让柯里化链的闭包返回类型格在检查期
-   decide，或覆盖「已 decided 的实参 vs 冻结类型注解」的 unify（不按值-值位置比较）。
+   (a) ~~库构造器的返回类型~~：已用单参数描述符解决（见实测 13）。
    (b) kernel 参数里嵌套 buffer 的读匹配（已测到三条路径各自失败的原因）：
    `param_path` 的设计自己写着「不能回答 struct field read」（参数与读只靠 equality class
    相连）；class 回退比较读节点与实参字段节点的 class，但库里 `read2` 内联后的字段读是
