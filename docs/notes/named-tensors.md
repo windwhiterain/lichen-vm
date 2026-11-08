@@ -554,12 +554,15 @@ What remains:
    and its live-side setter never called across the three suites, and the freezes that run
    before a program is checked carry no `@loop` mark, so no freeze races the check in the
    program path. A frozen loop closure with open captures still needs the caller's live values,
-   which is the boundary the unified lowering must answer. Measured before that lowering can be
-   reached at all (`zz_frozen_body_probe`): a package's named value keeps its field names across
-   the import, but a kernel declared from a frozen body refuses (`no field with this name in the
-   struct type Struct`) because the checker materializes a frozen signature and the copy loses
-   the struct's names; a kernel declared inside the package refuses as well. The signature read
-   comes first.
+   which is the boundary the unified lowering must answer. Measured (`zz_frozen_body_probe`): a
+   package declares, compiles and runs a kernel with a `@loop` inside it and exports the answer
+   `[3.0, 3.0]` — the loop converts at build, while the graph is live — and its exported
+   **compiled kernel**, its types and its functions all read back across the import. So a library
+   ships a compiled kernel value, not a frozen function: passing a frozen *function* to
+   `compute.parallel` stays refused by name (`static (imported) functions are not
+   kernel-compilable v1`). The one remaining launch gap is a cross-graph argument type unify:
+   running the exported kernel on a program-built buffer refuses with two Buffer types that print
+   identically.
    [general-contract-handoff](general-contract-handoff.md) carries the readings and the order.
 
 **Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
