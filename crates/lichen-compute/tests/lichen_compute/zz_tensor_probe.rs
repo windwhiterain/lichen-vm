@@ -152,3 +152,96 @@ fn probe_a_typed_selector() {
         ),
     }
 }
+
+/// The tensor library's address function: two pitches over the same buffer.
+///
+/// # Invariant
+/// Print-only. `tensor.lichen` is a package; the program fills one buffer and builds two
+/// views of `Tensor`, then asks each for the address of the same coordinate. The two
+/// answers differ and no second buffer is made (`docs/notes/named-tensors.md` §2).
+const TENSOR_ADDRESS: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+row_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 3, .column 1} 0 data.b
+col_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 1, .column 2} 0 data.b
+(row_major.shape.row, row_major.stride.row, row_major.origin, t.at2 row_major t.Pair{.row 1, .column 2}, t.at2 col_major t.Pair{.row 1, .column 2})
+"#;
+
+/// The same two views **inside a kernel**: reading each lane through `read2`.
+///
+/// # Invariant
+/// Print-only. The tensor is the kernel's input at `.in.t`, so its buffer sits at
+/// `.in.t.buffer`: the reading is whether the channel walk and the read agree on that
+/// nested position (`docs/notes/named-tensors.md` §5.1).
+const TENSOR_READ: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+ReadIn := {.t t.Tensor}
+ReadPar := {.n @any : Int, .in ReadIn}
+ReadOut := {.o (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+read_body := ('p = ReadPar) -> {
+  i := compute.range p.n
+  row := i / 3
+  col := i - row * 3
+  v := t.read2 p.in.t (t.Pair{.row row, .column col})
+  o := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((ReadOut){.o (compute.write ((compute.Write _){.to o, .at i, .value v}))})
+}
+k := compute.parallel read_body "cpu" ReadOut
+row_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 3, .column 1} 0 data.b
+col_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 1, .column 2} 0 data.b
+out_row := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t row_major}}) : Struct)
+out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct)
+(compute.collect out_row.o, compute.collect out_col.o)
+"#;
+
+/// The tensor library, loaded from the crate's own source, on both readings.
+#[test]
+fn probe_the_tensor_library() {
+    let mut store = new_store(None).expect("the store opens");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
+    if let Err(diagnostics) = store.load_package(&path) {
+        println!(
+            "[tensor] library refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        );
+        return;
+    }
+    for (label, program) in [("address", TENSOR_ADDRESS), ("read", TENSOR_READ)] {
+        match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
+            Ok(text) => println!("[tensor] {label}: {text}"),
+            Err(diagnostics) => println!(
+                "[tensor] {label} refused: {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}

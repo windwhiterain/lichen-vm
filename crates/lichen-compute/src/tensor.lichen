@@ -1,0 +1,24 @@
+---
+  compute = import "compute.lichen"
+---
+Pair := {.row @any : Int, .column @any : Int}
+Tensor := {
+  .buffer (compute.Buf (compute.BufParam{.type Float, .length _})),
+  .shape Pair,
+  .stride Pair,
+  .origin @any : Int,
+}
+dense2 := 'rows -> 'cols -> 'buffer -> {
+  Tensor{
+    .buffer buffer,
+    .shape Pair{.row rows, .column cols},
+    .stride Pair{.row cols, .column 1},
+    .origin 0,
+  }
+}
+view2 := 'shape -> 'stride -> 'origin -> 'buffer -> {
+  Tensor{.buffer buffer, .shape shape, .stride stride, .origin origin}
+}
+at2 := 't = Tensor -> 'i = Pair -> t.origin + i.row * t.stride.row + i.column * t.stride.column
+read2 := 't = Tensor -> 'i = Pair -> (compute.read ((compute.Read _){.from t.buffer, .at (at2 t i)}) : Float)
+write2 := 't = Tensor -> 'i = Pair -> 'v -> (compute.write ((compute.Write _){.to t.buffer, .at (at2 t i), .value v}))
