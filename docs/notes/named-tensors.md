@@ -204,16 +204,16 @@ Measured:
 
 - a selector that **captures** the tensor at the call site reads its named fields and answers
   (`(sel 0)(1)` is `3`);
-- a selector whose parameter is only **typed** (`('d = Dims) -> ...`) is refused: "this field
-  read cannot be checked: the container's type is not decided here" — the body is checked at
-  definition, before the parameter's layout is bound;
+- a selector whose parameter is only **typed** now answers too: `dimsOf := ('d = Dims) ->
+  (d.shape.row, d.shape.column)` applied to a two-pair tensor answers `(2, 3)` (probe
+  `zz_tensor_probe`'s `probe_a_typed_selector`). The deferral this note asked for landed in
+  `01936889`: a formal's field read is recorded at definition and its field's declared type is
+  read from the argument's value at the call;
 - a higher-order consumer needs the selector's function type stated, or its application is
   "not decided".
 
-So the closure form works **today**, with the caller writing one capturing selector per
-tensor. What it asks of the language is one checker capability: **defer a field read on a
-parameter whose struct type is known until the application**, so a library can provide
-`dimsOf` once for every tensor instead of per call site. That is the same lazy-`Index` rule
+So the closure form works **today**, and a library can provide `dimsOf` once for every tensor
+instead of per call site. That is the same lazy-`Index` rule
 [compute-kernel-struct](compute-kernel-struct.md) already applies to a wrapper's `.I`/`.O`.
 
 What the closure approach deliberately does **not** need: row polymorphism, first-class field
@@ -501,8 +501,8 @@ removed; the forms stand and the live input path is the fill kernel (§5.5, §11
   named contraction, and a permuted stride answers a different result rather than the same one.
 - The generic contraction kernel over a plan buffer against the plan-specialized body, on the
   same contraction — the price of rank-agnosticism, measured.
-- The checker deferral (§5.2): `dimsOf` written once for two tensor types, and the refusal it
-  replaces.
+- ~~The checker deferral (§5.2)~~: landed in `01936889`, measured by the typed selector
+  (`(2, 3)`).
 
 ## 11. What a contract kernel still needs
 

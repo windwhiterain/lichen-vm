@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `da52e00e` test: typed-only selector 作答（旧笔记的拒绝已过时）
   - `63843e80` test: 包持有的 contract 在 rank 2 / rank 3 都通过
   - `f6b9d3dc` test: 契约库端到端（包持有 dynamic-rank kernel）
   - `a4caf9c3` test: 冻结包的 kernel body 测量
@@ -104,7 +105,12 @@
     填三个 buffer、经 import 的类型建 Meta/Arg，`plrun lib.kernel` 在 rank 2/contract 2 答
     `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`，在 rank 3/contract 1 答
     `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`——都与参考一致。
-    这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。## 下一步（按用户裁定排序）
+    这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。12. **typed-only selector 已可用**（`zz_tensor_probe` 的 `probe_a_typed_selector`）：
+    `dimsOf := ('d = Dims) -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
+    named-tensors §5.2 里「refused」的读数属旧版本；deferral 是 `01936889` 落的。
+    形状表选择器因此可以「写一次、所有张量共用」。
+
+## 下一步（按用户裁定排序）
 
 1. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
