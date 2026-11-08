@@ -723,8 +723,9 @@ impl<P: Program> Module<P> {
         // resumes at the template.
         let mut followed = false;
         for _ in 0..16 {
-            if self.class_root(current) == value_class {
-                // The chain reached the state's value: what was collected reads
+            let class_matched = self.class_root(current) == value_class;
+            if class_matched && !path.is_empty() {
+                // The chain reached a state element: what was collected reads
                 // outermost-first.
                 return Self::state_path(path);
             }
@@ -776,6 +777,10 @@ impl<P: Program> Module<P> {
                 let mut slot = path.clone();
                 slot.push(position);
                 return Self::state_path(slot);
+            }
+            if class_matched {
+                // The whole state is the value: a scalar state's empty path.
+                return Self::state_path(path);
             }
             let Some(operation) = self.node_operation(current) else {
                 // **The walk bottomed out**: a clone's chain ends at this

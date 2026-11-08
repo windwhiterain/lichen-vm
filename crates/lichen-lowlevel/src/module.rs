@@ -69,6 +69,7 @@ impl<P: Program> Module<P> {
             applied_exprs: HashMap::new(),
             apply_result_owners: HashMap::new(),
             value_exprs: HashMap::new(),
+            value_reads: HashMap::new(),
             field_sources: HashMap::new(),
             requirement_nodes: HashSet::new(),
             struct_identity_items: HashSet::new(),
@@ -311,6 +312,16 @@ impl<P: Program> Module<P> {
         if !exprs.contains(&expr) {
             exprs.push(expr);
         }
+    }
+
+    /// Record that `value` is the element at `position` of `target`.
+    pub fn record_value_read(&mut self, value: NodeId, target: NodeId, position: usize) {
+        self.value_reads.entry(value).or_insert((target, position));
+    }
+
+    /// The read that produced `value`, if any.
+    pub fn value_read(&self, value: NodeId) -> Option<(NodeId, usize)> {
+        self.value_reads.get(&value).copied()
     }
 
     /// The expressions that state `value`, if any.

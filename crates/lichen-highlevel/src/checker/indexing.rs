@@ -74,6 +74,11 @@ where
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
+        // **The read names its element**: a state slot resolves through this.
+        if let Some(at) = position {
+            self.module
+                .record_value_read(value_node, array_value, at - 1);
+        }
         // The element's attributes are the read's: the slot is the field's own.
         if let Some((marker, slot)) = self.stated_element_attribute(element) {
             self.state[e].attr = Some(slot);

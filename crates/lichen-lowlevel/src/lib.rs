@@ -1087,6 +1087,12 @@ pub struct Module<P: Program> {
     /// The checker states the correspondence where it fixes an expression's value; a
     /// reader holding a value node reaches the expressions that state it.
     pub value_exprs: HashMap<NodeId, Vec<NodeId>>,
+    /// The read each value node was produced by, as its target and position.
+    ///
+    /// # Invariant
+    /// The checker states it where it fixes an index read's value; a reader
+    /// holding the value reaches the element position it names.
+    pub value_reads: HashMap<NodeId, (NodeId, usize)>,
     /// The actual field supplied for each constructor field requirement.
     ///
     /// # Invariant
