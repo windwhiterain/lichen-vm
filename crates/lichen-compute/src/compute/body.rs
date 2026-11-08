@@ -556,6 +556,11 @@ where
                 || self.module.node_origin(node).is_some_and(|origin| {
                     self.module.belongs_to(origin, function).unwrap_or(false)
                 })
+                || self.loops[index].entries.contains(&node)
+                || self.loops[index]
+                    .entries
+                    .iter()
+                    .any(|entry| self.module.node_origin(*entry) == Some(node))
                 // A structural state match is ownership: the node's path names
                 // the slot.
                 || self
@@ -587,6 +592,13 @@ where
 
     fn loop_value(&self, index: usize, node: NodeId) -> Result<Option<ValueId>, String> {
         let active = &self.loops[index];
+        // **The entering call's own element is the slot**: a body value unified with
+        // it carries its class, not a read chain.
+        if let Some(slot) = active.entries.iter().position(|entry| *entry == node) {
+            if let Some(value) = active.block_slots.get(slot) {
+                return Ok(Some(*value));
+            }
+        }
         // A clone of the marked function's node reads what its template does.
         let path = self
             .module
