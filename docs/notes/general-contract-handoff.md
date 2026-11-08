@@ -81,30 +81,29 @@
    因此「freeze 早于 mark」在探针路径上不成立，真正缺的是冻结转换的下沉。
 7. 冻结函数带 open captures 时，从冻结图单独下沉需要调用方的活值（capture 的对应关系），
    只有 capture-free 的冻结循环能纯用冻结图下沉。这是统一读法必须先回答的边界。
-8. **冻结包的 kernel 形状已测量**（探针 `zz_frozen_body_probe`）：
-   - 包内声明、编译并运行带 `@loop` 的 kernel 可行：build 时编译、`plrun` 运行，导出答案
-     `[3.0, 3.0]`；循环在包构建期（活图）转换。
-   - 包导出的**已编译 kernel**、它的类型、它的函数都能跨 import 读回（`lib.k`、`lib.Out`、
-     `lib.fill` 均作答）——**库形状不需要冻结下沉**。
+8. **库形状已端到端量通**（探针 `zz_frozen_body_probe`）：
+   - 包内声明、编译并运行带 `@loop` 的 kernel 可行（`declared`，导出答案 `[3.0, 3.0]`）；
+     循环在包构建期（活图）转换并冻结成**已编译 kernel 值**。
+   - 导入方读得回该 kernel 值、其类型与函数（`kernel`、`kernel-type`、`kernel-function`）。
+   - **程序用 import 的类型建参数并运行包导出的 kernel 可行**：`run` 答 `[6.0, 6.0]`
+     （buffer 的 perspective 来自 `compute.write`）。
    - 把冻结**函数**交给 `compute.parallel` 仍按名字拒绝：
-     `static (imported) functions are not kernel-compilable v1`（明确 v1 门）。
-   - 用程序自建的 buffer 运行导出的 kernel，参数类型检查拒绝：Buffer 对 Buffer、
-     两侧打印完全相同（跨图类型 unify 的缺口）。
-   - 早期「package boundary 丢字段名」是探针自身的错误（用了已删除的 `compute.buffer`；
-     且包以裸表达式结尾会把 export 变成 Array）——已更正。
+     `static (imported) functions are not kernel-compilable v1`（v1 门；库形状不需要它）。
+   - 早先 `run` 的 Buffer-Buffer 失配是探针自己用了**普通 buffer**（本地 `ABuf` 类型、
+     未经过 `write`/`read` 的 perspective），不是包边界缺陷；已复核并更正。
 9. 包以裸表达式结尾时 export 是那个表达式（如 Array），import 期望 Struct 就会在 import 行
    `expected Struct, found Array`；包应以绑定结尾。## 下一步（按用户裁定排序）
 
-1. **跨图参数类型 unify（不做物化）**：程序用自建 buffer 运行包导出的 kernel 时，
-   `plrun` 的参数检查把冻结 kernel 的参数类型与活 buffer 类型比对失败，两侧打印相同。
-   方向：类型比较走 `AnyNodeId`（`unify_ref` 已接受），让 Buffer 的 length 这类值在
-   冻结/活图之间按值相等成立；先写一个最小的 `lib.k` + 程序 buffer 用例定位失败的比较点。
-2. **冻结函数作为 kernel body**：v1 门 `static (imported) functions are not
-   kernel-compilable v1`。库形状已可走「包内编译 kernel、导出 kernel 值」，所以这条不再是
-   必需；若仍要支持，需要 `lower_loop`/`ActiveLoop` 持 `AnyFunctionId` 并从冻结图取状态节点
-   （`LoopGraph` 已实现两图查询；capture 边界见实测事实 7）。
-3. 3 维实例与最终库形状（具名张量、形状表、契约函数）。
-4. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
+1. **把库形状写成可复用示例**：包内「类型 + kernel + step」、程序 import 后建参数并
+   `plrun`。落点：`examples/` 或 `crates/lichen-serve/examples/` 的一个真实形状（具名张量
+   的 stride/shape 表），并让 `docs/notes/named-tensors.md` 指向它。
+2. **3 维实例**：同一探针换成 rank=3 的 plan（需要时先取得许可），验证 dynamic-rank
+   在库形状下同样成立。
+3. **契约函数（general contract API 的收尾）**：把 `contract`/`merge`/`without`/`count`/`key`
+   与拼好的 kernel 组成一个库函数，程序只需要类型与数据。
+4. 冻结函数作为 kernel body（v1 门）不再是库形状的必需项；若仍要做，需要
+   `lower_loop`/`ActiveLoop` 持 `AnyFunctionId` 并从冻结图取状态节点（capture 边界见实测事实 7）。
+5. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
 
 ## 已知坑
 

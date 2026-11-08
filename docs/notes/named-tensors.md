@@ -557,13 +557,11 @@ What remains:
    which is the boundary the unified lowering must answer. Measured (`zz_frozen_body_probe`): a
    package declares, compiles and runs a kernel with a `@loop` inside it and exports the answer
    `[3.0, 3.0]` — the loop converts at build, while the graph is live — and its exported
-   **compiled kernel**, its types and its functions all read back across the import. So a library
-   ships a compiled kernel value, not a frozen function: passing a frozen *function* to
-   `compute.parallel` stays refused by name (`static (imported) functions are not
-   kernel-compilable v1`). The one remaining launch gap is a cross-graph argument type unify:
-   running the exported kernel on a program-built buffer refuses with two Buffer types that print
-   identically.
-   [general-contract-handoff](general-contract-handoff.md) carries the readings and the order.
+   **compiled kernel** reads back across the import; a program that builds its argument through
+   the imported type (the buffer's perspective coming from `compute.write`) runs that kernel and
+   answers `[6.0, 6.0]`. So a library ships a compiled kernel value, not a frozen function:
+   passing a frozen *function* to `compute.parallel` stays refused by name (`static (imported)
+   functions are not kernel-compilable v1`).
 
 **Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
 `B{r1,c1}` (6×2, `B[t][c] = t+1+c`) over `c0`/`r1`; `C` is 2×2 and the probe answers
