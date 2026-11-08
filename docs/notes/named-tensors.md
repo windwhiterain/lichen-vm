@@ -403,11 +403,12 @@ to prefer a type-carried shape.
    function whose parameter is annotated with the **imported** `Tensor` type reads the type's
    fields instead of the value's: `x.shape` answers `(@any, @any)` (the `Pair` type's own
    placeholders) and `x.origin` answers `none`, while the same literal's `lit.shape.row` answers
-   `2`. The trace is sharper: a bare parameter (`plain_id`) hands back the literal's value, while
-   the annotated one (`'x = t.Tensor`) hands back the **type's** shape, so the annotation path
-   binds the formal's slot to the frozen type expression positionally and the value never comes
-   from the argument; a program-defined type of the same shape answers correctly. Reconstructing
-   the frozen type as its raw array does not work: it is a TypeFunction, not a Type. And a
+   `2`. That gap is fixed (`3081828f`): the frozen type is treated as a template — its static
+   items count as open and a frozen array leaves the requirement slot fresh — so `show_shape`
+   answers `(2, 3)`, `show_origin` `0`, and the library's `at2` answers `5` over a frozen
+   `Tensor` literal. What is not fixed: the library's own constructors (`dense2`/`view2`) leave
+   their return type undecided (ascribing the body to `Tensor` says `expected Tensor…, found
+   Struct`), so a caller reads fields of `t.Tensor{…}` directly instead. And a
    tensor at a kernel's
    `.in.t` is walked as an input at `[1, 0, 0]`, while `read2`'s read of `p.in.t.buffer` is not
    recognized as that buffer.
