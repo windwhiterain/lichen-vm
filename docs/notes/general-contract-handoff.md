@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `24fd5d42` tensor: tensor.lichen 初稿与两个阻塞
   - `da52e00e` test: typed-only selector 作答（旧笔记的拒绝已过时）
   - `63843e80` test: 包持有的 contract 在 rank 2 / rank 3 都通过
   - `f6b9d3dc` test: 契约库端到端（包持有 dynamic-rank kernel）
@@ -31,7 +32,7 @@
   - `3691e5c2` docs: general contract API handoff
   - `fd763a15` lowlevel: 值记录一次读的目标与位置
   - `6771f993` checker: formal 与 tuple 元素记录元素类型
-- 套件（`0207cbd1` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `249 passed, 1 ignored`。
+- 套件（`24fd5d42` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `251 passed, 1 ignored`。
 - 门：`cargo fmt --all`、`comments-check --config comments-test.toml . --max-violations 0`。
 - 调试打印 `[val]`、`[dbg]` 已从 compute 移除。
 
@@ -110,9 +111,26 @@
     named-tensors §5.2 里「refused」的读数属旧版本；deferral 是 `01936889` 落的。
     形状表选择器因此可以「写一次、所有张量共用」。
 
+13. **tensor 库包初稿已落**（`crates/lichen-compute/src/tensor.lichen`，用户选的语言侧 tensor 库）：
+    `Pair`、`Tensor`（buffer + shape + stride + origin）、`dense2`/`view2`、`at2`、`read2`/`write2`。
+    包能编译、函数可调用，但两个阻塞已测量（`zz_tensor_probe` 的 `probe_the_tensor_library`）：
+    - **带参数化字段的结构字面量没有名义类型**：`t.Tensor{...}` 传给 `t = Tensor` 形参后，
+      形参类型仍未定，`at2` 体内的字段读报
+      `this field read cannot be checked: the container's type is not decided here`；
+      直接 `(Tensor{...} : Tensor)` 会报 `expected Tensor…, found Struct`。
+    - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
+      认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
+      `read's buffer argument is not an input buffer of the parallel parameter`。
+    这两个缺口清掉，tensor 库才算可用。
+
 ## 下一步（按用户裁定排序）
 
-1. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
+1. **tensor 库的两个阻塞**（按用户选的 B）：
+   (a) 结构字面量的名义类型：`Tensor{...}` 含有参数化字段（`(compute.Buf …)`）时，
+   字面量的类型没有被认作 `Tensor`；需要让字面量的类型由被调用的类型给出（这是检查器/
+   类型系统的一处缺口，先写最小测量）；(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的
+   输入 `[1,0,0]` 与 `read2` 的读节点没有对上。
+2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
 2. **契约函数收尾**：库导出 `contract := 'shape -> 'data -> ...`，内部生成 plan、跑 kernel、

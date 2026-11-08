@@ -397,7 +397,14 @@ to prefer a type-carried shape.
    waits for the application, so `dimsOf` can be generic. The probe's one-value tensor then
    works for a matvec; this is the gating slice.
 2. **The tensor library**: `Tensor`, `dense2`, `view2`, `at2`, `read2`/`write2`, and the
-   selector closures; the probe's programs as tests.
+   selector closures; the probe's programs as tests. A first draft is in
+   `crates/lichen-compute/src/tensor.lichen`, loaded by `zz_tensor_probe`: the package compiles
+   and its functions are callable, and two gaps are measured. A `Tensor{…}` literal passed to a
+   `Tensor`-typed parameter leaves that parameter's type undecided (a struct literal over a
+   parametric `(compute.Buf …)` field is not read as its nominal type; the ascription says
+   `expected Tensor…, found Struct`), so `at2`'s field reads refuse. And a tensor at a kernel's
+   `.in.t` is walked as an input at `[1, 0, 0]`, while `read2`'s read of `p.in.t.buffer` is not
+   recognized as that buffer.
 3. **Output tensors**: ruling 8.4; flat outputs first.
 4. **Names in the roles** (§5.1): the artifact carries each leaf's field name; the host builds
    by name.
