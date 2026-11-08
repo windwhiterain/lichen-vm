@@ -1839,21 +1839,6 @@ where
             })
             .filter(|function| self.module.function_is_looping(*function));
         if let Some(function) = recursion {
-            eprintln!(
-                "[apply] node={node:?} block={} fn={function:?} owner={:?} arg={:?} argvalue={:?} items={:?}",
-                self.block,
-                self.loop_owner(node),
-                self.loop_argument(node),
-                self.loop_argument(node)
-                    .map(|argument| self.module.expr_value_half(argument)),
-                self.loop_argument(node)
-                    .and_then(|argument| self.module.expr_value_half(argument))
-                    .and_then(|value| unsafe { self.module.array_items(value) })
-                    .map(|items| items
-                        .iter()
-                        .map(|item| format!("{:?}", item.node))
-                        .collect::<Vec<_>>()),
-            );
             return match self.module.loop_conversion(function) {
                 Ok(conversion) => self.lower_loop(node, function, &conversion),
                 Err(refusal) => Err(format!(
@@ -1915,20 +1900,6 @@ where
         function: FunctionId,
         conversion: &LoopConversion,
     ) -> Result<ValueId, String> {
-        eprintln!(
-            "[lower-loop] node={node:?} fn={function:?} node_fn={:?} block={} steps={:?} active={:?}",
-            self.module.node_function(node),
-            self.block,
-            conversion
-                .steps
-                .iter()
-                .map(|step| format!("{:?}", step.apply))
-                .collect::<Vec<_>>(),
-            self.loops
-                .iter()
-                .map(|active| active.function)
-                .collect::<Vec<_>>(),
-        );
         let state = self.loop_state(node, conversion)?;
         let slots: Vec<ValueId> = state.iter().map(|(value, _)| *value).collect();
         // **The instance's own frame**: state reads bind to this instance's params.
@@ -2015,10 +1986,6 @@ where
                 }),
             );
         }
-        eprintln!(
-            "[loop] fn={function:?} entry={entry} header={header} tests={tests:?} steps={steps:?} exits={exits:?} merge={merge} slots={slots:?}",
-            slots = &slots
-        );
         self.loops.push(ActiveLoop {
             function,
             conversion: conversion.clone(),
@@ -2265,7 +2232,6 @@ where
         self.loops[index].block = block;
         let params = self.body.blocks[block].params.clone();
         let function = self.loops[index].function;
-        eprintln!("[enter] loop {index} fn={function:?} block={block} params={params:?}");
         let state = self.loops[index].conversion.state.clone();
         let entries = self.loops[index].entries.clone();
         // **The block's own parameters are the state bindings**: a branch block has
