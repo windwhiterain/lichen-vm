@@ -3,9 +3,11 @@
 //!
 //! # Invariant
 //!
-//! Print-only, asserts nothing. The library is a package, so its functions are frozen
-//! before the program names them; the readings are where a package's kernel meets the
-//! check (`docs/notes/general-contract-handoff.md`).
+//! Print-only, asserts nothing. A package compiles and runs its own `@loop` kernel while
+//! live (`declared`), the importer reads that compiled kernel back (`kernel`), and a
+//! program runs it on an argument built through the imported type (`run`; the buffer's
+//! perspective comes from `compute.write`). A frozen *function* handed to
+//! `compute.parallel` stays refused by name (`program`).
 
 use std::path::PathBuf;
 
@@ -167,15 +169,14 @@ lib.fill",
   lib = import "kernel_lib.lichen"
 ---
 Fill := {.n @any : Int}
-ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 fill := ('f = Fill) -> {
   i := compute.range f.n
   a := compute.buf (compute.BufParam{.type Float, .length 8})
-  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value 2.0}))})
+  ((lib.In){.unused (compute.write ((compute.Write _){.to a, .at i, .value 2.0}))})
 }
-f_kernel := compute.parallel fill "cpu" ABuf
+f_kernel := compute.parallel fill "cpu" lib.In
 data := (compute.plrun f_kernel ((Fill){.n 8}) : Struct)
-out := (compute.plrun lib.k ((lib.Arg){.n 2, .taps 3, .I lib.In{.unused data.a}}) : Struct)
+out := (compute.plrun lib.k ((lib.Arg){.n 2, .taps 3, .I data}) : Struct)
 compute.collect out.y : Array
 "#,
         ),
