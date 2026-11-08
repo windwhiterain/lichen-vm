@@ -130,6 +130,11 @@
       的返回类型并物化成叶子；`at2`（返回 Int）的叶子有值，而 `view2`/`dense2` 的
       `return_type` 指向**共享 struct 模板节点**，冻结后该节点无值（`value=None`），
       叶子仍未定——所以调用方的字段读没有 decided 类型可用。
+      **进一步测量**：`view2` 是柯里化链，签名读取只作用于**第一次应用**；后续应用的
+      callee 是上一步的闭包结果，检查期解析不到（其返回类型格未定）。把 `view2` 改成
+      **单参数结构**（`View` 描述符）也不行：已决定的结构字面量对冻结的结构类型注解
+      会报 `expected Struct, found Struct`（值-值按位置 unify，是冻结注解修复未覆盖的
+      另一半——actual 已 decided 时）。
     - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
       认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
       `read's buffer argument is not an input buffer of the parallel parameter`。
@@ -138,7 +143,8 @@
 ## 下一步（按用户裁定排序）
 
 1. **tensor 库剩余的两个口子**（按用户选的 B）：
-   (a) 库构造器的返回类型（`dense2`/`view2`）——类型注解/返回类型如何 decide（见实测 13）。
+   (a) 库构造器的返回类型（`dense2`/`view2`）——两条路：让柯里化链的闭包返回类型格在检查期
+   decide，或覆盖「已 decided 的实参 vs 冻结类型注解」的 unify（不按值-值位置比较）。
    (b) kernel 参数里嵌套 buffer 的读匹配（已测到三条路径各自失败的原因）：
    `param_path` 的设计自己写着「不能回答 struct field read」（参数与读只靠 equality class
    相连）；class 回退比较读节点与实参字段节点的 class，但库里 `read2` 内联后的字段读是
