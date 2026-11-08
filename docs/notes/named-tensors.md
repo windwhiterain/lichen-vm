@@ -547,11 +547,15 @@ What remains:
    measured working).
 5. **The contracted extents' equality** is a value comparison: check-time when literal, the
    library or host otherwise.
-6. **The static bridge is still there.** Normalize the kernel body's lambdas before the freeze
-   that produces a callee's static ref (so a frozen function carries `looping`), then remove
-   `StaticModule.dynamic_functions` / `Module::static_dynamic_function` and read the frozen
-   conversion through one graph interface. [general-contract-handoff](general-contract-handoff.md)
-   carries the readings and the order.
+6. **The static bridge is gone; the frozen conversion's lowering is not.** `StaticModule` no
+   longer carries the source module's `FunctionId`s, and a frozen `@loop` callee now reads its
+   own graph's conversion (`loop_conversion_any`) and refuses by name until the kernel can emit
+   a frozen conversion's state nodes. Measured before removing it: the bridge was never asked
+   and its live-side setter never called across the three suites, and the freezes that run
+   before a program is checked carry no `@loop` mark, so no freeze races the check in the
+   program path. A frozen loop closure with open captures still needs the caller's live values,
+   which is the boundary the unified lowering must answer.
+   [general-contract-handoff](general-contract-handoff.md) carries the readings and the order.
 
 **Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
 `B{r1,c1}` (6×2, `B[t][c] = t+1+c`) over `c0`/`r1`; `C` is 2×2 and the probe answers

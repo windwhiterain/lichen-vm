@@ -22,11 +22,12 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `c813a2f1` loop: 移除冻结函数桥
   - `96b58a15` compute: 循环入口值与外部节点所在块
   - `3691e5c2` docs: general contract API handoff
   - `fd763a15` lowlevel: 值记录一次读的目标与位置
   - `6771f993` checker: formal 与 tuple 元素记录元素类型
-- 套件（`96b58a15` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `247 passed, 1 ignored`。
+- 套件（`c813a2f1` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `247 passed, 1 ignored`。
 - 门：`cargo fmt --all`、`comments-check --config comments-test.toml . --max-violations 0`。
 - 调试打印 `[val]`、`[dbg]` 已从 compute 移除。
 
@@ -73,17 +74,22 @@
 3. `value_reads` 对动态下标无用（无常量位置），不要围绕它设计。
 4. compute 侧不能写模块（`&Module`）；任何登记必须发生在语言层（checker）。
 5. 嵌套循环的实参可以在外层循环的步块里；外部节点就地发射后支配关系成立。
+6. 冻结桥已在三个套件里测量为死代码：`static_dynamic_function` 从未被询问，
+   `set_static_origin` 从未被调用。程序自己的 lambda 在检查期打标，程序模块不会被冻结；
+   检查前发生的冻结（prelude 9 个函数、compute 37 个函数）都不含 `@loop`。
+   因此「freeze 早于 mark」在探针路径上不成立，真正缺的是冻结转换的下沉。
+7. 冻结函数带 open captures 时，从冻结图单独下沉需要调用方的活值（capture 的对应关系），
+   只有 capture-free 的冻结循环能纯用冻结图下沉。这是统一读法必须先回答的边界。
 
 ## 下一步（按用户裁定排序）
 
-1. **normalize 后再 freeze**：`Registry::freeze_mapped`（`crates/lichen-language/src/package.rs`）
-   目前早于 kernel body 的惰性 lowering，冻结副本缺 `looping` 标记。方向：
-   先归一化 kernel body 的 lambda，再冻结；冻结函数带上 `looping`。
-2. **移除跨模块桥**：`StaticModule.dynamic_functions`、`Module::static_dynamic_function`
-   以及 `apply` 里借 `FunctionId` 的分支，改成通过同一个图接口读冻结的转换
-   （`loop_conversion_any` 已支持两图，需要让内核 `apply`/`lower_loop` 走它）。
-3. 3 维实例（需要新探针时先取得用户许可）与最终库形状（具名张量、形状表、契约函数）。
-4. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
+1. **冻结转换的下沉（统一读法）**：`lower_loop`/`ActiveLoop` 改持 `AnyFunctionId`，
+   状态节点经 `state_nodes_any` 从冻结图取；步骤/出口里的冻结计算需要一个冻结节点的发射器。
+   现有 `LoopGraph` 已实现两图查询（operation/items/value/class/parameter_value_path），
+   先把 `Lower` 的循环机械改成走它，再决定 capture 的边界（见实测事实 7）。
+   需要「kernel body 来自冻结包」的探针来测量——**写探针前先取得用户许可**。
+2. 3 维实例（同样需要许可）与最终库形状（具名张量、形状表、契约函数）。
+3. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
 
 ## 已知坑
 
