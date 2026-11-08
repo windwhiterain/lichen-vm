@@ -173,9 +173,7 @@ fill := ('f = Fill) -> {
 }
 f_kernel := compute.parallel fill "cpu" BufT
 data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
-row_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 3, .column 1} 0 data.b
-col_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 1, .column 2} 0 data.b
-(row_major.shape.row, row_major.stride.row, row_major.origin, t.at2 row_major t.Pair{.row 1, .column 2}, t.at2 col_major t.Pair{.row 1, .column 2})
+t.at2 (t.Tensor{.buffer data.b, .shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 1, .column 2}, .origin 0}) t.Pair{.row 1, .column 2}
 "#;
 
 /// The same two views **inside a kernel**: reading each lane through `read2`.
@@ -272,7 +270,11 @@ fn probe_the_tensor_library() {
                 "[tensor] {label} refused: {:?}",
                 diagnostics
                     .iter()
-                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .map(|diagnostic| (
+                        diagnostic.message.clone(),
+                        diagnostic.file.clone(),
+                        diagnostic.span,
+                    ))
                     .collect::<Vec<_>>()
             ),
         }

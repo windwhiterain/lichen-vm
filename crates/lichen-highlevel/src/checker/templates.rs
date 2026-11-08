@@ -36,9 +36,17 @@ where
         };
         match held {
             LowValue::Any => true,
-            LowValue::Array(array) if self.is_compound_type(ty) => {
+            LowValue::Array(array) => {
                 // SAFETY: the handle belongs to this module, which outlives the walk.
-                unsafe { array.items() }
+                let items = unsafe { array.items() };
+                // **A frozen array is a type-level template**: a static item counts as open.
+                if items.iter().any(|item| item.node.dynamic().is_none()) {
+                    return true;
+                }
+                if !self.is_compound_type(ty) {
+                    return false;
+                }
+                items
                     .iter()
                     .any(|item| self.requirement_is_open_any(item.node, depth + 1))
             }
@@ -224,8 +232,10 @@ where
                 })
                 .collect()
         } else {
-            // A plain array value such as `Type` is not a template: its interior
-            // belongs to the value and must not be copied.
+            // A plain array such as `Type` is not a template; a frozen one leaves the slot fresh.
+            if source.iter().any(|item| item.node.dynamic().is_none()) {
+                return self.fresh_cell();
+            }
             return value;
         };
         self.array_value_node(self.current_block, items, array.layout())
