@@ -133,9 +133,11 @@
 ## 下一步（按用户裁定排序）
 
 1. **tensor 库的两个阻塞**（按用户选的 B）：
-   (a) 冻结类型注解：在 `check_unify_expr` 的注解路径上，把冻结的类型值当作
-   **requirement/template**（或重建为 TypeFunction）来 unify 形参的**类型格**，不要按位置
-   碰形参的值格；对照点是 live 类型注解（`Dims`）走 requirement 分支后工作正常。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
+   (a) 冻结类型注解：类型是 **TypeFunction**（失败实验的报错 `expected TypeFunction,
+   found Type` 已证明），live 类型注解正常，说明 live TypeFunction 与形参 slot 的 unify 会把
+   字段绑到实参上；冻结 TypeFunction 的应用没有走到这条绑定。下一步：查清 live TypeFunction
+   的 unify 规则（`check_unify_expr`/`unify` 对 TypeFunction 的处理），让冻结的那条走同一
+   应用路径（`apply_function_type`/静态 apply），而不是按位置 unify 值格。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
    与 `read2` 的读节点没有对上。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
