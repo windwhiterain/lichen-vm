@@ -217,7 +217,33 @@ out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct
 (compute.collect out_row.o, compute.collect out_col.o)
 "#;
 
-/// The tensor library, loaded from the crate's own source, on both readings.
+/// The imported (frozen) `Tensor` as a parameter type and as a literal's type.
+///
+/// # Invariant
+/// Print-only. The function is the program's own and only the types cross the package boundary,
+/// so the reading separates a frozen type's nominal identity from the library's functions
+/// (`docs/notes/named-tensors.md` §7.2).
+const FROZEN_TYPE: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+show_shape := 'x = t.Tensor -> x.shape
+show_origin := 'x = t.Tensor -> x.origin
+show_row := 'x = t.Tensor -> x.shape.row
+lit := t.Tensor{.buffer data.b, .shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 3, .column 1}, .origin 0}
+(show_shape lit, show_origin lit, show_row lit, lit.shape.row)
+"#;
+
 #[test]
 fn probe_the_tensor_library() {
     let mut store = new_store(None).expect("the store opens");
@@ -232,11 +258,101 @@ fn probe_the_tensor_library() {
         );
         return;
     }
-    for (label, program) in [("address", TENSOR_ADDRESS), ("read", TENSOR_READ)] {
+    for (label, program) in [
+        ("address", TENSOR_ADDRESS),
+        ("read", TENSOR_READ),
+        ("frozen-type", FROZEN_TYPE),
+    ] {
         match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
             Ok(text) => println!("[tensor] {label}: {text}"),
             Err(diagnostics) => println!(
                 "[tensor] {label} refused: {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}
+
+/// Why a `Tensor` literal is not its nominal type: a plain field, then a type-function one.
+///
+/// # Invariant
+/// Print-only. `Wrap` holds a named struct field and `Box` holds a field whose type is a type
+/// function applied to an argument; the readings separate the nominal type rule from the
+/// parametric field (`docs/notes/named-tensors.md` §7.2).
+const PLAIN_WRAP: &str = r#"
+Pair := {.row @any : Int, .column @any : Int}
+Wrap := {.p Pair}
+read := 'x = Wrap -> x.p.row
+read Wrap{.p Pair{.row 1, .column 2}}
+"#;
+
+const BOXED_WRAP: &str = r#"
+Pair := {.row @any : Int, .column @any : Int}
+Box := 'x = Pair -> {.inner x}
+B := Box Pair
+read := 'x = B -> x.inner.row
+read B{.inner Pair{.row 1, .column 2}}
+"#;
+
+/// The tensor's own field type, concrete and open: which one loses the nominal type.
+///
+/// # Invariant
+/// Print-only. `T6` states the buffer's length, `TOpen` leaves it open; both are read through
+/// a parameter typed by the struct, so the reading is the length's effect on the nominal type.
+const TENSOR6: &str = r#"
+---
+  compute = import "compute.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+Pair := {.row @any : Int, .column @any : Int}
+T6 := {.buffer (compute.Buf (compute.BufParam{.type Float, .length 6})), .shape Pair, .stride Pair, .origin @any : Int}
+show := 'x = T6 -> x.shape.row
+show T6{.buffer data.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}, .origin 0}
+"#;
+
+const TENSOR_OPEN: &str = r#"
+---
+  compute = import "compute.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+Pair := {.row @any : Int, .column @any : Int}
+TOpen := {.buffer (compute.Buf (compute.BufParam{.type Float, .length _})), .shape Pair, .stride Pair, .origin @any : Int}
+show := 'x = TOpen -> x.shape.row
+show TOpen{.buffer data.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}, .origin 0}
+"#;
+
+#[test]
+fn probe_a_parametric_field_type() {
+    for (label, program) in [
+        ("plain", PLAIN_WRAP),
+        ("boxed", BOXED_WRAP),
+        ("tensor6", TENSOR6),
+        ("open", TENSOR_OPEN),
+    ] {
+        let mut store = new_store(None).expect("the store opens");
+        match lichen_language::run::evaluate_raw(program, None, &mut store) {
+            Ok(text) => println!("[parametric] {label}: {text}"),
+            Err(diagnostics) => println!(
+                "[parametric] {label} refused: {:?}",
                 diagnostics
                     .iter()
                     .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
