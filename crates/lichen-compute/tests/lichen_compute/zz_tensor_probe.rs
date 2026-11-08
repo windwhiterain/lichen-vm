@@ -124,3 +124,31 @@ fn probe_a_contract_shape() {
         }
     }
 }
+
+/// The same read from a selector whose parameter is only **typed**: the open measurement.
+///
+/// # Invariant
+/// Print-only. `dimsOf` is written once for every two-pair tensor; the refusal says whether the
+/// checker defers the field read to the application (`docs/notes/named-tensors.md` §5.2).
+const GENERIC_SELECTOR: &str = r#"
+Pair := {.row @any : Int, .column @any : Int}
+Dims := {.shape Pair, .stride Pair}
+dimsOf := ('d = Dims) -> (d.shape.row, d.shape.column)
+x := Dims{.shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}}
+dimsOf x
+"#;
+
+#[test]
+fn probe_a_typed_selector() {
+    let mut store = new_store(None).expect("the store opens");
+    match lichen_language::run::evaluate_raw(GENERIC_SELECTOR, None, &mut store) {
+        Ok(text) => println!("[typed-selector] {text}"),
+        Err(diagnostics) => println!(
+            "[typed-selector] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
