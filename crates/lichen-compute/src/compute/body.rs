@@ -167,6 +167,8 @@ struct ActiveLoop {
     state: NodeId,
     /// The call's argument node per slot: the entry a state read names.
     entries: Vec<NodeId>,
+    /// What each slot entered with, in the conversion's slot order.
+    entry_values: Vec<ValueId>,
     /// The block the nest starts from: it dominates every block of the nest.
     entry: usize,
     /// The block the nest is currently emitting into.
@@ -351,9 +353,6 @@ where
     /// The value `node` names, emitting its definition the first time it is asked
     /// for.
     fn value(&mut self, node: NodeId) -> Result<ValueId, String> {
-        if format!("{node:?}").contains("15734") {
-            eprintln!("[val] node={node:?} lookup={:?}", self.lookup(node));
-        }
         if !self.lowered_path.insert(node) {
             return Err(format!(
                 "a definition cycle: {node:?} is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)"
@@ -417,29 +416,6 @@ where
     }
 
     fn value_inner(&mut self, node: NodeId) -> Result<ValueId, String> {
-        if format!("{node:?}").contains("15734") {
-            eprintln!(
-                "[dbg] node={node:?} owner={:?} pvp20={:?} exprs={:?} states={:?}",
-                self.loop_owner(node),
-                self.loops
-                    .iter()
-                    .map(|active| {
-                        (
-                            format!("{:?}", active.function),
-                            self.module.parameter_value_path(active.function, node),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                self.module.value_exprs(node).to_vec(),
-                self.loops
-                    .iter()
-                    .map(|active| (
-                        format!("{:?}", active.function),
-                        active.conversion.state.clone()
-                    ))
-                    .collect::<Vec<_>>()
-            );
-        }
         // **Inside a `@loop` nest the roles are the binding**: a marked function's read
         // resolves to its block's parameters.
         if let Some(index) = self.loop_owner(node)
@@ -463,13 +439,9 @@ where
         if self.depth > MAX_KERNEL_BODY_DEPTH {
             return Err(super::kernel_body_too_deep());
         }
-        // A nest's role is emitted in its current block; one it does not own, at the
-        // nest's entry.
+        // A nest's role goes in its current block; a foreign one where demanded.
         let enclosing = self.block;
-        let target = match self.loop_owner(node) {
-            Some(index) => Some(self.loops[index].block),
-            None => self.current_loop().map(|index| self.loops[index].entry),
-        };
+        let target = self.loop_owner(node).map(|index| self.loops[index].block);
         if let Some(target) = target {
             self.block = target;
         }
@@ -628,17 +600,6 @@ where
 
     fn loop_value(&self, index: usize, node: NodeId) -> Result<Option<ValueId>, String> {
         let active = &self.loops[index];
-        // **The entering call's own element is the slot**: a body value unified with
-        // it carries its class, not a read chain.
-        if let Some(slot) = active.entries.iter().position(|entry| {
-            *entry == node
-                || self.module.expr_value_half(*entry) == Some(node)
-                || self.module.class_root(*entry) == self.module.class_root(node)
-        }) {
-            if let Some(value) = active.block_slots.get(slot) {
-                return Ok(Some(*value));
-            }
-        }
         // A clone of the marked function's node reads what its template does.
         let path = self
             .module
@@ -657,6 +618,13 @@ where
                     .and_then(|origin| self.module.entry_state_path(active.state, origin))
             });
         let Some(path) = path else {
+            // **The entering call's element is the entry value**: what the nest
+            // entered with, never the slot's current parameter.
+            if let Some(slot) = active.entries.iter().position(|entry| {
+                *entry == node || self.module.expr_value_half(*entry) == Some(node)
+            }) {
+                return Ok(active.entry_values.get(slot).copied());
+            }
             return Ok(None);
         };
         let Some(slot) = active
@@ -1869,6 +1837,21 @@ where
             })
             .filter(|function| self.module.function_is_looping(*function));
         if let Some(function) = recursion {
+            eprintln!(
+                "[apply] node={node:?} block={} fn={function:?} owner={:?} arg={:?} argvalue={:?} items={:?}",
+                self.block,
+                self.loop_owner(node),
+                self.loop_argument(node),
+                self.loop_argument(node)
+                    .map(|argument| self.module.expr_value_half(argument)),
+                self.loop_argument(node)
+                    .and_then(|argument| self.module.expr_value_half(argument))
+                    .and_then(|value| unsafe { self.module.array_items(value) })
+                    .map(|items| items
+                        .iter()
+                        .map(|item| format!("{:?}", item.node))
+                        .collect::<Vec<_>>()),
+            );
             return match self.module.loop_conversion(function) {
                 Ok(conversion) => self.lower_loop(node, function, &conversion),
                 Err(refusal) => Err(format!(
@@ -1930,6 +1913,20 @@ where
         function: FunctionId,
         conversion: &LoopConversion,
     ) -> Result<ValueId, String> {
+        eprintln!(
+            "[lower-loop] node={node:?} fn={function:?} node_fn={:?} block={} steps={:?} active={:?}",
+            self.module.node_function(node),
+            self.block,
+            conversion
+                .steps
+                .iter()
+                .map(|step| format!("{:?}", step.apply))
+                .collect::<Vec<_>>(),
+            self.loops
+                .iter()
+                .map(|active| active.function)
+                .collect::<Vec<_>>(),
+        );
         let state = self.loop_state(node, conversion)?;
         let slots: Vec<ValueId> = state.iter().map(|(value, _)| *value).collect();
         // **The instance's own frame**: state reads bind to this instance's params.
@@ -2016,12 +2013,17 @@ where
                 }),
             );
         }
+        eprintln!(
+            "[loop] fn={function:?} entry={entry} header={header} tests={tests:?} steps={steps:?} exits={exits:?} merge={merge} slots={slots:?}",
+            slots = &slots
+        );
         self.loops.push(ActiveLoop {
             function,
             conversion: conversion.clone(),
             block_slots: self.body.blocks[header].params.clone(),
             state: self.loop_argument(node).unwrap_or(node),
             entries: state.iter().map(|(_, node)| *node).collect(),
+            entry_values: slots.clone(),
             entry,
             block: header,
             header,
@@ -2261,6 +2263,7 @@ where
         self.loops[index].block = block;
         let params = self.body.blocks[block].params.clone();
         let function = self.loops[index].function;
+        eprintln!("[enter] loop {index} fn={function:?} block={block} params={params:?}");
         let state = self.loops[index].conversion.state.clone();
         let entries = self.loops[index].entries.clone();
         // **The block's own parameters are the state bindings**: a branch block has

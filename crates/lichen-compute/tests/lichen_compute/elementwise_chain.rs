@@ -297,7 +297,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_proves() {
 
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![merged(1, "Elementwise or Reduction", "d96ece43a96974d1")],
+        vec![merged(1, "Elementwise or Reduction", "857e7461e5468c1e")],
         "the floor proves the region: the elementwise kernel and the reduction it feeds are one          kernel the pass's own proof holds"
     );
 }
