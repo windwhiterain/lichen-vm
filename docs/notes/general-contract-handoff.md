@@ -81,27 +81,28 @@
    因此「freeze 早于 mark」在探针路径上不成立，真正缺的是冻结转换的下沉。
 7. 冻结函数带 open captures 时，从冻结图单独下沉需要调用方的活值（capture 的对应关系），
    只有 capture-free 的冻结循环能纯用冻结图下沉。这是统一读法必须先回答的边界。
-8. **冻结包的 kernel body 在到达循环之前就被拒绝**（探针 `zz_frozen_body_probe`）：
-   - 包内命名值跨 import 保留字段名（`lib.pair.row` 答 1）；冻结的 body 函数是可用的值；
-   - 程序里 `compute.parallel lib.raw "cpu" lib.Out` 拒绝：
-     `no field with this name in the struct type Struct`（`compute.parallel` 的实例化
-     读冻结函数签名里的结构字段，名字丢了）；
-   - 包内声明 `k := compute.parallel raw "cpu" Out` 也拒绝：
-     `write's buffer argument is neither a declared buffer nor an output buffer`
-     （普通 write 也如此，和 `@loop` 无关）。
-   检查器的冻结签名走 `materialize_static_signature_expr`（物化），名字在这条路上丢失。
-   所以冻结转换下沉之前，先要把「冻结签名的读取」做成一视同仁的读，而不是物化。
+8. **冻结包的 kernel 形状已测量**（探针 `zz_frozen_body_probe`）：
+   - 包内声明、编译并运行带 `@loop` 的 kernel 可行：build 时编译、`plrun` 运行，导出答案
+     `[3.0, 3.0]`；循环在包构建期（活图）转换。
+   - 包导出的**已编译 kernel**、它的类型、它的函数都能跨 import 读回（`lib.k`、`lib.Out`、
+     `lib.fill` 均作答）——**库形状不需要冻结下沉**。
+   - 把冻结**函数**交给 `compute.parallel` 仍按名字拒绝：
+     `static (imported) functions are not kernel-compilable v1`（明确 v1 门）。
+   - 用程序自建的 buffer 运行导出的 kernel，参数类型检查拒绝：Buffer 对 Buffer、
+     两侧打印完全相同（跨图类型 unify 的缺口）。
+   - 早期「package boundary 丢字段名」是探针自身的错误（用了已删除的 `compute.buffer`；
+     且包以裸表达式结尾会把 export 变成 Array）——已更正。
+9. 包以裸表达式结尾时 export 是那个表达式（如 Array），import 期望 Struct 就会在 import 行
+   `expected Struct, found Array`；包应以绑定结尾。## 下一步（按用户裁定排序）
 
-## 下一步（按用户裁定排序）
-
-1. **冻结签名的读取（不做物化）**：`check_app` 对 `AnyFunctionId::Static` 调
-   `materialize_static_signature_expr`（`crates/lichen-lowlevel/src/static_module/apply.rs`），
-   物化后的签名丢结构字段名，`compute.parallel` 一读就拒绝。改成读冻结图自己的签名
-   （`Module::function_signature(AnyFunctionId)` 已返回 `AnyNodeId`），让检查器的槽位与
-   冻结节点统一（`unify_ref` 已接受 `AnyNodeId`）。
-2. **冻结转换的下沉**：签名打通后，`lower_loop`/`ActiveLoop` 改持 `AnyFunctionId`，
-   状态节点经 `state_nodes_any` 从冻结图取；步骤/出口里的冻结计算需要一个冻结节点的发射器
-   （`LoopGraph` 已实现两图查询）。capture 的边界见实测事实 7。
+1. **跨图参数类型 unify（不做物化）**：程序用自建 buffer 运行包导出的 kernel 时，
+   `plrun` 的参数检查把冻结 kernel 的参数类型与活 buffer 类型比对失败，两侧打印相同。
+   方向：类型比较走 `AnyNodeId`（`unify_ref` 已接受），让 Buffer 的 length 这类值在
+   冻结/活图之间按值相等成立；先写一个最小的 `lib.k` + 程序 buffer 用例定位失败的比较点。
+2. **冻结函数作为 kernel body**：v1 门 `static (imported) functions are not
+   kernel-compilable v1`。库形状已可走「包内编译 kernel、导出 kernel 值」，所以这条不再是
+   必需；若仍要支持，需要 `lower_loop`/`ActiveLoop` 持 `AnyFunctionId` 并从冻结图取状态节点
+   （`LoopGraph` 已实现两图查询；capture 边界见实测事实 7）。
 3. 3 维实例与最终库形状（具名张量、形状表、契约函数）。
 4. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
 
