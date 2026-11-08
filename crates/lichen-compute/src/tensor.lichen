@@ -8,16 +8,27 @@ Tensor := {
   .stride Pair,
   .origin @any : Int,
 }
-dense2 := 'rows -> 'cols -> 'buffer -> {
+Dense := {
+  .rows @any : Int,
+  .cols @any : Int,
+  .buffer (compute.Buf (compute.BufParam{.type Float, .length _})),
+}
+View := {
+  .shape Pair,
+  .stride Pair,
+  .origin @any : Int,
+  .buffer (compute.Buf (compute.BufParam{.type Float, .length _})),
+}
+dense2 := ('d = Dense) -> {
   Tensor{
-    .buffer buffer,
-    .shape Pair{.row rows, .column cols},
-    .stride Pair{.row cols, .column 1},
+    .buffer d.buffer,
+    .shape Pair{.row d.rows, .column d.cols},
+    .stride Pair{.row d.cols, .column 1},
     .origin 0,
   }
 }
-view2 := 'shape -> 'stride -> 'origin -> 'buffer -> {
-  Tensor{.buffer buffer, .shape shape, .stride stride, .origin origin}
+view2 := ('v = View) -> {
+  Tensor{.buffer v.buffer, .shape v.shape, .stride v.stride, .origin v.origin}
 }
 at2 := 't = Tensor -> 'i = Pair -> t.origin + i.row * t.stride.row + i.column * t.stride.column
 read2 := 't = Tensor -> 'i = Pair -> (compute.read ((compute.Read _){.from t.buffer, .at (at2 t i)}) : Float)

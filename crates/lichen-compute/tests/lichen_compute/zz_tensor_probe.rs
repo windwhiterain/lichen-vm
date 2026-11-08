@@ -208,8 +208,8 @@ read_body := ('p = ReadPar) -> {
   ((ReadOut){.o (compute.write ((compute.Write _){.to o, .at i, .value v}))})
 }
 k := compute.parallel read_body "cpu" ReadOut
-row_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 3, .column 1} 0 data.b
-col_major := t.view2 t.Pair{.row 2, .column 3} t.Pair{.row 1, .column 2} 0 data.b
+row_major := t.view2 t.View{.shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 3, .column 1}, .origin 0, .buffer data.b}
+col_major := t.view2 t.View{.shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 1, .column 2}, .origin 0, .buffer data.b}
 out_row := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t row_major}}) : Struct)
 out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct)
 (compute.collect out_row.o, compute.collect out_col.o)
@@ -272,8 +272,15 @@ fn probe_the_tensor_library() {
                     .iter()
                     .map(|diagnostic| (
                         diagnostic.message.clone(),
-                        diagnostic.file.clone(),
                         diagnostic.span,
+                        diagnostic.check.as_ref().map(|check| {
+                            (
+                                check.a,
+                                check.b,
+                                format!("{:?}", check.value_a),
+                                format!("{:?}", check.value_b),
+                            )
+                        }),
                     ))
                     .collect::<Vec<_>>()
             ),
