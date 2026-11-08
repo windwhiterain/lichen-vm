@@ -419,6 +419,12 @@ where
         if let Some(index) = self.loop_owner(node)
             && let Some(value) = self.loop_value(index, node)?
         {
+            // **A tuple state's element is the read's own projection**: the value's
+            // expression is the state's `Index`.
+            let value = match self.element_reader(node, self.loops[index].function)? {
+                Some(reader) => self.index(reader)?,
+                None => value,
+            };
             self.publish_mark(node, value);
             // **The node's value is this block parameter**: its class is the
             // parameter's (`emitted_class`).
@@ -645,6 +651,43 @@ where
             )
         })?;
         Ok(Some(value))
+    }
+
+    /// The expression that reads `node` as the loop state's element, if any.
+    ///
+    /// # Invariant
+    /// The reader is the state's own `Index` — its target carries the state's type
+    /// (`element_types`) — so a body value unified with another read is not one.
+    fn element_reader(&self, node: NodeId, function: FunctionId) -> Result<Option<NodeId>, String> {
+        let parameter = self.module.functions[function].parameter;
+        let value_cell = self.module.expr_value_half(parameter).unwrap_or(parameter);
+        let Some(state_type) = self.module.element_types.get(&value_cell).copied() else {
+            return Ok(None);
+        };
+        for expr in self.module.value_exprs(node) {
+            let Some(operation) = self.module.node_operation(*expr) else {
+                continue;
+            };
+            if !matches!(
+                AsEnum::<lichen_lowlevel::LowOperator>::as_enum(&operation.operator),
+                Some(lichen_lowlevel::LowOperator::Index)
+            ) {
+                continue;
+            }
+            let Some(operand) = operation.operand else {
+                continue;
+            };
+            let Ok(items) = self.module.operand_items(operand) else {
+                continue;
+            };
+            let Some(target) = items.first().and_then(|item| item.node.dynamic()) else {
+                continue;
+            };
+            if self.module.element_types.get(&target).copied() == Some(state_type) {
+                return Ok(Some(*expr));
+            }
+        }
+        Ok(None)
     }
 
     /// The parameter read `node` names, through the wrappers it may arrive in.
