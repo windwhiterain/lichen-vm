@@ -3,10 +3,8 @@
 //! # Invariant
 //!
 //! Print-only, asserts nothing. The plan is four (A stride, B stride, extent) entries:
-//! `r0`/`c2` then `c0`/`c1`. The kernel decodes through the first `rank` entries and folds the
-//! contraction through the rest; the answer is the reference
-//! `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`
-//! (`named-tensors.md` section 11).
+//! `r0`/`c2` then `c0`/`c1`; the kernel decodes through `rank` entries and folds the rest.
+//! Rank 2/2 answers `[2938, 7042, …]`, rank 3/1 `[330, 1554, …]` (`named-tensors.md` §11).
 
 use lichen_compute::language::new_store;
 
@@ -88,17 +86,40 @@ body := ('p = Par) -> {
   ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value value}))})
 }
 kernel := compute.parallel body "cpu" Out
-out := (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank 2, .contract 2, .total 12}, .I In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
+out := (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank @RANK@, .contract @CONTRACT@, .total 12}, .I In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
 compute.collect out.c : Array
 "#;
+
+/// The program at one rank and contraction count, as the template states them.
+fn program(rank: u32, contract: u32) -> String {
+    PROGRAM
+        .replace("@RANK@", &rank.to_string())
+        .replace("@CONTRACT@", &contract.to_string())
+}
 
 #[test]
 fn probe_a_dynamic_rank_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
-    match lichen_language::run::evaluate_raw(PROGRAM, None, &mut store) {
+    match lichen_language::run::evaluate_raw(&program(2, 2), None, &mut store) {
         Ok(text) => println!("[dynamic] {text}"),
         Err(diagnostics) => println!(
             "[dynamic] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+/// Rank 3, one contraction; reference `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`.
+#[test]
+fn probe_a_three_dimensional_contraction() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(&program(3, 1), None, &mut store) {
+        Ok(text) => println!("[three] {text}"),
+        Err(diagnostics) => println!(
+            "[three] refused: {:?}",
             diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
