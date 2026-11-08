@@ -697,6 +697,17 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   `lichen-highlevel/tests/loop_run.rs` on real programs (600 answers as a loop
   where the same source unmarked is refused by the *nesting* guard, 3_000 is
   refused as a loop by the *work* bound, and loop and unroll agree below both).
+- **The dynamic-rank contraction, measured** — `zz_dynamic_contract_probe` answers
+  `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`. Two rules the reading
+  needed: a node of the enclosing body that names an argument element is the **entry
+  value** (`Lower::loop_value` answers `ActiveLoop::entry_values`), not the slot's current
+  block parameter — before, the closure variable `rank` was read as loop state and
+  `dim := rank - s(0)` answered 0 every iteration; and a node the nest does not own is
+  emitted in the block that demands it (`Lower::value_inner` moves its cursor only for a
+  node the nest owns) — the nest's entry precedes the state such a definition may read, and
+  an inner nest's argument lowered around the outer step's parameters was refused as a
+  dominance violation. Entry nodes match by identity or value half; a class root is not an
+  identity, because every `Int` node would collide.
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no

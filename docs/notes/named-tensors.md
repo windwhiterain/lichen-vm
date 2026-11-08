@@ -518,7 +518,7 @@ the gap.
   `compute/body.rs`: a block's terminator is set where the walk ended, so a nest's entry branch
   is not overwritten; `value_inner` restores the cursor only when its own lowering did not move
   it, so a nest's merge stands; and a merged nest becomes the enclosing loop's current block.
-  The full compute suite passes (246 tests).
+  The full compute suite passes (247 tests).
 - **A table's entries are enumerable.** `@table_count t` and `@table_key t i` (an out-of-range
   ordinal refuses by name) give the keys by ordinal in the table's stored order, so a library
   can build the plan and the output descriptor from a shape table. `merge`, `without`, `count`
@@ -526,33 +526,17 @@ the gap.
 
 What remains:
 
-1. **The dynamic-rank body is not yet writable.** `zz_dynamic_contract_probe` builds it and is
-   still refused, but the plan now rides the fold's `Buf` state and **passes the kernel's role
-   walk**. The loop conversion admits a loop-invariant `Buf` (`01e72b04`); the compute lowering
-   gives each loop instance its own value frame and re-seeds a block's state bindings when the
-   nest enters it (`f1699103`, `4e55fca7`); and a state read resolves value -> parameter -> the
-   call's argument (`110b6163`, `6ffce226`). The remaining refusal is the enclosing `dot` fold:
-   a `@loop` lambda at a kernel body's top level is applied through a **static/frozen** callee,
-   so `apply`'s frozen branch inlines it and its body hits a block-0 dominance refusal; the
-   freeze copies no `@loop` mark onto `StaticFunction` at the time it runs. The infrastructure
-   for a frozen conversion is in place (`StaticFunction.looping`,
-   `StaticModule.dynamic_functions`, `Module::static_dynamic_function`, and the `apply`
-   branch), but the frozen functions carry no mark. Wrapping the dot in a lambda template makes
-   the callee dynamic and converts the dot; the next refusal is then the frozen residual's
-   index placement: the inlined callee's parameter reads do not place against the caller's
-   domain (`parameter_path`'s base never matches the clone's parameter node).
-
-   Measured with module pointers: the `@loop` marks (`mark_looping`) land on the same module
-   the compute lowering reads (one pointer, 33 functions), while the closure freeze that
-   produced the callee's static ref ran **before** them — the module was frozen from a build
-   that had not yet normalized the kernel body's lambdas. The freeze is the package build's
-   `Registry::freeze_mapped` (`crates/lichen-language/src/package.rs:739`), which runs before
-   the kernel body's lazy lowering. So the static copy's `looping` is a pre-normalization
-   snapshot, not a static/semantic limit; a freeze taken after the kernel body's normalization
-   carries the mark. The fix direction is therefore two-part: normalize
-   (the kernel body's lambdas) before the freeze that produces the callee's static ref, and
-   read the frozen function through one graph interface shared with the dynamic module
-   (`loop_conversion` over both) instead of a cross-module `FunctionId` bridge.
+1. **The dynamic-rank body runs, and is measured.** `zz_dynamic_contract_probe` answers
+   `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]` — the plan's four
+   (A stride, B stride, extent) entries, the first `rank` decoded and the rest folded. Two
+   lowering rules made it run, and both were measured rather than inferred: a node of the
+   enclosing body that names an argument element reads the **entry value**, not the slot's
+   current block parameter (the closure variable `rank` was read as loop state, so
+   `dim := rank - s(0)` answered 0 in every iteration); and a node the nest does not own is
+   emitted in the block that demands it, not at the nest's entry (an inner nest's argument
+   lowered around the outer step's parameters, and the entry does not dominate the block its
+   use reaches). The frozen-callee reading this note recorded before was not what this
+   program met.
 2. **The plan's order** is the table's stored (hash) order. It is deterministic and the strides
    are explicit, so it is a valid output order; the library and the host must both use it.
 3. **The input path is the fill kernel or the serve's host `RunArgument`s.** The
@@ -563,6 +547,11 @@ What remains:
    measured working).
 5. **The contracted extents' equality** is a value comparison: check-time when literal, the
    library or host otherwise.
+6. **The static bridge is still there.** Normalize the kernel body's lambdas before the freeze
+   that produces a callee's static ref (so a frozen function carries `looping`), then remove
+   `StaticModule.dynamic_functions` / `Module::static_dynamic_function` and read the frozen
+   conversion through one graph interface. [general-contract-handoff](general-contract-handoff.md)
+   carries the readings and the order.
 
 **Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
 `B{r1,c1}` (6×2, `B[t][c] = t+1+c`) over `c0`/`r1`; `C` is 2×2 and the probe answers

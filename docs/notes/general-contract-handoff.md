@@ -1,10 +1,11 @@
-# 通用契约 API 交接（动态秩探针）
+# 通用契约 API 交接（动态秩探针已通过）
 
 ## 目标
 
 - 持久目标：完成 general contract API 实现（具名张量 / 形状表内核）。
-- 当前子目标：动态秩收缩探针通过，输出 `[2938, 3874, 3016, 3952, 3094, 4030, 3172, 4108, 3250, 4186]`。
-- 探针：`crates/lichen-compute/tests/lichen_compute/zz_dynamic_contract_probe.rs`（print-only，调查期间留在树里）。
+- 子目标状态：动态秩收缩探针**已通过**，输出
+  `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`（与独立参考实现一致）。
+- 探针：`crates/lichen-compute/tests/lichen_compute/zz_dynamic_contract_probe.rs`（print-only）。
 
 ## 用户裁定（必须遵守）
 
@@ -18,66 +19,81 @@
 
 ## 仓库状态
 
-- 工作树：`C:\resource\lichen-vm`；分支 `dev`；HEAD `fd763a15`。
-- `git status`：`README.md`（既有改动，勿提交）、`docs/notes/general-contract-handoff.md`（本文件，未提交）。
-- 最近提交（新→旧）：
+- 工作树：`C:\resource\lichen-vm`；分支 `dev`。
+- `git status`：`README.md`（既有改动，勿提交）。
+- 相关提交（新→旧）：
+  - `96b58a15` compute: 循环入口值与外部节点所在块
+  - `3691e5c2` docs: general contract API handoff
   - `fd763a15` lowlevel: 值记录一次读的目标与位置
   - `6771f993` checker: formal 与 tuple 元素记录元素类型
-  - `75453357` compute: tuple state 元素按读者表达式投影
-  - `c8e1f354` lowlevel: 值记录产生它的表达式
-- 套件（HEAD 实测）：compute `247 passed, 1 ignored`；highlevel `136 passed`。
-- 探针（HEAD）：拒绝，信息为 `Bin(Int, Sub) reads ValueId(10), which block 2 receives as a parameter, and block 2 does not dominate block 8`。
+- 套件（`96b58a15` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `247 passed, 1 ignored`。
 - 门：`cargo fmt --all`、`comments-check --config comments-test.toml . --max-violations 0`。
+- 调试打印 `[val]`、`[dbg]` 已从 compute 移除。
+
+## 探针修复的两条规则（`96b58a15`）
+
+1. **入口值是入口值，不是当前块的参数。** 外层函数里作为调用实参元素出现的节点，
+   读到的是循环**进入时**的值；此前 `Lower::loop_value` 对这类节点返回
+   `block_slots[slot]`（当前块的参数），于是循环体内闭包变量 `rank` 被当成状态读，
+   `dim := rank - s(0)` 恒为 0。现在先按状态路径（`parameter_value_path` /
+   `entry_state_path`）解析真状态读，解析不到才按实参元素身份返回
+   `ActiveLoop::entry_values`。类根相等不做身份判据（同类的 Int 会互相误配）。
+2. **不属于该 nest 的节点在需求它的块里发射。** 此前发射到 nest 的 entry 块；当该定义
+   读取 nest 块参数时（嵌套循环的实参就可能如此），entry 不支配使用点，得到
+   `block 0 does not dominate block 6`。现在 `value_inner` 只为 nest 拥有的节点切换
+   游标，其余就地发射。
+
+副作用：`elementwise_chain` 的合并片段 digest 随发射布局更新为
+`857e7461e5468c1e`（该测试打印的 canonical form 未变，哈希仍自洽）。
 
 ## 相关代码
 
 - `crates/lichen-lowlevel/src/loop_conversion.rs`
-  - `LoopConversion { function: AnyFunctionId, state, tests, steps, exits }`；`loop_conversion_any`、`LoopGraph`。
-  - `Module::parameter_value_path`（约 709 行）：先 `marked_state_path`；再 `value_read` 猜测；再值侧链；链上含读者匹配分支（`value_exprs` 找 `Index` 读者）。
-  - 类匹配且路径为空时现在会落入读者分支（本提交改动）。
-- `crates/lichen-lowlevel/src/lib.rs`
-  - `Module.element_types: HashMap<NodeId, AnyNodeId>`（值节点 → 类型节点）。
-  - `Module.value_exprs: HashMap<NodeId, Vec<NodeId>>`（值 → 表达式）。
-  - `Module.value_reads: HashMap<NodeId, (NodeId, usize)>`（值 → 读目标与位置），本提交新增。
-- `crates/lichen-lowlevel/src/resolve.rs`
-  - `record_element_type(value, ty)`（`entry().or_insert`，首条生效）。
-  - `element_type_of(node)`：按节点、`class_root`、`node_origin` 依次回退。
-  - `element_value_node(node)`：节点值若是布局数组则取其首项，否则取节点自身。
-- `crates/lichen-highlevel/src/checker.rs`
-  - `value_of`（约 1772 行）：记录 `set_expr_value(term, value)`。
-  - `check_term`（约 1806 行起）：尾部有 `anchor_marks(e)` 与 skeleton 绑定。
+  - `Module::parameter_value_path`：先 `marked_state_path`，再值侧 `Index` 链；
+    读者分支用 `value_exprs` + `element_types` 回退。
+  - `Module::state_nodes`、`Module::entry_state_path`、`Module::read_position`。
+- `crates/lichen-lowlevel/src/lib.rs` 与 `module.rs`
+  - `element_types: HashMap<NodeId, AnyNodeId>`（值 → 类型，语义窄，勿当通用登记表）。
+  - `value_exprs: HashMap<NodeId, Vec<NodeId>>`（值 → 陈述它的表达式）。
+  - `value_reads: HashMap<NodeId, (NodeId, usize)>`（值 → 读目标与常量位置），暂时未接入。
 - `crates/lichen-highlevel/src/checker/indexing.rs`
-  - `check_index`（约 31 行）：`array_value = value_of(array)`、`index_value = value_of(index)`、`position = constant_position(index) + 1`；本提交在末尾写 `record_value_read(value_node, array_value, position - 1)`。
-- `crates/lichen-highlevel/src/checker/lambda.rs`
-  - `check_lam` 为每个 formal 记录元素类型（已提交）。
+  - `check_index`：只有 `constant_position(index)` 有常量时才 `record_value_read`；
+    探针的下标全是动态表达式，所以该表在探针里为空。
 - `crates/lichen-compute/src/compute/body.rs`
-  - `Lower` 持有 `&Module`，只能读；核心：`loop_owner`、`loop_value`、`value_inner`、`loop_state`、`lower_loop_steps`、`element_reader`。
-  - 调试打印仍在：`[val]`（355 行）、`[dbg]`（422 行）；交付前移除。
+  - `Lower` 持有 `&Module`（只读）；`loop_owner`、`loop_value`、`value_inner`、
+    `loop_state`、`lower_loop_*`、`enter_loop_block`、`ActiveLoop`。
+  - `LoopConversion` 的状态路径、tests/steps/exits 由 lowlevel 提供。
 
 ## 实测事实（重要）
 
-1. `element_types` 能登记循环入口值：在 `check_tuple_term` 用 `element_value_node(term)` 记录后，`element_types(15738) = Dynamic(17)`；探针从 `ValueId(10)` 进步为 `ValueId(0)`（block 0 参数，仍拒绝）。
-2. 但该登记只是「tuple 元素」这一处，就让 compute 套件出现 33 个 FAILED（`fused_region`、`chain_merge`、`cooperative_product`…）。
-3. 更早的「`value_of` 里对所有表达式值登记」让 compute 出现 17 个 FAILED。
-4. 结论：`element_types` 的语义比「任意值 → 类型」更窄（元素槽位的形状权威），不能作为循环状态元素的通用登记表。
-5. `value_reads` 已提交但未接入 `parameter_value_path` 的决策；`value_read(15734)` 为 None，`check_index` 记录到的是 `15738`（元素值），与 body 使用的 `15734` 不是同一节点，需对齐。
-6. 语言层 `value_of` 没覆盖循环入口值：`s` 的 `state[e].val` 由 `check_index` 直接写。
+1. 探针通过；旧交接文档里的期望值 `[2938, 3874, …]` 是错的（来自更早版本的程序），
+   已按独立参考实现更正。
+2. `element_types` 不能当“任意值 → 类型”登记表：全量登记破 17 个 compute 测试，
+   只登记 tuple 元素破 33 个（merge/tiling 依赖元素槽位语义）。
+3. `value_reads` 对动态下标无用（无常量位置），不要围绕它设计。
+4. compute 侧不能写模块（`&Module`）；任何登记必须发生在语言层（checker）。
+5. 嵌套循环的实参可以在外层循环的步块里；外部节点就地发射后支配关系成立。
 
-## 下一步（推荐顺序）
+## 下一步（按用户裁定排序）
 
-1. 对齐节点：查清 `15734` 与 `15738` 的关系（`node_origin`、`class_root`、`element_index`、`element_expr`），让 `check_index` 记录的读值与 body 实际使用的值一致。
-2. 用**专用**映射（`value_reads` 或新表）驱动 `parameter_value_path`，不要写 `element_types`；判定条件用「读目标 == 参数值格」或「读目标类 == 参数值类」，避免全域匹配导致套件回归。
-3. 接入后跑探针；若仍拒绝，按 `[dbg]` 看 `loop_value` 取到的 slot 值是否来自正确块（当前 `ValueId(0)` 是 block 0 参数，说明进入块或 block_slots 仍未切换）。
-4. 套件 + 门 + 提交；交付前移除 `[val]`/`[dbg]`。
+1. **normalize 后再 freeze**：`Registry::freeze_mapped`（`crates/lichen-language/src/package.rs`）
+   目前早于 kernel body 的惰性 lowering，冻结副本缺 `looping` 标记。方向：
+   先归一化 kernel body 的 lambda，再冻结；冻结函数带上 `looping`。
+2. **移除跨模块桥**：`StaticModule.dynamic_functions`、`Module::static_dynamic_function`
+   以及 `apply` 里借 `FunctionId` 的分支，改成通过同一个图接口读冻结的转换
+   （`loop_conversion_any` 已支持两图，需要让内核 `apply`/`lower_loop` 走它）。
+3. 3 维实例（需要新探针时先取得用户许可）与最终库形状（具名张量、形状表、契约函数）。
+4. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
 
 ## 已知坑
 
-- `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic；该写法已回退，勿重试。
-- compute 侧 `record_element_type` 因 `&Module` 借用不可用；勿改 `Lower` 持有方式。
-- 早前「全量登记」会静默改变 `element_type_of` 结果，破坏 merge/tiling 测试；任何登记改动先跑 compute 套件。
+- `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。
+- 计算 `Lower` 侧 `record_element_type` 会触发 `&Module` 借用错误，勿改 `Lower` 持有方式。
+- `elementwise_chain` 的 digest 是发射布局的指纹：改 lowering 后它会变，更新 pin 即可，
+  但先确认 canonical form 的其他断言仍通过。
+- 提交只 add 自己改的路径；不要提交 `README.md`。
 
 ## 交接提示
 
 - 压缩上下文后从「下一步」第 1 条继续。
 - 需要用户裁决时用 `ask_user_question`，不要用正文提问。
-- 提交只 add 自己改的路径；不要提交 `README.md`。
