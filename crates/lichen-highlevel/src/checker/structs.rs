@@ -315,14 +315,21 @@ where
     /// Whether a type cell is statically inspectable. Gates the
     /// field-read and function-ness guards.
     pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
-        self.module
-            .node_value(AnyNodeId::Dynamic(self.module.class_root(ty)))
+        let root = self.module.class_root(ty);
+        if self
+            .module
+            .node_value(AnyNodeId::Dynamic(root))
             .is_some_and(|value| {
                 matches!(
                     value.as_enum(),
                     None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
                 )
             })
+        {
+            return true;
+        }
+        // **A computed type is concrete**: it states its own layout at run time.
+        self.module.node_operation(root).is_some()
     }
 
     /// Whether a type node is the shared **struct layout**.

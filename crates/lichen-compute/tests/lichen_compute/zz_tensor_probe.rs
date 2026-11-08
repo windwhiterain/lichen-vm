@@ -259,9 +259,16 @@ fn probe_the_tensor_library() {
         );
         return;
     }
+    // The body spells the read itself: `read2`'s call would be refused inside a kernel.
+    let inline = TENSOR_READ.replace(
+        "  v := t.read2 p.in.t (t.Pair{.row row, .column col})",
+        "  at := p.in.t.origin + row * p.in.t.stride.row + col * p.in.t.stride.column
+  v := (compute.read ((compute.Read _){.from p.in.t.buffer, .at (at : Int)}) : Float)",
+    );
     for (label, program) in [
         ("address", TENSOR_ADDRESS),
         ("read", TENSOR_READ),
+        ("read-inline", inline.as_str()),
         ("frozen-type", FROZEN_TYPE),
     ] {
         match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
