@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::shape;
+use lichen_utils::extend::AsEnum;
 
 impl<P: HighProgram> Checker<P>
 where
@@ -23,14 +24,22 @@ where
             vals.push(self.state[el].term.expect("an element is compiled"));
         }
         let value = self.array_node(self.current_block, &vals);
-        // **A tuple states its fields' shapes**: a state read names an element by
-        // class, which only the fields give.
+        // **A tuple states its fields' shapes**: an element's type constant is its
+        // shape, read before any value exists.
         let fields: Vec<Option<lichen_lowlevel::LowShape>> = elements
             .iter()
             .map(|element| {
-                self.state[*element]
-                    .val
-                    .and_then(|val| self.module.low_type_of_node(val))
+                let ty = self.state[*element].ty?;
+                let value = self
+                    .module
+                    .node_value(lichen_lowlevel::AnyNodeId::Dynamic(ty))?;
+                if value == P::Value::int_marker() {
+                    Some(lichen_lowlevel::LowShape::USize)
+                } else if value == P::Value::float_marker() {
+                    Some(lichen_lowlevel::LowShape::Float)
+                } else {
+                    None
+                }
             })
             .collect();
         self.module
