@@ -566,8 +566,8 @@ What remains:
    functions are not kernel-compilable v1`). The same probe's `contract` reading carries the
    whole dynamic-rank contraction as a package — five nested `@loop` nests and the plan-driven
    addresses — and a program that fills the buffers and runs the exported kernel answers the
-   reference `[2938, 7042, …, 7930]`: the library holds the kernel, the host supplies data and
-   the meta.
+   reference `[2938, 7042, …, 7930]` at rank 2 over two contractions and `[330, 1554, …, 2250]`
+   at rank 3 over one: the library holds the kernel, the host supplies data and the meta.
 
 **Measured: the 2-D contraction runs.** `A{r0,c0}` (2×6, `A[r][t] = 6r+t+1`) contracts with
 `B{r1,c1}` (6×2, `B[t][c] = t+1+c`) over `c0`/`r1`; `C` is 2×2 and the probe answers

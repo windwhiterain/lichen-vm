@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `63843e80` test: 包持有的 contract 在 rank 2 / rank 3 都通过
   - `f6b9d3dc` test: 契约库端到端（包持有 dynamic-rank kernel）
   - `a4caf9c3` test: 冻结包的 kernel body 测量
   - `c813a2f1` loop: 移除冻结函数桥
@@ -97,11 +98,12 @@
 10. **3 维实例也通过**（`zz_dynamic_contract_probe` 的 rank 3 / contract 1）：
     `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`，与独立参考实现一致；
     2 维读数不变。
-11. **契约库端到端通过**（`zz_frozen_body_probe` 的 `contract` 读数）：包 `contract_lib.lichen`
-    持有 dynamic-rank 收缩的全部类型、body（5 层嵌套 `@loop`、plan 驱动地址）和 kernel；
-    包构建期转换循环并冻结已编译 kernel；程序用自己的 fill kernel 填三个 buffer、经 import
-    的类型建 Meta/Arg，`plrun lib.kernel` 答
-    `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`——与参考一致。
+11. **契约库端到端通过**（`zz_frozen_body_probe` 的 `contract` / `contract3` 读数）：
+    包 `contract_lib.lichen` 持有 dynamic-rank 收缩的全部类型、body（5 层嵌套 `@loop`、
+    plan 驱动地址）和 kernel；包构建期转换循环并冻结已编译 kernel；程序用自己的 fill kernel
+    填三个 buffer、经 import 的类型建 Meta/Arg，`plrun lib.kernel` 在 rank 2/contract 2 答
+    `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`，在 rank 3/contract 1 答
+    `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`——都与参考一致。
     这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。## 下一步（按用户裁定排序）
 
 1. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
