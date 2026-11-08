@@ -22,6 +22,7 @@
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。
 - `git status`：`README.md`（既有改动，勿提交）。
 - 相关提交（新→旧）：
+  - `932867c2` test: 冻结类型的字段读成 @any（成因测量）
   - `24fd5d42` tensor: tensor.lichen 初稿与两个阻塞
   - `da52e00e` test: typed-only selector 作答（旧笔记的拒绝已过时）
   - `63843e80` test: 包持有的 contract 在 rank 2 / rank 3 都通过
@@ -114,10 +115,12 @@
 13. **tensor 库包初稿已落**（`crates/lichen-compute/src/tensor.lichen`，用户选的语言侧 tensor 库）：
     `Pair`、`Tensor`（buffer + shape + stride + origin）、`dense2`/`view2`、`at2`、`read2`/`write2`。
     包能编译、函数可调用，但两个阻塞已测量（`zz_tensor_probe` 的 `probe_the_tensor_library`）：
-    - **带参数化字段的结构字面量没有名义类型**：`t.Tensor{...}` 传给 `t = Tensor` 形参后，
-      形参类型仍未定，`at2` 体内的字段读报
-      `this field read cannot be checked: the container's type is not decided here`；
-      直接 `(Tensor{...} : Tensor)` 会报 `expected Tensor…, found Struct`。
+    - **冻结类型作形参注解时形参类型未定**（已定位到成因）：`show := 'x = t.Tensor -> x.shape.row`
+      作用在 `t.Tensor{...}` 字面量上时，`x.shape` 得到的是**类型**的 `Pair`（`(@any, @any)`）、
+      `x.origin` 得到 `none`，而同一个字面量直接读 `lit.shape.row` 得 `2`。追查显示：形参的
+      类型格 class root 值为 `None`（`concrete=false`），于是 `check_named_field` 走延迟路径，
+      字段的值在定义处从**未定**的容器决定，得到类型侧的占位值。程序内定义的同类类型
+      （具体长度或 `_` 长度）都答对，所以分水岭是**冻结类型的注解**。
     - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
       认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
       `read's buffer argument is not an input buffer of the parallel parameter`。
@@ -126,10 +129,10 @@
 ## 下一步（按用户裁定排序）
 
 1. **tensor 库的两个阻塞**（按用户选的 B）：
-   (a) 结构字面量的名义类型：`Tensor{...}` 含有参数化字段（`(compute.Buf …)`）时，
-   字面量的类型没有被认作 `Tensor`；需要让字面量的类型由被调用的类型给出（这是检查器/
-   类型系统的一处缺口，先写最小测量）；(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的
-   输入 `[1,0,0]` 与 `read2` 的读节点没有对上。
+   (a) 冻结类型注解：让被注解形参的类型格在注解处**decided**（冻结类型的值可读即可），
+   这样 `check_named_field` 不走延迟路径、字段值从实参读；或在形参有注解时跳过延迟，
+   让运行期在实参上求值。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
+   与 `read2` 的读节点没有对上。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
