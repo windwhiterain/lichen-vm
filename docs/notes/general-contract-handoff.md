@@ -116,15 +116,16 @@
 13. **tensor 库包初稿已落**（`crates/lichen-compute/src/tensor.lichen`，用户选的语言侧 tensor 库）：
     `Pair`、`Tensor`（buffer + shape + stride + origin）、`dense2`/`view2`、`at2`、`read2`/`write2`。
     包能编译、函数可调用，但两个阻塞已测量（`zz_tensor_probe` 的 `probe_the_tensor_library`）：
-    - **冻结类型作形参注解时，形参绑定的是实参的“类型”而不是值**（已定位到成因）：
-      `plain_id := 'x -> x` 作用在同一字面量上返回其值
-      `((Buffer,Float,6), (2,3), (3,1), 0)`；而 `show_id := 'x = t.Tensor -> x` 返回**类型**的
-      形状（开着的 buffer、`Pair` 类型的占位、`@any`）。所以注解路径把形参 slot 与冻结的
-      类型表达式按位置 unify 了，形参的值格从未绑定到实参值；`x.shape`/`x.origin` 从这个
-      slot 读，于是答 `(@any,@any)` / `none`。程序内定义的同形类型（具体或 `_` 长度）都答对。
-      **试过的失败方向**：在 `value_slot_read` 里把冻结项的 value（Array）写成 live 值，
-      类型就成了 `Type` 而不是 `TypeFunction`（`expected TypeFunction, found Type`），
-      证明冻结类型必须以**类型层值**（TypeFunction）重建，不能直接取原始数组。
+    - **冻结类型作形参注解：已修复**（`3081828f`）。此前注解路径把形参 slot 按位置
+      unify 到冻结的类型值上（`show_id` 返回类型形状、`x.shape` 答 `(@any,@any)`）。两条规则：
+      冻结数组（含 static item）在 `requirement_is_open` 里算“开放”，且
+      `instantiate_requirement_value` 让这样的数组留下 **fresh 槽**而不是冻结值本身。
+      实测：`show_shape (2,3)`、`show_origin 0`、`show_row 2`、`show_id` 返回字面量的
+      buffer/(2,3)/(3,1)/0，库函数 `t.at2` 对冻结 `Tensor` 字面量答 `5`。
+      套件：compute 252、highlevel 136、lowlevel 167。
+    - **库构造器 `dense2`/`view2` 的返回类型仍未定**：给 body 加
+      `(Tensor{…} : Tensor)` 会报 `expected Tensor…, found Struct`，所以调用方对
+      `view2` 的结果做字段读仍会被拒；现在可以直接用 `t.Tensor{…}` 字面量绕开。
     - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
       认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
       `read's buffer argument is not an input buffer of the parallel parameter`。
@@ -132,13 +133,10 @@
 
 ## 下一步（按用户裁定排序）
 
-1. **tensor 库的两个阻塞**（按用户选的 B）：
-   (a) 冻结类型注解：类型是 **TypeFunction**（失败实验的报错 `expected TypeFunction,
-   found Type` 已证明），live 类型注解正常，说明 live TypeFunction 与形参 slot 的 unify 会把
-   字段绑到实参上；冻结 TypeFunction 的应用没有走到这条绑定。下一步：查清 live TypeFunction
-   的 unify 规则（`check_unify_expr`/`unify` 对 TypeFunction 的处理），让冻结的那条走同一
-   应用路径（`apply_function_type`/静态 apply），而不是按位置 unify 值格。(b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]`
-   与 `read2` 的读节点没有对上。
+1. **tensor 库剩余的两个口子**（按用户选的 B）：
+   (a) 库构造器的返回类型（`dense2`/`view2`）——类型注解/返回类型如何 decide（见实测 13）。
+   (b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]` 与 `read2` 的读节点
+   没有对上（`parallel_buffer_pos` 的三条匹配路径都没命中）。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
