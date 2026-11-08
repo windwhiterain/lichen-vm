@@ -11,20 +11,21 @@ use std::path::PathBuf;
 
 use lichen_compute::language::new_store;
 
-/// A package with a named field value and a body function carrying a `@loop`.
+/// A package whose body folds its input and returns a locally allocated output.
 const BODY: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In  := {.unused (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Out := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Par := {.n @any : Int, .taps @any : Int, .in In, .out Out}
+In  := {.unused (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+Par := {.n @any : Int, .taps @any : Int, .in In}
 Arg := {.n @any : Int, .taps @any : Int, .I In}
 pair := {.row 1, .column 2}
 raw := ('c = Par) -> {
   i := compute.range c.n
+  o := compute.buf (compute.BufParam{.type Float, .length 2})
   @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _){.from c.in.unused, .at s(0) - 1}) : Float)))
-  compute.write ((compute.Write _){.to c.out.y, .at i, .value fold (c.taps, 0.0)})
+  ((Out){.y (compute.write ((compute.Write _){.to o, .at i, .value fold (c.taps, 0.0)}))})
 }
 "#;
 
@@ -33,16 +34,28 @@ const KERNEL: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In  := {.unused (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Out := {.y (compute.Buf (compute.BufParam{.type Float, .length _}))}
-Par := {.n @any : Int, .taps @any : Int, .in In, .out Out}
+In  := {.unused (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+Out := {.y (compute.Buf (compute.BufParam{.type Float, .length 2}))}
+Par := {.n @any : Int, .taps @any : Int, .in In}
 Arg := {.n @any : Int, .taps @any : Int, .I In}
+Fill := {.n @any : Int}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 8})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value 1.0}))})
+}
+f_kernel := compute.parallel fill "cpu" ABuf
+data := (compute.plrun f_kernel ((Fill){.n 8}) : Struct)
 raw := ('c = Par) -> {
   i := compute.range c.n
+  o := compute.buf (compute.BufParam{.type Float, .length 2})
   @loop fold := 's -> if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _){.from c.in.unused, .at s(0) - 1}) : Float)))
-  compute.write ((compute.Write _){.to c.out.y, .at i, .value fold (c.taps, 0.0)})
+  ((Out){.y (compute.write ((compute.Write _){.to o, .at i, .value fold (c.taps, 0.0)}))})
 }
 k := compute.parallel raw "cpu" Out
+out := (compute.plrun k ((Arg){.n 2, .taps 3, .I In{.unused data.a}}) : Struct)
+collected := compute.collect out.y : Array
 "#;
 
 const PROGRAM: &str = r#"
@@ -50,9 +63,17 @@ const PROGRAM: &str = r#"
   compute = import "compute.lichen"
   lib = import "frozen_body_lib.lichen"
 ---
-x := (compute.buffer ([@any : Float, 2][1.0, 1.0] : Array) : (compute.Buf (compute.BufParam{.type Float, .length _})))
+Fill := {.n @any : Int}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 8})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value 1.0}))})
+}
+f_kernel := compute.parallel fill "cpu" ABuf
+data := (compute.plrun f_kernel ((Fill){.n 8}) : Struct)
 k := compute.parallel lib.raw "cpu" lib.Out
-out := (compute.plrun k ((lib.Arg){.n 2, .taps 3, .I lib.In{.unused x}}) : Struct)
+out := (compute.plrun k ((lib.Arg){.n 2, .taps 3, .I lib.In{.unused data.a}}) : Struct)
 compute.collect out.y : Array
 "#;
 
@@ -64,12 +85,13 @@ macro_rules! reading {
                 "refused {:?}",
                 diagnostics
                     .iter()
-                    .map(|diagnostic| diagnostic.message.clone())
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
                     .collect::<Vec<_>>()
             ),
         }
     };
 }
+
 #[test]
 fn probe_a_kernel_body_from_a_frozen_package() {
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("frozen_body_probe");
@@ -113,6 +135,50 @@ fn probe_a_kernel_body_from_a_frozen_package() {
             "---\n  lib = import \"frozen_body_lib.lichen\"\n---\nlib.raw",
         ),
         ("program", PROGRAM),
+        ("declared", KERNEL),
+        (
+            "kernel",
+            "---\n  compute = import \"compute.lichen\"\n  lib = import \"kernel_lib.lichen\"\n---\nlib.k",
+        ),
+        (
+            "kernel-type",
+            "---
+  compute = import \"compute.lichen\"
+  lib = import \"kernel_lib.lichen\"
+---
+lib.Out",
+        ),
+        (
+            "kernel-function",
+            "---
+  compute = import \"compute.lichen\"
+  lib = import \"kernel_lib.lichen\"
+---
+lib.fill",
+        ),
+        (
+            "answer",
+            "---\n  compute = import \"compute.lichen\"\n  lib = import \"kernel_lib.lichen\"\n---\nlib.out",
+        ),
+        (
+            "run",
+            r#"---
+  compute = import "compute.lichen"
+  lib = import "kernel_lib.lichen"
+---
+Fill := {.n @any : Int}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 8}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 8})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value 2.0}))})
+}
+f_kernel := compute.parallel fill "cpu" ABuf
+data := (compute.plrun f_kernel ((Fill){.n 8}) : Struct)
+out := (compute.plrun lib.k ((lib.Arg){.n 2, .taps 3, .I lib.In{.unused data.a}}) : Struct)
+compute.collect out.y : Array
+"#,
+        ),
     ] {
         println!(
             "[frozen] {label}: {}",
@@ -122,20 +188,5 @@ fn probe_a_kernel_body_from_a_frozen_package() {
                 &mut store
             ))
         );
-    }
-    // A package that declares the kernel itself.
-    match lichen_language::run::evaluate_raw(
-        "---\n  compute = import \"compute.lichen\"\n  lib = import \"kernel_lib.lichen\"\n---\nlib.k",
-        Some(&directory),
-        &mut store,
-    ) {
-        Ok(text) => println!("[frozen] kernel value: answered {text}"),
-        Err(diagnostics) => println!(
-            "[frozen] kernel value: refused {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.message.clone())
-                .collect::<Vec<_>>()
-        ),
     }
 }
