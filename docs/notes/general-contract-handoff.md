@@ -28,7 +28,7 @@
   - `3691e5c2` docs: general contract API handoff
   - `fd763a15` lowlevel: 值记录一次读的目标与位置
   - `6771f993` checker: formal 与 tuple 元素记录元素类型
-- 套件（`a4caf9c3` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `248 passed, 1 ignored`。
+- 套件（`0207cbd1` 实测）：lowlevel `167 passed`；highlevel `136 passed`；compute `249 passed, 1 ignored`。
 - 门：`cargo fmt --all`、`comments-check --config comments-test.toml . --max-violations 0`。
 - 调试打印 `[val]`、`[dbg]` 已从 compute 移除。
 
@@ -92,13 +92,16 @@
    - 早先 `run` 的 Buffer-Buffer 失配是探针自己用了**普通 buffer**（本地 `ABuf` 类型、
      未经过 `write`/`read` 的 perspective），不是包边界缺陷；已复核并更正。
 9. 包以裸表达式结尾时 export 是那个表达式（如 Array），import 期望 Struct 就会在 import 行
-   `expected Struct, found Array`；包应以绑定结尾。## 下一步（按用户裁定排序）
+   `expected Struct, found Array`；包应以绑定结尾。
+10. **3 维实例也通过**（`zz_dynamic_contract_probe` 的 rank 3 / contract 1）：
+    `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`，与独立参考实现一致；
+    2 维读数不变。## 下一步（按用户裁定排序）
 
 1. **把库形状写成可复用示例**：包内「类型 + kernel + step」、程序 import 后建参数并
    `plrun`。落点：`examples/` 或 `crates/lichen-serve/examples/` 的一个真实形状（具名张量
    的 stride/shape 表），并让 `docs/notes/named-tensors.md` 指向它。
-2. **3 维实例**：同一探针换成 rank=3 的 plan（需要时先取得许可），验证 dynamic-rank
-   在库形状下同样成立。
+2. **3 维实例已在同一探针通过**（rank 3 / contract 1）。下一步把库形状与 3 维/dynamic-rank
+   组合成一个真实示例（具名张量的 shape/stride 表）。
 3. **契约函数（general contract API 的收尾）**：把 `contract`/`merge`/`without`/`count`/`key`
    与拼好的 kernel 组成一个库函数，程序只需要类型与数据。
 4. 冻结函数作为 kernel body（v1 门）不再是库形状的必需项；若仍要做，需要

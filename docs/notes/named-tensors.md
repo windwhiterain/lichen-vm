@@ -527,8 +527,10 @@ the gap.
 What remains:
 
 1. **The dynamic-rank body runs, and is measured.** `zz_dynamic_contract_probe` answers
-   `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]` — the plan's four
-   (A stride, B stride, extent) entries, the first `rank` decoded and the rest folded. Two
+   `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]` at rank 2 over two
+   contractions and `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]` at rank 3 over
+   one — the plan's four (A stride, B stride, extent) entries, the first `rank` decoded and the
+   rest folded. Two
    lowering rules made it run, and both were measured rather than inferred: a node of the
    enclosing body that names an argument element reads the **entry value**, not the slot's
    current block parameter (the closure variable `rank` was read as loop state, so
