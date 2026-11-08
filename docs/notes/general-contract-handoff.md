@@ -193,6 +193,10 @@
      `read-inline` 现在停在 `a struct parameter field read names buffer … that struct's
      fields are None`（走查沿参数**类型值**走，`.t` 处的值是未定 cell，冻结 Tensor 的
      字段名读不到）。
+   - **冻结类型函数的字段不可内省**（本轮结论）：冻结的 `Tensor` 节点（ModuleKey(4) 的
+     节点 33）`static_read` 为 `None`——它没有被求值，`static_array_items` 也不适用，
+     所以 `struct_field_names` 拿不到字段名。要素：**在检查/编译期运行一次冻结函数**
+     （静态 apply/求值）才能读出类型函数的字段。这与 v1 的「冻结函数不可直接应用」同源。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
