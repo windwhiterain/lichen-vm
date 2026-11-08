@@ -406,9 +406,9 @@ to prefer a type-carried shape.
    `2`. That gap is fixed (`3081828f`): the frozen type is treated as a template — its static
    items count as open and a frozen array leaves the requirement slot fresh — so `show_shape`
    answers `(2, 3)`, `show_origin` `0`, and the library's `at2` answers `5` over a frozen
-   `Tensor` literal. What is not fixed: the library's own constructors (`dense2`/`view2`) leave
-   their return type undecided (ascribing the body to `Tensor` says `expected Tensor…, found
-   Struct`), so a caller reads fields of `t.Tensor{…}` directly instead. And a
+   `Tensor` literal. The library's own constructors are fixed by the **single-argument
+   descriptor** spelling (`567d875d`): `dense2 ('d = Dense)` and `view2 ('v = View)` carry the
+   type through, and the probe answers `5` from `t.at2` over a `t.view2 t.View{…}` result. And a
    tensor at a kernel's
    `.in.t` is walked as an input at `[1, 0, 0]`, while `read2`'s read of `p.in.t.buffer` is not
    recognized as that buffer.
