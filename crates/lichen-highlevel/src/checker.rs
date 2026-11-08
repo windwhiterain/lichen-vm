@@ -1756,18 +1756,23 @@ where
     /// It is stored for a static node and built lazily as `Index(expr, 0)` for a
     /// call result.
     fn value_of(&mut self, e: ExprId) -> NodeId {
-        if let Some(value) = self.state[e].val {
-            return value;
+        let value = if let Some(value) = self.state[e].val {
+            value
+        } else {
+            let expr = self.state[e].term.expect("expression must be compiled");
+            let operands = self.array_node(self.current_block, &[expr, self.zero()]);
+            let index = self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(operands),
+            );
+            self.state[e].val = Some(index);
+            index
+        };
+        if let Some(term) = self.state[e].term {
+            self.module.set_expr_value(term, value);
         }
-        let expr = self.state[e].term.expect("expression must be compiled");
-        let operands = self.array_node(self.current_block, &[expr, self.zero()]);
-        let index = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(operands),
-        );
-        self.state[e].val = Some(index);
-        index
+        value
     }
 
     /// The value `node` holds, or `None` when it holds nothing. Read-only.

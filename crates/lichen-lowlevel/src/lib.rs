@@ -1081,6 +1081,12 @@ pub struct Module<P: Program> {
     pub applied_exprs: HashMap<NodeId, NodeId>,
     /// The apply that produced each returned value, for constructor recovery.
     pub apply_result_owners: HashMap<NodeId, NodeId>,
+    /// The expressions each value node was produced by, keyed by the value.
+    ///
+    /// # Invariant
+    /// The checker states the correspondence where it fixes an expression's value; a
+    /// reader holding a value node reaches the expressions that state it.
+    pub value_exprs: HashMap<NodeId, Vec<NodeId>>,
     /// The actual field supplied for each constructor field requirement.
     ///
     /// # Invariant

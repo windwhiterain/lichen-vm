@@ -728,6 +728,40 @@ impl<P: Program> Module<P> {
                 // outermost-first.
                 return Self::state_path(path);
             }
+            // **The state's reader names the element**: the value's expression is
+            // the state's `Index`.
+            for expr in self.value_exprs(current) {
+                let Some(operation) = self.node_operation(*expr) else {
+                    continue;
+                };
+                if !matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Index)
+                ) {
+                    continue;
+                }
+                let Some(operand) = operation.operand else {
+                    continue;
+                };
+                let Ok(items) = self.operand_items(operand) else {
+                    continue;
+                };
+                let Some(target) = items.first().and_then(|item| item.node.dynamic()) else {
+                    continue;
+                };
+                if self.element_types.get(&target) != self.element_types.get(&value_cell)
+                    || self.element_types.get(&target).is_none()
+                {
+                    continue;
+                }
+                let Some(position) = items.get(1).and_then(|item| self.read_position(item.node))
+                else {
+                    continue;
+                };
+                let mut slot = path.clone();
+                slot.push(position);
+                return Self::state_path(slot);
+            }
             let Some(operation) = self.node_operation(current) else {
                 // **The walk bottomed out**: a clone's chain ends at this
                 // instantiation's parameter, a node the class test misses.

@@ -68,6 +68,7 @@ impl<P: Program> Module<P> {
             element_types: HashMap::new(),
             applied_exprs: HashMap::new(),
             apply_result_owners: HashMap::new(),
+            value_exprs: HashMap::new(),
             field_sources: HashMap::new(),
             requirement_nodes: HashSet::new(),
             struct_identity_items: HashSet::new(),
@@ -302,6 +303,22 @@ impl<P: Program> Module<P> {
     /// scope does not call this, and that block keeps the parent-block-read rule.
     pub fn mark_scope_root(&mut self, node: NodeId) {
         self.blocks[self.nodes[node].block].scope_root = Some(node);
+    }
+
+    /// Record that `expr` states `value` — the checker's expression-to-value edge.
+    pub fn set_expr_value(&mut self, expr: NodeId, value: NodeId) {
+        let exprs = self.value_exprs.entry(value).or_default();
+        if !exprs.contains(&expr) {
+            exprs.push(expr);
+        }
+    }
+
+    /// The expressions that state `value`, if any.
+    pub fn value_exprs(&self, value: NodeId) -> &[NodeId] {
+        self.value_exprs
+            .get(&value)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn add_node(
