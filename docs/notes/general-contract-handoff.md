@@ -188,6 +188,11 @@
      任何子项 class 都不相交，class 回退因此不中；`expr_value(slot.expr)` 给的是类型侧
      root。方向：让参数侧持有 kernel body 的**声明参数类型值**（而不是只有 template kind），
      或在 `plrun` 调用处解析 body 的 deferred reads。
+   - **已落地的小步**（`addf6cc9`）：`type_is_concrete` 现在把「计算出来的类型」（读到的冻结
+     类型）视为 concrete，于是内联 body 的字段读能过检查、进入 kernel 自己的走查；实测
+     `read-inline` 现在停在 `a struct parameter field read names buffer … that struct's
+     fields are None`（走查沿参数**类型值**走，`.t` 处的值是未定 cell，冻结 Tensor 的
+     字段名读不到）。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
