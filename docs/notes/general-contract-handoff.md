@@ -177,12 +177,17 @@
 
 1. **tensor 库剩余的两个口子**（按用户选的 B）：
    (a) ~~库构造器的返回类型~~：已用单参数描述符解决（见实测 13）。
-   (b) kernel 参数里嵌套 buffer 的读匹配（已测到三条路径各自失败的原因）：
-   `param_path` 的设计自己写着「不能回答 struct field read」（参数与读只靠 equality class
-   相连）；class 回退比较读节点与实参字段节点的 class，但库里 `read2` 内联后的字段读是
-   formal 上的 lazy `Index`，不是实参的字段节点，class 不同；`field_source_of` 也落空
-   （字段的 declared source 是类型槽，不是实参）。方向：调用处把 formal-rooted 的字段读
-   的值节点改写成实参字段（扩展现有 deferral），或让 class 回退沿读的容器链按 class 走。
+   (b) kernel 参数里嵌套 buffer 的读匹配（本轮又测到三条事实）：
+   - **kernel body 里不能调用库函数**：`compute.parallel` 的 lowering 只支持 cross-kernel
+     callee（`kernel body Apply is supported only for a cross-kernel (kernel-value) callee v1`），
+     所以 `at2`/`read2` 不能出现在 kernel body 里；body 必须内联地址算术与 read。
+   - **内联后卡在冻结字段类型**：`p.in.t.origin` 报 `container's type is not decided`——
+     `p.in.t` 的字段类型是冻结的 `Tensor`，而 kernel body 的 deferred read 没有调用点可解析
+     （deferral 只在 dynamic callee 的 apply 处解析，`compute.parallel` 是 native 调用）。
+   - **`read2` 路径只差 buffer 位置**：clone 里 `t.buffer` 的链 base class 与参数 value 的
+     任何子项 class 都不相交，class 回退因此不中；`expr_value(slot.expr)` 给的是类型侧
+     root。方向：让参数侧持有 kernel body 的**声明参数类型值**（而不是只有 template kind），
+     或在 `plrun` 调用处解析 body 的 deferred reads。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
