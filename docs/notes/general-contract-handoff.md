@@ -126,6 +126,10 @@
     - **库构造器 `dense2`/`view2` 的返回类型仍未定**：给 body 加
       `(Tensor{…} : Tensor)` 会报 `expected Tensor…, found Struct`，所以调用方对
       `view2` 的结果做字段读仍会被拒；现在可以直接用 `t.Tensor{…}` 字面量绕开。
+      测量（临时打印已移除）：`check_app` 对冻结 callee 读 `static_function_signature`
+      的返回类型并物化成叶子；`at2`（返回 Int）的叶子有值，而 `view2`/`dense2` 的
+      `return_type` 指向**共享 struct 模板节点**，冻结后该节点无值（`value=None`），
+      叶子仍未定——所以调用方的字段读没有 decided 类型可用。
     - **嵌套 buffer 的读没有匹配上**：tensor 放在 kernel 的 `.in.t` 时，通道走查把 buffer
       认作输入 `[1, 0, 0]`，但 `read2` 读 `p.in.t.buffer` 报
       `read's buffer argument is not an input buffer of the parallel parameter`。
@@ -135,8 +139,12 @@
 
 1. **tensor 库剩余的两个口子**（按用户选的 B）：
    (a) 库构造器的返回类型（`dense2`/`view2`）——类型注解/返回类型如何 decide（见实测 13）。
-   (b) kernel 参数里嵌套 buffer 的读匹配：通道走查的输入 `[1,0,0]` 与 `read2` 的读节点
-   没有对上（`parallel_buffer_pos` 的三条匹配路径都没命中）。
+   (b) kernel 参数里嵌套 buffer 的读匹配（已测到三条路径各自失败的原因）：
+   `param_path` 的设计自己写着「不能回答 struct field read」（参数与读只靠 equality class
+   相连）；class 回退比较读节点与实参字段节点的 class，但库里 `read2` 内联后的字段读是
+   formal 上的 lazy `Index`，不是实参的字段节点，class 不同；`field_source_of` 也落空
+   （字段的 declared source 是类型槽，不是实参）。方向：调用处把 formal-rooted 的字段读
+   的值节点改写成实参字段（扩展现有 deferral），或让 class 回退沿读的容器链按 class 走。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
