@@ -23,6 +23,18 @@ where
             vals.push(self.state[el].term.expect("an element is compiled"));
         }
         let value = self.array_node(self.current_block, &vals);
+        // **A tuple states its fields' shapes**: a state read names an element by
+        // class, which only the fields give.
+        let fields: Vec<Option<lichen_lowlevel::LowShape>> = elements
+            .iter()
+            .map(|element| {
+                self.state[*element]
+                    .val
+                    .and_then(|val| self.module.low_type_of_node(val))
+            })
+            .collect();
+        self.module
+            .seed_class_low_type(value, lichen_lowlevel::LowShape::Tuple(fields));
         let ty_node = self.tuple_template();
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
