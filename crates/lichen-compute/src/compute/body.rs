@@ -556,7 +556,11 @@ where
                 || self.module.node_origin(node).is_some_and(|origin| {
                     self.module.belongs_to(origin, function).unwrap_or(false)
                 })
-                || self.loops[index].entries.contains(&node)
+                || self.loops[index].entries.iter().any(|entry| {
+                    *entry == node
+                        || self.module.expr_value_half(*entry) == Some(node)
+                        || self.module.class_root(*entry) == self.module.class_root(node)
+                })
                 || self.loops[index]
                     .entries
                     .iter()
@@ -594,7 +598,11 @@ where
         let active = &self.loops[index];
         // **The entering call's own element is the slot**: a body value unified with
         // it carries its class, not a read chain.
-        if let Some(slot) = active.entries.iter().position(|entry| *entry == node) {
+        if let Some(slot) = active.entries.iter().position(|entry| {
+            *entry == node
+                || self.module.expr_value_half(*entry) == Some(node)
+                || self.module.class_root(*entry) == self.module.class_root(node)
+        }) {
             if let Some(value) = active.block_slots.get(slot) {
                 return Ok(Some(*value));
             }
