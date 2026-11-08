@@ -869,11 +869,6 @@ impl<P: Program> Module<P> {
         self.functions[function].looping = Some(slot);
     }
 
-    /// Record the static function a live function is the form of.
-    pub fn set_static_origin(&mut self, function: FunctionId, origin: StaticFunctionRef) {
-        self.functions[function].static_origin = Some(origin);
-    }
-
     /// Record the template a live function was rebuilt from.
     pub fn set_template(&mut self, function: FunctionId, template: FunctionId) {
         self.functions[function].template = Some(template);

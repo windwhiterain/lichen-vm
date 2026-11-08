@@ -49,12 +49,6 @@ where
             // (`docs/notes/loop-conversion.md`).
             self.module
                 .mark_looping(function, crate::shape::EXPR_VALUE_SLOT);
-            // **The live function names its static form**: a freeze may predate
-            // the mark.
-            let value = self.value_of(e);
-            if let Some(origin) = self.module.static_function_of_callee(value) {
-                self.module.set_static_origin(function, origin);
-            }
         }
         // Predeclare each formal leaf's slot so body reads resolve to it.
         let formals = self.formal_leaves(parameter);

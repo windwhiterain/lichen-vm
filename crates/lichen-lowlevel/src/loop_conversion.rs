@@ -615,27 +615,14 @@ impl<'a, P: Program> LoopGraph<'a, P> {
 }
 
 impl<P: Program> Module<P> {
-    /// The live function a frozen `@loop` callee names; `None` when it carries no
-    /// mark.
+    /// Whether the function carries the `@loop` mark, live or frozen, and its
+    /// state slot.
     ///
     /// # Invariant
-    /// The mark is read from the live function, not the frozen copy: a freeze may
-    /// run before `mark_looping`, so the static function's `looping` is stale.
-    pub fn static_dynamic_function(&self, sref: crate::StaticFunctionRef) -> Option<FunctionId> {
-        let module = self.static_module(sref.module);
-        let source = module
-            .dynamic_functions
-            .get(sref.index.0)
-            .copied()
-            .flatten();
-        self.functions
-            .iter()
-            .find(|(_, function)| {
-                function.looping.is_some()
-                    && (function.static_origin == Some(sref)
-                        || (source.is_some() && function.template == source))
-            })
-            .map(|(id, _)| id)
+    /// The mark lives on the function's own graph: a frozen function states the
+    /// slot its freeze copied, never a live function's.
+    pub fn function_looping_any(&self, function: crate::AnyFunctionId) -> Option<usize> {
+        LoopGraph::new(self).function_looping(function)
     }
 
     /// Whether `function`'s `@loop` recursion is convertible, and what it

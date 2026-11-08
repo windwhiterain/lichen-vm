@@ -624,12 +624,10 @@ where
     if !r.done() {
         return Err("trailing bytes after the artifact".into());
     }
-    let function_count = functions.len();
     let mut module = StaticModule {
         key,
         nodes,
         functions,
-        dynamic_functions: vec![None; function_count],
         apply_result_owners,
         field_sources,
         arena,

@@ -1779,18 +1779,20 @@ where
             .static_callee(callee, operands.get(3).map(|item| item.node))
             .is_some()
             || is_static_function(self.module, callee);
-        // **A frozen `@loop` callee converts like a live one**: the static ref
-        // names the live function.
-        if let Some(sref) = self.static_callee(callee, operands.get(3).map(|item| item.node))
-            && let Some(function) = self.module.static_dynamic_function(sref)
-        {
-            return match self.module.loop_conversion(function) {
-                Ok(conversion) => self.lower_loop(node, function, &conversion),
-                Err(refusal) => Err(format!(
-                    "a `@loop`-marked recursion this kernel body applies is not convertible,                      and a kernel body has no expansion to fall back on: the shape is {}                      (`docs/notes/loop-conversion.md` §4)",
-                    refusal.name()
-                )),
-            };
+        // **A frozen `@loop` callee reads its own graph's conversion**: the mark
+        // and the shape come from the frozen function.
+        if let Some(sref) = self.static_callee(callee, operands.get(3).map(|item| item.node)) {
+            let frozen = AnyFunctionId::Static(sref);
+            if self.module.function_looping_any(frozen).is_some() {
+                return Err(match self.module.loop_conversion_any(frozen) {
+                    Ok(_) => "this kernel body applies a frozen `@loop` function, and lowering a                               frozen conversion needs the frozen graph's state nodes: the reader                               exists in `loop_conversion`, and the kernel's emission reads this                               module's nodes (`docs/notes/loop-conversion.md` §8.6)"
+                        .to_string(),
+                    Err(refusal) => format!(
+                        "a frozen `@loop` callee this kernel body applies is not convertible,                          and a kernel body has no expansion to fall back on: the shape is {}                          (`docs/notes/loop-conversion.md` §4)",
+                        refusal.name()
+                    ),
+                });
+            }
         }
         if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);

@@ -1413,9 +1413,6 @@ pub struct StaticModule<P: Program> {
     pub key: ModuleKey,
     pub nodes: Vec<StaticNode<P>>,
     pub functions: Vec<StaticFunction>,
-    /// The source module's function per static function, by position; `None` when
-    /// reloaded.
-    pub dynamic_functions: Vec<Option<FunctionId>>,
     /// The apply that produced each returned value, preserved for constructor recovery.
     pub apply_result_owners: HashMap<LocalNodeId, LocalNodeId>,
     /// The actual field supplied for each constructor field requirement, keyed by exact node.
