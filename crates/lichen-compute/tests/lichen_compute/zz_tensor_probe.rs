@@ -240,8 +240,11 @@ data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
 show_shape := 'x = t.Tensor -> x.shape
 show_origin := 'x = t.Tensor -> x.origin
 show_row := 'x = t.Tensor -> x.shape.row
+show_id := 'x = t.Tensor -> x
+plain_id := 'x -> x
+show_pair := 'p = t.Pair -> p
 lit := t.Tensor{.buffer data.b, .shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 3, .column 1}, .origin 0}
-(show_shape lit, show_origin lit, show_row lit, lit.shape.row)
+(show_shape lit, show_origin lit, show_row lit, lit.shape.row, show_id lit, plain_id lit, show_pair t.Pair{.row 4, .column 5})
 "#;
 
 #[test]
