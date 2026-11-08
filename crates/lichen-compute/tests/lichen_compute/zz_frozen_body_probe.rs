@@ -132,7 +132,14 @@ body := ('p = Par) -> {
 kernel := compute.parallel body "cpu" Out
 "#;
 
-/// A program that fills the three plan buffers and runs the library's kernel.
+/// The program at `rank` and `contract`, filling the plan buffers first.
+fn contract_program(rank: u32, contract: u32) -> String {
+    CONTRACT_PROGRAM
+        .replace("@RANK@", &rank.to_string())
+        .replace("@CONTRACT@", &contract.to_string())
+}
+
+/// [`contract_program`]'s source.
 const CONTRACT_PROGRAM: &str = r#"
 ---
   compute = import "compute.lichen"
@@ -168,7 +175,7 @@ p_kernel := compute.parallel fill_plan "cpu" PBuf
 data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
 data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
 data_p := (compute.plrun p_kernel ((Fill){.n 12}) : Struct)
-out := (compute.plrun lib.kernel ((lib.Arg){.meta lib.Meta{.n 10, .rank 2, .contract 2, .total 12}, .I lib.In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
+out := (compute.plrun lib.kernel ((lib.Arg){.meta lib.Meta{.n 10, .rank @RANK@, .contract @CONTRACT@, .total 12}, .I lib.In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
 compute.collect out.c : Array
 "#;
 
@@ -236,7 +243,6 @@ fn probe_a_kernel_body_from_a_frozen_package() {
             "kernel",
             "---\n  compute = import \"compute.lichen\"\n  lib = import \"kernel_lib.lichen\"\n---\nlib.k",
         ),
-        ("contract", CONTRACT_PROGRAM),
         (
             "kernel-type",
             "---
@@ -280,6 +286,19 @@ compute.collect out.y : Array
             "[frozen] {label}: {}",
             reading!(lichen_language::run::evaluate_raw(
                 source,
+                Some(&directory),
+                &mut store
+            ))
+        );
+    }
+    for (label, source) in [
+        ("contract", contract_program(2, 2)),
+        ("contract3", contract_program(3, 1)),
+    ] {
+        println!(
+            "[frozen] {label}: {}",
+            reading!(lichen_language::run::evaluate_raw(
+                &source,
                 Some(&directory),
                 &mut store
             ))
