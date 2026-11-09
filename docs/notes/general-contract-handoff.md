@@ -193,6 +193,11 @@
      `read-inline` 现在停在 `a struct parameter field read names buffer … that struct's
      fields are None`（走查沿参数**类型值**走，`.t` 处的值是未定 cell，冻结 Tensor 的
      字段名读不到）。
+   - **kernel 参数用程序声明的类型就能读嵌套 tensor**（本轮量通，`6bc4ce40`）：把
+     `Pair`/`Tensor`/`ReadIn` 声明在程序里（live），kernel body 内联地址算术和
+     `compute.read`，同一套 2×3 列主序/行主序张量读出
+     `[1,2,3,4,5,6]` 与 `[1,3,5,2,4,6]`。规则：**kernel 参数类型必须是程序声明的**（role walk
+     在 live 模块里读字段名）；冻结类型留给宿主侧，kernel 边界用程序自己的类型或扁平 buffer。
    - **冻结类型值的“值槽”是空的，但冻结模块确实保存了函数的值**（本轮修正结论）：
      `t.Tensor` 的冻结表示是一个 expr `[value, type, attrs]`，其中 value 槽（ModuleKey(4)
      的节点 7）**无值也无操作**，而 type 槽（节点 33）保存着 5 项数组（TypeFunction kind）。

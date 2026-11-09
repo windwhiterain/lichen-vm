@@ -411,7 +411,10 @@ to prefer a type-carried shape.
    type through, and the probe answers `5` from `t.at2` over a `t.view2 t.View{…}` result. And a
    tensor at a kernel's
    `.in.t` is walked as an input at `[1, 0, 0]`, while `read2`'s read of `p.in.t.buffer` is not
-   recognized as that buffer.
+   recognized as that buffer. The working spelling (`6bc4ce40`): the kernel's tensor type is
+   **declared in the program** (live), the body inlines the address arithmetic and the buffer
+   read, and the role walk reads the fields live — the probe answers `[1, 2, 3, 4, 5, 6]` and
+   `[1, 3, 5, 2, 4, 6]`. A frozen library type stays host-side.
 3. **Output tensors**: ruling 8.4; flat outputs first.
 4. **Names in the roles** (§5.1): the artifact carries each leaf's field name; the host builds
    by name.
