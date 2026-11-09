@@ -74,6 +74,7 @@ impl<P: Program> Module<P> {
             requirement_nodes: HashSet::new(),
             struct_identity_items: HashSet::new(),
             frozen_reads: HashMap::new(),
+            parameter_annotations: HashMap::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),
             applied_claims: HashMap::new(),

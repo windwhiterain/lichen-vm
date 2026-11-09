@@ -32,6 +32,7 @@ where
             .map(|&arg| NativeArg {
                 expr: arg,
                 value: self.value_of(arg),
+                term: self.state[arg].term,
             })
             .collect();
         let loc = self.loc(e, 0);

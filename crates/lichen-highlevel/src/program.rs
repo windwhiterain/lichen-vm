@@ -235,6 +235,13 @@ pub trait Ctx<P: Program> {
     );
     /// The value `node` holds — read-only, for an attribute's subtype relation.
     fn node_value(&self, node: NodeId) -> Option<P::Value>;
+    /// Resolve a kernel body's deferred field reads against its declared parameter type.
+    ///
+    /// # Invariant
+    /// A kernel body has no check-time call, so its reads are resolved here, from the
+    /// parameter's **type value** — the annotation's own value — and never from an
+    /// argument. The default does nothing: only a program with kernel bodies needs it.
+    fn resolve_kernel_reads(&mut self, _body: NodeId) {}
 }
 
 /// A literal — the operator-like value-extension point. See

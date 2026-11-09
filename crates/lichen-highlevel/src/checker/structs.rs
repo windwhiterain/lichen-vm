@@ -352,6 +352,10 @@ where
     /// field-read and function-ness guards.
     pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
         let root = self.module.class_root(ty);
+        // **A frozen reference is a decided type**: its layout is read through it.
+        if self.module.frozen_reads.contains_key(&root) {
+            return true;
+        }
         if self
             .module
             .node_value(AnyNodeId::Dynamic(root))

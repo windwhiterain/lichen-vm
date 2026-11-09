@@ -40,6 +40,9 @@ pub struct NativeApply {
 pub struct NativeArg {
     pub expr: ExprId,
     pub value: NodeId,
+    /// The argument's term expr — its `[value, type]` slot, where a function
+    /// argument's function is read.
+    pub term: Option<NodeId>,
 }
 
 /// The compile-time lowering behaviour of one native operator.

@@ -1298,6 +1298,72 @@ where
         }
     }
 
+    /// The **value** of a field in a struct **type** value: the field's declared type.
+    ///
+    /// # Invariant
+    /// A type literal's field value **is** its declared type, so the lookup reads the
+    /// field's value slot, not its type slot.
+    fn declared_field_value(&self, container: AnyNodeId, name: &'static str) -> Option<AnyNodeId> {
+        let table = crate::shape::value_item(&self.module, container, 0)?;
+        let table =
+            lichen_utils::extend::AsEnum::<LowValue>::as_enum(&self.module.node_value(table)?)?
+                .clone();
+        let LowValue::Table(table) = table else {
+            return None;
+        };
+        let at = self.module.name_table_index(table, name)?;
+        let field = crate::shape::value_item(
+            &self.module,
+            container,
+            at + crate::shape::STRUCT_VALUE_FIELD_BASE,
+        )?;
+        crate::shape::value_item(&self.module, field, crate::shape::EXPR_VALUE_SLOT)
+    }
+
+    /// Resolve a kernel body's deferred reads against its declared parameter type.
+    ///
+    /// # Invariant
+    /// The read's declared type is the **field's value** in the parameter's type literal;
+    /// a frozen reference decides the type cell by reference, and a live one is unified.
+    pub fn resolve_kernel_reads(&mut self, body: NodeId) {
+        let Some(lichen_lowlevel::AnyFunctionId::Dynamic(function)) =
+            self.module.function_apply_function(body)
+        else {
+            return;
+        };
+        let Some(type_value) = self.module.parameter_annotations.get(&function).copied() else {
+            return;
+        };
+        let Some(reads) = self.deferred_field_reads.remove(&function) else {
+            return;
+        };
+        let mut resolved: std::collections::HashMap<ExprId, AnyNodeId> =
+            std::collections::HashMap::new();
+        for read in reads {
+            let container = if read.direct {
+                Some(AnyNodeId::Dynamic(type_value))
+            } else {
+                resolved.get(&read.container).copied()
+            };
+            let Some(container) = container else {
+                continue;
+            };
+            let Some(field) = self.declared_field_value(container, read.name) else {
+                continue;
+            };
+            match field {
+                AnyNodeId::Static(_) => {
+                    self.module.frozen_reads.insert(read.ty, field);
+                }
+                AnyNodeId::Dynamic(node) => {
+                    self.module
+                        .unify_ref(AnyNodeId::Dynamic(read.ty), AnyNodeId::Dynamic(node));
+                }
+            }
+            resolved.insert(read.expr, field);
+        }
+    }
+
     /// The field's declared type and value from a container's value.
     fn resolved_field(
         &mut self,
@@ -2068,6 +2134,10 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
+    fn resolve_kernel_reads(&mut self, body: NodeId) {
+        Checker::resolve_kernel_reads(self, body)
+    }
+
     fn full_width_layout(&mut self) -> u32 {
         Checker::full_width_layout(self)
     }

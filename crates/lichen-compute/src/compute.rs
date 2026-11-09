@@ -9400,6 +9400,10 @@ where
     ) -> NativeApply {
         let f = &args[0];
         let backend = &args[1];
+        // The body's reads resolve against its declared parameter type: no call exists.
+        if let Some(term) = f.term {
+            ctx.resolve_kernel_reads(term);
+        }
         // The third argument is the codomain; an operation that carries none keeps
         // the two-item form.
         let operands = match args.get(2) {

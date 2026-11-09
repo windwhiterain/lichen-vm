@@ -276,6 +276,17 @@ where
         // A formal's unify reads its slot identity directly; other values keep
         // the lazy read required by the lowering contract.
         let direct = self.formal_actual(actual);
+        // **A parameter annotation's value is the declared type**: kernel-body reads
+        // resolve against it.
+        if direct
+            && let Some(&(function, _)) = self.function_stack.last()
+            && let Some(value) = self.module.expr_value_half(expected_term)
+        {
+            self.module
+                .parameter_annotations
+                .entry(function)
+                .or_insert(value);
+        }
         let actual_value = if direct {
             self.module
                 .expr_value_half(actual_term)

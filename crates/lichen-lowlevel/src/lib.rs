@@ -1120,6 +1120,13 @@ pub struct Module<P: Program> {
     /// frozen node it named; a read-only walk — the kernel's — follows that node. The value
     /// is a **reference**, never a copy: static and dynamic reads share one interface.
     pub frozen_reads: HashMap<NodeId, AnyNodeId>,
+    /// The **value** of each function's parameter annotation — the declared type.
+    ///
+    /// # Invariant
+    /// A formal's type cell states the annotation's *type*; this map keeps the
+    /// annotation's *value*, which is the named type a kernel body's reads resolve
+    /// against (no argument exists at check time).
+    pub parameter_annotations: HashMap<FunctionId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.
