@@ -229,9 +229,14 @@
      **内联调查的结论**（155 末）：程序被**多次 check**（`Mode::Check`、`Mode::Evaluate`，
      还有一次在 `statements-eval` 之后）；body 的读 `n/in/t/buffer` 是在**较后的那一次**
      的语句循环里被检查的，而各检查点的“晚解析”看到的读表里没有它们（每次 27 条、全是
-     库/前一轮的读）；按 pass 清空读表后仍对不上。读链容器也仍不匹配记录的形参 value cell。
-     结论：要打通，需要按 check pass 正确记录/解析（读表与参数表的生命周期跟着 pass 走），
-     这是一次**结构性的 check 流程改动**，不是局部补丁。
+     库/前一轮的读）。结论：需要按 check pass 正确记录/解析。
+     **原则更新（用户裁定：不能延迟）**：不放宽为“延迟到调用点解析”，而是**在检查期**用
+     引用解析。落地（`e728065d`）：每个函数记录形参的 value cell；`check_named_field` 在
+     读出 `value_node` 后，沿“参数注解的类型字面量”解析该字段的**声明类型**，冻结字段只记
+     引用（`frozen_reads`），不拷贝；kernel 走查按节点或 class root 跟随引用。
+     **实测**：机制就位、套件全绿，但 body 的读所在 pass 里的容器（391）不等于该函数记录的
+     形参 value cell（327）——**多 pass 的节点复用**是剩余阻碍：要在同一 pass 内建立
+     “读链容器 = 该 pass 记录的形参 cell”的对应。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
