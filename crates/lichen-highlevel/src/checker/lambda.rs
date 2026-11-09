@@ -76,6 +76,8 @@ where
             );
             self.state[*formal].term = Some(slot);
             self.state[*formal].ty = Some(type_cell);
+            // **The parameter's value cell is the body's read-chain root**.
+            self.module.parameter_values.insert(function, value_cell);
         }
         // Push one frame even when the side declares no formal.
         self.scopes.push(scope);

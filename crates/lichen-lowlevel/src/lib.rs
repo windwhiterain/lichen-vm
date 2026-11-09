@@ -1127,6 +1127,8 @@ pub struct Module<P: Program> {
     /// annotation's *value*, which is the named type a kernel body's reads resolve
     /// against (no argument exists at check time).
     pub parameter_annotations: HashMap<FunctionId, NodeId>,
+    /// Each function's parameter **value cell** — the root a body's read chain starts at.
+    pub parameter_values: HashMap<FunctionId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,
     /// The clone's parameter of each apply, keyed by the apply node.

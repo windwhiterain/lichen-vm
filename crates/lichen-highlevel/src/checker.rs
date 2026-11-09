@@ -229,6 +229,13 @@ where
     /// one no call resolved is refused at the end, the undecided-read ruling
     /// (`docs/notes/per-application-body.md`).
     deferred_field_reads: HashMap<FunctionId, Vec<DeferredFieldRead>>,
+    /// Each field read's **declared type**, resolved at check time from the parameter
+    /// annotation's type literal.
+    ///
+    /// # Invariant
+    /// A read's type is the **field's value** in its container's type literal; a frozen
+    /// field is a reference (`frozen_reads`), never a copy.
+    read_types: HashMap<NodeId, AnyNodeId>,
     /// The attributes a body requires of its own parameter, replayed at each apply.
     ///
     /// # Invariant
@@ -691,6 +698,7 @@ where
             merged_tails: HashMap::new(),
             deferred_requirements: HashMap::new(),
             deferred_field_reads: HashMap::new(),
+            read_types: HashMap::new(),
             attribute_markers: HashMap::new(),
             body_claims: HashMap::new(),
             reference_claims: HashMap::new(),

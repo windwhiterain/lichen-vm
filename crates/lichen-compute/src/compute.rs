@@ -5802,10 +5802,13 @@ where
         // positions continue in the struct value it stands for.
         let value = standing_struct_value(module, standing_structs, value)?.unwrap_or(value);
         // **A deferred read names its frozen value**: the walk follows the reference.
-        let value = value
-            .dynamic()
-            .and_then(|node| module.frozen_reads.get(&node).copied())
-            .unwrap_or(value);
+        let frozen = value.dynamic().and_then(|node| {
+            module
+                .frozen_reads
+                .get(&node)
+                .or_else(|| module.frozen_reads.get(&module.class_root(node)))
+        });
+        let value = frozen.copied().unwrap_or(value);
         // A struct's constant step is physical (`name_table[name] + 2`); a tuple's is not.
         let on_struct = is_struct_value(module, value);
         let at = match step {

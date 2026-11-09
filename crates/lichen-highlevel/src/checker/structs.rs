@@ -262,6 +262,25 @@ where
             }
         };
         let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
+        // **The read's type resolves at check time**, walking the annotation's type
+        // literal — no deferral, no copy.
+        let container_type = self.read_types.get(&container_value).copied().or_else(|| {
+            // The chain's root is the owning function's parameter value cell.
+            self.module
+                .parameter_values
+                .iter()
+                .find(|(_, value)| **value == container_value)
+                .and_then(|(function, _)| self.module.parameter_annotations.get(function).copied())
+                .map(AnyNodeId::Dynamic)
+        });
+        if let Some(container_type) = container_type
+            && let Some(field) = self.declared_field_value(container_type, name)
+        {
+            if let AnyNodeId::Static(_) = field {
+                self.module.frozen_reads.insert(value_node, field);
+            }
+            self.read_types.insert(value_node, field);
+        }
         if !concrete && !self.is_loop_state(container) {
             // Deferred to the call, which states the field's type from the argument.
             if let (Some(&(function, _)), Some(root)) =
