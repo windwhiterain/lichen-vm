@@ -256,6 +256,55 @@ out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct
 (compute.collect out_row.o : Array, compute.collect out_col.o : Array)
 "#;
 
+/// The tensor-driven contraction: two tensors in, their stride arithmetic, one buffer out.
+///
+/// # Invariant
+/// Print-only. The type is the program's (a kernel cannot name a frozen type's fields); the
+/// body reads each operand through `p.in.<t>.buffer` and computes the address from the
+/// tensor's own `origin`/`stride`. `A = [[1, 2, 3], [4, 5, 6]]` times
+/// `B = [[1, 2], [3, 4], [5, 6]]` is `[22, 28, 49, 64]`.
+const TENSOR_CONTRACT: &str = r#"
+---
+  compute = import "compute.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data_a := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+data_b := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+Pair := {.row @any : Int, .column @any : Int}
+Tensor := {.buffer (compute.Buf (compute.BufParam{.type Float, .length _})), .shape Pair, .stride Pair, .origin @any : Int}
+In := {.a Tensor, .b Tensor}
+Par := {.m @any : Int, .in In}
+Out := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+body := ('p = Par) -> {
+  i := compute.range p.m
+  r := i / 2
+  c := i - r * 2
+  @loop dot := 'u -> if u(0) == 0 then u(1) else {
+    k := u(0) - 1
+    a_idx := p.in.a.origin + r * p.in.a.stride.row + k * p.in.a.stride.column
+    b_idx := p.in.b.origin + k * p.in.b.stride.row + c * p.in.b.stride.column
+    av := (compute.read ((compute.Read _){.from p.in.a.buffer, .at a_idx}) : Float)
+    bv := (compute.read ((compute.Read _){.from p.in.b.buffer, .at b_idx}) : Float)
+    dot (u(0) - 1, u(1) + av * bv)
+  }
+  s := dot (3, 0.0)
+  o := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value s}))})
+}
+k := compute.parallel body "cpu" Out
+a := Tensor{.buffer data_a.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}, .origin 0}
+b := Tensor{.buffer data_b.b, .shape Pair{.row 3, .column 2}, .stride Pair{.row 2, .column 1}, .origin 0}
+out := (compute.plrun k ((Par){.m 4, .in In{.a a, .b b}}) : Struct)
+compute.collect out.c : Array
+"#;
+
 /// The imported (frozen) `Tensor` as a parameter type and as a literal's type.
 ///
 /// # Invariant
@@ -311,6 +360,7 @@ fn probe_the_tensor_library() {
         ("read", TENSOR_READ),
         ("read-inline", inline.as_str()),
         ("read-live", TENSOR_READ_LIVE),
+        ("contract", TENSOR_CONTRACT),
         ("frozen-type", FROZEN_TYPE),
     ] {
         match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
