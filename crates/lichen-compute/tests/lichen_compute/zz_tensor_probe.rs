@@ -215,6 +215,47 @@ out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct
 (compute.collect out_row.o, compute.collect out_col.o)
 "#;
 
+/// The same read with the tensor type declared **in the program**: a live parameter type.
+///
+/// # Invariant
+/// Print-only. The body inlines the address arithmetic and the buffer read, because a
+/// kernel body cannot call a library function; the type is the program's own, so the
+/// role walk reads its fields without crossing a frozen boundary.
+const TENSOR_READ_LIVE: &str = r#"
+---
+  compute = import "compute.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+Pair := {.row @any : Int, .column @any : Int}
+Tensor := {.buffer (compute.Buf (compute.BufParam{.type Float, .length _})), .shape Pair, .stride Pair, .origin @any : Int}
+ReadIn := {.t Tensor}
+ReadPar := {.n @any : Int, .in ReadIn}
+ReadOut := {.o (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+read_body := ('p = ReadPar) -> {
+  i := compute.range p.n
+  row := i / 3
+  col := i - row * 3
+  at := p.in.t.origin + row * p.in.t.stride.row + col * p.in.t.stride.column
+  v := (compute.read ((compute.Read _){.from p.in.t.buffer, .at at}) : Float)
+  o := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((ReadOut){.o (compute.write ((compute.Write _){.to o, .at i, .value v}))})
+}
+k := compute.parallel read_body "cpu" ReadOut
+row_major := Tensor{.buffer data.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 3, .column 1}, .origin 0}
+col_major := Tensor{.buffer data.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 1, .column 2}, .origin 0}
+out_row := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t row_major}}) : Struct)
+out_col := (compute.plrun k ((ReadPar){.n 6, .in ReadIn{.t col_major}}) : Struct)
+(compute.collect out_row.o : Array, compute.collect out_col.o : Array)
+"#;
+
 /// The imported (frozen) `Tensor` as a parameter type and as a literal's type.
 ///
 /// # Invariant
@@ -269,6 +310,7 @@ fn probe_the_tensor_library() {
         ("address", TENSOR_ADDRESS),
         ("read", TENSOR_READ),
         ("read-inline", inline.as_str()),
+        ("read-live", TENSOR_READ_LIVE),
         ("frozen-type", FROZEN_TYPE),
     ] {
         match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
