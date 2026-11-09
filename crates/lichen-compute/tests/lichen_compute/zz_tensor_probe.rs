@@ -335,6 +335,107 @@ lit := t.Tensor{.buffer data.b, .shape t.Pair{.row 2, .column 3}, .stride t.Pair
 (show_shape lit, show_origin lit, show_row lit, lit.shape.row, show_id lit, plain_id lit, show_pair t.Pair{.row 4, .column 5})
 "#;
 
+/// The frozen bundle's own shape: the export, its fields, and what each field holds.
+///
+/// # Invariant
+/// Print-only. Reads the artifact directly, so the reading separates "the freeze kept
+/// no value" from "the program's read never reached it".
+/// The read of an imported type value, on its own.
+///
+/// # Invariant
+/// Print-only. The program only reads `t.Tensor`; the answer is the render of whatever
+/// value the read produces, which separates the type value from the kind.
+const TENSOR_TYPE_READ: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+t.Tensor
+"#;
+
+#[test]
+fn probe_the_tensor_type_read() {
+    let mut store = new_store(None).expect("the store opens");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
+    if store.load_package(&path).is_err() {
+        println!("[type-read] refused");
+        return;
+    }
+    match lichen_language::run::evaluate_raw(TENSOR_TYPE_READ, path.parent(), &mut store) {
+        Ok(text) => println!("[type-read] {text}"),
+        Err(diagnostics) => println!(
+            "[type-read] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_the_frozen_bundle() {
+    let mut store = new_store(None).expect("the store opens");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
+    let handle = match store.load_package(&path) {
+        Ok(handle) => handle,
+        Err(_) => {
+            println!("[bundle] refused");
+            return;
+        }
+    };
+    let registry = store.registry.read().expect("the registry lock opens");
+    let Some(package) = registry.get(handle.key) else {
+        println!("[bundle] not registered");
+        return;
+    };
+    let module = &package.module;
+    let read = |index: usize| {
+        module.nodes[index]
+            .value
+            .map(|value| format!("{:?}", value).chars().take(120).collect::<String>())
+    };
+    let items = |index: usize| {
+        module
+            .static_array_items(lichen_lowlevel::LocalNodeId { index })
+            .map(|items| items.iter().map(|item| item.index).collect::<Vec<_>>())
+    };
+    for index in 0..40 {
+        println!(
+            "[bundle] node {index} value={:?} class={:?}",
+            read(index),
+            module.static_class_root(lichen_lowlevel::LocalNodeId { index })
+        );
+    }
+    let export = handle.export.index.index;
+    println!("[bundle] export={export} items={:?}", items(export));
+    let Some(export_items) = items(export) else {
+        return;
+    };
+    for (name, item) in export_items.iter().enumerate() {
+        println!(
+            "[bundle] export item {name} = {item} read={:?}",
+            read(*item)
+        );
+    }
+    let Some(value) = export_items.first() else {
+        return;
+    };
+    println!("[bundle] export value={value} items={:?}", items(*value));
+    let Some(fields) = items(*value) else {
+        return;
+    };
+    for field in fields.iter().skip(2) {
+        println!(
+            "[bundle] field {field} items={:?} value_read={:?}",
+            items(*field),
+            items(*field)
+                .and_then(|inner| inner.first().copied())
+                .map(read)
+        );
+    }
+}
+
 #[test]
 fn probe_the_tensor_library() {
     let mut store = new_store(None).expect("the store opens");
