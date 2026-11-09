@@ -209,13 +209,17 @@
      哪个冻结节点”**（`Module::frozen_reads`），kernel 的只读走查跟随它；本轮已实现并实测
      卡在：kernel body 的 lowering 走的是**克隆节点**（走查看到 3977/3946 等克隆，映射键
      是原节点 3679），所以映射必须随 clone 复制，或键放在 clone 共享的节点上。
-     **本轮落地**（`8b702de7`，无物化）：检查器把“未定读 → 冻结节点”的**引用**记进
+     **落地一**（`8b702de7`，无物化）：检查器把“未定读 → 冻结节点”的**引用**记进
      `Module::frozen_reads`（常量位置直接取冻结字段值；名字位置经字段声明查），只读走查
-     查表跟随。实测：`t.Tensor` 声明的读记录为 `Static(325)`（冻结类型值），走查已能使用；
-     但 body 里 `p.in.t` 的读仍未命中——它的容器类型是**kind 项**（一个 expr，value 是
-     `TypeStruct` 节点 7，名字槽不是 Table），不是类型值。**剩余的一步是类型表示**：让类型
-     字面量的字段类型指向字段的**值**（类型值/其冻结引用），而不是它的 type 槽项；这样
-     body 读也能记录到 `Static(325)`，kernel 名字/位置解析即可用，且全程只引用、不拷贝。
+     查表跟随；`t.Tensor` 声明的读记录为 `Static(325)`。
+     **落地二**（`d5afed9c`）：检查器为每个函数保留**参数注解的值**（
+     `Module::parameter_annotations`），`Ctx::resolve_kernel_reads` 钩子由
+     `compute.parallel` 调用，并用 `NativeArg.term` 解决“函数实参的值格要到定义后才填”
+     的问题。
+     **本轮实测的卡点**：钩子能拿到 body 的函数与注解，但 **body 的字段读不是 deferred
+     读**（容器类型是 struct kind，concrete=true），所以“延迟读解析”的钩子无事可做。
+     下一步：**扫描 body 的读**——对参数上的每个字段读，按参数类型字面量解析其声明类型，
+     把它命中的冻结引用记进 `frozen_reads`（仍是引用，不拷贝）。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
