@@ -2726,6 +2726,19 @@ where
             standing_struct_value(module, standing_structs, held).map(|value| value.unwrap_or(held))
         })
         .transpose()?;
+    // **A read that names a frozen value is that reference**: the walk descends it.
+    let held = held.map(|value| {
+        value
+            .dynamic()
+            .and_then(|node| {
+                module
+                    .frozen_reads
+                    .get(&node)
+                    .or_else(|| module.frozen_reads.get(&module.class_root(node)))
+                    .copied()
+            })
+            .unwrap_or(value)
+    });
     if let Some(held) = held
         && is_struct_value(module, held)
     {

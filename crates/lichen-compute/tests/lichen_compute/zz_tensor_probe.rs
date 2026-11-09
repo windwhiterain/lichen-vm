@@ -376,15 +376,22 @@ fn probe_the_tensor_type_read() {
 /// The smallest program whose kernel reads through a frozen type's field.
 ///
 /// # Invariant
-/// Print-only. `In`'s `.t` is the imported `Tensor`; the body reads `p.in.t.buffer`, which the
-/// checker leaves as a reference read and the lowering must map to an input. The reading is
-/// the refusal while the type's field layout is not decided at the read
-/// (`docs/notes/general-contract-handoff.md`).
+/// Print-only. `In`'s `.t` is the imported `Tensor`; the body reads `p.in.t.buffer`, and the
+/// run answers the filled values in order — a frozen type as a kernel parameter, by reference.
 const MINIMAL_NESTED: &str = r#"
 ---
   compute = import "compute.lichen"
   t = import "tensor.lichen"
 ---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data := (compute.plrun f_kernel ((Fill){.n 4}) : Struct)
 In := {.t t.Tensor}
 Par := {.n @any : Int, .in In}
 Out := {.o (compute.Buf (compute.BufParam{.type Float, .length 4}))}
@@ -395,6 +402,9 @@ body := ('p = Par) -> {
   ((Out){.o (compute.write ((compute.Write _){.to o, .at i, .value v}))})
 }
 k := compute.parallel body "cpu" Out
+tensor := t.Tensor{.buffer data.b, .shape t.Pair{.row 2, .column 2}, .stride t.Pair{.row 2, .column 1}, .origin 0}
+out := (compute.plrun k ((Par){.n 4, .in In{.t tensor}}) : Struct)
+compute.collect out.o : Array
 "#;
 
 #[test]

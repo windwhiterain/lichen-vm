@@ -114,7 +114,24 @@ where
         let Some(ty) = items.get(1).and_then(|item| item.node.dynamic()) else {
             return expr;
         };
+        let source = value;
         let value = self.instantiate_requirement_value(value, ty, depth + 1);
+        // **The instance inherits the template's frozen reference**: the fresh cell is the
+        // same frozen value, by reference.
+        if value != source
+            && let Some(frozen) = self
+                .module
+                .frozen_reads
+                .get(&source)
+                .or_else(|| {
+                    self.module
+                        .frozen_reads
+                        .get(&self.module.class_root(source))
+                })
+                .copied()
+        {
+            self.module.frozen_reads.insert(value, frozen);
+        }
         let mut items = items.to_vec();
         items[0].node = AnyNodeId::Dynamic(value);
         let layout = self
