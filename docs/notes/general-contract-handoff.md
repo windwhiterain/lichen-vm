@@ -193,6 +193,10 @@
      `read-inline` 现在停在 `a struct parameter field read names buffer … that struct's
      fields are None`（走查沿参数**类型值**走，`.t` 处的值是未定 cell，冻结 Tensor 的
      字段名读不到）。
+   - **tensor 驱动的收缩已量通**（`eb495a6f`）：程序声明 `Tensor`/`Pair`，kernel 参数放两个
+     tensor，body 用 `p.in.<t>.buffer` 读、用 `origin`/`stride` 算地址、`@loop` 累加收缩维，
+     结果 `[22, 28, 49, 64]`（A 2×3 × B 3×2）。加上 `read-live` 的转置读数
+     `[1,3,5,2,4,6]`，named-tensor 形态端到端可用。
    - **kernel 参数用程序声明的类型就能读嵌套 tensor**（本轮量通，`6bc4ce40`）：把
      `Pair`/`Tensor`/`ReadIn` 声明在程序里（live），kernel body 内联地址算术和
      `compute.read`，同一套 2×3 列主序/行主序张量读出

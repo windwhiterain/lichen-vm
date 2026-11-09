@@ -414,7 +414,10 @@ to prefer a type-carried shape.
    recognized as that buffer. The working spelling (`6bc4ce40`): the kernel's tensor type is
    **declared in the program** (live), the body inlines the address arithmetic and the buffer
    read, and the role walk reads the fields live — the probe answers `[1, 2, 3, 4, 5, 6]` and
-   `[1, 3, 5, 2, 4, 6]`. A frozen library type stays host-side.
+   `[1, 3, 5, 2, 4, 6]`. A frozen library type stays host-side. The **contraction** over two
+   tensors answers too (`eb495a6f`): `A = [[1,2,3],[4,5,6]]` times `B = [[1,2],[3,4],[5,6]]`
+   is `[22, 28, 49, 64]`, with each operand read through `p.in.<t>.buffer` and the address
+   taken from the tensor's own `origin` and `stride`.
 3. **Output tensors**: ruling 8.4; flat outputs first.
 4. **Names in the roles** (§5.1): the artifact carries each leaf's field name; the host builds
    by name.
