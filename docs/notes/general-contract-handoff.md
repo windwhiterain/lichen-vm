@@ -249,8 +249,11 @@
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
-2. **契约函数收尾**：库导出 `contract := 'shape -> 'data -> ...`，内部生成 plan、跑 kernel、
-   返回结果与 merge/without 出来的形状；程序只给形状与数据。
+2. **契约函数收尾**：已落地**程序侧**的 `contract := 'arg -> ((compute.plrun lib.kernel arg) : Struct)`
+   （`d8ac82ac`）：rank 2 答 `[2938, 7042, …]`、rank 3 答 `[330, 1554, …]`。**库内**写同样的
+   函数被拒绝（`the container's type is not decided here`），所以工作拼法是“库持有 kernel、
+   宿主持有调用”。剩余：plan 仍由 `fill_plan` 硬编码；形状表 → plan 的路线（值携带 vs 类型级
+   表）待裁定。
 3. **落成真实示例**：`examples/` 会进 README 渲染（`lichen-tools` 的 readme 渲染器），
    加之前先取得许可。
 4. 冻结函数作为 kernel body（v1 门）不再是库形状的必需项；若仍要做，需要
