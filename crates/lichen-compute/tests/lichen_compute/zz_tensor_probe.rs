@@ -373,6 +373,50 @@ fn probe_the_tensor_type_read() {
     }
 }
 
+/// The smallest program whose kernel reads through a frozen type's field.
+///
+/// # Invariant
+/// Print-only. `In`'s `.t` is the imported `Tensor`; the body reads `p.in.t.buffer`, which the
+/// checker leaves as a reference read and the lowering must map to an input. The reading is
+/// the refusal while the type's field layout is not decided at the read
+/// (`docs/notes/general-contract-handoff.md`).
+const MINIMAL_NESTED: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+In := {.t t.Tensor}
+Par := {.n @any : Int, .in In}
+Out := {.o (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+body := ('p = Par) -> {
+  i := compute.range p.n
+  v := (compute.read ((compute.Read _){.from p.in.t.buffer, .at i}) : Float)
+  o := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((Out){.o (compute.write ((compute.Write _){.to o, .at i, .value v}))})
+}
+k := compute.parallel body "cpu" Out
+"#;
+
+#[test]
+fn probe_the_minimal_nested_read() {
+    let mut store = new_store(None).expect("the store opens");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
+    if store.load_package(&path).is_err() {
+        println!("[minimal] library refused");
+        return;
+    }
+    match lichen_language::run::evaluate_raw(MINIMAL_NESTED, path.parent(), &mut store) {
+        Ok(text) => println!("[minimal] {text}"),
+        Err(diagnostics) => println!(
+            "[minimal] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|d| (d.message.clone(), d.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_the_frozen_bundle() {
     let mut store = new_store(None).expect("the store opens");

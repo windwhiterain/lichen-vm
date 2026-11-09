@@ -283,6 +283,17 @@ where
                     .push(read);
             }
         }
+        // **The checker names the frozen value a read stands for**, and a read-only walk
+        // follows the reference.
+        let frozen = match constant {
+            Some(at) => shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)
+                .filter(|item| item.dynamic().is_none())
+                .and_then(|item| shape::value_item(&self.module, item, shape::EXPR_VALUE_SLOT)),
+            None => self.declared_field_frozen(container_ty, name),
+        };
+        if let Some(frozen) = frozen {
+            self.module.frozen_reads.insert(value_node, frozen);
+        }
         let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
@@ -293,6 +304,31 @@ where
             self.attribute_markers.insert(e, marker);
         }
         expr
+    }
+
+    /// The frozen value the field `name` of a **type value** declares, when it declares one.
+    ///
+    /// # Invariant
+    /// The lookup is the type's own: a name reads the declaration's field, and a static
+    /// field value **is** its frozen identity — no copy stands between them.
+    fn declared_field_frozen(&self, container_ty: NodeId, name: &'static str) -> Option<AnyNodeId> {
+        let root = self.module.class_root(container_ty);
+        let table = shape::value_item(&self.module, AnyNodeId::Dynamic(root), 0)?;
+        let table = self.module.node_value(table)?.as_enum()?.clone();
+        let LowValue::Table(table) = table else {
+            return None;
+        };
+        let at = self.module.name_table_index(table, name)?;
+        let field = shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(root),
+            at + shape::STRUCT_VALUE_FIELD_BASE,
+        )?;
+        let value = shape::value_item(&self.module, field, shape::EXPR_VALUE_SLOT)?;
+        match value {
+            AnyNodeId::Static(_) => Some(value),
+            AnyNodeId::Dynamic(node) => self.module.frozen_reads.get(&node).copied(),
+        }
     }
 
     /// The name table a struct value holds at its first slot.
