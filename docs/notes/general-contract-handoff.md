@@ -202,6 +202,13 @@
      `compute.read`，同一套 2×3 列主序/行主序张量读出
      `[1,2,3,4,5,6]` 与 `[1,3,5,2,4,6]`。规则：**kernel 参数类型必须是程序声明的**（role walk
      在 live 模块里读字段名）；冻结类型留给宿主侧，kernel 边界用程序自己的类型或扁平 buffer。
+   - **冻结字段读的 value 槽是有意未定的，kernel 走查看不到它**（本轮实测）：`t.Tensor`
+     的读在检查期返回 value=3679（未定）、type=3681（kind expr）——延迟是为了让调用点解析
+     字段类型（冻结注解修复依赖它）。把该读物化成 decided 会让 `frozen-type` 读数回退
+     `((@any,@any), none, …)`，所以不能改读本身。可行的方向是**检查器记录“这个未定读代表
+     哪个冻结节点”**（`Module::frozen_reads`），kernel 的只读走查跟随它；本轮已实现并实测
+     卡在：kernel body 的 lowering 走的是**克隆节点**（走查看到 3977/3946 等克隆，映射键
+     是原节点 3679），所以映射必须随 clone 复制，或键放在 clone 共享的节点上。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
