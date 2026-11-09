@@ -305,6 +305,53 @@ out := (compute.plrun k ((Par){.m 4, .in In{.a a, .b b}}) : Struct)
 compute.collect out.c : Array
 "#;
 
+/// The contraction over **imported** tensors: the library's type as the kernel's parameter.
+///
+/// # Invariant
+/// Print-only. Both operands are the library's `Tensor` (its constructor and its stride
+/// fields); the contracted values answer the same `[22, 28, 49, 64]` as the program-typed
+/// variant, by reference (`docs/notes/named-tensors.md`).
+const TENSOR_CONTRACT_FROZEN: &str = r#"
+---
+  compute = import "compute.lichen"
+  t = import "tensor.lichen"
+---
+Fill := {.n @any : Int}
+BufT := {.b (compute.Buf (compute.BufParam{.type Float, .length 6}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 6})
+  ((BufT){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+f_kernel := compute.parallel fill "cpu" BufT
+data_a := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+data_b := (compute.plrun f_kernel ((Fill){.n 6}) : Struct)
+In := {.a t.Tensor, .b t.Tensor}
+Par := {.m @any : Int, .in In}
+Out := {.c (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+body := ('p = Par) -> {
+  i := compute.range p.m
+  r := i / 2
+  c := i - r * 2
+  @loop dot := 'u -> if u(0) == 0 then u(1) else {
+    k := u(0) - 1
+    a_idx := p.in.a.origin + r * p.in.a.stride.row + k * p.in.a.stride.column
+    b_idx := p.in.b.origin + k * p.in.b.stride.row + c * p.in.b.stride.column
+    av := (compute.read ((compute.Read _){.from p.in.a.buffer, .at a_idx}) : Float)
+    bv := (compute.read ((compute.Read _){.from p.in.b.buffer, .at b_idx}) : Float)
+    dot (u(0) - 1, u(1) + av * bv)
+  }
+  s := dot (3, 0.0)
+  o := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value s}))})
+}
+k := compute.parallel body "cpu" Out
+a := t.Tensor{.buffer data_a.b, .shape t.Pair{.row 2, .column 3}, .stride t.Pair{.row 3, .column 1}, .origin 0}
+b := t.Tensor{.buffer data_b.b, .shape t.Pair{.row 3, .column 2}, .stride t.Pair{.row 2, .column 1}, .origin 0}
+out := (compute.plrun k ((Par){.m 4, .in In{.a a, .b b}}) : Struct)
+compute.collect out.c : Array
+"#;
+
 /// The imported (frozen) `Tensor` as a parameter type and as a literal's type.
 ///
 /// # Invariant
@@ -516,6 +563,7 @@ fn probe_the_tensor_library() {
         ("read-inline", inline.as_str()),
         ("read-live", TENSOR_READ_LIVE),
         ("contract", TENSOR_CONTRACT),
+        ("contract-frozen", TENSOR_CONTRACT_FROZEN),
         ("frozen-type", FROZEN_TYPE),
     ] {
         match lichen_language::run::evaluate_raw(program, path.parent(), &mut store) {
