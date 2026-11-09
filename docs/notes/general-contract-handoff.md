@@ -218,8 +218,12 @@
      的问题。
      **本轮实测的卡点**：钩子能拿到 body 的函数与注解，但 **body 的字段读不是 deferred
      读**（容器类型是 struct kind，concrete=true），所以“延迟读解析”的钩子无事可做。
-     下一步：**扫描 body 的读**——对参数上的每个字段读，按参数类型字面量解析其声明类型，
-     把它命中的冻结引用记进 `frozen_reads`（仍是引用，不拷贝）。
+     **本轮又测到两条**（155）：(1) **body 的读是晚检查的**——`compute.parallel` 的
+     build 时钩子跑在 body 读被检查之前；把解析放到整个 check 之后（定义 pass 之后）才能
+     看到这些读；(2) **读链的根容器不是函数的参数值**：例如函数参数 expr 的值是 2131，
+     而 `p.in` 读的容器是 391（形参的 **value cell**），两者不相等，所以“从参数值出发”
+     的链解析匹配不上。下一步：从**形参的 value cell** 出发（`state[formal].val`），或在
+     模板/实例之间建立映射后再解析。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
