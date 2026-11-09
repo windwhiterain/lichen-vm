@@ -224,9 +224,14 @@
      再解析，所有函数仍是 `matching=0`——读链的根是**模板节点**（如 `compute` 库模板里的
      396/504，或 body 的 391/661/684），不是用户在 check 期建的函数参数 cell。下一步：
      建立**模板 ↔ 实例**的参数映射（或从模板的形参 value cell 出发），再沿读链解析。
-     **委派**：独立调查（subagent `kernel-read-root`，只读）专门查“body 的读何时/由哪条
-     check 路径创建、读链节点与函数参数/注解的关系”，结论会并入本文件（首个 subagent
-     `kernel-frozen-read-investigator` 在产出前失败，已删除）。
+     **委派**：两个只读 subagent 都在产出前失败（诊断只有 `[object Object]`），已删除；
+     改为内联调查。
+     **内联调查的结论**（155 末）：程序被**多次 check**（`Mode::Check`、`Mode::Evaluate`，
+     还有一次在 `statements-eval` 之后）；body 的读 `n/in/t/buffer` 是在**较后的那一次**
+     的语句循环里被检查的，而各检查点的“晚解析”看到的读表里没有它们（每次 27 条、全是
+     库/前一轮的读）；按 pass 清空读表后仍对不上。读链容器也仍不匹配记录的形参 value cell。
+     结论：要打通，需要按 check pass 正确记录/解析（读表与参数表的生命周期跟着 pass 走），
+     这是一次**结构性的 check 流程改动**，不是局部补丁。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
