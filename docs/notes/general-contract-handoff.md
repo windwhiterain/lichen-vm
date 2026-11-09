@@ -224,8 +224,9 @@
      再解析，所有函数仍是 `matching=0`——读链的根是**模板节点**（如 `compute` 库模板里的
      396/504，或 body 的 391/661/684），不是用户在 check 期建的函数参数 cell。下一步：
      建立**模板 ↔ 实例**的参数映射（或从模板的形参 value cell 出发），再沿读链解析。
-     **委派**：已派独立调查（subagent `kernel-frozen-read-investigator`，只读）专门查
-     “读链根节点由哪条 check 路径创建、与函数参数 cell 的映射是什么”，结论会并入本文件。
+     **委派**：独立调查（subagent `kernel-read-root`，只读）专门查“body 的读何时/由哪条
+     check 路径创建、读链节点与函数参数/注解的关系”，结论会并入本文件（首个 subagent
+     `kernel-frozen-read-investigator` 在产出前失败，已删除）。
    - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
      直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
      Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
