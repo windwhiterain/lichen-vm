@@ -202,12 +202,12 @@
      `compute.read`，同一套 2×3 列主序/行主序张量读出
      `[1,2,3,4,5,6]` 与 `[1,3,5,2,4,6]`。规则：**kernel 参数类型必须是程序声明的**（role walk
      在 live 模块里读字段名）；冻结类型留给宿主侧，kernel 边界用程序自己的类型或扁平 buffer。
-   - **冻结类型值的“值槽”是空的，但冻结模块确实保存了函数的值**（本轮修正结论）：
-     `t.Tensor` 的冻结表示是一个 expr `[value, type, attrs]`，其中 value 槽（ModuleKey(4)
-     的节点 7）**无值也无操作**，而 type 槽（节点 33）保存着 5 项数组（TypeFunction kind）。
-     所以不是“需要再求值一次”——冻结模块已保存了求过的函数值；是**检查器在读冻结字段时
-     留下了未定的 value 槽**，冻结原样复制了它。修复方向：在检查期解析该读（与冻结注解
-     修复同一族），或用 expr 的 type 槽给字段定类型；不需要运行冻结函数。
+   - **冻结产物保存了全部值；`t.Tensor` 运行时读出的就是类型值**（本轮实测，`426e42ea`）：
+     直接检查 artifact：export 的 11 个绑定值都在（4 个类型是 type value，5 个函数是
+     Function），`t.Tensor` 单独运行得到 `((?a, Float, none), (@any,@any), (@any,@any),
+     @any): Struct`。所以**冻结不是问题**；kernel 走查看到的是“类型层字段的值 = struct
+     kind（节点 7 = TypeStruct）”，而不是类型值。修复方向：让检查器给类型层字段存**类型值**
+     （而不是 kind），或让走查沿该字段的 type 槽找类型值。
 2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
    stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
    「形状表 → 地址」的最后一环。
