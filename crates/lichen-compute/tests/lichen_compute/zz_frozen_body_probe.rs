@@ -175,7 +175,8 @@ p_kernel := compute.parallel fill_plan "cpu" PBuf
 data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
 data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
 data_p := (compute.plrun p_kernel ((Fill){.n 12}) : Struct)
-out := (compute.plrun lib.kernel ((lib.Arg){.meta lib.Meta{.n 10, .rank @RANK@, .contract @CONTRACT@, .total 12}, .I lib.In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
+contract := ('arg = lib.Arg) -> ((compute.plrun lib.kernel arg) : Struct)
+out := contract ((lib.Arg){.meta lib.Meta{.n 10, .rank @RANK@, .contract @CONTRACT@, .total 12}, .I lib.In{.a data_a.a, .b data_b.b, .plan data_p.plan}})
 compute.collect out.c : Array
 "#;
 
