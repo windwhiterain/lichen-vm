@@ -91,3 +91,14 @@ skipped and the probe annotating its two runs with their concrete codomains
   `Meta`/`In` declarations — the contract kernel's argument path.
 
 Both are outside the annotation itself.
+
+## The curried call step
+
+The first of those was the *curried* call: a partial application's value is a runtime
+cell, so `function_apply_function` answered `None` for the outer applies and their result
+types stayed open (`(f 1 2).x` refused). The fallback now walks the IR
+(`Checker::curried_callee`): the inner application's own function — recursing through the
+chain — then that function's return expression as the next function. Measured: the
+minimal curried probe answers `3`, and the named contract's call resolves every apply, so
+its only remaining refusal is the runtime unify on the plan type (`build_outputs`'s
+declared-codomain assembly, `expected raw[Table, TypeId(51), …], found Struct`).
