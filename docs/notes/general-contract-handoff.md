@@ -450,6 +450,12 @@
 - 结论：不是 SPEC 的规则问题，是**定义 pass 的实参强制**把 per-call 值提前烘死（与“不物化”冲突）。
   下一步（不新加机制）：让定义 pass 的那次 apply 走**签名检查/惰性**路径，不在检查期 `evaluate_node` 实参；
   先核对 `ParameterCheck::Signature` 路径是否已具备所需信息，再把 `apply_parameter_check` 的强制限定到运行期 apply。
+- 已试（本轮）：把 `evaluate_pattern_argument_inner` 里的 `evaluate_node(argument)` 换成“只取已有值”。
+  结果：compute **145 失败**、highlevel 2 失败、lowlevel 8 失败——这个强制是**承重**的（定义 pass 靠它
+  让 apply-time 检查触发、让 clone 拿到要复制的形状），不能拿掉。已回退，三套件恢复全绿。
+- 因此修复点不在“强制与否”，而在**强制出来的值如何被 clone 用**：clone 的 `class_inside` 判据（类 scope）
+  决定了这些节点被引用而非克隆，引用让定义 pass 的值留在原类里。下一步核对 `node_class_inside_scope`
+  对“类里含全局类型值”的判定，与 SPEC 的 Clone 规则（class 在 f's scope 才 clone）逐条对齐。
 
 ## 已知坑
 
