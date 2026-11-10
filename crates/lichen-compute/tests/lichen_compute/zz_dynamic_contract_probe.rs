@@ -289,43 +289,29 @@ body := ('p = Par) -> {
 }
 kernel := compute.parallel body "cpu" Out
 ShapeTable := table{string, Int}
-NameSet := set{string}
-Names2 := [@any : string, 2]
-BufA := (compute.Buf (compute.BufParam{.type Float, .length 24}))
-BufB := (compute.Buf (compute.BufParam{.type Float, .length 60}))
-contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> ('anames : NameSet) -> 'bbuf -> ('bshape : ShapeTable) -> ('bstride : ShapeTable) -> ('bnames : NameSet) -> ('n0 : string) -> ('n1 : string) -> ('n2 : string) -> ('n3 : string) -> {
-  a0 := if n0 @in anames then ashape <== n0 else 0
-  b0 := if n0 @in bnames then bshape <== n0 else 0
-  a1 := if n1 @in anames then ashape <== n1 else 0
-  b1 := if n1 @in bnames then bshape <== n1 else 0
-  a2 := if n2 @in anames then ashape <== n2 else 0
-  b2 := if n2 @in bnames then bshape <== n2 else 0
-  a3 := if n3 @in anames then ashape <== n3 else 0
-  b3 := if n3 @in bnames then bshape <== n3 else 0
-  e0 := (a0 > b0) * a0 + (a0 <= b0) * b0
-  e1 := (a1 > b1) * a1 + (a1 <= b1) * b1
-  e2 := (a2 > b2) * a2 + (a2 <= b2) * b2
-  e3 := (a3 > b3) * a3 + (a3 <= b3) * b3
-  as0 := if n0 @in anames then astride <== n0 else 0
-  bs0 := if n0 @in bnames then bstride <== n0 else 0
-  as1 := if n1 @in anames then astride <== n1 else 0
-  bs1 := if n1 @in bnames then bstride <== n1 else 0
-  as2 := if n2 @in anames then astride <== n2 else 0
-  bs2 := if n2 @in bnames then bstride <== n2 else 0
-  as3 := if n3 @in anames then astride <== n3 else 0
-  bs3 := if n3 @in bnames then bstride <== n3 else 0
+contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> 'bbuf -> ('bshape : ShapeTable) -> ('bstride : ShapeTable) -> ('n0 : string) -> ('n1 : string) -> ('n2 : string) -> ('n3 : string) -> {
+  e0 := ashape <== n0
+  e1 := ashape <== n1
+  e2 := ashape <== n2
+  e3 := ashape <== n3
+  as0 := astride <== n0
+  bs0 := bstride <== n0
+  as1 := astride <== n1
+  bs1 := bstride <== n1
+  as2 := astride <== n2
+  bs2 := bstride <== n2
+  as3 := astride <== n3
+  bs3 := bstride <== n3
   ps := PlanShape{.n 12, .s0 as0, .s1 bs0, .s2 e0, .s3 as1, .s4 bs1, .s5 e1, .s6 as2, .s7 bs2, .s8 e2, .s9 as3, .s10 bs3, .s11 e3}
   dp := (compute.plrun p_kernel ps : Struct)
   meta := Meta{.n e0 * e1, .rank 4, .contract 2, .total e2 * e3}
   (compute.plrun kernel ((Arg){.meta meta, .I In{.a abuf, .b bbuf, .plan dp.plan}}) : Struct)
 }
-ashape := table(table{string, Int})("i" => 2, "j" => 3, "k" => 4)
-astride := table(table{string, Int})("i" => 12, "j" => 4, "k" => 1)
-anames := set(set{string})("i", "j", "k")
-bshape := table(table{string, Int})("l" => 5, "j" => 3, "k" => 4)
-bstride := table(table{string, Int})("l" => 1, "j" => 20, "k" => 5)
-bnames := set(set{string})("l", "j", "k")
-c := contract data_a.a ashape astride anames data_b.b bshape bstride bnames "i" "l" "j" "k"
+ashape := table(table{string, Int})("i" => 2, "l" => 5, "j" => 3, "k" => 4)
+astride := table(table{string, Int})("i" => 12, "l" => 0, "j" => 4, "k" => 1)
+bshape := table(table{string, Int})("i" => 2, "l" => 5, "j" => 3, "k" => 4)
+bstride := table(table{string, Int})("i" => 0, "l" => 1, "j" => 20, "k" => 5)
+c := contract data_a.a ashape astride data_b.b bshape bstride "i" "l" "j" "k"
 compute.collect c.c : Array
 "#;
 
