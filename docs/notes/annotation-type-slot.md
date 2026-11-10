@@ -102,3 +102,25 @@ chain — then that function's return expression as the next function. Measured:
 minimal curried probe answers `3`, and the named contract's call resolves every apply, so
 its only remaining refusal is the runtime unify on the plan type (`build_outputs`'s
 declared-codomain assembly, `expected raw[Table, TypeId(51), …], found Struct`).
+
+## The runtime unify, against the spec's struct rule
+
+The spec (`docs/language-spec.md` §Struct) is explicit: an instance's type slot **is**
+`Struct`, and the named type is the value's identity (`name_table` + `nominal_id`):
+
+```
+s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
+s.<name> := {type_of s = Struct; @raw s.value[s.value.name_table[<name>]+2]}
+```
+
+So the failing engine-side unify compares two things that are correct at their own levels:
+the **declared codomain** (`PBuf`, a named struct *type value*: `raw[Table, TypeId(51), …]`)
+and the **result's type** (the `Struct` marker, as an instance's type must be). The
+declared codomain is a *layout to assemble by identity*, which `build_outputs` /
+`struct_value_node` already do (name table + id + fields, no unify). The runtime should
+therefore not unify the two: the diagnostic is the engine-side apply/normalize unify
+(a `DiagKind::Runtime` with no diary entry) meeting the declared codomain.
+
+Next: find which engine unify (definition-pass apply or a clone normalize) receives the
+declared codomain as one side, and make the codomain a layout input rather than a unify
+operand — the spec's rule is identity, not a type-level equality.
