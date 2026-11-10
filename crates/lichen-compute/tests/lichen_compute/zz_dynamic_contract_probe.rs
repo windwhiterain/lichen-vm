@@ -491,11 +491,11 @@ body := ('p = Par) -> {
   o := compute.buf (compute.BufParam{.type Float, .length p.meta.n})
   ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value value}))})
 }
-kernel := compute.parallel body "cpu" Out
 data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
 data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
 ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
 dp := (compute.plrun p_kernel ps : Struct)
+kernel := compute.parallel body "cpu" Out
 run := 'abuf -> 'bbuf -> 'plan_b -> {
   (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank 4, .contract 2, .total 12}, .I In{.a abuf, .b bbuf, .plan plan_b}}) : Struct)
 }
@@ -540,6 +540,62 @@ fn probe_two_runs() {
         Ok(text) => println!("[two-runs] {text}"),
         Err(diagnostics) => println!(
             "[two-runs] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+/// A kernel reading two buffers that arrive as function parameters.
+///
+/// # Invariant
+/// Print-only. The kernel's input buffers are a function's parameters here, which is the
+/// contract kernel's shape; a zero answer means a parameter buffer does not reach a kernel.
+const PARAMETER_BUFFERS: &str = r#"
+--- compute = import "compute.lichen" ---
+ABuf := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Buffers := {.a (compute.Buf (compute.BufParam{.type Int, .length 4})), .p (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Meta := {.n @any : Int, .rank @any : Int, .contract @any : Int, .total @any : Int}
+Sum := {.meta Meta, .in Buffers}
+SumOut := {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Fill := {.n @any : Int}
+PlanFill := {.n @any : Int}
+fill_a := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+}
+fill_p := ('f = Fill) -> {
+  i := compute.range f.n
+  p := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to p, .at i, .value (i + 1)}))})
+}
+sum := ('p = Sum) -> {
+  i := compute.range p.meta.n
+  o := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((SumOut){.c (compute.write ((compute.Write _){.to o, .at i, .value ((compute.read ((compute.Read _){.from p.in.a, .at i}) : Int) + (compute.read ((compute.Read _){.from p.in.p, .at (p.meta.rank - 3)}) : Int))}))})
+}
+a_kernel := compute.parallel fill_a "cpu" ABuf
+p_kernel := compute.parallel fill_p "cpu" ABuf
+sum_kernel := compute.parallel sum "cpu" SumOut
+data_a := (compute.plrun a_kernel ((Fill){.n 4}) : Struct)
+data_p := (compute.plrun p_kernel ((Fill){.n 4}) : Struct)
+run := 'abuf -> 'pbuf -> {
+  (compute.plrun sum_kernel ((Sum){.meta Meta{.n 4, .rank 4, .contract 1, .total 2}, .in Buffers{.a abuf, .p pbuf}}) : Struct)
+}
+r := run data_a.a data_p.a
+compute.collect r.c : Array
+"#;
+
+#[test]
+fn probe_a_parameter_buffers() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(PARAMETER_BUFFERS, None, &mut store) {
+        Ok(text) => println!("[parameter-buffers] {text}"),
+        Err(diagnostics) => println!(
+            "[parameter-buffers] refused: {:?}",
             diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))

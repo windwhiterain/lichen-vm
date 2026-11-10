@@ -312,6 +312,16 @@
   求值（模板 buffer 的读为 0），于是解码循环的 `% extent` 除以零。
   这是 kernel 编译/lowering 的缺陷（参数来源的 plan 读不能按模板求值），不是语言层。
 
+### 参数 buffer 的实测（本轮）
+
+- `probe_a_parameter_buffers`：kernel 形状与契约 kernel 同构（`{.meta 4 个 Int, .in Buffers{2 个 buffer}}`），
+  两个 buffer 都从**函数参数**进来，kernel 读它们 → `[3, 4, 5, 6]` ✓。参数 buffer 能进 kernel。
+- 契约 kernel 在函数里（`probe_a_contract_kernel_in_function`）仍在 `compute.parallel` 处
+  `integer divide by zero`；加 `DBG_IN` 实测**三个输入都解析成 array**（position 0/1/2，path [1,0]/[1,1]/[1,2]），
+  所以缺陷在输入解析**之后**：kernel 执行时 plan 的 extent 读到 0（或 `@loop` 展开把模板读折叠成 0）。
+  把 `ps`/`dp` 挪到 `kernel :=` 之前无效（trap 仍在）。
+  下一步：在 kernel 编译的 `@loop` 展开/常量折叠处打点，确认 `p.in.plan` 的读是否被折叠成模板的 0。
+
 ## 已知坑
 
 - `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。
