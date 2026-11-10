@@ -467,6 +467,12 @@
 - 结论：与 SPEC 的偏差在**定义 pass 以模板参数求值模板 body**（SPEC 没有这一步），不在 Struct/Unify/Clone。
   下一步（最小、不新加机制）：在 clone 的“引用”情形里，把**被引用且带烘死值**的 per-call 节点按 clone 已有的
   reset（run stamp/值）重置，使运行期重新求值；先核对 `node_apply` 的 reference 分支是否已有 reset 可复用。
+- 已试（本轮）：在 `node_apply` 的 reference 分支（`!class_inside && !replay_operation && !wildcard`）对
+  “有 operation、有值、已 runned”的节点做 `set_node_value(None)` + 清 run stamp。
+  - 三套件全绿（267/136/167）；
+  - `DBG_RESET` 实测：只重置了一个 **Apply** 节点（9323，值是被烘出来的 array），**没有**触到链上的
+    读节点（Index）——说明链上的读不是走 reference 分支，而是走了别的路径（可能被 clone）。
+  - 链式探针仍 `raw none`，所以这个 reset 不是充分修复；已回退（不留未证明的语义改动）。
 
 ## 已知坑
 
