@@ -335,6 +335,17 @@
 - 待办：把“实参的答案替换参数声明”的落点定下来（`write_node_answer` 规则，`equality.rs:427`），
   即检查器的参数注解路径、apply clone、还是 plrun 的 native build；约束是不物化、不加机制、static/dynamic 一致。
 
+### 输入解析读的是“类的值”，不是被求值的读（本轮实测）
+
+- 在 `apply_parameter_check` 里对开放参数槽调用既有 `write_node_answer`（answer 规则）**确实写入**
+  （`agrees=true, open=true`），参数槽拿到调用点答案；但链式 plrun 仍 `raw none`。
+- 决定性对照：函数内 `compute.collect d1.a` → `[1, 2, 3, 4]` ✓（同一个读，由 VM 求值操作数后取到运行期 buffer）。
+- 链式路径的输入解析：`value_at_path` 的 `slot_value_of` 取的是**类里的已定值**（声明的静态 `ABuf/Buf` 包装，
+  `items[0/1]` 是 Static 的 Table/TypeId），所以 `buf_payload` 拿到的是声明的 `.native`，`run_input` 拒绝
+  （不是 `ComputeValue::Buffer`）。collect 路径能工作，是因为 VM 先**求值**了读节点。
+- 下一步（不物化、不加机制）：让输入解析保留**路径上的字段节点**（读），先由 VM 求值该节点，
+  再取它的值做 `buf_payload`——与 collect 路径同一语义；`value_at_path` 现在直接取类值，跳过了这一步。
+
 ## 已知坑
 
 - `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。
