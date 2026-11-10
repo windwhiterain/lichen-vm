@@ -322,6 +322,19 @@
   把 `ps`/`dp` 挪到 `kernel :=` 之前无效（trap 仍在）。
   下一步：在 kernel 编译的 `@loop` 展开/常量折叠处打点，确认 `p.in.plan` 的读是否被折叠成模板的 0。
 
+### 链式 plrun 的根因（本轮，只读调查）
+
+- 新复现：`probe_a_parameter_buffers`（函数里两次 plrun，第二次的参数域读第一次的结果）
+  答 `raw none`。它在 `ParLaunch` 的 named-form 输入解析处静默返回 None。
+- 实测根因：输入解析拿到的是**声明的 `Buf` 包装模板**（5 项：`[Table, TypeId(100), Array, Array, Array]`），
+  它第 2 项 `.native` 是 `@any` 洞；读的 base 就是这份声明，所以无论怎样“索取”读节点，
+  只能求值出声明，拿不到第一次 plrun 的运行期结果。参数被绑到声明（`plrun := 'k = K -> 'a = (k.I _) -> …`，
+  `compute.lichen:19`），调用点的实参值没有替换掉参数类里的声明。
+- 试过的修法（已回退）：在解析处用 `class_operation_owner` 命名持有操作的类成员并 `evaluate_node_deep_ref` 求值。
+  读节点本身被求值成声明，payload 仍是空 cell，无效；套件仍 267 绿。
+- 待办：把“实参的答案替换参数声明”的落点定下来（`write_node_answer` 规则，`equality.rs:427`），
+  即检查器的参数注解路径、apply clone、还是 plrun 的 native build；约束是不物化、不加机制、static/dynamic 一致。
+
 ## 已知坑
 
 - `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。
