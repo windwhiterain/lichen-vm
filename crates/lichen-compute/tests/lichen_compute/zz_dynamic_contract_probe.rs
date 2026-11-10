@@ -289,19 +289,19 @@ body := ('p = Par) -> {
 }
 kernel := compute.parallel body "cpu" Out
 ShapeTable := table{string, Int}
-contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> 'bbuf -> ('bshape : ShapeTable) -> ('bstride : ShapeTable) -> ('n0 : string) -> ('n1 : string) -> ('n2 : string) -> ('n3 : string) -> {
-  e0 := ashape <== n0
-  e1 := ashape <== n1
-  e2 := ashape <== n2
-  e3 := ashape <== n3
-  as0 := astride <== n0
-  bs0 := bstride <== n0
-  as1 := astride <== n1
-  bs1 := bstride <== n1
-  as2 := astride <== n2
-  bs2 := bstride <== n2
-  as3 := astride <== n3
-  bs3 := bstride <== n3
+contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> 'bbuf -> ('bshape : ShapeTable) -> ('bstride : ShapeTable) -> {
+  e0 := ashape <== "i"
+  e1 := ashape <== "l"
+  e2 := ashape <== "j"
+  e3 := ashape <== "k"
+  as0 := astride <== "i"
+  bs0 := bstride <== "i"
+  as1 := astride <== "l"
+  bs1 := bstride <== "l"
+  as2 := astride <== "j"
+  bs2 := bstride <== "j"
+  as3 := astride <== "k"
+  bs3 := bstride <== "k"
   ps := PlanShape{.n 12, .s0 as0, .s1 bs0, .s2 e0, .s3 as1, .s4 bs1, .s5 e1, .s6 as2, .s7 bs2, .s8 e2, .s9 as3, .s10 bs3, .s11 e3}
   dp := (compute.plrun p_kernel ps : Struct)
   meta := Meta{.n e0 * e1, .rank 4, .contract 2, .total e2 * e3}
@@ -311,7 +311,7 @@ ashape := table(table{string, Int})("i" => 2, "l" => 5, "j" => 3, "k" => 4)
 astride := table(table{string, Int})("i" => 12, "l" => 0, "j" => 4, "k" => 1)
 bshape := table(table{string, Int})("i" => 2, "l" => 5, "j" => 3, "k" => 4)
 bstride := table(table{string, Int})("i" => 0, "l" => 1, "j" => 20, "k" => 5)
-c := contract data_a.a ashape astride data_b.b bshape bstride "i" "l" "j" "k"
+c := contract data_a.a ashape astride data_b.b bshape bstride
 compute.collect c.c : Array
 "#;
 
@@ -331,6 +331,237 @@ has := ('s : NameSet) -> "i" @in s
 get := ('n : string) -> ('s : ShapeTable) -> ('ns : NameSet) -> if n @in ns then s <== n else 0
 (read t, read2 7 t, has names, get "i" t names, get "l" t names)
 "#;
+
+/// A plan read inside a struct literal, then returned.
+///
+/// # Invariant
+/// Print-only. The plan kernel runs in a function, its field read feeds a struct literal,
+/// and the caller collects the field — the named contract's inner flow, one step simpler.
+const PLAN_IN_LITERAL: &str = r#"
+--- compute = import "compute.lichen" ---
+PBuf := {.plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+PlanShape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+plan_fill := ('f = PlanShape) -> {
+  i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
+  plan := compute.buf (compute.BufParam{.type Int, .length 12})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
+}
+p_kernel := compute.parallel plan_fill "cpu" PBuf
+run := ('ps = PlanShape) -> {
+  dp := (compute.plrun p_kernel ps : Struct)
+  ((PBuf){.plan dp.plan})
+}
+ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
+r := run ps
+compute.collect r.plan : Array
+"#;
+
+/// Two kernels in one function: the plan kernel's field and a second kernel's result.
+///
+/// # Invariant
+/// Print-only. The second run takes the first's field inside a struct literal, and the
+/// caller collects the second result — the named contract's shape with a square kernel.
+const TWO_RUNS: &str = r#"
+--- compute = import "compute.lichen" ---
+PBuf := {.plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Fill := {.n @any : Int}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (int2float (i + 1))}))})
+}
+a_kernel := compute.parallel fill "cpu" ABuf
+PlanShape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+plan_fill := ('f = PlanShape) -> {
+  i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
+  plan := compute.buf (compute.BufParam{.type Int, .length 12})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
+}
+p_kernel := compute.parallel plan_fill "cpu" PBuf
+run := ('ps = PlanShape) -> {
+  dp := (compute.plrun p_kernel ps : Struct)
+  d := (compute.plrun a_kernel ((Fill){.n 4}) : Struct)
+  ((PBuf){.plan dp.plan})
+}
+ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
+r := run ps
+compute.collect r.plan : Array
+"#;
+
+/// An unannotated buffer parameter, placed in a struct literal, read back.
+///
+/// # Invariant
+/// Print-only. The named contract's buffers are unannotated parameters; this states whether
+/// such a parameter can fill a struct field and be read.
+const BUFFER_PARAMETER: &str = r#"
+--- compute = import "compute.lichen" ---
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+Fill := {.n @any : Int}
+Holder := {.x (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (int2float (i + 1))}))})
+}
+a_kernel := compute.parallel fill "cpu" ABuf
+data := (compute.plrun a_kernel ((Fill){.n 4}) : Struct)
+run := 'b -> {
+  h := Holder{.x b}
+  h
+}
+r := run data.a
+compute.collect r.x : Array
+"#;
+
+/// The contract kernel inside a function, its plan handed in from the top level.
+///
+/// # Invariant
+/// Print-only. The kernel runs with a plan buffer parameter; the caller collects the result.
+const CONTRACT_KERNEL_IN_FUNCTION: &str = r#"
+--- compute = import "compute.lichen" ---
+Meta := {.n @any : Int, .rank @any : Int, .contract @any : Int, .total @any : Int}
+In   := {.a (compute.Buf (compute.BufParam{.type Float, .length 24})), .b (compute.Buf (compute.BufParam{.type Float, .length 60})), .plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+Out  := {.c (compute.Buf (compute.BufParam{.type Float, .length 10}))}
+Par  := {.meta Meta, .in In}
+Arg  := {.meta Meta, .I In}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 24}))}
+BBuf := {.b (compute.Buf (compute.BufParam{.type Float, .length 60}))}
+PBuf := {.plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+Fill := {.n @any : Int}
+fill_a := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 24})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (int2float (i + 1))}))})
+}
+fill_b := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 60})
+  ((BBuf){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+PlanShape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+plan_fill := ('f = PlanShape) -> {
+  i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
+  plan := compute.buf (compute.BufParam{.type Int, .length 12})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
+}
+a_kernel := compute.parallel fill_a "cpu" ABuf
+b_kernel := compute.parallel fill_b "cpu" BBuf
+p_kernel := compute.parallel plan_fill "cpu" PBuf
+body := ('p = Par) -> {
+  i := compute.range p.meta.n
+  rank := p.meta.rank
+  contract := p.meta.contract
+  @loop decode_a := 's -> if s(0) == 0 then s(2) else {
+    dim := rank - s(0)
+    extent := (compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 2)}) : Int)
+    coordinate := s(1) % extent
+    decode_a (s(0) - 1, s(1) / extent, s(2) + coordinate * ((compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3)}) : Int)))
+  }
+  @loop decode_b := 's -> if s(0) == 0 then s(2) else {
+    dim := rank - s(0)
+    extent := (compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 2)}) : Int)
+    coordinate := s(1) % extent
+    decode_b (s(0) - 1, s(1) / extent, s(2) + coordinate * ((compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 1)}) : Int)))
+  }
+  @loop address_a := 't -> if t(0) == 0 then t(2) else {
+    dim := t(4) + (t(5) - t(0))
+    extent := (compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 2)}) : Int)
+    coordinate := t(1) % extent
+    address_a (t(0) - 1, t(1) / extent, t(2) + coordinate * ((compute.read ((compute.Read _){.from t(3), .at (dim * 3)}) : Int)), t(3), t(4), t(5))
+  }
+  @loop address_b := 't -> if t(0) == 0 then t(2) else {
+    dim := t(4) + (t(5) - t(0))
+    extent := (compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 2)}) : Int)
+    coordinate := t(1) % extent
+    address_b (t(0) - 1, t(1) / extent, t(2) + coordinate * ((compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 1)}) : Int)), t(3), t(4), t(5))
+  }
+  base_a := decode_a (rank, i, 0)
+  base_b := decode_b (rank, i, 0)
+  @loop dot := 'u -> if u(0) == 0 then u(1) else {
+    j := u(0) - 1
+    ca := address_a (contract, j, 0, p.in.plan, rank, contract)
+    cb := address_b (contract, j, 0, p.in.plan, rank, contract)
+    dot (u(0) - 1, (u(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (base_a + ca)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at (base_b + cb)}) : Float))))
+  }
+  value := dot (p.meta.total, 0.0)
+  o := compute.buf (compute.BufParam{.type Float, .length p.meta.n})
+  ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value value}))})
+}
+kernel := compute.parallel body "cpu" Out
+data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
+data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
+ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
+dp := (compute.plrun p_kernel ps : Struct)
+run := 'abuf -> 'bbuf -> 'plan_b -> {
+  (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank 4, .contract 2, .total 12}, .I In{.a abuf, .b bbuf, .plan plan_b}}) : Struct)
+}
+c := run data_a.a data_b.b dp.plan
+compute.collect c.c : Array
+"#;
+
+#[test]
+fn probe_a_contract_kernel_in_function() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(CONTRACT_KERNEL_IN_FUNCTION, None, &mut store) {
+        Ok(text) => println!("[contract-in-function] {text}"),
+        Err(diagnostics) => println!(
+            "[contract-in-function] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_buffer_parameter() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(BUFFER_PARAMETER, None, &mut store) {
+        Ok(text) => println!("[buffer-parameter] {text}"),
+        Err(diagnostics) => println!(
+            "[buffer-parameter] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_two_runs() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(TWO_RUNS, None, &mut store) {
+        Ok(text) => println!("[two-runs] {text}"),
+        Err(diagnostics) => println!(
+            "[two-runs] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_plan_in_literal() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(PLAN_IN_LITERAL, None, &mut store) {
+        Ok(text) => println!("[plan-in-literal] {text}"),
+        Err(diagnostics) => println!(
+            "[plan-in-literal] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
 
 #[test]
 fn probe_a_plan_in_function() {

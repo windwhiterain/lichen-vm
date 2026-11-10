@@ -296,6 +296,22 @@
   kernel 的 `.O` 类型值（`build` 在冻结模板上拿不到，见 `ParLaunchOp::build` 的 Invariant），
   不是注解值。已回退，树绿。**建议改走路线 2**（把该域读按 formal-rooted 延迟到调用点）。
 
+## 函数内两次 plrun 的实测（本轮）
+
+- **内联到顶层的命名契约给出参考值**（`abb4cfbb`，`probe_a_named_inline`）：
+  `[2938.0, 7042.0, 3016.0, 7264.0, 3094.0, 7486.0, 3172.0, 7708.0, 3250.0, 7930.0]`，
+  全程 SPEC 合规的 `: Struct` 注解。所以布局不是瓶颈。
+- 单独实测都通过（新探针）：
+  `probe_a_plan_in_literal`（函数内 plan 内核 + 域读进聚合值再返回）→ plan 12 项；
+  `probe_two_runs`（一个函数里两次 plrun）→ plan 12 项；
+  `probe_a_buffer_parameter`（未注解的 buffer 参数进结构体域再读回）→ `[1,2,3,4]`；
+  `probe_a_parameter_key`（参数为键的表查找）→ `(2, 3)`。
+- **函数包装的命名契约仍不行**：表推导 plan 时答案 `raw none`；把 plan 改成函数参数
+  （`probe_a_contract_kernel_in_function`）时在 `compute.parallel` 的编译处报
+  `integer divide by zero`（span 72,11）——kernel 编译把 `p.in.plan` 的读按**参数模板**
+  求值（模板 buffer 的读为 0），于是解码循环的 `% extent` 除以零。
+  这是 kernel 编译/lowering 的缺陷（参数来源的 plan 读不能按模板求值），不是语言层。
+
 ## 已知坑
 
 - `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。
