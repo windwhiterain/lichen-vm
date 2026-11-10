@@ -362,6 +362,15 @@
   没有与第一次 plrun 的 apply 节点并入同类，运行时结果也就填不进这个空 cell。
 - 下一步：比较 `check_struct_value` 构造字段值时用的容器值与直接 `d1.a` 用的容器值（两者是否同一个
   node / 是否同类），按 SPEC 的 `e3 = v[k]`（e3 就是你写的表达式）定位构造路径的偏差。
+- 已查两端：
+  - 字面量 `Buffers{.a d1.a}` 走 `check_instantiate`：对**未定**的字段值不做 value 级 unify，
+    只记 `field_sources[required_value] = actual_value`（`structs.rs:980` 附近）。
+  - 输入的解析 `value_at_path` 取到的就是**读的值节点**（带已定类型值）；实测在该节点及其类根上
+    `field_sources` 查不到来源（`direct=None, via_class=None`）。
+  - 所以要么 `field_sources` 的键不在解析到的节点上（注册的是模板字段值，解析走的是读的值节点），
+    要么该链接只有“叶子为空/`@any` 才跟随”（`recorded_leaf`）而这里叶子有值。
+- 下一轮：把 `check_instantiate` 注册的 `required_value` 键与解析到的节点逐一对照（同一 node？同类？），
+  再把“模板字段的 required 值 → 实际值”的链接接到解析路径上（不动任何 Invariant，不加机制）。
 
 ## 已知坑
 
