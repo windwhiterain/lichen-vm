@@ -75,3 +75,19 @@ test, `a_set_and_a_table_value_render_their_own_syntax`); compute `259`, highlev
 B is the smaller step that keeps the spec's term slot; A is the model the slots note
 states and what `(plrun … : PBuf)` needs; C is orthogonal (it would also give the
 wrapper a return type without any annotation).
+
+## The guard step that landed
+
+`check_named_field`'s struct guard (`check_unify(container_ty, struct_template)`) is now
+skipped when the container's type is a **struct type value** (`struct_identity_items`'s
+name table at its item 0): a type value already proves the layout, and unifying it with
+the template is what produced `expected Struct, found raw[…Struct]`. With the guard
+skipped and the probe annotating its two runs with their concrete codomains
+(`: PBuf`, `: Out`), the named contract's refusals move to two other places:
+
+- `c.c` on the contract call's result: `UndecidedContainer` — the function's return type
+  is the annotated run's type, and the caller's read does not see it decided;
+- a runtime unify `expected raw[Table, TypeId(51), …], found Struct` at the program's
+  `Meta`/`In` declarations — the contract kernel's argument path.
+
+Both are outside the annotation itself.
