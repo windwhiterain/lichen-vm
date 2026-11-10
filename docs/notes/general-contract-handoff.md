@@ -400,6 +400,15 @@
     立刻破坏结构体字面量的字段读（`no field named to/at/value/from in the struct type Struct`），已回退。
 - 下一轮：把“apply 的值”按 SPEC 落成**一个值位置**（`@raw[value, type]` 的 value 槽），运行期把结果写进这个位置，
   而不是对 apply 节点做 `Index(…, 0)`；先确认顶层为什么能工作（顶层的 value 槽是不是同一个位置）。
+- 已比较（本轮 `DBG_READ2`）：
+  - 顶层命名契约（`probe_a_named_inline`）的读：容器 val 节点在**检查期同样是未定**（`val_value=None`），
+    所以“顶层值已定”不是差别。
+  - 差别在**函数体被 clone**：函数内读的链是 `9538 → 9536 → 9168`，而 `9168 = Index(9166, 0)` 的 9166
+    是**模板（检查期）的 apply 节点**；运行时执行的是 clone 的 apply 节点，模板的 9166 不跑。
+    顶层不 clone（就地求值），所以同一段 wiring 在顶层成立。
+  - 即：clone 重放把读的浅层节点（9538/9536）映射到了 clone 的块，但**没有把链底的 apply 节点（9166）映射到 clone 的 apply**。
+- 下一轮：查 apply-clone 的重放映射（`applied_exprs`/`clone_parameters`/`replay_applied`），确认“读的值 = Index(模板 apply, 0)”
+  这类深层引用在 clone 里应映射到 clone 的 apply 节点；按 `docs/notes/apply-clone-ownership.md` 的语义补映射（不动 Invariant、不加机制）。
 
 ## 已知坑
 
