@@ -78,6 +78,12 @@ An operation can have an operand node.
 Nodes inside same class must share same value, class is merged by unify.
 An value can be Type or an array of nodes.
 
+## Unify
+Unify is a lowlevel action that unify two node will merge into one node if those satisfied:
+- both side are equal or any side is undecided.
+- recursive into nodes both side refers and apply the same rule.
+or else produce an unify error. 
+
 ## Attribute
 
 An expression is a raw array of attributes, value attribute is a lowlevel value, other attribute is an expression recursively, attributes is extentable.
@@ -235,7 +241,7 @@ Useful to give an undecided node a guarantee that it will never be decided.
 Subtype via lowlevel unify exception:
 - Always unify success.
 - Can recurise into lowlevel array, not lowlevel function, with everything `Any`.
-- Only merge if right side is undecided.
+- Only merge if another side is right side and undecided.
 
 ```sytax
 `@any` := `@raw Any`
