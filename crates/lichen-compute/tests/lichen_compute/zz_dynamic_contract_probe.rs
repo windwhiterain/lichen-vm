@@ -177,7 +177,7 @@ p_kernel := compute.parallel plan_fill "cpu" PBuf
 plan_of := 'n0 -> ('ashape : table{string, Int}) -> {
   e := ashape <== n0
   ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 e, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
-  dp := (compute.plrun p_kernel ps : PBuf)
+  dp := (compute.plrun p_kernel ps : Struct)
   dp.plan
 }
 t := table(table{string, Int})("i" => 2, "j" => 3)
@@ -303,9 +303,9 @@ contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> 'bbuf 
   as3 := astride <== n3
   bs3 := bstride <== n3
   ps := PlanShape{.n 12, .s0 as0, .s1 bs0, .s2 e0, .s3 as1, .s4 bs1, .s5 e1, .s6 as2, .s7 bs2, .s8 e2, .s9 as3, .s10 bs3, .s11 e3}
-  dp := (compute.plrun p_kernel ps : PBuf)
+  dp := (compute.plrun p_kernel ps : Struct)
   meta := Meta{.n e0 * e1, .rank 4, .contract 2, .total e2 * e3}
-  (compute.plrun kernel ((Arg){.meta meta, .I In{.a abuf, .b bbuf, .plan dp.plan}}) : Out)
+  (compute.plrun kernel ((Arg){.meta meta, .I In{.a abuf, .b bbuf, .plan dp.plan}}) : Struct)
 }
 ashape := table(table{string, Int})("i" => 2, "l" => 5, "j" => 3, "k" => 4)
 astride := table(table{string, Int})("i" => 12, "l" => 0, "j" => 4, "k" => 1)

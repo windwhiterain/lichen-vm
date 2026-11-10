@@ -178,8 +178,30 @@ reverted with the tree green. The type-of relation is a *checker* fact (`state[e
 the lowlevel holds the expr's type item and the narrow `element_types`, not a general
 type-of.
 
-The SPEC's `ann1 = ann2` for a **struct type value** therefore needs the *identity*
-relation, not the type relation: an instance's type is `Struct` whatever named type it
-instantiates, so `x : PBuf` can only mean "x's identity is PBuf's" (its name table and
-nominal id). That is the open ruling the two measured routes leave: how the annotation's
-`=` reads a struct type value.
+The SPEC's Subtype section is the whole statement of `=`:
+
+```
+## Subtype
+
+Unify is directed, extend to subtype, which made unify order, annotations matters.
+
+`a = b` => `a <: b`
+
+### Attribute
+Attributes can register a custom function `is_subtype` to override its subtype behavior.
+Subtype via post unify error suppression.
+```
+
+So `=` is the directed unify `a <: b`, and the only extension the SPEC names is an
+attribute's `is_subtype`; nothing in the SPEC makes a named struct value equal `Struct`.
+Per the SPEC, the annotation for a struct value is `: Struct` (both sides the marker),
+and a named struct type in a type position makes `type_of x = Struct` false — the
+field access rule refuses.
+
+Measured with that spelling: the named contract **evaluates** (no refusals;
+`zz_dynamic_contract_probe::probe_a_named_contraction` answers `raw none: Array`). The
+empty answer is the second fact: the plrun's declared layout rides on the **call
+annotation's value** (the checker passes it as the native op's third operand), so
+annotating `: Struct` declares the marker as the layout. The kernel value at run time is
+a `ComputeValue::ParKernel` node with no operation, so its own `parallel` node (whose
+third operand is the codomain) is not reachable from the call.
