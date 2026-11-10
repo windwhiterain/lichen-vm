@@ -409,6 +409,9 @@
   - 即：clone 重放把读的浅层节点（9538/9536）映射到了 clone 的块，但**没有把链底的 apply 节点（9166）映射到 clone 的 apply**。
 - 下一轮：查 apply-clone 的重放映射（`applied_exprs`/`clone_parameters`/`replay_applied`），确认“读的值 = Index(模板 apply, 0)”
   这类深层引用在 clone 里应映射到 clone 的 apply 节点；按 `docs/notes/apply-clone-ownership.md` 的语义补映射（不动 Invariant、不加机制）。
+- 已试（本轮）：把 apply 的 term 改成表达式对 `expr_of(apply, c)`（让 `value_of` 的 `Index(term, 0)` 取到 apply 节点本身）。
+  结果：`TableGet` 求值处 panic（`evaluation.rs:461`，unreachable "TableGet target must be a table"），已回退。
+  结论：apply 的 term = 裸 op 节点是**承重**的表示（不是随手可改的），改动要连带 `value_of`/读路径与 `TableGet` 的假设一起改。
 
 ## 已知坑
 
