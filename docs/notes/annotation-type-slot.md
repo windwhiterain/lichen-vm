@@ -168,3 +168,18 @@ binding when the cell is decided removes the refusal but fails
 binding **is** the annotation check. So the engine's `unify_ref` must follow the same
 directed subtype the language's `=` follows; that is a correction of the engine's unify,
 not a new mechanism.
+
+### Why the engine cannot simply apply the type-of rule
+
+A subtype fallback in the engine's unify (`a <: b` when `type_of(a) = b`) was measured:
+`element_types` (the lowlevel's only value→type registration) does not carry the call's
+result cell, so the rule answers `None` and the refusal stands — and the fallback was
+reverted with the tree green. The type-of relation is a *checker* fact (`state[e].ty`);
+the lowlevel holds the expr's type item and the narrow `element_types`, not a general
+type-of.
+
+The SPEC's `ann1 = ann2` for a **struct type value** therefore needs the *identity*
+relation, not the type relation: an instance's type is `Struct` whatever named type it
+instantiates, so `x : PBuf` can only mean "x's identity is PBuf's" (its name table and
+nominal id). That is the open ruling the two measured routes leave: how the annotation's
+`=` reads a struct type value.
