@@ -440,6 +440,16 @@
   可共享（closed/共享），但它们内部含 apply（per-call），这是矛盾的来源。
 - 下一步：在 `node_apply` 的 `template_content_is_closed`/`proven_concrete` 判定上核对：内容含 apply 的
   聚合值不应被判为 closed；按 `docs/notes/apply-clone-ownership.md` 的“只有闭合才共享”修正（不动 Invariant）。
+- 已定位（本轮）：**返回形态 vs 实参形态**的差别在 `Module::evaluate_pattern_argument`
+  （`apply.rs:89` 在 `apply_parameter_check` 前调用；实现 `function.rs:748`）：
+  - 它先 `evaluate_node(argument)`，再按 pattern 的数组逐项**递归强制**参数（跳过 `shallow` 位置）；
+  - 实参形态：定义 pass 会用模板参数把函数体走一遍（apply-time 检查），这次 apply 就强制了字面量的
+    字段读 → 读在第一次 plrun 未跑时“跑过”并把类型值写进类（run stamp 置位）；运行期 clone 的启动
+    再索取时看到“已跑”，值停在类型值 → `raw none`。
+  - 返回形态：字面量是**返回值**，没有 pattern 检查去强制它；它在运行期被求值时才跑，拿到运行期值 ✓。
+- 结论：不是 SPEC 的规则问题，是**定义 pass 的实参强制**把 per-call 值提前烘死（与“不物化”冲突）。
+  下一步（不新加机制）：让定义 pass 的那次 apply 走**签名检查/惰性**路径，不在检查期 `evaluate_node` 实参；
+  先核对 `ParameterCheck::Signature` 路径是否已具备所需信息，再把 `apply_parameter_check` 的强制限定到运行期 apply。
 
 ## 已知坑
 
