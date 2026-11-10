@@ -410,6 +410,32 @@ fn probe_a_curried_call() {
     }
 }
 
+/// The spec's directed unify on a struct value against its kind.
+///
+/// # Invariant
+/// Print-only. `a = b` is `a <: b`; a struct value's type is `Struct`, so `S = Struct`
+/// is the SPEC's type-of rule.
+const STRUCT_KIND_UNIFY: &str = r#"
+S := {.x 1}
+r := (S = Struct)
+r
+"#;
+
+#[test]
+fn probe_a_struct_kind_unify() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(STRUCT_KIND_UNIFY, None, &mut store) {
+        Ok(text) => println!("[kind-unify] {text}"),
+        Err(diagnostics) => println!(
+            "[kind-unify] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_named_shape_table() {
     let mut store = new_store(None).expect("the embedded compute package registers");
