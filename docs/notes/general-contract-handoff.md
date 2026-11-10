@@ -348,11 +348,13 @@
 - 按用户更新的 SPEC（`docs/language-spec.md`：Unify 段 + Any 段 “Only merge if another side is right
   side and undecided”）核对：实现的 wildcard 分支 `is_wildcard(va) && vb.is_none()` 与 SPEC 一致；
   把“右侧是 Any 也合并”的改动是错误的，已回退。
-- 实测（本轮）：把输入解析改成“取字段的值节点并 `evaluate_node`”后，该节点**同时持有一个值和一个
-  `Index` operation**（值是检查期 unify 写入的类型值）；VM 的求值闸门（“a value a unification wrote is
-  not the operator's answer”）没有重跑它，求值后值仍是类型值，`.native` 仍是数组而非 Buffer。
-  把 `compute.lichen` 的 `r = k.O` 去掉也不改变结果（读的 base 变成 `Index(d1 值, 位置)`，但答案仍是类型值）。
-  所以链式 plrun 的障碍在“值节点已有类值、operation 不被重跑”，与 Any 规则无关。
+- 实测（本轮）：把输入解析改成“取字段的值节点并 `evaluate_node`”后：
+  - `has_no_result_yet` 为 **false**（该节点的 run stamp 已置位）——它的 `Index` operation 已经跑过，
+    答案是**类型值**；`.native` 的 payload node 无值。
+  - 读的 base 链是 `Index(d1 值, 位置)`，`d1` 的值就是第一次 plrun 的结果；把 `compute.lichen` 的
+    `r = k.O` 去掉也**不改变**这个读数，所以类型值的合并不在 plrun lambda 里，而在别处（候选：
+    结构体实例化时字段与类型字段值的 unify，即 SPEC §Struct 的 `v[k] = e1` 那一步）。
+  - 结论：与 Any 规则无关；障碍是“第一次 plrun 的结果值已经是类型值”，读只是在读这个值。
 
 ## 已知坑
 
