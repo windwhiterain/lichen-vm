@@ -473,6 +473,15 @@
   - `DBG_RESET` 实测：只重置了一个 **Apply** 节点（9323，值是被烘出来的 array），**没有**触到链上的
     读节点（Index）——说明链上的读不是走 reference 分支，而是走了别的路径（可能被 clone）。
   - 链式探针仍 `raw none`，所以这个 reset 不是充分修复；已回退（不留未证明的语义改动）。
+- 对照读数（本轮 `DBG_REF`）：**好的形态也命中同一个 reference 分支**，且它的 Index 节点同样是
+  `value=Some(Array), runned=true, class_inside=false`：
+  - `probe_a_plan_in_literal`：`[ref] node=7722 value=Some(Array) runned=true class_inside=false`；
+  - 失败的实参形态：链上 Index 的 reference 访问是 `value=None, runned=false`（还没烘过）；
+  - 所以“引用 + 已烘值”本身不是判别点；差别在**烘的时机/之后是否被重新求值**：好的形态里那个读在
+    运行期（第一次 plrun 之后）得到值，返回路径会再次求值它；实参形态没有这条再次求值的路径。
+- 下一步：找“返回值求值”路径（`return`/`wire_apply_result`/apply 的 `evaluate_node(applied)`）里对
+  读节点的再次求值（`write_node_answer` 的 answer-over-requirement），把它同样用在“实参在运行期
+  被启动索取”这条路径上。
 
 ## 已知坑
 
