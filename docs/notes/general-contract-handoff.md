@@ -390,6 +390,16 @@
     即“字面量里读的容器值”与“`value_of` 的兜底 Index”不是同一个 node。
 - 下一轮：在字面量的字段构造路径上打印 `value_of(argument_expr)` 的节点与 `state[argument_expr].val/term`，
   与直接读路径对照（两者是否同一 node），据此定位构造路径把容器值换成裸 cell 的位置。
+- 已测（本轮 `DBG_READ` / `DBG_INST`）：
+  - 绑定到 apply 的容器：`state.val = 9168`，`state.term = 9172`；9172 是表达式 `@raw[9168, 34, @any, @any]`
+    （值槽、类型槽、两个属性）；9168 = `Index(9166, 0)`——`value_of` 对 apply 的兜底：**读值为 apply 节点 9166
+    的第 0 项**。
+  - 语义核对：apply 的运行期结果是结构体（name table/id/字段），`Index(结果, 0)` 取到的是**名字表**，不是结果本身；
+    只有当 apply 的值本身是 `@raw[value, type]` 表达式对时这个兜底才对。
+  - 试改“apply 的值 = apply 节点本身”（`state[e].val = Some(node)`，以及 `value_of` 对 apply 返回 term）：
+    立刻破坏结构体字面量的字段读（`no field named to/at/value/from in the struct type Struct`），已回退。
+- 下一轮：把“apply 的值”按 SPEC 落成**一个值位置**（`@raw[value, type]` 的 value 槽），运行期把结果写进这个位置，
+  而不是对 apply 节点做 `Index(…, 0)`；先确认顶层为什么能工作（顶层的 value 槽是不是同一个位置）。
 
 ## 已知坑
 
