@@ -381,6 +381,15 @@
     类的 value 停在 required 的类型值。
 - 下一步：按检查器的绑定路径找出“绑定值 cell ↔ apply 节点”应有的并类点（顶层能工作说明顶层有这条链接），
   在函数内补齐同一语义（不动 Invariant、不加机制）。
+- 已读检查器（本轮）：
+  - `check_app` 里 `let apply = op_node(Apply, operands); let node = apply;`，
+    `state[e].term = node`（**term 就是 apply op 节点**）、`state[e].ty = Some(c)`、`state[e].val = None`。
+  - `ExprKind::Formal` 的 value = `expr_value_half(binding.term)`——对 apply op 节点它取不到“对的”
+    value half；取不到时 `value_of` 兜底建 `Index(term, 0)`。
+  - 实测读的 base（9168）**不是** `Index`（无 operation、无值），所以这条兜底没有出现在字面量路径上；
+    即“字面量里读的容器值”与“`value_of` 的兜底 Index”不是同一个 node。
+- 下一轮：在字面量的字段构造路径上打印 `value_of(argument_expr)` 的节点与 `state[argument_expr].val/term`，
+  与直接读路径对照（两者是否同一 node），据此定位构造路径把容器值换成裸 cell 的位置。
 
 ## 已知坑
 
