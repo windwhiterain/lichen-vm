@@ -412,6 +412,15 @@
 - 已试（本轮）：把 apply 的 term 改成表达式对 `expr_of(apply, c)`（让 `value_of` 的 `Index(term, 0)` 取到 apply 节点本身）。
   结果：`TableGet` 求值处 panic（`evaluation.rs:461`，unreachable "TableGet target must be a table"），已回退。
   结论：apply 的 term = 裸 op 节点是**承重**的表示（不是随手可改的），改动要连带 `value_of`/读路径与 `TableGet` 的假设一起改。
+- 更准确（本轮 `DBG_CALL`）：函数内读（215/216/217）的容器 term **不是**裸 apply 节点——`call=None`；
+  它的 term 是表达式对 `@raw[9168, 34, @any, @any]`，值槽 9168 = `Index(9166, 0)`，9166 是 apply 节点。
+  另一个读（231）的 term 才是裸 apply（`call=Some(12260)`）。
+- 由 `Index(apply, 0)` 的语义可推：只有当 apply 的**值**本身是表达式对（`@raw[result, …]`）时，
+  `Index(apply,0)` 才等于结果；原生 op（`$plrun`）的答案若是裸值，这条链就取到结果的第一项。
+  顶层能工作说明顶层的 apply 值是对（返回值本身是表达式对）；函数内这条链的 apply 值/结果不同。
+- 试改“容器 term 是裸 apply 时用 apply 节点当容器值”（`check_named_field`）：不破坏也不修复（`raw none`），已回退。
+- 下一步：确认 `wire_apply_result` 写进 apply 节点的值是**表达式对**还是裸结果（`evaluation.rs` 的调用路径），
+  以及函数 clone 后该值是否仍是同一对；这决定 `Index(apply,0)` 的读法是否成立。
 
 ## 已知坑
 
