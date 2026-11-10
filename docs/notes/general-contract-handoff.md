@@ -456,6 +456,17 @@
 - 因此修复点不在“强制与否”，而在**强制出来的值如何被 clone 用**：clone 的 `class_inside` 判据（类 scope）
   决定了这些节点被引用而非克隆，引用让定义 pass 的值留在原类里。下一步核对 `node_class_inside_scope`
   对“类里含全局类型值”的判定，与 SPEC 的 Clone 规则（class 在 f's scope 才 clone）逐条对齐。
+- 已按 SPEC 逐条对齐（本轮）：这不是 clone 判据的错。
+  - SPEC §Struct 的 `@raw v[k] = e1` 让槽与**类型字段值**（顶层类型表达式的节点）unify；按 Unify 段
+    “any side is undecided → merge”，两者成一类；类的 scope = 两者的最近公共祖先 = 顶层 → 按 Clone 段
+    “不在 f's scope → create a reference”，**引用是 SPEC 要求的**。
+  - SPEC 的 Function 改写只对 **body_clone** 求值：`{let (p_clone -> body_clone) = @clone (…); a = p_clone;
+    body_clone}`——**没有**“先用模板参数把模板 body 求值一遍”这一步。
+  - 实现多做了这一步（定义 pass 的“body 走一遍以触发 apply-time 检查”），把值烘进类里；这些类又被
+    SPEC 要求“引用”，于是烘进去的值跟着引用留到运行期。
+- 结论：与 SPEC 的偏差在**定义 pass 以模板参数求值模板 body**（SPEC 没有这一步），不在 Struct/Unify/Clone。
+  下一步（最小、不新加机制）：在 clone 的“引用”情形里，把**被引用且带烘死值**的 per-call 节点按 clone 已有的
+  reset（run stamp/值）重置，使运行期重新求值；先核对 `node_apply` 的 reference 分支是否已有 reset 可复用。
 
 ## 已知坑
 
