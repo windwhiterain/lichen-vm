@@ -195,6 +195,8 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
+    /// The reverse of `function_of`: the IR expression a function was compiled from.
+    function_expr: HashMap<FunctionId, ExprId>,
     /// The enclosing lambdas' formal parameters, innermost last: an attribute
     /// naming one of their fields is a **reference**.
     ///
@@ -691,6 +693,7 @@ where
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
+            function_expr: HashMap::new(),
             current_parameters: Vec::new(),
             placeholder_constructors: std::collections::HashSet::new(),
             gc_scopes: Vec::new(),

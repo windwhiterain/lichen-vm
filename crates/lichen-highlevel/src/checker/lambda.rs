@@ -41,6 +41,7 @@ where
             self.module.set_template(function, template);
         }
         self.function_of.insert(e, function);
+        self.function_expr.insert(function, e);
         self.function_stack.push((function, Some(e)));
         // The `@loop` mark crosses into the graph here, where the shell exists and
         // the body does not (loop-conversion.md §8.6).
@@ -393,6 +394,36 @@ where
         written.and_then(|index| arguments.get(index)).copied()
     }
 
+    /// The function a **curried partial application** returns.
+    ///
+    /// # Invariant
+    /// A partial application's value is a runtime cell, so the function is read from the
+    /// IR: the callee's function, its return expression, and that expression's function.
+    fn curried_callee(&self, function: ExprId) -> Option<AnyFunctionId> {
+        let ExprKind::Apply {
+            function: inner, ..
+        } = self.ir[function].kind
+        else {
+            return None;
+        };
+        // The inner application's own function: a decided value, else one step down.
+        let inner_function = self.state[inner]
+            .term
+            .and_then(|term| self.module.function_apply_function(term))
+            .or_else(|| self.curried_callee(inner))?;
+        let AnyFunctionId::Dynamic(inner_function) = inner_function else {
+            return None;
+        };
+        let callee_expr = *self.function_expr.get(&inner_function)?;
+        let ExprKind::Function { r#return, .. } = self.ir[callee_expr].kind else {
+            return None;
+        };
+        self.function_of
+            .get(&r#return)
+            .copied()
+            .map(AnyFunctionId::Dynamic)
+    }
+
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         // The call's expected type may decide a placeholder callee, so the
@@ -420,7 +451,8 @@ where
                     .expr_value_half(callee_expr)
                     .and_then(|half| self.module.static_function_of_callee(half))
                     .map(AnyFunctionId::Static)
-            });
+            })
+            .or_else(|| self.curried_callee(function));
         // The callee's **parameter expr** states its requirement: the same read as
         // its type slot (`docs/notes/attributes.md`).
         let parameter_expr = match callee {

@@ -384,6 +384,32 @@ fn probe_a_named_contraction() {
     }
 }
 
+/// A curried call's result type: the outer apply names the inner function.
+///
+/// # Invariant
+/// Print-only. The field read on the call's result needs the return type the outer apply
+/// states, which is the probe of the curried-chain resolution.
+const CURRIED_CALL: &str = r#"
+f := ('a : Int) -> ('b : Int) -> {.x (a + b)}
+r := f 1 2
+r.x
+"#;
+
+#[test]
+fn probe_a_curried_call() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(CURRIED_CALL, None, &mut store) {
+        Ok(text) => println!("[curried] {text}"),
+        Err(diagnostics) => println!(
+            "[curried] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_named_shape_table() {
     let mut store = new_store(None).expect("the embedded compute package registers");
