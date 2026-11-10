@@ -246,9 +246,12 @@
      @any): Struct`。所以**冻结不是问题**；kernel 走查看到的是“类型层字段的值 = struct
      kind（节点 7 = TypeStruct）”，而不是类型值。修复方向：让检查器给类型层字段存**类型值**
      （而不是 kind），或让走查沿该字段的 type 槽找类型值。
-2. **plan 由形状表驱动**：探针里的 plan 仍由 `fill_plan` 硬编码 stride/extent。把具名张量的
-   stride 表（`@table_count`/`@table_key`，或库里的结构值）变成 plan buffer，才是
-   「形状表 → 地址」的最后一环。
+2. **plan 由形状表驱动**（已按用户裁定 A「值携带」落地，`2f68adc4`）：plan 现在是**宿主数据**
+   ——`Shape{.n, .s0 … .s11}` 的第一个整数是 lane 数，其余是十二个 plan 项；plan kernel 只把它
+   物化进 plan buffer，不再硬编码 stride/extent。rank 2 答 `[2938, 7042, …]`、rank 3 答
+   `[330, 1554, …]`。**实测规则**：kernel 的发射 extent 是参数**第一个整数域**（把 rank 放第一
+   时只跑了 rank 个 lane）。剩余：宿主侧从形状表**推导**这十二项（Rust helper 或 serve 的
+   RunArguments 路径），以及 `contract` 函数把这套形状/数据串起来。
 2. **契约函数收尾**：已落地**程序侧**的 `contract := 'arg -> ((compute.plrun lib.kernel arg) : Struct)`
    （`d8ac82ac`）：rank 2 答 `[2938, 7042, …]`、rank 3 答 `[330, 1554, …]`。**库内**写同样的
    函数被拒绝（`the container's type is not decided here`），所以工作拼法是“库持有 kernel、
