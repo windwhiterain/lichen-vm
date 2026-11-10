@@ -4,7 +4,6 @@
 pub mod automatic_tiling;
 pub mod class_pass;
 pub mod compute;
-pub mod contract;
 pub mod floor;
 pub mod fusion_claim;
 pub mod fusion_file;

@@ -11,7 +11,6 @@
 //! plan entries, and the plan kernel only materializes them into the buffer. A kernel's
 //! launch extent is its parameter's first integer field.
 
-use lichen_compute::contract::{Dim, plan_entries};
 use lichen_compute::language::new_store;
 
 const PROGRAM: &str = r#"
@@ -92,6 +91,24 @@ kernel := compute.parallel body "cpu" Out
 out := (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank @RANK@, .contract @CONTRACT@, .total 12}, .I In{.a data_a.a, .b data_b.b, .plan data_p.plan}}) : Struct)
 compute.collect out.c : Array
 "#;
+
+/// One contraction dim, as the host's shape table states it.
+struct Dim {
+    a_stride: u32,
+    b_stride: u32,
+    extent: u32,
+}
+
+/// The plan's integers, three per dim, in the table's order (test scaffolding).
+fn plan_entries(dims: &[Dim]) -> Vec<i64> {
+    let mut entries = Vec::with_capacity(dims.len() * 3);
+    for dim in dims {
+        entries.push(i64::from(dim.a_stride));
+        entries.push(i64::from(dim.b_stride));
+        entries.push(i64::from(dim.extent));
+    }
+    entries
+}
 
 /// The host's shape table: the demo's four dims, in plan order.
 ///
