@@ -518,6 +518,32 @@ fn probe_a_contract_kernel_in_function() {
     }
 }
 
+/// The minimal field-read case: a local struct value built from a parameter.
+///
+/// # Invariant
+/// Print-only. The same read at the top level answers; inside a function it is the
+/// question this probe answers.
+const LOCAL_STRUCT_READ: &str = r#"
+T := {.a @any : Int}
+f := 'x -> { p := T{.a x}; p.a }
+f 7
+"#;
+
+#[test]
+fn probe_a_local_struct_read() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(LOCAL_STRUCT_READ, None, &mut store) {
+        Ok(text) => println!("[local-struct-read] {text}"),
+        Err(diagnostics) => println!(
+            "[local-struct-read] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
