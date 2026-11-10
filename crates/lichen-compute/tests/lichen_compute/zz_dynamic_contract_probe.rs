@@ -544,15 +544,18 @@ fn probe_a_local_struct_read() {
     }
 }
 
-/// The compute-free analogue of the failing kernel launch: a struct-valued parameter
-/// pattern over a typed literal whose field is a call's result.
+/// A parameter pattern that names the **enclosing** lambda's parameter, read inside the
+/// inner lambda — `compute.lichen`'s `plrun` shape, with no plugin.
 ///
 /// # Invariant
-/// Print-only. The core answers it (7: Int), so the kernel launch's failure is the
-/// plugin's wrapper, not the language's apply.
+/// Print-only. The core refuses the read ("the container's type is not decided"), so the
+/// wrapper shape is a language-level case, not a compute one.
 const PATTERN_ARGUMENT: &str = r#"
-T := {.a @any : Int}
-g := ('p = T) -> p.a
+K := {.native @any, .I @any, .O @any}
+Tf := 'x -> {.a @any : Int}
+T := Tf Int
+mk := 'k -> ('p = (k.I _)) -> p.a
+g := mk K{.native 0, .I Tf, .O Tf}
 F := 'x -> T{.a x}
 h := 'x -> {
   d := (F x)
