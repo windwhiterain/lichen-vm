@@ -544,42 +544,6 @@ fn probe_a_local_struct_read() {
     }
 }
 
-/// `compute.lichen`'s `plrun` wrapper shape with no plugin: a nested lambda whose
-/// parameter pattern names the enclosing lambda's parameter.
-///
-/// # Invariant
-/// Print-only. With the enclosing parameter annotated (`'k = K`) the core answers 7: Int,
-/// so the wrapper is not the failing part; the remaining difference is the native call's
-/// result read inside the next call's argument literal.
-const PATTERN_ARGUMENT: &str = r#"
-K := {.native @any, .I @any, .O @any}
-Tf := 'x -> {.a @any : Int}
-T := Tf Int
-mk := ('k = K) -> ('p = (k.I _)) -> p.a
-g := mk K{.native 0, .I Tf, .O Tf}
-F := 'x -> T{.a x}
-h := 'x -> {
-  d := (F x)
-  g (T{.a d.a})
-}
-h 7
-"#;
-
-#[test]
-fn probe_a_pattern_argument() {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    match lichen_language::run::evaluate_raw(PATTERN_ARGUMENT, None, &mut store) {
-        Ok(text) => println!("[pattern-argument] {text}"),
-        Err(diagnostics) => println!(
-            "[pattern-argument] refused: {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
-                .collect::<Vec<_>>()
-        ),
-    }
-}
-
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
