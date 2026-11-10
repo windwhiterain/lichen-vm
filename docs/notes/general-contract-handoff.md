@@ -421,6 +421,16 @@
 - 试改“容器 term 是裸 apply 时用 apply 节点当容器值”（`check_named_field`）：不破坏也不修复（`raw none`），已回退。
 - 下一步：确认 `wire_apply_result` 写进 apply 节点的值是**表达式对**还是裸结果（`evaluation.rs` 的调用路径），
   以及函数 clone 后该值是否仍是同一对；这决定 `Index(apply,0)` 的读法是否成立。
+- 已核对（本轮读码）：
+  - `wire_apply_result(node, result, …)` 把**被应用体的值**直接写进 apply 节点（结果若为 ≥2 项数组且
+    apply 节点类为空才写），不做额外包装。
+  - `check_app` 的 term 是 `expr_of(apply, c)` 这个对；`value_of` 兜底 = `Index(term, 0)`——即
+    **对 pair 取第 0 项 = apply 节点本身**，读法是正确的（前一轮把 9166 误当 apply；它其实是 pair）。
+  - 所以 wiring 本身没问题，剩下的仍是 **clone**：pair/Index 节点是检查期造的（未打函数标签 → 按
+    apply-clone 的规则**共享不克隆**），而 pair 第 0 项的 apply 节点是**打标签按次克隆**的；clone 的
+    读仍指向**模板的 pair/apply**，模板的 apply 不跑。
+- 下一步：在 clone 重放处把“读的值 = Index(模板 pair, 0)”按 clone 重新指向 clone 的 apply（共享 pair
+  但第 0 项应取 clone 的 apply），参考 `docs/notes/apply-clone-ownership.md` 的标签/共享规则。
 
 ## 已知坑
 
