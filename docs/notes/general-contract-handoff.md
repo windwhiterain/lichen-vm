@@ -250,8 +250,10 @@
    ——`Shape{.n, .s0 … .s11}` 的第一个整数是 lane 数，其余是十二个 plan 项；plan kernel 只把它
    物化进 plan buffer，不再硬编码 stride/extent。rank 2 答 `[2938, 7042, …]`、rank 3 答
    `[330, 1554, …]`。**实测规则**：kernel 的发射 extent 是参数**第一个整数域**（把 rank 放第一
-   时只跑了 rank 个 lane）。剩余：宿主侧从形状表**推导**这十二项（Rust helper 或 serve 的
-   RunArguments 路径），以及 `contract` 函数把这套形状/数据串起来。
+   时只跑了 rank 个 lane）。**已落地**（`0d97c524`）：宿主用形状表 `[Dim; 4]`（每维 a_stride/b_stride/extent）
+   经 `shape_value` 编成 `Shape` 值，程序只做物化；两 rank 读数不变。剩余：把这套
+   helper 提升为**产品 API**（走 serve 的 RunArguments 路径），以及 `examples/` 里的真实示例
+   （需用户许可，会进 README 渲染）。
 2. **契约函数收尾**：已落地**程序侧**的 `contract := 'arg -> ((compute.plrun lib.kernel arg) : Struct)`
    （`d8ac82ac`）：rank 2 答 `[2938, 7042, …]`、rank 3 答 `[330, 1554, …]`。**库内**写同样的
    函数被拒绝（`the container's type is not decided here`），所以工作拼法是“库持有 kernel、
