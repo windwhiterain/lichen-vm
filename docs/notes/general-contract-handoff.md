@@ -265,6 +265,24 @@
    `lower_loop`/`ActiveLoop` 持 `AnyFunctionId` 并从冻结图取状态节点（capture 边界见实测事实 7）。
 5. 若继续用 `value_reads`，只在语言层记录真实存在的常量位置；动态位置需要另一条判据。
 
+## 具名爱因斯坦形态（用户裁定 A：具名表）
+
+拼写与实测（`zz_dynamic_contract_probe.rs`）：
+
+- 形状/步长是**具名表** `table{string, Int}`，名字集合是 `set{string}`；
+- `x <== "i"` 按名取值、`"i" @in names` 判成员、`if n @in ns then s <== n else 0` 做缺名保护；
+- **参数类型注解要用冒号**：`('s : ShapeTable)`、`('ns : NameSet)`、`('n : string)`；`=` 是等价
+  细化，不是类型注解（`('s = ShapeTable)` 报 `expected ?, found Type`）；计算出来的类型
+  （`Buf` 应用、数组）不能作注解（`expected Struct/Array, found raw[…Struct/Array]`），
+  所以 buffer 参数不注解、由调用点统一。
+- **已验证**：具名表 + 查找 + 集合成员（`(2, 3, 1)`）、plan kernel 在普通函数里由具名表推导
+  plan（`[12, 0, 2, 0, 1, 5, 4, 20, 3, 1, 5, 4]`）、`plrun` 在普通函数里跑 kernel 并读结果
+  （`[1, 2, 3, 4]`）。
+- **卡点**：`if n @in ns then s <== n else 0` 当 `n` 是**参数**时，`@in` 的条件在检查期未定，
+  `if` 的结果在调用点也**没有**被解析（读数是 `none`）；字面量键（`"i" @in names`）则正常。
+  所以具名推导需要在检查器里把“参数键的 `@in` 守卫”延迟/解析到调用点，或换一种缺名保护
+  （例如表查找缺键返回一个显式的 `zero`，而不是错误）。
+
 ## 已知坑
 
 - `check_app` 对 `range_children(argument)` 直接 `state[element]` 会越界 panic，勿重试。

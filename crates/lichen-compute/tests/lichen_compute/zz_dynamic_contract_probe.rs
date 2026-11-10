@@ -158,6 +158,254 @@ fn program(rank: u32, contract: u32) -> String {
         .replace("@SHAPE@", &shape_value(&shape_table()))
 }
 
+/// The plan kernel run inside a plain function, returning its buffer.
+///
+/// # Invariant
+/// The library entry's middle step: a function builds the plan value, runs the plan kernel,
+/// and hands back the plan buffer.
+const PLAN_IN_FUNCTION: &str = r#"
+--- compute = import "compute.lichen" ---
+PBuf := {.plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+PlanShape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+plan_fill := ('f = PlanShape) -> {
+  i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
+  plan := compute.buf (compute.BufParam{.type Int, .length 12})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
+}
+p_kernel := compute.parallel plan_fill "cpu" PBuf
+plan_of := 'n0 -> ('ashape : table{string, Int}) -> {
+  e := ashape <== n0
+  ps := PlanShape{.n 12, .s0 12, .s1 0, .s2 e, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}
+  dp := (compute.plrun p_kernel ps : Struct)
+  dp.plan
+}
+t := table(table{string, Int})("i" => 2, "j" => 3)
+p := plan_of "i" t
+compute.collect p : Array
+"#;
+
+/// A kernel run inside a plain function, and the result's field read.
+///
+/// # Invariant
+/// The library's entry shape: a plain function runs the kernel and hands back the result's
+/// buffer field; the reading answers the filled values.
+const FUNCTION_RUN: &str = r#"
+--- compute = import "compute.lichen" ---
+Fill := {.n @any : Int}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 4}))}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (int2float (i + 1))}))})
+}
+k := compute.parallel fill "cpu" ABuf
+run := ('f = Fill) -> {
+  out := (compute.plrun k f : Struct)
+  compute.collect out.a : Array
+}
+run ((Fill){.n 4})
+"#;
+
+/// The named Einstein contraction: the tensor carries its dim names, and the library derives
+/// the plan from them.
+///
+/// # Invariant
+/// The plan's order is the output list then the contraction list; a dim's extent is the
+/// named shape's answer in whichever operand carries it, and the other operand's stride is
+/// zero (its name is not in that operand's set, so the lookup is skipped, not defaulted).
+const NAMED_CONTRACT: &str = r#"
+--- compute = import "compute.lichen" ---
+Meta := {.n @any : Int, .rank @any : Int, .contract @any : Int, .total @any : Int}
+In   := {.a (compute.Buf (compute.BufParam{.type Float, .length 24})), .b (compute.Buf (compute.BufParam{.type Float, .length 60})), .plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+Out  := {.c (compute.Buf (compute.BufParam{.type Float, .length 10}))}
+Par  := {.meta Meta, .in In}
+Arg  := {.meta Meta, .I In}
+ABuf := {.a (compute.Buf (compute.BufParam{.type Float, .length 24}))}
+BBuf := {.b (compute.Buf (compute.BufParam{.type Float, .length 60}))}
+PBuf := {.plan (compute.Buf (compute.BufParam{.type Int, .length 12}))}
+Fill := {.n @any : Int}
+fill_a := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Float, .length 24})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (int2float (i + 1))}))})
+}
+fill_b := ('f = Fill) -> {
+  i := compute.range f.n
+  b := compute.buf (compute.BufParam{.type Float, .length 60})
+  ((BBuf){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
+}
+PlanShape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+plan_fill := ('f = PlanShape) -> {
+  i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
+  plan := compute.buf (compute.BufParam{.type Int, .length 12})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
+}
+a_kernel := compute.parallel fill_a "cpu" ABuf
+b_kernel := compute.parallel fill_b "cpu" BBuf
+p_kernel := compute.parallel plan_fill "cpu" PBuf
+data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
+data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
+body := ('p = Par) -> {
+  i := compute.range p.meta.n
+  rank := p.meta.rank
+  contract := p.meta.contract
+  @loop decode_a := 's -> if s(0) == 0 then s(2) else {
+    dim := rank - s(0)
+    extent := (compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 2)}) : Int)
+    coordinate := s(1) % extent
+    decode_a (s(0) - 1, s(1) / extent, s(2) + coordinate * ((compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3)}) : Int)))
+  }
+  @loop decode_b := 's -> if s(0) == 0 then s(2) else {
+    dim := rank - s(0)
+    extent := (compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 2)}) : Int)
+    coordinate := s(1) % extent
+    decode_b (s(0) - 1, s(1) / extent, s(2) + coordinate * ((compute.read ((compute.Read _){.from p.in.plan, .at (dim * 3 + 1)}) : Int)))
+  }
+  @loop address_a := 't -> if t(0) == 0 then t(2) else {
+    dim := t(4) + (t(5) - t(0))
+    extent := (compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 2)}) : Int)
+    coordinate := t(1) % extent
+    address_a (t(0) - 1, t(1) / extent, t(2) + coordinate * ((compute.read ((compute.Read _){.from t(3), .at (dim * 3)}) : Int)), t(3), t(4), t(5))
+  }
+  @loop address_b := 't -> if t(0) == 0 then t(2) else {
+    dim := t(4) + (t(5) - t(0))
+    extent := (compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 2)}) : Int)
+    coordinate := t(1) % extent
+    address_b (t(0) - 1, t(1) / extent, t(2) + coordinate * ((compute.read ((compute.Read _){.from t(3), .at (dim * 3 + 1)}) : Int)), t(3), t(4), t(5))
+  }
+  base_a := decode_a (rank, i, 0)
+  base_b := decode_b (rank, i, 0)
+  @loop dot := 'u -> if u(0) == 0 then u(1) else {
+    j := u(0) - 1
+    ca := address_a (contract, j, 0, p.in.plan, rank, contract)
+    cb := address_b (contract, j, 0, p.in.plan, rank, contract)
+    dot (u(0) - 1, (u(1) + ((compute.read ((compute.Read _){.from p.in.a, .at (base_a + ca)}) : Float) * (compute.read ((compute.Read _){.from p.in.b, .at (base_b + cb)}) : Float))))
+  }
+  value := dot (p.meta.total, 0.0)
+  o := compute.buf (compute.BufParam{.type Float, .length p.meta.n})
+  ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value value}))})
+}
+kernel := compute.parallel body "cpu" Out
+ShapeTable := table{string, Int}
+NameSet := set{string}
+Names2 := [@any : string, 2]
+BufA := (compute.Buf (compute.BufParam{.type Float, .length 24}))
+BufB := (compute.Buf (compute.BufParam{.type Float, .length 60}))
+contract := 'abuf -> ('ashape : ShapeTable) -> ('astride : ShapeTable) -> ('anames : NameSet) -> 'bbuf -> ('bshape : ShapeTable) -> ('bstride : ShapeTable) -> ('bnames : NameSet) -> ('n0 : string) -> ('n1 : string) -> ('n2 : string) -> ('n3 : string) -> {
+  a0 := if n0 @in anames then ashape <== n0 else 0
+  b0 := if n0 @in bnames then bshape <== n0 else 0
+  a1 := if n1 @in anames then ashape <== n1 else 0
+  b1 := if n1 @in bnames then bshape <== n1 else 0
+  a2 := if n2 @in anames then ashape <== n2 else 0
+  b2 := if n2 @in bnames then bshape <== n2 else 0
+  a3 := if n3 @in anames then ashape <== n3 else 0
+  b3 := if n3 @in bnames then bshape <== n3 else 0
+  e0 := (a0 > b0) * a0 + (a0 <= b0) * b0
+  e1 := (a1 > b1) * a1 + (a1 <= b1) * b1
+  e2 := (a2 > b2) * a2 + (a2 <= b2) * b2
+  e3 := (a3 > b3) * a3 + (a3 <= b3) * b3
+  as0 := if n0 @in anames then astride <== n0 else 0
+  bs0 := if n0 @in bnames then bstride <== n0 else 0
+  as1 := if n1 @in anames then astride <== n1 else 0
+  bs1 := if n1 @in bnames then bstride <== n1 else 0
+  as2 := if n2 @in anames then astride <== n2 else 0
+  bs2 := if n2 @in bnames then bstride <== n2 else 0
+  as3 := if n3 @in anames then astride <== n3 else 0
+  bs3 := if n3 @in bnames then bstride <== n3 else 0
+  ps := PlanShape{.n 12, .s0 as0, .s1 bs0, .s2 e0, .s3 as1, .s4 bs1, .s5 e1, .s6 as2, .s7 bs2, .s8 e2, .s9 as3, .s10 bs3, .s11 e3}
+  dp := (compute.plrun p_kernel ps : Struct)
+  meta := Meta{.n e0 * e1, .rank 4, .contract 2, .total e2 * e3}
+  (compute.plrun kernel ((Arg){.meta meta, .I In{.a abuf, .b bbuf, .plan dp.plan}}) : Struct)
+}
+ashape := table(table{string, Int})("i" => 2, "j" => 3, "k" => 4)
+astride := table(table{string, Int})("i" => 12, "j" => 4, "k" => 1)
+anames := set(set{string})("i", "j", "k")
+bshape := table(table{string, Int})("l" => 5, "j" => 3, "k" => 4)
+bstride := table(table{string, Int})("l" => 1, "j" => 20, "k" => 5)
+bnames := set(set{string})("l", "j", "k")
+c := contract data_a.a ashape astride anames data_b.b bshape bstride bnames "i" "l" "j" "k"
+compute.collect c.c : Array
+"#;
+
+/// A tensor whose shape and stride are **named tables**, and a lookup by name.
+///
+/// # Invariant
+/// The named form's primitives: a `table{Str, Int}` field on a tensor value, a lookup by a
+/// string name, and an absent name's answer.
+const NAMED_TABLE: &str = r#"
+ShapeTable := table{string, Int}
+t := table(table{string, Int})("i" => 2, "j" => 3)
+read := ('s : ShapeTable) -> s <== "i"
+read2 := 'b -> ('s : ShapeTable) -> s <== "j"
+NameSet := set{string}
+names := set(set{string})("i", "j")
+has := ('s : NameSet) -> "i" @in s
+get := ('n : string) -> ('s : ShapeTable) -> ('ns : NameSet) -> if n @in ns then s <== n else 0
+(read t, read2 7 t, has names, get "i" t names, get "l" t names)
+"#;
+
+#[test]
+fn probe_a_plan_in_function() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(PLAN_IN_FUNCTION, None, &mut store) {
+        Ok(text) => println!("[plan-in-function] {text}"),
+        Err(diagnostics) => println!(
+            "[plan-in-function] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_function_run() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_RUN, None, &mut store) {
+        Ok(text) => println!("[function-run] {text}"),
+        Err(diagnostics) => println!(
+            "[function-run] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_named_contraction() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(NAMED_CONTRACT, None, &mut store) {
+        Ok(text) => println!("[named-contract] {text}"),
+        Err(diagnostics) => println!(
+            "[named-contract] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_named_shape_table() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(NAMED_TABLE, None, &mut store) {
+        Ok(text) => println!("[named] {text}"),
+        Err(diagnostics) => println!(
+            "[named] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_dynamic_rank_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
