@@ -544,6 +544,38 @@ fn probe_a_local_struct_read() {
     }
 }
 
+/// The compute-free analogue of the failing kernel launch: a struct-valued parameter
+/// pattern over a typed literal whose field is a call's result.
+///
+/// # Invariant
+/// Print-only. The core answers it (7: Int), so the kernel launch's failure is the
+/// plugin's wrapper, not the language's apply.
+const PATTERN_ARGUMENT: &str = r#"
+T := {.a @any : Int}
+g := ('p = T) -> p.a
+F := 'x -> T{.a x}
+h := 'x -> {
+  d := (F x)
+  g (T{.a d.a})
+}
+h 7
+"#;
+
+#[test]
+fn probe_a_pattern_argument() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(PATTERN_ARGUMENT, None, &mut store) {
+        Ok(text) => println!("[pattern-argument] {text}"),
+        Err(diagnostics) => println!(
+            "[pattern-argument] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
