@@ -209,7 +209,18 @@ where
         if !concrete && !self.is_loop_state(container) && !self.is_formal_rooted(container) {
             return self.refuse_undecided_container(e, container, container_ty, "field read");
         }
-        if concrete {
+        // **A struct type value proves the layout**: the template guard is unnecessary.
+        let is_type_value = self
+            .module
+            .expr_value_half(container_ty)
+            .or_else(|| {
+                crate::shape::value_item(&self.module, AnyNodeId::Dynamic(container_ty), 0)
+                    .and_then(|item| item.dynamic())
+            })
+            .and_then(|node| crate::shape::value_item(&self.module, AnyNodeId::Dynamic(node), 0))
+            .and_then(|table| table.dynamic())
+            .is_some_and(|table| self.module.struct_identity_items.contains(&table));
+        if concrete && !is_type_value {
             self.check_unify(
                 container_ty,
                 self.struct_template(),
