@@ -431,6 +431,15 @@
     读仍指向**模板的 pair/apply**，模板的 apply 不跑。
 - 下一步：在 clone 重放处把“读的值 = Index(模板 pair, 0)”按 clone 重新指向 clone 的 apply（共享 pair
   但第 0 项应取 clone 的 apply），参考 `docs/notes/apply-clone-ownership.md` 的标签/共享规则。
+- 已测（本轮 `DBG_TAG`）：链上的节点（9538、9536、9168、9166、9159）**全部已注册在某个函数里**
+  （`registered=true`）——即它们是有标签的模板节点，按 clone 规则本应被克隆。
+  但运行期解析用的仍是这些**模板节点本身**（不是 clone 出来的新节点），说明**调用者（`run`）的 body clone
+  没有克隆这个结构体字面量/它的字段读**（节点被共享而不是克隆），于是读的链仍停在模板的 apply——那个
+  apply 在运行期不跑。
+- 注：clone 的 `node_apply` 判据里 `proven_concrete && closed` 会**共享**；这里的字面量/读被判定为
+  可共享（closed/共享），但它们内部含 apply（per-call），这是矛盾的来源。
+- 下一步：在 `node_apply` 的 `template_content_is_closed`/`proven_concrete` 判定上核对：内容含 apply 的
+  聚合值不应被判为 closed；按 `docs/notes/apply-clone-ownership.md` 的“只有闭合才共享”修正（不动 Invariant）。
 
 ## 已知坑
 
