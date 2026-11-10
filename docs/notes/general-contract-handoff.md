@@ -371,6 +371,16 @@
     要么该链接只有“叶子为空/`@any` 才跟随”（`recorded_leaf`）而这里叶子有值。
 - 下一轮：把 `check_instantiate` 注册的 `required_value` 键与解析到的节点逐一对照（同一 node？同类？），
   再把“模板字段的 required 值 → 实际值”的链接接到解析路径上（不动任何 Invariant，不加机制）。
+- 已对照（本轮 `DBG_MATCH`）：
+  - `field_sources` 里有 `required=9633 → supplied=9538`，且**两者同类**（root 9538）——链接是在的、
+    两端同类；解析到的链头 9538 就是这一类。
+  - 类的 value 是**required 侧的类型值**（已定那侧）；`supplied`（读）的运行期答案没进来。
+  - 读的 base 是 `9168`：root `8856`、**无值、无 operation**、owner 是它自己——即“绑定到 apply 表达式的
+    值 cell”与 apply 节点没有连上（apply 的 `state[e].val = None`）。
+  - 所以卡点已成一条：**函数内 `d1 := (apply …)` 的绑定值 cell 与 apply 节点没有并类**；读走空 cell，
+    类的 value 停在 required 的类型值。
+- 下一步：按检查器的绑定路径找出“绑定值 cell ↔ apply 节点”应有的并类点（顶层能工作说明顶层有这条链接），
+  在函数内补齐同一语义（不动 Invariant、不加机制）。
 
 ## 已知坑
 
