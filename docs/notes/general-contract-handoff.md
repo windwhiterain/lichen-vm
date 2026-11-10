@@ -345,6 +345,14 @@
   （不是 `ComputeValue::Buffer`）。collect 路径能工作，是因为 VM 先**求值**了读节点。
 - 下一步（不物化、不加机制）：让输入解析保留**路径上的字段节点**（读），先由 VM 求值该节点，
   再取它的值做 `buf_payload`——与 collect 路径同一语义；`value_at_path` 现在直接取类值，跳过了这一步。
+- 按用户更新的 SPEC（`docs/language-spec.md`：Unify 段 + Any 段 “Only merge if another side is right
+  side and undecided”）核对：实现的 wildcard 分支 `is_wildcard(va) && vb.is_none()` 与 SPEC 一致；
+  把“右侧是 Any 也合并”的改动是错误的，已回退。
+- 实测（本轮）：把输入解析改成“取字段的值节点并 `evaluate_node`”后，该节点**同时持有一个值和一个
+  `Index` operation**（值是检查期 unify 写入的类型值）；VM 的求值闸门（“a value a unification wrote is
+  not the operator's answer”）没有重跑它，求值后值仍是类型值，`.native` 仍是数组而非 Buffer。
+  把 `compute.lichen` 的 `r = k.O` 去掉也不改变结果（读的 base 变成 `Index(d1 值, 位置)`，但答案仍是类型值）。
+  所以链式 plrun 的障碍在“值节点已有类值、operation 不被重跑”，与 Any 规则无关。
 
 ## 已知坑
 
