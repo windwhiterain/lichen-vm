@@ -37,6 +37,8 @@ both operands as exprs.
 | unify target = `state[type_expr].val` (the value channel) | 9 language-lib failures |
 | replace an undecided `found` with the term (no unify) | `type_of (1) : Type` renders `?a: ?a` — the unify is what evaluates the term |
 | replace, but only for a struct type value's value, unify unchanged | language lib back to baseline; `(plrun … : PBuf)` still `expected Struct, found Table` |
+| skip `type_denotation`'s element/attribute unifications for a type value | language lib back to baseline (harmless); the refusal is then the annotation's own unify: `expected Struct, found raw[…Struct]` |
+| replace an undecided attribute, deep-evaluating the annotated value's term first | 5 language-lib failures (`type_of (1) : Type` renders `?a: ?a`) — the unify is not reproducible by evaluation |
 
 Baseline suite: `lichen-language --lib` is `68 passed, 1 failed` (a pre-existing parse
 test, `a_set_and_a_table_value_render_their_own_syntax`); compute `259`, highlevel
