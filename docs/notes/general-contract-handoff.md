@@ -482,6 +482,12 @@
 - 下一步：找“返回值求值”路径（`return`/`wire_apply_result`/apply 的 `evaluate_node(applied)`）里对
   读节点的再次求值（`write_node_answer` 的 answer-over-requirement），把它同样用在“实参在运行期
   被启动索取”这条路径上。
+- 已试（本轮）：clone 的 `carried` 对 per-call 节点（`depends_on_parameter`）不再携带定义 pass 的答案
+  （`template_answer && !depends_on_parameter`）。三套件全绿（267/136/167），但链式探针仍 `raw none`
+  ——说明失败的那次读既不是被 clone 的、也不是携带答案的那一支。已回退（不留未证明的改动）。
+- 现状小结（19 轮）：所有局部改法（answer 写入、class-owner 索取、字段值求值、apply term/val、容器取
+  apply、reference reset、carried 关闭）**要么无效、要么破坏其他不变量**；失败只出现在
+  “函数内 + 调用的实参字面量含另一次调用的结果”这一组合，而等价的**返回形态**正常。
 
 ## 已知坑
 
