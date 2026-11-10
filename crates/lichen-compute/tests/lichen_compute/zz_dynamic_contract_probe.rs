@@ -5,6 +5,11 @@
 //! Print-only, asserts nothing. The plan is four (A stride, B stride, extent) entries:
 //! `r0`/`c2` then `c0`/`c1`; the kernel decodes through `rank` entries and folds the rest.
 //! Rank 2/2 answers `[2938, 7042, …]`, rank 3/1 `[330, 1554, …]` (`named-tensors.md` §11).
+//!
+//! # Invariant
+//! The plan is host data: `Shape`'s first field is the lane count, the rest are the twelve
+//! plan entries, and the plan kernel only materializes them into the buffer. A kernel's
+//! launch extent is its parameter's first integer field.
 
 use lichen_compute::language::new_store;
 
