@@ -124,3 +124,20 @@ therefore not unify the two: the diagnostic is the engine-side apply/normalize u
 Next: find which engine unify (definition-pass apply or a clone normalize) receives the
 declared codomain as one side, and make the codomain a layout input rather than a unify
 operand — the spec's rule is identity, not a type-level equality.
+
+### Measured alternative: the marker in the type slot
+
+`check_ann` was changed so that a **named struct type** in a type position sets the slot
+(and the check) to the struct **marker**, per the spec's instance rule. Measured:
+
+- the named contract now **evaluates** (`raw none: Array`; the runtime unify is gone) —
+  but the collect answers `none`, so the assembled result needs a look;
+- highlevel's `an_annotation_with_a_struct_value_rejects_a_literal_at_apply_time` fails:
+  it asserts the diagnostic's expected value is the struct **value** (an Array), and the
+  marker makes it a `TypeValue(TypeStruct)`;
+- compute 260 and language lib stay green.
+
+So the two spec rules pull apart for a struct type annotation: the annotation rewrite
+puts the annotation *expression* in the type slot (the struct value), while the instance
+rule says an instance's type *is* `Struct`. Which one the annotation slot follows decides
+whether the named-type use is a type slot or an identity — a ruling.
