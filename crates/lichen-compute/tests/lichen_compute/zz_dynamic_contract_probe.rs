@@ -11,6 +11,7 @@
 //! plan entries, and the plan kernel only materializes them into the buffer. A kernel's
 //! launch extent is its parameter's first integer field.
 
+use lichen_compute::contract::{Dim, plan_entries};
 use lichen_compute::language::new_store;
 
 const PROGRAM: &str = r#"
@@ -92,22 +93,11 @@ out := (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank @RANK@, .contract @C
 compute.collect out.c : Array
 "#;
 
-/// One contraction dim, as the host's shape table states it.
-///
-/// # Invariant
-/// A dim's stride is zero exactly when its operand does not carry the dim; the plan's entry
-/// order is the table's order, and the count is the table's length times three.
-struct Dim {
-    a_stride: u32,
-    b_stride: u32,
-    extent: u32,
-}
-
 /// The host's shape table: the demo's four dims, in plan order.
 ///
 /// # Invariant
-/// This is the host's data: the shape value's first field is the lane count, then each dim's
-/// `a_stride`, `b_stride`, `extent` — the plan kernel only materializes it.
+/// This is the host's data: the shape value's first field is the lane count, then the plan's
+/// entries — the plan kernel only materializes it.
 fn shape_table() -> [Dim; 4] {
     [
         Dim {
@@ -135,12 +125,10 @@ fn shape_table() -> [Dim; 4] {
 
 /// The `Shape` literal the host hands the program: its lane count, then the plan entries.
 fn shape_value(table: &[Dim]) -> String {
-    let count = table.len() * 3;
-    let mut fields = vec![format!(".n {count}")];
-    for (index, dim) in table.iter().enumerate() {
-        fields.push(format!(".s{} {}", index * 3, dim.a_stride));
-        fields.push(format!(".s{} {}", index * 3 + 1, dim.b_stride));
-        fields.push(format!(".s{} {}", index * 3 + 2, dim.extent));
+    let entries = plan_entries(table);
+    let mut fields = vec![format!(".n {}", entries.len())];
+    for (index, value) in entries.iter().enumerate() {
+        fields.push(format!(".s{index} {value}"));
     }
     fields.join(", ")
 }
