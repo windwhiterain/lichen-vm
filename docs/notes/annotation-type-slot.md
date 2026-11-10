@@ -141,3 +141,30 @@ So the two spec rules pull apart for a struct type annotation: the annotation re
 puts the annotation *expression* in the type slot (the struct value), while the instance
 rule says an instance's type *is* `Struct`. Which one the annotation slot follows decides
 whether the named-type use is a type slot or an identity — a ruling.
+
+### Measured: the spec's own unify already accepts it
+
+`S := {.x 1}; r := (S = Struct)` answers **1** (`zz_dynamic_contract_probe`,
+`probe_a_struct_kind_unify`): the spec's directed rule `a = b` is `a <: b`, and a struct
+value's type is `Struct`, so the language-level `=` accepts the struct value against its
+kind. The runtime refusal is therefore **not a missing language rule**: it is the engine's
+own binding in `crates/lichen-lowlevel/src/function.rs` (`apply`):
+
+```rust
+// The call's own result type is the applied return's type cell.
+if let Some(cell) = cell
+    && let Some(codomain) = self.expr_type_item(instantiation.applied)
+{
+    self.evaluate_node(codomain, Some(block));
+    self.unify_ref(cell, codomain);
+}
+```
+
+The call's result cell holds the annotation's type value (a named struct type) and the
+applied return's type item is the instance's marker (`Struct`), so the structural
+`unify_ref` fails: `expected raw[Table, TypeId(51), …], found Struct`. Skipping the
+binding when the cell is decided removes the refusal but fails
+`a_call_result_annotation_is_checked_against_the_return_type` and its direct variant — the
+binding **is** the annotation check. So the engine's `unify_ref` must follow the same
+directed subtype the language's `=` follows; that is a correction of the engine's unify,
+not a new mechanism.
