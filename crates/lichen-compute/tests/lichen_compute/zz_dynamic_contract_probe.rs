@@ -46,7 +46,7 @@ b_kernel := compute.parallel fill_b "cpu" BBuf
 p_kernel := compute.parallel fill_plan "cpu" PBuf
 data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
 data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
-data_p := (compute.plrun p_kernel ((Shape){.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}) : Struct)
+data_p := (compute.plrun p_kernel ((Shape){@SHAPE@}) : Struct)
 body := ('p = Par) -> {
   i := compute.range p.meta.n
   rank := p.meta.rank
@@ -92,11 +92,65 @@ out := (compute.plrun kernel ((Arg){.meta Meta{.n 10, .rank @RANK@, .contract @C
 compute.collect out.c : Array
 "#;
 
-/// The program at one rank and contraction count, as the template states them.
+/// One contraction dim, as the host's shape table states it.
+///
+/// # Invariant
+/// A dim's stride is zero exactly when its operand does not carry the dim; the plan's entry
+/// order is the table's order, and the count is the table's length times three.
+struct Dim {
+    a_stride: u32,
+    b_stride: u32,
+    extent: u32,
+}
+
+/// The host's shape table: the demo's four dims, in plan order.
+///
+/// # Invariant
+/// This is the host's data: the shape value's first field is the lane count, then each dim's
+/// `a_stride`, `b_stride`, `extent` — the plan kernel only materializes it.
+fn shape_table() -> [Dim; 4] {
+    [
+        Dim {
+            a_stride: 12,
+            b_stride: 0,
+            extent: 2,
+        },
+        Dim {
+            a_stride: 0,
+            b_stride: 1,
+            extent: 5,
+        },
+        Dim {
+            a_stride: 4,
+            b_stride: 20,
+            extent: 3,
+        },
+        Dim {
+            a_stride: 1,
+            b_stride: 5,
+            extent: 4,
+        },
+    ]
+}
+
+/// The `Shape` literal the host hands the program: its lane count, then the plan entries.
+fn shape_value(table: &[Dim]) -> String {
+    let count = table.len() * 3;
+    let mut fields = vec![format!(".n {count}")];
+    for (index, dim) in table.iter().enumerate() {
+        fields.push(format!(".s{} {}", index * 3, dim.a_stride));
+        fields.push(format!(".s{} {}", index * 3 + 1, dim.b_stride));
+        fields.push(format!(".s{} {}", index * 3 + 2, dim.extent));
+    }
+    fields.join(", ")
+}
+
+/// The program at one rank and contraction count, with the host's plan.
 fn program(rank: u32, contract: u32) -> String {
     PROGRAM
         .replace("@RANK@", &rank.to_string())
         .replace("@CONTRACT@", &contract.to_string())
+        .replace("@SHAPE@", &shape_value(&shape_table()))
 }
 
 #[test]
