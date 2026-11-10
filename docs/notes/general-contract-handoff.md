@@ -289,6 +289,12 @@
   其结果类型未定，于是域读被拒（非 formal-rooted，不能延迟）。去掉 `: Struct` 注解会引入
   `expected Table, found Struct`，所以注解是必需的。下一步：让 `plrun` 的结果类型在构造
   聚合值时已是 kernel 的 codomain（或把该域读按 formal-rooted 延迟）。
+  **尝试 1 的实测**（`NativeOp::result_type` 默认 `None`，`ParLaunchOp` 答第三实参的值；
+  边界用 fresh cell 与之 unify）：第三实参**其实总是 `: Struct` 注解本身**（`args=3`、
+  declared = `Struct` 标记，`DBG_RT` 实测），不是 kernel 的 `.O` 类型；把结果类型 unify 成
+  `Struct` 标记会让 `compute.parallel` 的 lower 报 **definition cycle**。所以路线 1 需要的是
+  kernel 的 `.O` 类型值（`build` 在冻结模板上拿不到，见 `ParLaunchOp::build` 的 Invariant），
+  不是注解值。已回退，树绿。**建议改走路线 2**（把该域读按 formal-rooted 延迟到调用点）。
 
 ## 已知坑
 
