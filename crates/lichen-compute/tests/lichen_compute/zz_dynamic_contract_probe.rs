@@ -29,22 +29,19 @@ fill_b := ('f = Fill) -> {
   b := compute.buf (compute.BufParam{.type Float, .length 60})
   ((BBuf){.b (compute.write ((compute.Write _){.to b, .at i, .value (int2float (i + 1))}))})
 }
-fill_plan := ('f = Fill) -> {
+Shape := {.n @any : Int, .s0 @any : Int, .s1 @any : Int, .s2 @any : Int, .s3 @any : Int, .s4 @any : Int, .s5 @any : Int, .s6 @any : Int, .s7 @any : Int, .s8 @any : Int, .s9 @any : Int, .s10 @any : Int, .s11 @any : Int}
+fill_plan := ('f = Shape) -> {
   i := compute.range f.n
+  v := (i == 0) * f.s0 + (i == 1) * f.s1 + (i == 2) * f.s2 + (i == 3) * f.s3 + (i == 4) * f.s4 + (i == 5) * f.s5 + (i == 6) * f.s6 + (i == 7) * f.s7 + (i == 8) * f.s8 + (i == 9) * f.s9 + (i == 10) * f.s10 + (i == 11) * f.s11
   plan := compute.buf (compute.BufParam{.type Int, .length 12})
-  dim := i / 3
-  slot := i - dim * 3
-  a_stride := (dim == 0) * 12 + (dim == 2) * 4 + (dim == 3) * 1
-  b_stride := (dim == 1) * 1 + (dim == 2) * 20 + (dim == 3) * 5
-  extent := (dim == 0) * 2 + (dim == 1) * 5 + (dim == 2) * 3 + (dim == 3) * 4
-  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value ((slot == 0) * a_stride + (slot == 1) * b_stride + (slot == 2) * extent)}))})
+  ((PBuf){.plan (compute.write ((compute.Write _){.to plan, .at i, .value v}))})
 }
 a_kernel := compute.parallel fill_a "cpu" ABuf
 b_kernel := compute.parallel fill_b "cpu" BBuf
 p_kernel := compute.parallel fill_plan "cpu" PBuf
 data_a := (compute.plrun a_kernel ((Fill){.n 24}) : Struct)
 data_b := (compute.plrun b_kernel ((Fill){.n 60}) : Struct)
-data_p := (compute.plrun p_kernel ((Fill){.n 12}) : Struct)
+data_p := (compute.plrun p_kernel ((Shape){.n 12, .s0 12, .s1 0, .s2 2, .s3 0, .s4 1, .s5 5, .s6 4, .s7 20, .s8 3, .s9 1, .s10 5, .s11 4}) : Struct)
 body := ('p = Par) -> {
   i := compute.range p.meta.n
   rank := p.meta.rank
