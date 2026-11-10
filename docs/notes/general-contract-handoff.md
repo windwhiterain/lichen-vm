@@ -283,8 +283,12 @@
 - **变体（已改成）**：两张形状表都列出**全部维**，不在该操作数上的维其 stride 写 0——于是
   推导不需要成员守卫，只做表查找。**卡点二**：这样组合后 `contract` 调用处仍报
   `this field read cannot be checked: the container's type is not decided here`（读数 98,6，
-  调用行）；`plrun` 单独在函数里跑、读结果域是通的，所以剩余是一个**在调用点未解析的域读**，
-  需要检查器侧定位（候选：`dp.plan` 与外层函数的参数/返回类型交互）。
+  调用行）；`plrun` 单独在函数里跑、读结果域是通的，所以剩余是一个**在调用点未解析的域读**。
+  已定位（`refuse_undecided_container` 加临时打印）：被拒的是 **`(plrun p_kernel ps).plan`**
+  ——容器是 **Apply**（`compute.plrun` 调用），在函数内构造 `In{… .plan dp.plan}` 的**深求值**时
+  其结果类型未定，于是域读被拒（非 formal-rooted，不能延迟）。去掉 `: Struct` 注解会引入
+  `expected Table, found Struct`，所以注解是必需的。下一步：让 `plrun` 的结果类型在构造
+  聚合值时已是 kernel 的 codomain（或把该域读按 formal-rooted 延迟）。
 
 ## 已知坑
 
