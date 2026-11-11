@@ -641,6 +641,44 @@ fn probe_a_function_user_struct_argument() {
     }
 }
 
+/// The consumer call replaced by a direct collect of the producer's field inside the
+/// same function.
+///
+/// # Invariant
+/// Print-only. Answers the buffer's four values when the producer's result itself is
+/// sound and the loss is in the argument literal.
+const FUNCTION_DIRECT_COLLECT: &str = r#"
+--- compute = import "compute.lichen" ---
+ABuf := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Fill := {.n @any : Int}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+}
+k := compute.parallel fill "cpu" ABuf
+run := 'n -> {
+  d := (compute.plrun k ((Fill){.n n}) : Struct)
+  compute.collect d.a : Array
+}
+run 4
+"#;
+
+#[test]
+fn probe_a_function_direct_collect() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_DIRECT_COLLECT, None, &mut store) {
+        Ok(text) => println!("[function-direct-collect] {text}"),
+        Err(diagnostics) => println!(
+            "[function-direct-collect] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
