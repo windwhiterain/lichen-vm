@@ -710,6 +710,38 @@ fn probe_a_nested_typed_field() {
     }
 }
 
+/// A field whose expression is a call returning a struct value.
+///
+/// # Invariant
+/// Print-only; refused with "expected Int, found Int", a nominal identity mismatch.
+const DECIDED_FIELD_VALUE: &str = r#"
+Inner := {.x @any : Int}
+mk := 'u -> Inner{.x u}
+Outer := {.i (mk 1)}
+F := 'n -> Outer{.i Inner{.x n}}
+g := ('p = Outer) -> p.i.x
+h := 'n -> {
+  d := (F n)
+  g (Outer{.i Inner{.x d.i.x}})
+}
+h 7
+"#;
+
+#[test]
+fn probe_a_decided_field_value() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(DECIDED_FIELD_VALUE, None, &mut store) {
+        Ok(text) => println!("[decided-field-value] {text}"),
+        Err(diagnostics) => println!(
+            "[decided-field-value] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
