@@ -741,6 +741,44 @@ fn probe_a_decided_field_value() {
     }
 }
 
+/// The failing chain with the argument type declared inside the function.
+///
+/// # Invariant
+/// Print-only; answers the buffer values when a function-scoped type repairs it.
+const FUNCTION_LOCAL_TYPE: &str = r#"
+--- compute = import "compute.lichen" ---
+Fill := {.n @any : Int}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Int, .length 4})
+  ({.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+}
+k := compute.parallel fill "cpu" {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+run := 'n -> {
+  ABuf := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+  G := ('p = ABuf) -> p.a
+  d := (compute.plrun k ((Fill){.n n}) : Struct)
+  G (ABuf{.a d.a})
+}
+r := run 4
+compute.collect r : Array
+"#;
+
+#[test]
+fn probe_a_function_local_type() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_LOCAL_TYPE, None, &mut store) {
+        Ok(text) => println!("[function-local-type] {text}"),
+        Err(diagnostics) => println!(
+            "[function-local-type] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
