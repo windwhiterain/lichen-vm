@@ -1687,3 +1687,52 @@ f 7
         }
     }
 }
+
+/// The Any-typed field's own reading, beside the decided field's refusal.
+///
+/// # Invariant
+/// Print-only: an `@any` field takes the supplied value (`@any` is undecided and always
+/// unifies), so only a decided declared value can refuse.
+#[test]
+fn probe_a_spec_any_field() {
+    let cases: [(&str, &str); 3] = [
+        (
+            "any-field",
+            r#"
+T := {.a @any : Int}
+f := 'n -> (T{.a n}).a
+f 2
+"#,
+        ),
+        (
+            "any-nested-field",
+            r#"
+Inner := {.x @any : Int}
+T := {.a Inner}
+f := 'n -> (T{.a Inner{.x n}}).a.x
+f 7
+"#,
+        ),
+        (
+            "decided-field",
+            r#"
+T := {.a 1}
+f := 'n -> (T{.a n}).a
+f 2
+"#,
+        ),
+    ];
+    for (name, source) in cases {
+        let mut store = new_store(None).expect("the embedded compute package registers");
+        match lichen_language::run::evaluate_raw(source, None, &mut store) {
+            Ok(text) => println!("[spec-any] {name}: {text}"),
+            Err(diagnostics) => println!(
+                "[spec-any] {name}: refused {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}

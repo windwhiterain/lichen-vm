@@ -1119,3 +1119,22 @@ f 7
 另：类型函数字段（`Buf := 'p -> {...}; T := {.a (Buf Param)}`）会 panic
 `TableGet target must be a table`——但该 panic 在 SPEC 实现之前的基线（`4d2cb04e`）上同样出现，
 是既有缺陷，不是本次 SPEC 实现引入的。
+
+## Any 字段的读数与诊断修复（round 23）
+
+三个最小纯 lichen 形状的实测：
+
+| 程序 | 结果 |
+|---|---|
+| `T := {.a @any : Int}; f := 'n -> (T{.a n}).a; f 2` | `2: Int` ✓ |
+| `Inner := {.x @any : Int}; T := {.a Inner}; f := 'n -> (T{.a Inner{.x n}}).a.x; f 7` | **`none: Int`** |
+| `T := {.a 1}; f := 'n -> (T{.a n}).a; f 2` | refused `expected 1, found 2` |
+
+- **Any 的情形不报错**，而是给出 `none`：`v[k] = e1` 先把槽与 `Inner`（`.x` 是 `@any`）并类，随后
+  `e3 = v[k]` 下钻到 `.x`——给定值 7 在左、`@any` 在右，按 §Any 不并类，于是类里仍是 `@any`，
+  读出来就是 undecided（`none`）。这正是 compute 链 `raw none` 的最小纯语言复现。
+- **报错的是“声明值已定”的情形**（`{.a 1}` 对给定 2）：两边已定且不等 → Unify 报错。
+
+诊断：`DiagKind::Runtime` 原来用 `printer.node(d.a/d.b)`，两侧都是 `Int` 类型常量时消息成为
+“expected Int, found Int”，不指名冲突的值。已改为**两侧渲染相同时取记录值**（`d.value_a`/`d.value_b`），
+现在输出 `expected 1, found 2` / `expected 1, found 7`。

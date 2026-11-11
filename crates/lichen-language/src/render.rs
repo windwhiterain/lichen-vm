@@ -369,6 +369,16 @@ where
                           (`docs/notes/answer-collision.md`)"
                         .to_string(),
                 }
+            } else if expected == found {
+                // A type names both sides alike; the values that met are the difference.
+                let expected_value = d.value_a.and_then(|value| printer.diagnostic_value(value));
+                let found_value = d.value_b.and_then(|value| printer.diagnostic_value(value));
+                match (expected_value, found_value) {
+                    (Some(expected_value), Some(found_value)) => {
+                        format!("expected {expected_value}, found {found_value}")
+                    }
+                    _ => format!("expected {expected}, found {found}"),
+                }
             } else {
                 format!("expected {expected}, found {found}")
             }
