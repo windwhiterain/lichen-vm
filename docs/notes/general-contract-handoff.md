@@ -954,3 +954,22 @@ round 14 的三条候选边都假设被拒的 `3435` 是读链基座。**实测�
 
 剩余链条：形参 `n` 的值（2）→ 函数体内字面量 `(Fill){.n n}` 的 `.n` 字段（clone 后）；
 这是逐次 clone 的形参值传播，下一轮从这里量。
+
+## 生产者 launch 只在检查期求值一次（round 16）
+
+按 kernel id 区分后：
+
+```
+[leaf] kernel=10704…（生产者 fill）  cfg=11496 leaf=8041 value=None   ← 唯一一次
+[leaf] kernel=10305…（消费者 sum）  cfg=14204 leaf=8677 value=2       ← extent 两次
+[leaf] kernel=10305…（消费者 sum）  cfg=14267 leaf=8677 value=2
+```
+
+- 生产者的 launch **只在检查期**用模板的 cfg（`11496`）和未定值的叶子（`8041`）求值了一次；
+- 运行期消费者读 `d.a` 时，**没有再次 demand 生产者的 launch clone**——所以它的字面量字段永远拿不到 2。
+
+`parameter_projection(container, 8041, block)` 对 8041 返回 `None`：它不是 Index 链（`path.is_empty()`），
+而是一个纯值节点（形参 `n` 的值），所以投影机制不覆盖它。
+
+下一步：量消费者在运行期读 `d.a` 时，它的基座（生产者的 launch clone）为什么没有被 demand——
+是读的类已经有了检查期的 None、还是 clone 的 launch 节点没有被建立。
