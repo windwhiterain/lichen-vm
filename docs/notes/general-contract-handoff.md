@@ -1005,3 +1005,16 @@ payload=9707 undecided=true origin=Some(2636)   ← write apply 的 clone
 
 下一步：让字面量 clone 的字段值也走 clone（`node_apply` 的 value 映射），或者运行期重新打开
 模板里未决的读（清 stamp）——前者更符合“每次使用一份副本”的 SPEC 语义。
+
+## 字面量里的读被 clone，但解码走到模板节点（round 19）
+
+- `[node_apply] node=NodeId(3443)` 出现两次 ✓：给定读（`d.a`）确实被 clone 了；
+- 但 `[cfg] cfg=14204 path=[1,0] resolved=8700`：解码从 clone 的字面量出发，却在 `.in.a`
+  处落到**模板的** `8700`；
+- `8700` 不是 identity item（`identity=Some(false)`），所以它不是“声明身份”被有意共享的。
+
+即：clone 的字面量里 `.in` 字段的值链（嵌套 `B1{...}` 的 struct 值）仍指向模板的结构，
+`value_at_path` 顺着它取到模板的读/值节点；而 clone 出来的读（`3443` 的 clone）没有被解码走到。
+
+下一步：量 clone 的 `.in` 字段槽的值（是 clone 的结构还是模板的结构），以及 `value_apply` 对嵌套
+struct 值的映射为什么把 `.a` 的值节点留成了模板节点。
