@@ -514,3 +514,18 @@
 所以两边的 `resolved` 结构相同（[table, id, ...]），差别只在那个 `.native` 位置有没有 buffer。
 下一步就查这个位置的值是谁写的：顶层是定义 pass 就地求值写入，函数内的 clone 是否写成另一批节点，
 使解码读到的这一份始终为空。
+
+## 收窄到“实参字面量的槽”（本轮）
+
+同一函数内：
+
+- `compute.collect d.a` → `[1, 2, 3, 4]`（探针 `probe_a_function_direct_collect`）——第一次调用的结果与它的字段读本身是好的；
+- `G (ABuf{.a d.a})` → `raw none`——同一个读经过**实参字面量的槽**就丢了。
+
+按 SPEC 说：`e3 = v[k]`（§Struct 实例化）把 `e3`（`d.a` 的读）与 `v[k]`（类型字段 expr `e1`）
+merge 成一个 class，而这两处的 value 不同：读自己的答案 = 真实 buffer，类的 value = `e1`（类型值）。
+这违反 Lowlevel 段的 `Nodes inside same class must share same value`——一个 class 里出现了两个不同的 value。
+
+所以修复点已缩到这个 unify 的结果上：merge 之后，类里只能有一个 value；`e1`（右）与 `e3` 的答案
+（左）不同时，按 SPEC 只能有一个成立。下一步核对实现里是谁把两个值都留下了（`write_node_answer` 写
+`e3` 的答案，而类里已有 `e1`），并按 SPEC 的“一个 class 一个 value”修正那一处。
