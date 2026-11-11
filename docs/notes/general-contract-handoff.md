@@ -661,3 +661,20 @@ expr_value_half(field)`），值是给定 expr 的 value（`actual_value`）。
 结论：要让解码顺 `field_sources` 找到给定值，必须先实现 `@raw v[k] = e1`（实例槽与类型字段值并类），
 这样 `field_source_of` 的类根回退才能从实例槽走到模板字段、再到给定值（e3）。这仍是 SPEC 的原有步骤，
 不是新机制。
+
+## `v[k] = e1` 的第一次尝试（round 5）
+
+在 `check_instantiate` 里加了两步：
+
+1. 复制前捕获模板的字段项：`shape::value_items(template_value)` 跳过 `STRUCT_VALUE_FIELD_BASE` 的节点；
+2. 在参数循环里先 `check_unify(实例槽, 模板字段项)`（SPEC 的 `@raw v[k] = e1`），再 `e3 = v[k]`。
+
+结果：
+
+- 最小探针仍 `raw none`；
+- 能工作的 `parallel_read_input_buffer` 从通过变成失败，诊断 `expected Int, found Struct`。
+
+说明捕获到的“模板字段项”不是一个字段的 value（可能是 expr 对或嵌套槽），与实例槽不是同一层，unify 直接冲突。
+已回退，基线恢复（`parallel_read_input_buffer` 通过）。
+
+下一步：量清楚实例槽与模板字段项各自是什么节点（value / expr 对 / 槽），再决定 `v[k] = e1` 的正确一端。
