@@ -1577,7 +1577,10 @@ where
                                     resolved = Some(actual);
                                 }
                             }
-                            let Some(node) = resolved.and_then(|buf| buf_payload::<P>(module, buf))
+                            // An open payload follows the applied result's actual buffer: the
+                            // wrapper may hold the declared value while `.native` is still open.
+                            let Some(node) = resolved
+                                .and_then(|buf| recorded_buffer_payload::<P>(module, block, buf))
                             else {
                                 return None;
                             };
