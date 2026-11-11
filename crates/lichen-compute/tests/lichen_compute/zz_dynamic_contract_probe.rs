@@ -679,6 +679,37 @@ fn probe_a_function_direct_collect() {
     }
 }
 
+/// Nested typed field filled from a call result.
+///
+/// # Invariant
+/// Print-only; answers 7: Int.
+const NESTED_TYPED_FIELD: &str = r#"
+In2 := {.a @any : Int}
+T := {.b In2}
+F := 'x -> T{.b In2{.a x}}
+g := ('p = T) -> p.b.a
+h := 'x -> {
+  d := (F x)
+  g (T{.b In2{.a d.b.a}})
+}
+h 7
+"#;
+
+#[test]
+fn probe_a_nested_typed_field() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(NESTED_TYPED_FIELD, None, &mut store) {
+        Ok(text) => println!("[nested-typed-field] {text}"),
+        Err(diagnostics) => println!(
+            "[nested-typed-field] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
