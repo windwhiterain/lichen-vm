@@ -1254,3 +1254,28 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 而不是继续在 scope/anchor 上找。
 
 已恢复最好状态（无 e1 unify，262 passed / 21 failed）。
+
+## 类作用域摘要的 stale None（round 30）
+
+`[gate]` 探针打印 node 83 的类成员与摘要（有 e1 unify 的失败态）：
+
+```
+[gate] node=83 class_inside=false summary=None members=[
+  (83,  Some(FunctionId(1)), None),
+  (106, Some(FunctionId(1)), Some(FunctionId(1))),
+  (119, Some(FunctionId(1)), Some(FunctionId(1))),
+  ...]
+```
+
+- **所有成员 owner 都是 FunctionId(1)**，按 `refresh_class_summary` 的规则摘要应为 `Some(1)`；
+- 但 83（代表）自己存着 **None**（虚拟根，代表“类跨出所有作用域”）→ `class_inside=false` → 引用而不是 clone；
+- 之后的 pass 里同类却读到 `Some(1)`（且成员只剩 83），说明摘要被刷新过/类被重建过。
+
+所以 `none` 的直接原因是**类作用域摘要的 stale None**：某个成员在 owner 未设定（None）时先被并进类、而代表就取了这个 None；
+`set_node_owner` 会 refresh，但若合并发生在其后且代表是已污染的那个，None 就留在代表上。
+
+尝试过「merge 前刷新两侧」（`merge_class_summaries` 内 refresh），**无效**（仍 none，256/27）——
+说明污染点不在该合并路径，或刷新用的成员 owner 当时仍是 None。
+
+下一步应找：哪个成员在 owner=None 时进入了该类（克隆创建时 function 是否为 None），
+以及代表为何还是 83 而不是被刷新过的成员。已恢复基线（262/21）。
