@@ -1018,3 +1018,18 @@ payload=9707 undecided=true origin=Some(2636)   ← write apply 的 clone
 
 下一步：量 clone 的 `.in` 字段槽的值（是 clone 的结构还是模板的结构），以及 `value_apply` 对嵌套
 struct 值的映射为什么把 `.a` 的值节点留成了模板节点。
+
+## clone 只到一层（round 20）
+
+`[path]` 读数（消费者路径 `[1,0]`）：
+
+```
+at=1 field=14242(克隆的 .in 槽) → node=8725（无 origin，有值：映射出的数组）
+at=0 field=8712（.a 槽，无 origin） → node=8700（无 origin）
+```
+
+- clone 的 `.in` 槽节点（`14242`）存在，但它的值是**映射出的数组**（`8725`，无 origin）；
+- 该数组的 `.a` 槽（`8712`）却是**模板节点**（无 origin）——嵌套层级没有被 clone；
+- 所以解码在 `.in.a` 处取到模板的 `8700`，而不是读的 clone。
+
+即：`value_apply` 只映射了外层字面量一层，嵌套 struct 值里的字段槽仍是模板的。
