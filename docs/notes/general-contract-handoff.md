@@ -1233,3 +1233,24 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 
 所以 `none` 不是“模板并进实例的类”，而是：**e1 unify 之后，形参在某些 apply 中以其自身的 block(2) 被判为 outside，于是被引用而不是 clone**。
 下一步要查的是：为什么 e1 unify 会让同一形参在某个 apply 的 anchor 下变成 outside（anchor/block 的作用域比较），以及引用路径与函数体内读的 cell 为什么不在同一类。
+
+## 形参 gate 的 anchor 实测（round 29）
+
+`DBG_CLONE` 打印 node 83 的每次判定：
+
+```
+[gate] node=83 block=BlockId(2) anchor=FunctionId(1) anchor_block=BlockId(2) class_inside=false value=Array
+[gate] ... class_inside=true value=None
+```
+
+- anchor 与 anchor_block 完全相同，差异只在 `value`：值已成 Array 的访问 → false；值为 None 的访问 → true；
+- `node_class_inside_scope` 用的是 **ctx.scope_root**（不是 anchor）：`let Some(scope) = ctx.scope_root else { return false }`；
+- 所以 false 来自 **某次 apply 的 `scope_root` 为 None**（无作用域的 pass），而 e1 unify 恰好让形参多进了这样一次 pass。
+
+这解释了引用路径：形参在该 pass 被判 outside → 返回模板自己的 cell(83) → 实参写到 83 的类；
+函数体内的读用另一个 cell(78)，不在同一类 → None → `none`。
+
+下一步：查为何 e1 unify 会触发一次 `scope_root=None` 的 pass（以及该 pass 是否做了参数绑定），
+而不是继续在 scope/anchor 上找。
+
+已恢复最好状态（无 e1 unify，262 passed / 21 failed）。
