@@ -793,3 +793,14 @@ Suite after both reverts: `test result: ok. 279 passed; 0 failed; 1 ignored`.
 
 当前基线：套件 `279 passed, 1 ignored`，工作树干净（只剩 `README.md` 与 maintainer 的
 `docs/language-spec.md` 编辑）。
+
+## `_ = @any` 的方向规则（round 11）
+
+按 Any 段的例子（`_ = @any` := `_`、`{a := _; @any = a}` := `@any`），在 `unify_inner` 的
+`(None, Some)` 分支加了规则：**右侧是 `Any` 时不并类**（左侧保持空），而左侧是 `Any` 时仍并（右侧变 `Any`）。
+
+- 套件计数不变（252 passed / 27 failed），所以它不是当前链的卡点；
+- 但它与 SPEC 的例子一致，已提交（`116568f7`）。
+
+当前链的卡点仍是：kernel 编译体在函数形态下遇到孤立空 cell（`3435`），以及 `e3 = v[k]` 对 `@any`
+槽的填充语义。
