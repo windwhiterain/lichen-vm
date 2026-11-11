@@ -1160,3 +1160,21 @@ f 7
 
 所以问题变成：SPEC 的 `e3 = @raw v[k]` 的**方向**——是“槽保留 e1、e3 保留自己的值”（当前实现），
 还是“槽取 e3 的值（v[k] = e3）”？前者给出 `none`，后者给出 7。
+
+## 按“v 的槽是 @raw None”改的实测（round 25）
+
+按用户指正（`v := @raw[name_table, nominal_id, @raw None, @raw None]`，实例的槽是 None，
+模板的 `@any` 不可能进 `v`；7 应与 `v` 里的 None unify）：
+
+1. `instantiate_requirement` 的字段值改为 `fresh_cell()`（`v` 的空槽）；
+2. `check_instantiate` 的顺序改为先 `e3 = v[k]`、再 `v[k] = e1`。
+
+读数：
+
+- `[inst-after] slot=133 fields=[(78, None)] given_fields=[(78, None)]`——类的字段与给定值
+  的字段**相同**（`78` = 形参 `n` 的 cell），即类的值确实取了**给定**的数组（不再是模板的）；
+- 但套件从 257/25 掉到 **118/164**：空槽副本破坏了其它读取路径（recorded/graph 等仍依赖模板值）；
+- `any-nested-field` 仍是 `none`：给定值的 `.x` 是**形参 cell**（检查期 undecided），运行期要靠
+  形参 clone 填 7 —— 剩下的是 clone/side-apply 这一层，不是 struct unify。
+
+已回退这两个实验（保留 `render.rs` 的诊断修复与探针），基线恢复 257 passed / 25 failed。
