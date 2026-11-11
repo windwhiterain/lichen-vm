@@ -1063,6 +1063,16 @@ where
         node
     }
 
+    /// Whether `node` carries anything this walk can emit.
+    ///
+    /// # Invariant
+    /// An operation and a value are the two things a lowering runs on; a cell with neither is
+    /// the requirement the Any rule left open (`docs/language-spec.md` §Any).
+    fn defined(&self, node: NodeId) -> bool {
+        self.module.node_operation(node).is_some()
+            || self.module.node_value(AnyNodeId::Dynamic(node)).is_some()
+    }
+
     /// The first **field**'s value node when `node` is an array (a struct instance).
     ///
     /// # Invariant
@@ -1198,10 +1208,13 @@ where
                 return self.parameter(slot);
             }
             if let Some(inner) = self.first_slot_value(node) {
-                return match self.parameter_path_of(inner)? {
-                    Some(slot) => self.parameter(slot),
-                    None => self.lower_definition(inner),
-                };
+                if let Some(slot) = self.parameter_path_of(inner)? {
+                    return self.parameter(slot);
+                }
+                // **An open `.native` slot is no definition**: the instance's supplier decides.
+                if self.defined(inner) {
+                    return self.lower_definition(inner);
+                }
             }
             if let Some(payload) = self.instance_payload(node) {
                 // The identity is the node the body bound, not a peel of it.
