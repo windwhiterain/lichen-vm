@@ -779,6 +779,53 @@ fn probe_a_function_local_type() {
     }
 }
 
+/// The chained launch with every type declared inside the function.
+///
+/// # Invariant
+/// Print-only; answers the written values when a function-scoped type carries them.
+const FUNCTION_LOCAL_CHAIN: &str = r#"
+--- compute = import "compute.lichen" ---
+run := 'n -> {
+  ABuf := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+  Buffers := {.a (compute.Buf (compute.BufParam{.type Int, .length 4})), .b (compute.Buf (compute.BufParam{.type Int, .length 4})), .plan (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+  Meta := {.n @any : Int, .rank @any : Int, .contract @any : Int, .total @any : Int}
+  Sum := {.meta Meta, .in Buffers}
+  SumOut := {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+  Fill := {.n @any : Int}
+  fill := ('f = Fill) -> {
+    i := compute.range f.n
+    a := compute.buf (compute.BufParam{.type Int, .length 4})
+    ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+  }
+  sum := ('p = Sum) -> {
+    i := compute.range p.meta.n
+    o := compute.buf (compute.BufParam{.type Int, .length 4})
+    ((SumOut){.c (compute.write ((compute.Write _){.to o, .at i, .value (compute.read ((compute.Read _){.from p.in.plan, .at i}) : Int)}))})
+  }
+  a_kernel := compute.parallel fill "cpu" ABuf
+  sum_kernel := compute.parallel sum "cpu" SumOut
+  d1 := (compute.plrun a_kernel ((Fill){.n n}) : Struct)
+  (compute.plrun sum_kernel ((Sum){.meta Meta{.n 4, .rank 4, .contract 1, .total 2}, .in Buffers{.a d1.a, .b d1.a, .plan d1.a}}) : Struct)
+}
+r := run 4
+compute.collect r.c : Array
+"#;
+
+#[test]
+fn probe_a_function_local_chain() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_LOCAL_CHAIN, None, &mut store) {
+        Ok(text) => println!("[function-local-chain] {text}"),
+        Err(diagnostics) => println!(
+            "[function-local-chain] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
