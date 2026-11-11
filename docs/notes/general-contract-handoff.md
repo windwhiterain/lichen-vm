@@ -985,3 +985,23 @@ round 14 的三条候选边都假设被拒的 `3435` 是读链基座。**实测�
 
 下一轮量：运行期读 `d.a` 的节点是模板节点还是 clone、它的 `runned`/`value` 各是什么——这决定闸门
 是否应当按 SPEC 的“a value a unification wrote is not the operator's answer”把它当作未答、重跑一次。
+
+## 解码读到的仍是模板节点（round 18）
+
+`[state]` 读数（缓冲/负载：节点、是否 undecided、origin、操作）：
+
+```
+buffer=8700 Index undecided=true  origin=None
+payload=8718 undecided=true origin=None
+buffer=3443 Index undecided=true  origin=None
+payload=9707 undecided=true origin=Some(2636)   ← write apply 的 clone
+```
+
+- 消费者运行期解码 `value_at_path` 落到 `8700`/`3443`（**模板节点，无 origin**），它们的值来自
+  类的 unify（声明侧 `Buf`），不是 operator 的答案；
+- 这两个读在检查期跑过并被 `ran_undecided` 打了 run stamp，所以闸门的 `has_no_result_yet`
+  为假、不再重跑；
+- 字面量 clone 的字段值节点被**共享**（无 origin），所以运行期没有 demand 生产者的 launch。
+
+下一步：让字面量 clone 的字段值也走 clone（`node_apply` 的 value 映射），或者运行期重新打开
+模板里未决的读（清 stamp）——前者更符合“每次使用一份副本”的 SPEC 语义。
