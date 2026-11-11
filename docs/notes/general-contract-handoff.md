@@ -862,3 +862,27 @@ kernel 编译体的 `self.params` 只有一个槽：`expr=540`、`value=535`；�
 结论：这条读链的基座不是“参数槽 / 参数镜像”能命名的东西；它是检查期的 per-use 副本。
 `22a7a42d` 提交了这条边（无害，套件计数不变），但解决 27 个失败还需要找到能命名该副本的边
 （候选：该副本的 `field_sources` required 侧、或检查器构造读时的基座选择）。
+
+## 读链基座的 origin 是 Apply 结果（round 14）
+
+`parameter_path` 的基座（`11895`、`12076`、`12078`）都有 `origin`，且 origin 是 **Apply** 节点：
+
+```
+origin=6947/3760  op=Apply  value=Array
+```
+
+origin 的类根（6947/3760）也不等于参数槽（3479/3474）。所以：
+
+- 基座不是槽、不是 image、origin 也不是槽；
+- 它是**被 apply 后的实参结果的 clone**——与 `parameter_path` 注释里的不变量一致
+  （“a parameter the deep pass unified with its argument is a computation by codegen time”），
+  即编译期看到的参数值就是实参那边的节点。
+
+可选的下一条边（需要 maintainer 定）：
+
+1. **`parameter_images` 的记录扩展到 apply 结果**：clone 参数时把“实参结果 → 形参槽”也记下来；
+   检查器/低层已有 `clone_parameters`，扩一个映射即可（最贴合现有机制）；
+2. **按 apply 的 operands 追**：基座的 origin 是 Apply，用 `node_function` + 该 apply 的实参
+   节点对照 `self.params`（不动低层，但需要 apply 的 operand 仍可读）；
+3. **接受“参数值即实参”**：编译期把基座当参数处理（在 `parameter_path` 里允许基座是
+   Apply 结果），最省事但放宽了匹配。
