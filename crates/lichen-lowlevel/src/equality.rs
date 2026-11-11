@@ -444,6 +444,9 @@ impl<P: Program> Module<P> {
             // A requirement gives way to the thing's answer; a decided value never does.
             if held.is_some_and(|held| self.value_holds_open_cell(held, 0)) {
                 self.set_node_value(node, Some(value));
+                // One class holds one value: the answer replaces the requirement everywhere.
+                let representative = self.equality_representative(node);
+                self.propagate_class_value(representative, value);
             } else {
                 self.write_node_value_if_absent(node, Some(value));
             }
