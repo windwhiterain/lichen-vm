@@ -541,3 +541,17 @@ merge 成一个 class，而这两处的 value 不同：读自己的答案 = 真�
 下一步（收敛后）：量“给定表达式 `e3` 的实际 Buf 值”与“实例字段（wraps 那个裸 cell）”是否同一
 class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` 位置并类——按 Unify 的
 “recursive into nodes both side refers”应有并类，缺的正是那一处。
+
+## 分类结论（第 28 轮）
+
+- 跳过定义 pass（`DBG_NO_DEFPASS`）后，失败程序的答案**仍是** `raw none`——所以“定义 pass 提前求值”
+  不是本失败的直接原因。
+- 直接把实参类型声明在函数内，答案 `[1, 2, 3, 4]` ✓。
+- 按 SPEC 推：`e3 = v[k]`（§Struct 实例化）在检查期把字段读与类型字段值 `e1` 并成一类，类里已有
+  `e1`（顶层类型值）；按 Lowlevel 段的 `Nodes inside same class must share same value`，类里就是
+  `e1`，而 `e1` 的 `.native` 是 `@any`/空——所以程序按 SPEC 的规则就是 undecided。
+- 类型声明在函数内时，该类落在函数 scope 内，Clone 规则按次克隆，读被重新求值，答案才是真实 buffer。
+
+因此：这一形状（顶层类型 + 函数 + 用户结构体实参）在 SPEC 现有规则下是 undecided，实现与规则一致；
+可用形态是“类型声明在函数内/块内”，或使用插件自己的参数结构（`compute.A`）。此前把它记成“实现缺陷”
+的分类应当更正。
