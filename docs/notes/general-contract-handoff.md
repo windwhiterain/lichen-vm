@@ -832,3 +832,19 @@ kernel 编译体的 `self.params` 只有一个槽：`expr=540`、`value=535`；�
 
 下一步：确认 `p.in.a` 的 Index 链在检查期是以参数 `p` 的 value（槽 535）为基座，还是以类型字段值的
 副本（3435）为基座；如果是后者，就是检查器构造读的位置需要按 SPEC 的 `s.value[...]` 对齐。
+
+## 读链的基座是 per-use 副本（round 13）
+
+编译体走到 `p.in.a` 的读链时，链上的 target 都在 `BlockId(3)`，其类根是它们自己（`11895`、`12076`、
+`12078`），而参数槽是 `expr=3479`、`value=3474`——两者类根都不相等。
+
+也就是说：copy 修复生效后，kernel 体读的基座是检查期造的 **per-use 副本**（同 block、高 id），
+不是参数槽的 value；`parameter_path` 的基座匹配因此失败，落到 `opaque(3435)`。
+
+下一步的分叉：
+
+1. 让 `parameter_path` 把“副本 → 参数槽”的边（`field_sources` 的 required→supplied，或 apply 的
+   参数镜像）接上，按这条边识别基座；
+2. 或者让检查器构造读时直接以参数槽的 value 为基座（`s.value[...]` 的 SPEC 改写），副本只作为槽值。
+
+两条都可行，但一条改插件、一条改检查器；需要 maintainer 定方向。
