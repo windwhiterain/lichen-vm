@@ -313,7 +313,14 @@ impl<P: Program> Module<P> {
             root = target;
         }
         if path.is_empty() {
-            return None;
+            let Some((function, _)) = self
+                .parameter_values
+                .iter()
+                .find(|(_, value)| **value == root)
+            else {
+                return None;
+            };
+            root = self.functions[*function].parameter;
         }
         let mut images = Vec::new();
         let mut current = container;
@@ -367,6 +374,12 @@ impl<P: Program> Module<P> {
     /// Follow one constant `Index` path from an actual parameter image.
     fn projection_at(&mut self, image: NodeId, path: &[usize], block: BlockId) -> Option<NodeId> {
         let mut current = AnyNodeId::Dynamic(image);
+        if path.is_empty() {
+            current = self
+                .expr_value_half(image)
+                .map(AnyNodeId::Dynamic)
+                .unwrap_or(current);
+        }
         for &position in path.iter().rev() {
             self.evaluate_node(current, Some(block));
             // SAFETY: `current` is a live node of this module, and this walk releases no block.
