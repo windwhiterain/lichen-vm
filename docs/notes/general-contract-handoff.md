@@ -501,3 +501,16 @@
 
 - 压缩上下文后从「下一步」第 1 条继续。
 - 需要用户裁决时用 `ask_user_question`，不要用正文提问。
+
+## 量到的判别点（顶层能工作 vs 函数内失败）
+
+同一个输入解码位置，`resolved` 指向的值逐项展开：
+
+- 顶层 `parallel_read_input_buffer`（答 22）：Buf 的 `.native` 项里有一项是
+  `ComputeValue(Buffer(..., Int))` —— 真实 buffer 在；
+- 函数内 + 用户结构体实参（`probe_a_function_user_struct_argument`，`raw none`）：同一位置的项
+  全部 `value=None` —— 真实 buffer 不在。
+
+所以两边的 `resolved` 结构相同（[table, id, ...]），差别只在那个 `.native` 位置有没有 buffer。
+下一步就查这个位置的值是谁写的：顶层是定义 pass 就地求值写入，函数内的 clone 是否写成另一批节点，
+使解码读到的这一份始终为空。
