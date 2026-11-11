@@ -973,3 +973,15 @@ round 14 的三条候选边都假设被拒的 `3435` 是读链基座。**实测�
 
 下一步：量消费者在运行期读 `d.a` 时，它的基座（生产者的 launch clone）为什么没有被 demand——
 是读的类已经有了检查期的 None、还是 clone 的 launch 节点没有被建立。
+
+## 读的 value 短路了 Index 的 demand（round 17）
+
+- `Index` 的求值本身会 demand 它的基座（`evaluate_node(operands[0])`），所以只要读**重新跑一次**，
+  就会去 demand 生产者的 launch clone；
+- 但读的类里有值（声明侧 `Buf`），闸门 `if let Some(value) = self.nodes[node].value { ... }`
+  在 `has_no_result_yet(node)` 为假时直接返回值、不跑 operation；
+- 克隆侧的规则在 `crates/lichen-lowlevel/src/function.rs:960-990`：`carried_answer` 只在模板答案是
+  “已证明”时才 `stamp_node_ran_if(clone, true)`，否则克隆的 `runned` 应为 false（即应重跑）。
+
+下一轮量：运行期读 `d.a` 的节点是模板节点还是 clone、它的 `runned`/`value` 各是什么——这决定闸门
+是否应当按 SPEC 的“a value a unification wrote is not the operator's answer”把它当作未答、重跑一次。
