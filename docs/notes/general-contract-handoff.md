@@ -804,3 +804,19 @@ Suite after both reverts: `test result: ok. 279 passed; 0 failed; 1 ignored`.
 
 当前链的卡点仍是：kernel 编译体在函数形态下遇到孤立空 cell（`3435`），以及 `e3 = v[k]` 对 `@any`
 槽的填充语义。
+
+## 通用 tracing 的设计（round 12）
+
+compute 插件要“通用的 tracing 合法 lichen 结构”，即三个读者（直接解码、recorded 解码、kernel 编译体）
+都只沿语言自身的结构走，不依赖具体形状或节点 id。可用的边（按优先级）：
+
+1. **expr 的 value half**（`expr_value_half`）：一个表达式的值位置；
+2. **struct 字段的 supplier**（`field_sources`，required → supplied）：SPEC §Struct 的
+   `@raw v[k] = e1` / `e3 = v[k]` 记录的那条边；
+3. **apply 的参数镜像**（`parameter_images` / `clone_parameters`）：形参的值节点 ↔ 实参的值节点；
+4. **节点的 origin**（`node_origin`）：clone → 模板；
+5. 只有以上都走不通时才是“空 cell”，拒绝。
+
+本轮读数：kernel 编译体拒绝的 `NodeId(3435)` 位于 `BlockId(2)`，无 origin、无 `field_sources`（两个方向
+都没有）、类根是它自己——是检查期的一个裸 cell，编译体沿读链走到了它。要判断它该由哪条边解析，需要
+把它与 `self.params` 的 slot（expr / value）对照；下一步继续。
