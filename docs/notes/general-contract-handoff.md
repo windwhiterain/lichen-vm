@@ -820,3 +820,15 @@ compute 插件要“通用的 tracing 合法 lichen 结构”，即三个读者�
 本轮读数：kernel 编译体拒绝的 `NodeId(3435)` 位于 `BlockId(2)`，无 origin、无 `field_sources`（两个方向
 都没有）、类根是它自己——是检查期的一个裸 cell，编译体沿读链走到了它。要判断它该由哪条边解析，需要
 把它与 `self.params` 的 slot（expr / value）对照；下一步继续。
+
+## 3435 不是参数槽（round 13）
+
+kernel 编译体的 `self.params` 只有一个槽：`expr=540`、`value=535`；被拒绝的 `3435` 与两者的类根都
+不相等。`3435` 位于 `BlockId(2)`、无 origin、无 `field_sources`、类根是它自己——即检查期由
+`instantiate_requirement_value` 为开放槽造的 fresh cell（类型的字段值副本）。
+
+所以编译体沿 `p.in.a` 的读链走到了**类型字段值的副本**，而不是参数槽本身；`parameter_path` 的基座
+匹配因此失败，落到了 `opaque`。
+
+下一步：确认 `p.in.a` 的 Index 链在检查期是以参数 `p` 的 value（槽 535）为基座，还是以类型字段值的
+副本（3435）为基座；如果是后者，就是检查器构造读的位置需要按 SPEC 的 `s.value[...]` 对齐。
