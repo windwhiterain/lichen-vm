@@ -1083,3 +1083,39 @@ node=8725 root=41   inside=false depends=true   → referenced（共享）
 我按字面读：`v[k] = e1` 合类 → 副本在声明侧 → 解码走类 → 取到模板读；要按“副本脱离”，
 则解码必须沿给定表达式的供给边走到它在本次调用里的 clone（`3443` 的 clone 确实存在，
 但其映射只存在 per-apply 的 `ctx.remap` 里，没有全局可查的边）。
+
+## 最小纯 lichen 错误例（round 22）
+
+把 §Struct 与 §Clone 按 SPEC 实现后，最小的纯 lichen 失败例子是：
+
+```lichen
+T := {.a 1}
+f := 'n -> (T{.a n}).a
+f 2
+```
+
+读数：`refused [("expected Int, found Int", Some((4, 3)))]`。
+
+同形状但值相同（`T := {.a 7}; f 7` 或嵌套 `Inner{.x 7}`）答 `7: Int` ✓。
+
+机制：§Struct 的 `v[k] = e1` 把字段的**声明值**（`1`）与**给定值**（`2`）unify；Unify 段规定
+“两边已定且不等 → 错误”，于是拒绝。实现按 SPEC 是对的——它暴露的是“字段声明值是已定值时，
+该字段就不能再被赋予别的值”这一语义。
+
+嵌套版本（更接近 compute 的类型写法）：
+
+```lichen
+Inner := {.x @any : Int}
+T := {.a (Inner{.x 1})}
+f := 'n -> (T{.a (Inner{.x n})}).a.x
+f 7
+```
+
+同样被拒：`expected Int, found Int`（span `(5, 3)`）；把声明值换成 `7`（与给定相同）则答 `7: Int`。
+
+探针：`probe_a_spec_struct_minimal_error`、`probe_a_spec_struct_and_clone`
+（`crates/lichen-compute/tests/lichen_compute/zz_dynamic_contract_probe.rs`，print-only）。
+
+另：类型函数字段（`Buf := 'p -> {...}; T := {.a (Buf Param)}`）会 panic
+`TableGet target must be a table`——但该 panic 在 SPEC 实现之前的基线（`4d2cb04e`）上同样出现，
+是既有缺陷，不是本次 SPEC 实现引入的。

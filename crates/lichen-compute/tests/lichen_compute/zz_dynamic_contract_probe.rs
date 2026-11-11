@@ -1539,3 +1539,151 @@ fn probe_a_three_dimensional_contraction() {
         ),
     }
 }
+
+/// The smallest pure-lichen shapes the struct rewrite's two unifies touch.
+///
+/// # Invariant
+/// Print-only, asserts nothing: each program prints what the spec-conforming
+/// implementation answers, so the smallest failing shape is named by a reading.
+#[test]
+fn probe_a_spec_struct_and_clone() {
+    let cases: [(&str, &str); 6] = [
+        (
+            "decided-field-given-other",
+            r#"
+Inner := {.x @any : Int}
+T := {.a (Inner{.x 1})}
+f := 'n -> {
+  d := (T{.a (Inner{.x n})})
+  d.a.x
+}
+f 7
+"#,
+        ),
+        (
+            "decided-field-given-same",
+            r#"
+Inner := {.x @any : Int}
+T := {.a (Inner{.x 7})}
+f := 'n -> {
+  d := (T{.a (Inner{.x n})})
+  d.a.x
+}
+f 7
+"#,
+        ),
+        (
+            "local-read",
+            r#"
+T := {.x @any : Int}
+mk := 'u -> T{.x u}
+f := 'n -> {
+  d := (mk n)
+  d.x
+}
+f 7
+"#,
+        ),
+        (
+            "literal-from-local",
+            r#"
+T := {.x @any : Int}
+mk := 'u -> T{.x u}
+f := 'n -> {
+  d := (mk n)
+  (T{.x d.x}).x
+}
+f 7
+"#,
+        ),
+        (
+            "nested-local",
+            r#"
+Inner := {.x @any : Int}
+Outer := {.i Inner}
+mk := 'n -> Outer{.i Inner{.x n}}
+f := 'n -> {
+  d := (mk n)
+  d.i.x
+}
+f 7
+"#,
+        ),
+        (
+            "two-step",
+            r#"
+T := {.a @any : Int}
+mk := 'u -> T{.a u}
+f := 'n -> {
+  d := (mk n)
+  e := (mk d.a)
+  e.a
+}
+f 7
+"#,
+        ),
+    ];
+    for (name, source) in cases {
+        let mut store = new_store(None).expect("the embedded compute package registers");
+        match lichen_language::run::evaluate_raw(source, None, &mut store) {
+            Ok(text) => println!("[spec-struct-clone] {name}: {text}"),
+            Err(diagnostics) => println!(
+                "[spec-struct-clone] {name}: refused {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}
+
+/// The same mismatch, shrunk: a field whose declared value is a literal.
+///
+/// # Invariant
+/// Print-only: `T{.a 2}` against a declared `.a` of `1` is the shortest shape the
+/// struct rewrite's `v[k] = e1` unify can refuse.
+#[test]
+fn probe_a_spec_struct_minimal_error() {
+    let cases: [(&str, &str); 3] = [
+        (
+            "literal-declared",
+            r#"
+T := {.a 1}
+f := 'n -> (T{.a n}).a
+f 2
+"#,
+        ),
+        (
+            "struct-declared",
+            r#"
+Inner := {.x @any : Int}
+T := {.a (Inner{.x 1})}
+f := 'n -> (T{.a (Inner{.x n})}).a.x
+f 7
+"#,
+        ),
+        (
+            "struct-declared-same",
+            r#"
+Inner := {.x @any : Int}
+T := {.a (Inner{.x 7})}
+f := 'n -> (T{.a (Inner{.x n})}).a.x
+f 7
+"#,
+        ),
+    ];
+    for (name, source) in cases {
+        let mut store = new_store(None).expect("the embedded compute package registers");
+        match lichen_language::run::evaluate_raw(source, None, &mut store) {
+            Ok(text) => println!("[spec-minimal] {name}: {text}"),
+            Err(diagnostics) => println!(
+                "[spec-minimal] {name}: refused {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}
