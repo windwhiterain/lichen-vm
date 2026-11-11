@@ -692,3 +692,13 @@ expr_value_half(field)`），值是给定 expr 的 value（`actual_value`）。
 
 下一步：确认测试 harness 是否冻结程序（`run`/`evaluate_raw` 的 static 路径），以及 static 模块里
 `ParLaunch`/输入解码的处理是否与动态路径一致——这正好也是“不等于 compute 特例”的落点。
+
+## 冻结假设被排除（round 9）
+
+`evaluate_raw` → `compile_with_imports_at` → `render_build`（`crates/lichen-language/src/run.rs:85-93`）：
+直接在**动态模块**里 `evaluate_node_deep(build.root_val)`，没有冻结/static 路径。所以上一轮的
+frozen 假设不成立。
+
+剩余问题：最小程序里 launch 的 `ParLaunch` 臂进入了、但没走到 `run_parallel_kernel`（在输入解码里
+提前返回）；而 collect 形态能拿到值，说明它的值来自另一条路径。这段调查已交给一个 coding subagent
+（`launch-path-fixer`）继续，套件保持 `279 passed, 1 ignored`（`52876710`）。
