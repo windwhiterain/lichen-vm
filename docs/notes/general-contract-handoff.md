@@ -678,3 +678,17 @@ expr_value_half(field)`），值是给定 expr 的 value（`actual_value`）。
 已回退，基线恢复（`parallel_read_input_buffer` 通过）。
 
 下一步：量清楚实例槽与模板字段项各自是什么节点（value / expr 对 / 槽），再决定 `v[k] = e1` 的正确一端。
+
+## 探针里的 launch 由谁求值（round 8）
+
+- 最小程序里 `ParLaunch` 的算子**被求值**（`PLRUN eval recording=false` ×3），但**从不进入
+  `run_parallel_kernel`**（`[pl] outcome` 打印从未出现）；
+- `value_at_path` 在最小程序里解析出的标量叶子（`564`）始终 `value=None`；
+- 对照的 `probe_a_function_direct_collect` 同样打印叶子 `None`，但 collect 仍答 `[1,2,3,4]`，
+  而且**它的 `PLRUN` 也一次没打印**。
+
+结论：测试跑的这些程序，launch 的结果不是由我插桩的这个动态求值臂算出来的——很可能走的是
+**frozen/static 模块**的路径（测试 harness 会冻结），我的插桩只在动态模块里，所以看不到。
+
+下一步：确认测试 harness 是否冻结程序（`run`/`evaluate_raw` 的 static 路径），以及 static 模块里
+`ParLaunch`/输入解码的处理是否与动态路径一致——这正好也是“不等于 compute 特例”的落点。
