@@ -1057,3 +1057,29 @@ node=8725 root=41   inside=false depends=true   → referenced（共享）
 2. 还是 **“Clone an undecided node will detached from its original class”** 要求 undecided 节点
    无论类根如何都必须 clone（并脱离原类）？
 3. 还是 `8725` 本不该 undecided（它映射自一个已定结构，只是元素里含模板读）？
+
+## 按更新后 §Clone 再读（round 21）
+
+更新后的规则：
+
+- “undecided node, if its class is in the applying function's scope, must be cloned, otherwise
+  reference it”；
+- “for efficiency: clone recursive into a decided node if the deep_decided flag is false；
+  reference node outside the applying function's scope”；
+- “Clone an undecided node will detached from its original class for let-polymorphism.”
+
+实测对照：`3443`（模板读）inside=true → cloned ✓；`8725`（`.in` 字段的映射值）undecided，
+但类根是声明侧 `41` → outside → referenced。
+
+两条 SPEC 规则的联合效果：
+
+1. §Struct 的 `v[k] = e1` 把 per-use 副本与声明侧字段 unify（两边都已定时会下钻并合类），
+   所以副本的类根落在声明作用域；
+2. §Clone 于是判它在 applying function 的作用域之外 → 引用而不是 clone。
+
+因此**按字面**实现是自洽的；但若 per-use 副本要保持“脱离原类”（§Clone 最后一句），那么
+`v[k] = e1` 不应让副本并入声明侧的类——两种读法给出相反的结论。
+
+我按字面读：`v[k] = e1` 合类 → 副本在声明侧 → 解码走类 → 取到模板读；要按“副本脱离”，
+则解码必须沿给定表达式的供给边走到它在本次调用里的 clone（`3443` 的 clone 确实存在，
+但其映射只存在 per-apply 的 `ctx.remap` 里，没有全局可查的边）。
