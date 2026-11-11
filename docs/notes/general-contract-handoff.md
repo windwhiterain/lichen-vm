@@ -588,3 +588,33 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 
 按 Merge 章节，类求值会触发类内节点的 operation；这个 cell 没有 operation，也不在任何被触发的路径上，所以它保持空。
 下一步不能靠“再跑一遍 operation”修（上一轮已试，还破坏两个设备测试）；要看的是**实例化的槽为什么指向这个检查期 cell**，以及 clone 应当把它带到运行期的那一份是哪条路径。
+
+## 结论：这是语言的问题（第 34 轮）
+
+### 证据
+
+1. 最小例子的解码处读数：
+
+```
+[src] resolved=NodeId(8628) root=NodeId(8628) payload=NodeId(3296) payload_root=NodeId(12446) source=None
+```
+
+实例字段的 node 是一个**孤立 class**（类根就是它自己），你写的 `d.a` 不在这个 class 里；`field_sources` 也没有链接。
+
+2. 代码：`check_instantiate`（`crates/lichen-highlevel/src/checker/structs.rs`）里，只有
+   `actual_value_is_decided` 时才执行 `check_unify(给定, 槽)`；给定 undecided 时 **跳过**了这一步
+   （注释写着 “Undecided values cannot mismatch; check only type and attributes”）。
+   而 SPEC §Struct 的改写是**无条件**的 `e3 = @raw v[...]`，Unify 段本身就规定
+   “any side is undecided → merge”。
+
+3. 实验：把该 `check_unify` 移出 `if`（两分支都执行），最小例子的失败**改变形态**——
+   从 `raw none` 变成 kernel 编译诊断：
+   `compute.parallel: a kernel body reached a node with neither a value nor an operation`。
+   说明类的 merge 确实发生了（解码走到了合并后的节点），只是 kernel 编译路径还不能处理
+   合并进来的 undecided 读。整包 compute 测试 40 个失败。
+
+### 回答
+
+**语言的问题**：§Struct 的 `e3 = v[k]` 对 undecided 的给定值没有执行；这不是 compute 独有的，
+也不是插件读法的问题。修正它需要不止一行：还要让 kernel 编译路径接受“合并进来的 undecided 读”
+（上面第 3 条的失败形态）。
