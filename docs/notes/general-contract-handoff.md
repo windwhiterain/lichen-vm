@@ -618,3 +618,29 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 **语言的问题**：§Struct 的 `e3 = v[k]` 对 undecided 的给定值没有执行；这不是 compute 独有的，
 也不是插件读法的问题。修正它需要不止一行：还要让 kernel 编译路径接受“合并进来的 undecided 读”
 （上面第 3 条的失败形态）。
+
+## SPEC 修复的进度与实验（rounds 1-3）
+
+已提交两步 SPEC 要求（WIP，红）：
+
+- `70266a42`：§Struct 的 `e3 = v[k]` 无条件 unify；类求值触发类内所有成员 operation；
+  kernel 编译对裸成员增加“类内 operation”回退。
+- `75b514ae`：任何一次读都触发类求值（`evaluate_node_body` 去掉 `has_no_result_yet` 条件）。
+
+### 实验（本轮）
+
+对 `parallel_read_input_buffer` 逐个回退，确定是谁破坏它：
+
+| 状态 | 结果 |
+|---|---|
+| 三处全部回退（基线） | `test result: ok. 1 passed` ✓ |
+| 只保留类触发（回退 unify） | **失败**（检查期 `read's buffer argument is not an input buffer ...`） |
+| 只保留 unify（回退类触发） | 也失败（答案变 0） |
+
+读数：kernel 体里读的节点（如 `21535`）是一个**孤立 class**，参数槽的 expr 类根（如 `322`）与读链底
+（`13218`）都不相等，`param_path` 的“槽 expr / 槽 value 同类”匹配没有命中；`parallel_buffer_pos`
+的同类回退也没命中。
+
+结论：两块 SPEC 要求本身都要实现，但**插件的参数路径解析仍按节点链启发式**匹配，没有按 SPEC 的
+class 模型走；下一步是把 `param_path` / `parallel_buffer_pos` 的匹配改为“先求值类、再按类找参数槽”，
+这是插件内部的改动，不新增语言机制。
