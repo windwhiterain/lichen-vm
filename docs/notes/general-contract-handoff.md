@@ -1138,3 +1138,25 @@ f 7
 诊断：`DiagKind::Runtime` 原来用 `printer.node(d.a/d.b)`，两侧都是 `Int` 类型常量时消息成为
 “expected Int, found Int”，不指名冲突的值。已改为**两侧渲染相同时取记录值**（`d.value_a`/`d.value_b`），
 现在输出 `expected 1, found 2` / `expected 1, found 7`。
+
+## `7 unify @any` 的实测（round 24）
+
+在 wildcard 分支里加探针测到（prelude 自身的 unify 也会经过它）：
+
+```
+[any] a=1  b=47 va=TypeInt   vb=Any
+[any] a=2  b=47 va=TypeFloat vb=Any
+[any] a=156 b=147 va=Array    vb=Any   ← 我们的 .x 值槽
+```
+
+- 同一个 `Any` 槽（`47`）在 prelude 里分别与 `Int`、`Float` 两个类型 unify——如果按“左已定就写进右侧
+  类”实现，就会把 Int 写进该多态类，随后 Float 的 unify 冲突（实测得到 `expected Int, found Float`，
+  `span=None`）。所以**不能写右侧的类**；
+- 左已定时“node obtain the left side value”指的是**左侧节点自己保留值**（7 仍是 7）——当前实现
+  正是如此（wildcard 分支返回成功、不并类）。
+
+那 `none` 从哪来：`e3 = v[k]` 之后，槽 `v[k]` 的类仍是 `e1`（模板的 `Inner`，`.x` 是 `@any`），
+而 7 留在 `e3` 自己的节点上；读 `d.a.x` 读的是槽 `v[k]` → `@any` → undecided。
+
+所以问题变成：SPEC 的 `e3 = @raw v[k]` 的**方向**——是“槽保留 e1、e3 保留自己的值”（当前实现），
+还是“槽取 e3 的值（v[k] = e3）”？前者给出 `none`，后者给出 7。
