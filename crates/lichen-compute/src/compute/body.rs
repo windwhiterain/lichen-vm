@@ -770,10 +770,22 @@ where
             // **`Index(param_expr, k)` is the expr's value half, not a path step**, and the
             // cursor stops on the expr.
             if self.params.iter().any(|slot| {
-                self.module.class_root(slot.expr) == self.module.class_root(*target)
-                    || self.module.field_sources.get(target).is_some_and(|source| {
-                        self.module.class_root(slot.expr) == self.module.class_root(*source)
-                    })
+                let target_root = self.module.class_root(*target);
+                [slot.expr, slot.value].iter().any(|slot_node| {
+                    let slot_root = self.module.class_root(*slot_node);
+                    // An apply's clone reads the parameter's image class (`parameter_images`).
+                    slot_root == target_root
+                        || self
+                            .module
+                            .field_sources
+                            .get(target)
+                            .is_some_and(|source| slot_root == self.module.class_root(*source))
+                        || self
+                            .module
+                            .parameter_images
+                            .get(&slot_root)
+                            .is_some_and(|image| self.module.class_root(*image) == target_root)
+                })
             }) {
                 cursor = *target;
                 break;
