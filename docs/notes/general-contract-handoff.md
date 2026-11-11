@@ -1033,3 +1033,27 @@ at=0 field=8712（.a 槽，无 origin） → node=8700（无 origin）
 - 所以解码在 `.in.a` 处取到模板的 `8700`，而不是读的 clone。
 
 即：`value_apply` 只映射了外层字面量一层，嵌套 struct 值里的字段槽仍是模板的。
+
+## clone 判定的实测（round 21，按更新后的 SPEC §Clone）
+
+SPEC §Clone（用户更新）：“undecided node, if its class is in function f's scope, must be cloned,
+otherwise reference it.”
+
+`[scope]` 读数：
+
+```
+node=3443 root=3443 inside=true  depends=true   → cloned ✓
+node=8725 root=41   inside=false depends=true   → referenced（共享）
+```
+
+`8725` 是 `value_apply` 为 `.in` 字段值映射出的新数组，undecided（proven=false、closed=false），
+但它的类根是 `41`（声明侧），所以 `class_inside_scope` 判为 false → 被引用而不是 clone；
+它的字段槽（`8712`/`8700`）因此保持模板节点，解码永远取到模板读。
+
+待确认的偏差点（三条候选，需要 SPEC 的原意）：
+
+1. **“its class is in f's scope”** 是否指节点**自己所在的 scope**（`8725` 是在函数体里被
+   `value_apply` 造出来的），而不是合并后类根（`41`）的 scope？
+2. 还是 **“Clone an undecided node will detached from its original class”** 要求 undecided 节点
+   无论类根如何都必须 clone（并脱离原类）？
+3. 还是 `8725` 本不该 undecided（它映射自一个已定结构，只是元素里含模板读）？
