@@ -1280,9 +1280,15 @@ impl<P: Program> Module<P> {
                 true
             }
             // One side knows a value: the merged class holds it; there is nothing to descend into.
-            (Some(_), None) | (None, Some(_)) => {
-                // The merge already gave every member the value the deciding side kept.
+            (Some(x), None) => {
                 self.add_equality(ra, rb);
+                true
+            }
+            // An `Any` on the right never decides an undecided left: `_ = @any` is `_`.
+            (None, Some(y)) => {
+                if !matches!(AsEnum::<LowValue>::as_enum(&y), Some(LowValue::Any)) {
+                    self.add_equality(ra, rb);
+                }
                 true
             }
             // Both sides know a value: they must be the same; for an array the elements decide it.
