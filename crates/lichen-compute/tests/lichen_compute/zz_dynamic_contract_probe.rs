@@ -544,6 +544,103 @@ fn probe_a_local_struct_read() {
     }
 }
 
+/// The read/write chain in one function, with the consumer's argument a **user struct**.
+///
+/// # Invariant
+/// Print-only. With `(compute.A _)` as the argument it answers `[20, 22, 24]`; with the
+/// user struct `In2A` it answers `raw none`, so the declared field's type value is the
+/// trigger, not the function boundary.
+const FUNCTION_USER_STRUCT_ARGUMENT: &str = r#"
+--- compute = import "compute.lichen" ---
+In1  := {.a @any : Int}
+Out1 := {.z (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par1 := {.n @any : Int, .in In1}
+f1 := ('k = Par1) -> {
+  i := compute.range k.n
+  z := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out1){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 10}))})
+}
+k1 := compute.parallel f1 "cpu" Out1
+In2  := {.b (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Out2 := {.w (compute.Buf (compute.BufParam{.type Int, .length 3}))}
+Par2 := {.n @any : Int, .in In2}
+f2 := ('k = Par2) -> {
+  i := compute.range k.n
+  a := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Int)
+  w := compute.buf (compute.BufParam{.type Int, .length k.n})
+  ((Out2){.w (compute.write ((compute.Write _){.to w, .at i, .value a + a}))})
+}
+k2 := compute.parallel f2 "cpu" Out2
+In2A := {.n @any : Int, .in In2}
+run := 'n -> {
+  inbuf := (compute.plrun k1 ((compute.A _){.n n, .I In1{.a 0}}) : Struct)
+  out := (compute.plrun k2 ((In2A){.n n, .in In2{.b inbuf.z}}) : Struct)
+  compute.collect out.w : Array
+}
+run 3
+"#;
+
+/// The chained probe with `.meta` removed and one input field, read from the argument.
+///
+/// # Invariant
+/// Print-only. Answers raw none, so neither the meta nesting nor the field count is it.
+const CHAIN_NO_META: &str = r#"
+--- compute = import "compute.lichen" ---
+ABuf := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Buffers := {.a (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Sum := {.n @any : Int, .in Buffers}
+SumOut := {.c (compute.Buf (compute.BufParam{.type Int, .length 4}))}
+Fill := {.n @any : Int}
+fill := ('f = Fill) -> {
+  i := compute.range f.n
+  a := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((ABuf){.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+}
+sum := ('p = Sum) -> {
+  i := compute.range p.n
+  o := compute.buf (compute.BufParam{.type Int, .length 4})
+  ((SumOut){.c (compute.write ((compute.Write _){.to o, .at i, .value (compute.read ((compute.Read _){.from p.in.a, .at i}) : Int)}))})
+}
+a_kernel := compute.parallel fill "cpu" ABuf
+sum_kernel := compute.parallel sum "cpu" SumOut
+run := 'n -> {
+  d1 := (compute.plrun a_kernel ((Fill){.n n}) : Struct)
+  (compute.plrun sum_kernel ((Sum){.n 4, .in Buffers{.a d1.a}}) : Struct)
+}
+r := run 4
+compute.collect r.c : Array
+"#;
+
+#[test]
+fn probe_a_chain_no_meta() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(CHAIN_NO_META, None, &mut store) {
+        Ok(text) => println!("[chain-no-meta] {text}"),
+        Err(diagnostics) => println!(
+            "[chain-no-meta] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+#[test]
+fn probe_a_function_user_struct_argument() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_USER_STRUCT_ARGUMENT, None, &mut store) {
+        Ok(text) => println!("[function-user-struct-argument] {text}"),
+        Err(diagnostics) => println!(
+            "[function-user-struct-argument] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 #[test]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
