@@ -228,7 +228,8 @@ where
             .evaluate_node(AnyNodeId::Dynamic(template_value), None);
         // Each instance gets its own element requirement; the written template is
         // never written into.
-        let template_value = self.instantiate_requirement_value(template_value, template_ty, 0);
+        let template_value =
+            self.instantiate_requirement_value(template_value, AnyNodeId::Dynamic(template_ty), 0);
         let (requirement, template_count) = match self.template_shape(template_value) {
             Some(shape) => shape,
             None => {

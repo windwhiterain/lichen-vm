@@ -111,7 +111,7 @@ where
         let Some(value) = items.first().and_then(|item| item.node.dynamic()) else {
             return expr;
         };
-        let Some(ty) = items.get(1).and_then(|item| item.node.dynamic()) else {
+        let Some(ty) = items.get(1).map(|item| item.node) else {
             return expr;
         };
         let source = value;
@@ -149,7 +149,7 @@ where
     pub(super) fn instantiate_requirement_value(
         &mut self,
         value: NodeId,
-        ty: NodeId,
+        ty: AnyNodeId,
         depth: usize,
     ) -> NodeId {
         if depth > 64 {
@@ -177,7 +177,7 @@ where
         };
         // SAFETY: the handle belongs to this module, which outlives the copy.
         let source: Vec<ArrayItem> = unsafe { array.items() }.to_vec();
-        let items: Vec<ArrayItem> = if self.is_struct_layout(ty) {
+        let items: Vec<ArrayItem> = if self.is_struct_layout_any(ty) {
             source
                 .iter()
                 .take(2)
@@ -195,11 +195,7 @@ where
                     }
                 }))
                 .collect()
-        } else if crate::shape::is_array_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(ty),
-        ) {
+        } else if crate::shape::is_array_type_any(&mut self.module, self.type_expr, ty) {
             source
                 .iter()
                 .enumerate()
@@ -222,19 +218,10 @@ where
                     }
                 })
                 .collect()
-        } else if crate::shape::is_tuple_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(ty),
-        ) || crate::shape::is_table_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(ty),
-        ) || crate::shape::is_set_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(ty),
-        ) {
+        } else if crate::shape::is_tuple_type_any(&mut self.module, self.type_expr, ty)
+            || crate::shape::is_table_type_any(&mut self.module, self.type_expr, ty)
+            || crate::shape::is_set_type_any(&mut self.module, self.type_expr, ty)
+        {
             source
                 .iter()
                 .map(|item| ArrayItem {
