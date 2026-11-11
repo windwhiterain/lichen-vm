@@ -644,3 +644,20 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 结论：两块 SPEC 要求本身都要实现，但**插件的参数路径解析仍按节点链启发式**匹配，没有按 SPEC 的
 class 模型走；下一步是把 `param_path` / `parallel_buffer_pos` 的匹配改为“先求值类、再按类找参数槽”，
 这是插件内部的改动，不新增语言机制。
+
+## 第三块缺失：`@raw v[k] = e1`（round 4）
+
+按 maintainer 的口径：Any 段“only merge if another side is right side and undecided”——
+`e3 = v[k]` 里给定在左、`v[k]` 的 `@any` 在右，**不 merge**，class 保持 undecided。所以读的答案只能来自
+**给定表达式自己的 value**（e3），不能指望类。
+
+本轮量到：实例字段（`8628`）是**孤立 class**，`expr_value_half(8628) = None`，`field_sources` 在它上面
+查不到；而 `check_instantiate` 记录 `field_sources` 的键是**模板字段**的 value（`required_value =
+expr_value_half(field)`），值是给定 expr 的 value（`actual_value`）。
+
+即：实例的槽（`v[k]`）与类型的字段值（`e1`）**没有并类**——SPEC 的 `@raw v[k] = e1` 这一步被
+`instantiate_requirement_value` 的“复制开放槽”替代了（复制出新 cell，不是 unify）。
+
+结论：要让解码顺 `field_sources` 找到给定值，必须先实现 `@raw v[k] = e1`（实例槽与类型字段值并类），
+这样 `field_source_of` 的类根回退才能从实例槽走到模板字段、再到给定值（e3）。这仍是 SPEC 的原有步骤，
+不是新机制。
