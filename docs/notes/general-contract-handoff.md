@@ -702,3 +702,71 @@ frozen 假设不成立。
 剩余问题：最小程序里 launch 的 `ParLaunch` 臂进入了、但没走到 `run_parallel_kernel`（在输入解码里
 提前返回）；而 collect 形态能拿到值，说明它的值来自另一条路径。这段调查已交给一个 coding subagent
 （`launch-path-fixer`）继续，套件保持 `279 passed, 1 ignored`（`52876710`）。
+
+## Launch-chain measurements (delegated slice)
+
+Baseline `b3e1a986`'s parent (`0b55b661`): `test result: ok. 279 passed; 0 failed; 1 ignored`.
+
+### Where the working collect probe's launch value comes from
+
+`probe_a_function_direct_collect`: the launch runs during the `Evaluate` build's
+**top-statements** pass — the program's execution is that pass, and `render_build` only
+re-evaluates the root. Trace: `[phase] top-statements` → `PLRUN` → `[run] kernel …
+leaves=[4] inputs=0` → `collect` answers `[1, 2, 3, 4]`. The ParLaunch arm does reach
+`run_parallel_kernel` there; the earlier reading "never reaches it" holds for the
+minimal probe only.
+
+### The failing launch's early return
+
+`probe_a_function_chain_minimal` enters the arm several times but the **producer** launch
+never runs: its scalar leaf (`Fill{.n n}`) is absent in the second build
+(`[launch leaf 0] … value=absent`), and the consumer's dependency short-circuits it in
+the third. The consumer's input decode resolves `cfg.b`'s field to the read's value node
+(an isolated class whose value is the type declaration's `Buf` wrapper), whose `.native`
+is the declaration's `@any` cell; `recorded_buffer_payload` follows `field_sources` to a
+check-time read with no value and returns `None`, so the arm exits at
+
+    let Some(node) = payload else { return None };
+
+with no `run_input` refusal. The other early returns before `run_parallel_kernel` are not
+on this path.
+
+### The differing step
+
+The per-use copy (`instantiate_requirement`, `crates/lichen-highlevel/src/checker/templates.rs`)
+bailed out when a field's type half was a **frozen ref**: `value_items(field)[1]` is
+`Static(compute.Buf)` for every `compute.Buf` field, so
+`items.get(1).and_then(|item| item.node.dynamic())` is `None` and the function returned the
+template's own field expression. Measured: `template_field == slot_field == 186`,
+`slot == required == 3294` — so `v[k] = e1` (57659de3) was a no-op and the instance shared
+the declaration's field value, `.native` included.
+
+Top level has no function apply, so the supplied read (`inbuf.z`) keeps its own class and
+its runtime answer is the buffer (class `{9428}`). Inside a function the apply's parameter
+unify merges the supplied read with the declaration wrapper (measured
+`[equality] a=8640 b=186`), and a right-side `@any` never merges, so the answer cannot land
+in the shared `.native` cell.
+
+### The attempts, both reverted
+
+- `b3e1a986`: the copy fix. The copy runs (`copied=NodeId(8686)`) and the failing class
+  becomes four per-use copies plus the read. The probe still answers `raw none`: the decode
+  reaches a supplied read node (`op=Index`, `runned=false`), but evaluating it does not
+  force the producer apply. Compute suite: 276 passed, 3 failed —
+  `buf_element_class_recorded`, "argument 0 of this dispatch is not a buffer", because the
+  recording resolved the wrapper through `field_sources`, which the shared declaration node
+  used to satisfy. Reverted in `745583ba`.
+- An `evaluate_node_body` rule ("a class value holding an open cell is not an answer") plus
+  a decode-side evaluation of the resolved node: no fix, and the class walk re-runs
+  undecided operators on every read (trace 4.4k lines). Reverted.
+
+### Remaining blocker
+
+The direct decode has no mapping from the check-time instance tree to the runtime clone's
+read: `parameter_projection`/`parameter_images` supply that for parameter images only, not
+for a function-local binding such as `d`. Per Merge the class must end with the read's
+answer, but the read's one attempt was consumed before the data existed (`[stamp]` measured
+between the merge and the third build's top-statements), and the class value it was filled
+with is the declaration's requirement.
+
+Suite after both reverts: `test result: ok. 279 passed; 0 failed; 1 ignored`.
