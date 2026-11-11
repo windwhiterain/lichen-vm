@@ -579,3 +579,12 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 `plrun` 的 native-buffer 路径选择不在 SPEC 里（SPEC 自称 “Illustration only, not precise”）。因此：
 - 交付用**调用方构造 Arg 的函数包装形态**（已给参考值）；
 - 若要“类型化字面量在函数体内构造”也成立，那才是需要 maintainer 决定的问题（`Parallel` 的输入解析在声明侧为空时是否应跟随 supplied 的实际答案）。
+
+## 那个空 cell 是谁也不管的节点（第 31 轮）
+
+- 失败程序里 `resolved` = `NodeId(9373)`，其 payload cell = `NodeId(4721)`；
+- 给 `node_apply`（clone 走路）打点后，**4721 从未进入过 clone 走路**（既没有 clone 也没有 reference 记录）；
+- 所以它是**检查期由实例化造出来的节点**，clone 走路不经过它，运行期也就没有任何东西写它——与它“无值、无 operation”的读数一致。
+
+按 Merge 章节，类求值会触发类内节点的 operation；这个 cell 没有 operation，也不在任何被触发的路径上，所以它保持空。
+下一步不能靠“再跑一遍 operation”修（上一轮已试，还破坏两个设备测试）；要看的是**实例化的槽为什么指向这个检查期 cell**，以及 clone 应当把它带到运行期的那一份是哪条路径。
