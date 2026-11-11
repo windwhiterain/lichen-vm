@@ -1577,7 +1577,13 @@ where
                                     resolved = Some(actual);
                                 }
                             }
-                            // An open payload follows the applied result's actual buffer.
+                            // The payload follows the applied result's actual buffer.
+                            // The slot is its value half, where the edge is keyed.
+                            let resolved = resolved.map(|buf| {
+                                buf.dynamic()
+                                    .and_then(|node| module.expr_value_half(node))
+                                    .map_or(buf, AnyNodeId::Dynamic)
+                            });
                             let Some(node) = resolved
                                 .and_then(|buf| recorded_buffer_payload::<P>(module, block, buf))
                             else {
