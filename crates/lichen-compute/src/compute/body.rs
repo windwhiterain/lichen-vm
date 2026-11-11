@@ -1176,12 +1176,6 @@ where
                 }
                 return Ok(value);
             }
-            // A class shares one value and one run: a bare member is its class's operation.
-            if let Some(owner) = self.module.class_operation_owner(node)
-                && owner != node
-            {
-                return self.value(owner);
-            }
             return self.opaque(node);
         };
         let Some(operand) = operation.operand else {

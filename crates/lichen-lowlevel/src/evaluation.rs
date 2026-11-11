@@ -115,21 +115,22 @@ impl<P: Program> Module<P> {
         // the buffer is the module's.
         let mut members = self.class_snapshots.pop().unwrap_or_default();
         members.clear();
-        // Every member's operation runs when the class is evaluated.
-        // `visiting` is re-read at each turn.
+        // One pass over the members that owe an answer; `visiting` is re-read at each turn.
         let mut current = Some(representative);
         while let Some(member) = current {
             let entry = &self.nodes[member];
             current = entry.meta().next();
-            if member != node && entry.operation.is_some() {
+            if member != node
+                && entry.operation.is_some()
+                && (entry.value.is_none() || !entry.runned)
+            {
                 members.push(member);
             }
         }
         for index in 0..members.len() {
             let member = members[index];
-            if !self.nodes[member].visiting {
-                let guard = self.retain_node(member);
-                guard.run(|module, member| module.evaluate_node_operation(member));
+            if self.has_no_result_yet(member) && !self.nodes[member].visiting {
+                self.evaluate_node(Dyn(member), None);
             }
         }
         members.clear();
