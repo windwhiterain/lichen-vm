@@ -886,3 +886,59 @@ origin 的类根（6947/3760）也不等于参数槽（3479/3474）。所以：
    节点对照 `self.params`（不动低层，但需要 apply 的 operand 仍可读）；
 3. **接受“参数值即实参”**：编译期把基座当参数处理（在 `parameter_path` 里允许基座是
    Apply 结果），最省事但放宽了匹配。
+
+## 3435 不在读链上：它是 codomain 的 Buf `.native` 槽（round 15，已修）
+
+round 14 的三条候选边都假设被拒的 `3435` 是读链基座。**实测不是**：
+
+1. kernel 编译分两次。`fid=1`（`mk`，slot `expr=540`/`value=535`）先拒绝；`fid=3`（`sum`，
+   slot `expr=3479`/`value=3474`）就是 round 14 量到的那条 `p.in.a` 读链，它的
+   `parameter_path` 基座匹配确实失败，但**不产生**拒绝（链上的节点都有自己的值/origin，
+   走查继续）。报错里的 `3435` 来自 `fid=1`。
+2. `fid=1` 的走查（`lower_index_function`）：codomain 的输出 = `3439`（`compute.write` 返回的
+   `Buf` 实例）；`3439` 无 operation、无 origin；`parameter_path(3439)` 不中 →
+   `first_slot_value(3439)` = `3435`（该实例的 `.native` 字段值 = `instantiate_requirement_value`
+   为开放 `@any` 造的 fresh cell）→ `parameter_path_of(3435)` 不中 →
+   `lower_definition(3435)` → `definition(3435)` 无 operation → `opaque(3435)`。
+   即：**不是读链基座，而是声明实例的开放 `.native` 槽**。
+3. 三条候选边为什么都命名不了它（实测）：
+   - `3435` 的 `node_origin = None`（边 2、边 3 都要 origin=Apply，不可能）；
+   - `clone_parameters` / `parameter_images` 对 `3435` 及其类根都无条目（边 1 要扩的
+     “apply 结果 clone → 形参槽”没有 clone 可扩）；
+   - `field_sources` 两个方向都空；类成员 `{3435, 3316, 8718, 8737, 9707}` 全部无值、无 operation
+     （`9707` 的 origin 是 apply `2636`，但类里没有任何 operation，`defining_member` 仍答 Opaque）。
+4. **能命名它的是既有的第四条边**：`3439` 自己有一条记录
+   `field_sources[3439] = 3443`，`3443 = Index(2636, 0)`，`2636` 就是 `mk` body 里的
+   `compute.write` apply；它的 clone `9626` 是 `ComputeOperator::Write`（`origin=2636`，
+   args = `[to, at, value]`）。`Lower::supplied` 本来就沿这条边找供应商，只是它排在
+   `first_slot_value` 之后，永远轮不到。
+
+### 修法（`0cbf3ae2`，一行逻辑 + 一个小判定）
+
+`definition` 的 no-operation 分支里，`first_slot_value` 只在槽**有定义**（有 operation 或有值）时
+继续；开放槽（SPEC §Any 的 `@any` 不会被右侧 merge）落到既有 `supplied` 边。
+声明实例（`compute.buf` 这类 `.native` 有 `$buf` op 的）行为不变。
+
+- 探针：`probe_a_function_chain_minimal` **不再在 kernel 编译处拒绝**，答 `raw none`；
+- 套件：`test result: FAILED. 252 passed; 27 failed` → `254 passed; 25 failed`（无新增失败），
+  两个转为通过：`loop_write::a_body_that_is_a_fold_writes_inside_the_folds_step`、
+  `refusal_over_an_answer::a_refusal_over_an_input_buffer_is_reported_beside_an_answer_that_arrived`。
+
+### 剩余的两个 stop（本轮实测，都已不是 kernel 编译）
+
+`raw none` 的原因在 launch 的输入解码，与 `3435` 无关：
+
+1. **producer（`fid=1`）的标量叶**：`[leaf] node=8041 value=None`；其类 `{8041, 8068}` 都无值，
+   且 `field_sources[8041] = 8041`（自指）——`recorded_leaf` 因此原地停住，`n` 的运行期值
+   不在这个类里。这是“函数内实参字面量的槽”老问题的新读数（round 19/28/31 的同一族）。
+2. **consumer（`fid=3`）的输入 buffer**：`[input] path=[1,0] resolved=8700 payload=None`；
+   `buf_payload(8700)` 给 `8718`（开放），`8700` 的 `field_sources` 源是 `3443`（同一个 apply），
+   `recorded_buffer_payload` 的投影循环返回 None。
+
+两条都落在“检查期模板值 vs 运行期 clone 值”这条旧链上，需要 maintainer 定方向（本切片未动）。
+
+### 结论
+
+- round 13/14 的“读链基座”方向不是本探针的拒绝点；**三条候选边都命名不了 `3435`**（理由见上），
+  能命名它的是 `field_sources` → apply 的既有边，且修复后拒绝消失。
+- 余下的是 launch 解码的两个 stop（上面第 1、2 条），数值可复现，与 kernel 编译无关。
