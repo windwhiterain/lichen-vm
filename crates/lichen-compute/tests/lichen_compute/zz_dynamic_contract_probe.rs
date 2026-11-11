@@ -782,7 +782,7 @@ fn probe_a_function_local_type() {
 /// The chained launch with every type declared inside the function.
 ///
 /// # Invariant
-/// Print-only; answers the written values when a function-scoped type carries them.
+/// Print-only; answers raw none.when a function-scoped type carries them.
 const NAMED_CONTRACT_WHOLE_ARG: &str = r#"
 --- compute = import "compute.lichen" ---
 Meta := {.n @any : Int, .rank @any : Int, .contract @any : Int, .total @any : Int}
@@ -1150,6 +1150,51 @@ fn probe_a_function_local_chain() {
         Ok(text) => println!("[function-local-chain] {text}"),
         Err(diagnostics) => println!(
             "[function-local-chain] refused: {:?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+/// The smallest chained launch: the consumer's argument reads the producer's field.
+///
+/// # Invariant
+/// Print-only; answers raw none.
+const FUNCTION_CHAIN_MINIMAL: &str = r#"
+--- compute = import "compute.lichen" ---
+B1 := {.a (compute.Buf (compute.BufParam{.type Int, .length 2}))}
+Fill := {.n @any : Int}
+Par := {.n @any : Int, .in B1}
+Out := {.c (compute.Buf (compute.BufParam{.type Int, .length 2}))}
+mk := ('p = Fill) -> {
+  i := compute.range p.n
+  a := compute.buf (compute.BufParam{.type Int, .length 2})
+  ((B1){.a (compute.write ((compute.Write _){.to a, .at i, .value (i + 1)}))})
+}
+sum := ('p = Par) -> {
+  i := compute.range p.n
+  o := compute.buf (compute.BufParam{.type Int, .length 2})
+  ((Out){.c (compute.write ((compute.Write _){.to o, .at i, .value (compute.read ((compute.Read _){.from p.in.a, .at i}) : Int)}))})
+}
+k1 := compute.parallel mk "cpu" B1
+k2 := compute.parallel sum "cpu" Out
+run := 'n -> {
+  d := (compute.plrun k1 ((Fill){.n n}) : Struct)
+  (compute.plrun k2 ((Par){.n 2, .in B1{.a d.a}}) : Struct)
+}
+r := run 2
+compute.collect r.c : Array
+"#;
+
+#[test]
+fn probe_a_function_chain_minimal() {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    match lichen_language::run::evaluate_raw(FUNCTION_CHAIN_MINIMAL, None, &mut store) {
+        Ok(text) => println!("[function-chain-minimal] {text}"),
+        Err(diagnostics) => println!(
+            "[function-chain-minimal] refused: {:?}",
             diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
