@@ -410,22 +410,9 @@ where
     /// cell carries the layout is the layout too. The template's own
     /// self-reference is not needed to name it.
     pub(super) fn is_struct_layout(&mut self, ty: NodeId) -> bool {
-        self.is_struct_layout_any(AnyNodeId::Dynamic(ty))
-    }
-
-    /// [`Self::is_struct_layout`] for a type half that may be frozen.
-    ///
-    /// # Invariant
-    /// A field's type half can be a frozen ref (`Static`), whose value is the
-    /// template; the kind test reads a ref's own items, so only the class fallback
-    /// needs a live node.
-    pub(super) fn is_struct_layout_any(&mut self, ty: AnyNodeId) -> bool {
-        if shape::is_struct_type_any(&mut self.module, self.type_expr, ty) {
+        if shape::is_struct_type_any(&mut self.module, self.type_expr, AnyNodeId::Dynamic(ty)) {
             return true;
         }
-        let AnyNodeId::Dynamic(ty) = ty else {
-            return false;
-        };
         let template = self.struct_template();
         self.module.equality_representative(ty) == self.module.equality_representative(template)
     }
@@ -890,8 +877,7 @@ where
                 .unwrap_or_default();
         // Each use copies the template's open slots; instances never share a
         // required field node.
-        let template_value =
-            self.instantiate_requirement_value(template_value, AnyNodeId::Dynamic(template_ty), 0);
+        let template_value = self.instantiate_requirement_value(template_value, template_ty, 0);
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(
