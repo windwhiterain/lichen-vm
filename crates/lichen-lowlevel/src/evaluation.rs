@@ -128,18 +128,6 @@ impl<P: Program> Module<P> {
         for index in 0..members.len() {
             let member = members[index];
             if !self.nodes[member].visiting {
-                if std::env::var("DBG_CLASS").is_ok() {
-                    eprintln!(
-                        "[class] root={representative:?} member={member:?} op={:?} value={:?} runned={}",
-                        self.nodes[member]
-                            .operation
-                            .map(|operation| format!("{:?}", operation.operator)),
-                        self.nodes[member]
-                            .value
-                            .map(|value| format!("{value:?}").chars().take(24).collect::<String>()),
-                        self.nodes[member].runned
-                    );
-                }
                 let guard = self.retain_node(member);
                 guard.run(|module, member| module.evaluate_node_operation(member));
             }
@@ -172,9 +160,8 @@ impl<P: Program> Module<P> {
         if self.is_scope_root_read(node, referer) {
             return self.evaluate_block(node);
         }
-        // Every read triggers the class's operations, so unify's order cannot decide
-        // its answer.
-        if !self.nodes[node].visiting {
+        // The class before the node runs, so unify's order cannot decide its answer.
+        if self.has_no_result_yet(node) && !self.nodes[node].visiting {
             self.evaluate_class_first(node);
         }
         if let Some(value) = self.nodes[node].value {
