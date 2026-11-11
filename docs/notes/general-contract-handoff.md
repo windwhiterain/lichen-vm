@@ -1178,3 +1178,24 @@ f 7
   形参 clone 填 7 —— 剩下的是 clone/side-apply 这一层，不是 struct unify。
 
 已回退这两个实验（保留 `render.rs` 的诊断修复与探针），基线恢复 257 passed / 25 failed。
+
+## 规则澄清与当前进度（round 26）
+
+用户澄清：**不是“模板不能并”，而是 `@any` 在右侧不能并左侧**（§Any 的方向规则）。
+
+对应实现：`v[k] = e1` 是 raw 写入——per-use 副本本身就是 e1 的副本（开放槽是空 cell）；
+`e3 = v[k]` 里给定值 unify 的是副本的**空 cell**，不是模板的 `@any`。所以删掉“再对模板节点做一次
+unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类并回模板侧，使副本离开函数作用域、
+按 §Clone 被引用而不是 clone；而不是“模板不能并”。
+
+当前读数：
+
+- 套件 **262 passed / 21 failed**（原 257/25）；
+- 最小链式探针答 `[1, 2]`（原 `raw none`）；
+- 嵌套 literal 的四种形态（单独 / 字段内读 / 函数内读 / 经局部读）全部答 7；
+- 声明值已定（`{.a 1}` 对 2）仍按 Unify 拒绝。
+
+剩余 21 个失败的样例：`parallel_read_input_buffer` 答 0（应 22）。实测两个 launch 都执行
+（fill: leaves=[3,0]；sum: leaves=[3] inputs=1），解码解析出的 payload 是
+`ComputeValue(Buffer(…))`（open=false），所以 buffer 找到了但内容为空——下一步是确认它解析的是
+**生产者写入的那个 buffer** 还是另一个（如声明侧/输出侧）。
