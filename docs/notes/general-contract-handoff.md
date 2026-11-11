@@ -555,3 +555,27 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 因此：这一形状（顶层类型 + 函数 + 用户结构体实参）在 SPEC 现有规则下是 undecided，实现与规则一致；
 可用形态是“类型声明在函数内/块内”，或使用插件自己的参数结构（`compute.A`）。此前把它记成“实现缺陷”
 的分类应当更正。
+
+## 更正：函数包装形态是可表达的（第 30 轮）
+
+上一轮的“函数包装不可表达”结论收回。按 high 评审的读法与实测：
+
+- **可用的函数形态**（已测，`probe_a_named_contraction_whole_arg`）：
+
+  ```lichen
+  contract := ('arg = Arg) -> ((compute.plrun kernel arg) : Struct)
+  out := contract ((Arg){.meta meta, .I In{.a data_a.a, .b data_b.b, .plan dp.plan}})
+  compute.collect out.c : Array
+  ```
+
+  答出参考值 `[2938.0, 7042.0, 3016.0, 7264.0, 3094.0, 7486.0, 3172.0, 7708.0, 3250.0, 7930.0]: Array` ✓
+
+- 关键在于：**实参 `Arg{…}` 在包装函数之外构造**（计划推导 `dp := plrun p_kernel ps` 也在那里），函数体里只有 `arg`，没有含 `dp.plan` 的类型化字面量 → 不触发跨 scope 的 class 引用。
+- 限制：计划推导必须在调用方一侧；把整个 `Arg` 构造搬进函数体仍是上一轮测到的那种形态（`raw none`）。
+- 上一轮把“引用”推成“永不重新求值”是过度推断：更准确的说法是“launch 解析到一个**没有 operation 的声明侧空 cell**”，而 SPEC 对此不表态。
+
+## SPEC 对“launch 输入解析该走声明侧还是 supplied 侧”没有规定
+
+`plrun` 的 native-buffer 路径选择不在 SPEC 里（SPEC 自称 “Illustration only, not precise”）。因此：
+- 交付用**调用方构造 Arg 的函数包装形态**（已给参考值）；
+- 若要“类型化字面量在函数体内构造”也成立，那才是需要 maintainer 决定的问题（`Parallel` 的输入解析在声明侧为空时是否应跟随 supplied 的实际答案）。
