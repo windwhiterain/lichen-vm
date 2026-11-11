@@ -710,19 +710,18 @@ fn probe_a_nested_typed_field() {
     }
 }
 
-/// A field whose expression is a call returning a struct value.
+/// The kernel launch's shape without compute.
 ///
 /// # Invariant
-/// Print-only; refused with "expected Int, found Int", a nominal identity mismatch.
+/// Print-only; answers 7: Int, so the language apply is not the failing part.
 const DECIDED_FIELD_VALUE: &str = r#"
 Inner := {.x @any : Int}
 mk := 'u -> Inner{.x u}
-Outer := {.i (mk 1)}
-F := 'n -> Outer{.i Inner{.x n}}
+Outer := {.i Inner}
 g := ('p = Outer) -> p.i.x
 h := 'n -> {
-  d := (F n)
-  g (Outer{.i Inner{.x d.i.x}})
+  d := (mk n)
+  g (Outer{.i Inner{.x d.x}})
 }
 h 7
 "#;
