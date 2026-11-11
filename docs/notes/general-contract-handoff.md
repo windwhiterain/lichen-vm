@@ -529,3 +529,15 @@ merge 成一个 class，而这两处的 value 不同：读自己的答案 = 真�
 所以修复点已缩到这个 unify 的结果上：merge 之后，类里只能有一个 value；`e1`（右）与 `e3` 的答案
 （左）不同时，按 SPEC 只能有一个成立。下一步核对实现里是谁把两个值都留下了（`write_node_answer` 写
 `e3` 的答案，而类里已有 `e1`），并按 SPEC 的“一个 class 一个 value”修正那一处。
+
+## 输入解码读到的节点（本轮）
+
+失败程序里，named-form 输入循环 `resolved` = 一个 `Index` 节点（类根是它自己），它的 value 是一个
+`[table, id, ...]` 形状的数组；`buf_payload` 取到的“字段”里，那层 `.native` 位置是
+`NodeId(4721)`：**无值、无 operation 的裸 cell**，`evaluate_node` 返回 None。
+
+也就是说：解码读到的 `.native` cell，**没有任何东西写过**；真实 buffer 在另一个节点上。
+
+下一步（收敛后）：量“给定表达式 `e3` 的实际 Buf 值”与“实例字段（wraps 那个裸 cell）”是否同一
+class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` 位置并类——按 Unify 的
+“recursive into nodes both side refers”应有并类，缺的正是那一处。
