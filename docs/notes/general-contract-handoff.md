@@ -770,3 +770,26 @@ between the merge and the third build's top-statements), and the class value it 
 with is the declaration's requirement.
 
 Suite after both reverts: `test result: ok. 279 passed; 0 failed; 1 ignored`.
+
+## 全套 SPEC 修复的组合测量（round 10）
+
+把三件套叠加在 copy 修复之上（`a5ff2f66` 重新应用，随后回退）测到：
+
+- **copy 修复确实建立了 per-use 链接**：解码处的 slot = `8700`，`field_sources` 有
+  `source=Some(3443)`、payload `8718`；`probe_a_function_direct_collect` 仍答 `[1,2,3,4]`；
+- 加上**无条件 `e3 = v[k]`** 后：套件 252 passed / 27 failed（无 copy 修复时是 40 failed）；
+- 再叠加**类触发**后：`parallel_read_input_buffer` 在检查期失败；整包出现**挂起**（有测试循环），
+  已终止；
+- 最小链式探针的失败形态：kernel 编译报
+  `a kernel body reached a node with neither a value nor an operation (node=3435)`；
+  该节点是无来源（`field_sources` 无链接）、孤立的空 cell。
+
+## 结论
+
+- 语言侧（SPEC 的两步）实现后，瓶颈转到 **kernel 编译体**对 per-use 副本/空 cell 的处理；
+- SPEC 的 Any 规则（右侧 Any 不 merge）意味着**类的值拿不到给定答案**，读者必须沿
+  `field_sources` 走到给定节点——语言侧已经建立这条链接，剩下的是插件读者与 kernel 编译按它走；
+- 这是一次插件内部的重构（参数路径、kernel 体的空 cell、recorded 路径），不是一行改动。
+
+当前基线：套件 `279 passed, 1 ignored`，工作树干净（只剩 `README.md` 与 maintainer 的
+`docs/language-spec.md` 编辑）。
