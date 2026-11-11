@@ -876,18 +876,6 @@ where
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
-        // The type's field expressions, before the per-use copy: the rewrite unifies each
-        // instance slot with its `e1`.
-        let template_fields: Vec<NodeId> =
-            shape::value_items(&self.module, AnyNodeId::Dynamic(template_value))
-                .map(|items| {
-                    items
-                        .iter()
-                        .skip(shape::STRUCT_VALUE_FIELD_BASE)
-                        .filter_map(|item| item.node.dynamic())
-                        .collect()
-                })
-                .unwrap_or_default();
         // Each use copies the template's open slots; instances never share a
         // required field node.
         let template_value =
@@ -1006,18 +994,6 @@ where
                 let field = *field;
                 let argument_expr = elements[*argument];
                 let actual_value = self.value_of(argument_expr);
-                // The rewrite's v[k] = e1: the slot value unifies with
-                // the type's field value before the supplied expression joins it.
-                if let Some(required) = template_fields.get(position).copied() {
-                    let required = self.module.expr_value_half(required).unwrap_or(required);
-                    let slot = self.module.expr_value_half(field).unwrap_or(field);
-                    self.check_unify(
-                        slot,
-                        required,
-                        self.loc(argument_expr, 1),
-                        DiagKind::Annotation,
-                    );
-                }
                 let required_value = self.module.expr_value_half(field).unwrap_or(field);
                 self.module
                     .field_sources

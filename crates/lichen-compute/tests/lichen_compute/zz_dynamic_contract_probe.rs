@@ -1736,3 +1736,65 @@ f 2
         }
     }
 }
+
+/// Where the nested struct literal's supplied value is lost, in three shapes.
+///
+/// # Invariant
+/// Print-only: the literal alone, the literal under a struct-typed field, and the same
+/// read moved out of the function.
+#[test]
+fn probe_a_spec_nested_literal() {
+    let cases: [(&str, &str); 4] = [
+        (
+            "literal-alone",
+            r#"
+Inner := {.x @any : Int}
+f := 'n -> Inner{.x n}
+(f 7).x
+"#,
+        ),
+        (
+            "literal-in-field-read-inside",
+            r#"
+Inner := {.x @any : Int}
+T := {.a Inner}
+f := 'n -> (T{.a Inner{.x n}}).a.x
+f 7
+"#,
+        ),
+        (
+            "literal-in-field-read-outside",
+            r#"
+Inner := {.x @any : Int}
+T := {.a Inner}
+f := 'n -> T{.a Inner{.x n}}
+(f 7).a.x
+"#,
+        ),
+        (
+            "literal-in-field-same-function-value",
+            r#"
+Inner := {.x @any : Int}
+T := {.a Inner}
+f := 'n -> {
+  d := T{.a Inner{.x n}}
+  d.a.x
+}
+f 7
+"#,
+        ),
+    ];
+    for (name, source) in cases {
+        let mut store = new_store(None).expect("the embedded compute package registers");
+        match lichen_language::run::evaluate_raw(source, None, &mut store) {
+            Ok(text) => println!("[nested-literal] {name}: {text}"),
+            Err(diagnostics) => println!(
+                "[nested-literal] {name}: refused {:?}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+}
