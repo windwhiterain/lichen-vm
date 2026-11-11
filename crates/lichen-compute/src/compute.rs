@@ -6858,6 +6858,8 @@ where
                 .dynamic()
                 .and_then(|node| field_source_of(module, node))?,
         );
+        // The supplier is a read of its own: demand it before reading its payload.
+        let _ = module.evaluate_node(buffer, None);
         payload = buf_payload::<P>(module, buffer)?;
     }
     Some(payload)

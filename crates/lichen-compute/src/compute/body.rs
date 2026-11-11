@@ -1068,6 +1068,32 @@ where
             .and_then(|slot| slot.dynamic())
     }
 
+    /// The supplier a bare node reaches along the language's own edges.
+    ///
+    /// # Invariant
+    /// Only supply edges are followed — an expr's value half and the struct field a
+    /// `field_sources` entry names as supplied — never a class merge, so the walk ends
+    /// at a node holding a value or an operation and cannot cycle.
+    fn supplied(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = node;
+        for _ in 0..8 {
+            let next = self
+                .module
+                .expr_value_half(current)
+                .or_else(|| self.module.field_sources.get(&current).copied())?;
+            if next == current {
+                return None;
+            }
+            if self.module.node_operation(next).is_some()
+                || self.module.node_value(AnyNodeId::Dynamic(next)).is_some()
+            {
+                return Some(next);
+            }
+            current = next;
+        }
+        None
+    }
+
     /// The `.native` slot's value node when `node` is a `Buf`-shaped instance.
     ///
     /// # Invariant
@@ -1175,6 +1201,10 @@ where
                     self.declared.insert(identity, ordinal);
                 }
                 return Ok(value);
+            }
+            // A per-use copy reaches its supplier along the language's own edge.
+            if let Some(supplied) = self.supplied(node) {
+                return self.value(supplied);
             }
             return self.opaque(node);
         };

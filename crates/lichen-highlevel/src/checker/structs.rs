@@ -1022,15 +1022,15 @@ where
                 self.module
                     .field_sources
                     .insert(required_value, actual_value);
-                if self.actual_value_is_decided(actual_value) {
-                    // A field read unifies like any other argument: no deferred node.
-                    self.check_unify(
-                        vals[*argument],
-                        field,
-                        self.loc(argument_expr, 1),
-                        DiagKind::Annotation,
-                    );
-                } else {
+                // The rewrite's e3 = v[k] joins the supplied expression to the slot
+                // whether or not the supplied side is decided yet.
+                self.check_unify(
+                    vals[*argument],
+                    field,
+                    self.loc(argument_expr, 1),
+                    DiagKind::Annotation,
+                );
+                if !self.actual_value_is_decided(actual_value) {
                     // Undecided values cannot mismatch; check only type and attributes.
 
                     // A call's term is the apply node, so its type comes from the cell.
