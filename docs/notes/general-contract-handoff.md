@@ -1217,3 +1217,19 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 但机制尚未定位；已回退到最好状态 **262 passed / 21 failed**、`any-nested-field: 7`、最小链 `[1, 2]`。
 下一步需要从“e1 unify 的 `(Some, Some)` 下钻对该数组类的实际影响”入手（谁的类/哪个成员被改动），
 而不是 stamp 或 scope。
+
+## e1 unify 的实测机制（round 28）
+
+对比有无 `v[k] = e1` 两次运行中，形参节点 `83` 的 clone 判定（`DBG_CLONE` 探针）：
+
+| 状态 | `[param]` image | `[gate] node=83 class_inside` |
+|---|---|---|
+| 无 e1 unify | **215**（clone） | true（所有访问） |
+| 有 e1 unify | **83**（引用模板自己的 cell） | **false**（部分访问） |
+
+- `class_root(83) = 83`——**类没有合并**，所以 `class_inside_scope` 的 summary 就是节点自己的 block（`BlockId(2)`）；
+- `class_inside` 翻转说明 **同一个节点在不同 apply 里被判成 outside**（即 `ctx.anchor` 不同）；
+- 引用发生后，`apply` 把 7 写进模板 cell(83) 的类，而函数体内的读用的是另一个 cell(78)，两者不在一个类 → 读到 None → `none`。
+
+所以 `none` 不是“模板并进实例的类”，而是：**e1 unify 之后，形参在某些 apply 中以其自身的 block(2) 被判为 outside，于是被引用而不是 clone**。
+下一步要查的是：为什么 e1 unify 会让同一形参在某个 apply 的 anchor 下变成 outside（anchor/block 的作用域比较），以及引用路径与函数体内读的 cell 为什么不在同一类。
