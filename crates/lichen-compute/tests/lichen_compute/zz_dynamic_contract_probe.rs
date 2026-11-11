@@ -717,7 +717,7 @@ fn probe_a_nested_typed_field() {
 const DECIDED_FIELD_VALUE: &str = r#"
 Inner := {.x @any : Int}
 mk := 'u -> Inner{.x u}
-Outer := {.i Inner}
+Outer := {.i (mk 1)}
 g := ('p = Outer) -> p.i.x
 h := 'n -> {
   d := (mk n)
@@ -731,16 +731,9 @@ fn probe_a_decided_field_value() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(DECIDED_FIELD_VALUE, None, &mut store) {
         Ok(text) => println!("[decided-field-value] {text}"),
-        Err(diagnostics) => println!(
-            "[decided-field-value] refused: {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| (diagnostic.message.clone(), diagnostic.span))
-                .collect::<Vec<_>>()
-        ),
+        Err(diagnostics) => println!("[decided-field-value] refused: {diagnostics:?}"),
     }
 }
-
 /// The failing chain with the argument type declared inside the function.
 ///
 /// # Invariant
