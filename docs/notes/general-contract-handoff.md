@@ -1199,3 +1199,21 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 （fill: leaves=[3,0]；sum: leaves=[3] inputs=1），解码解析出的 payload 是
 `ComputeValue(Buffer(…))`（open=false），所以 buffer 找到了但内容为空——下一步是确认它解析的是
 **生产者写入的那个 buffer** 还是另一个（如声明侧/输出侧）。
+
+## stamp 假设被排除（round 27）
+
+给 `stamp_node_ran` 加探针，在“有 e1 unify”的失败态跑 `any-nested-field`：
+
+```
+[stamp] node=107 op=Some(Index) …
+[stamp] node=209 op=Some(Index) value=Array …
+[stamp] node=259 op=Some(TypeOperator(Add)) …
+```
+
+- **所有 stamp 都落在有 operation 的节点上**（Index / TypeOperator），没有裸 cell 被 stamp；
+- 所以“检查期 unify 把形参 cell 标记成已答、挡掉运行期写入”的假设不成立。
+
+当前结论：`v[k] = e1`（模板字段节点，按 SPEC 是 e1）一加入就回到 `none`（两种顺序都试过），
+但机制尚未定位；已回退到最好状态 **262 passed / 21 failed**、`any-nested-field: 7`、最小链 `[1, 2]`。
+下一步需要从“e1 unify 的 `(Some, Some)` 下钻对该数组类的实际影响”入手（谁的类/哪个成员被改动），
+而不是 stamp 或 scope。
