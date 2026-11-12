@@ -81,8 +81,8 @@ div {.dividen 1,.dividor 2}, div{.dividen 1.0,.dividor 2.0}
 4. Function generic: can fomulate any constraint.
 Div := 'T -> {.dividen @any: 'T, .dividor @any: T}
 (Div _){.dividen 1,.dividor 2}, (Div _){.dividen 1.0,.dividor 2.0}
-div := {.'dividend: 'T, .'dividor: T} -> dividend / dividor
-div {.dividen 1,.dividor 2}, div{.dividen 1.0,.dividor 2.0}
+div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor
+div _ {.dividen 1,.dividor 2}, div _ {.dividen 1.0,.dividor 2.0}
 
 ## Lowlevel
 
