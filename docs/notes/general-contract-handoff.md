@@ -1696,3 +1696,16 @@ SPEC §Clone 说“unify the argument with the parameter”；现在的实现把
 所以缺陷不在 `x.at` 的编码本身，而在 **apply 的 answer**：`$read`/`read` 的 apply 结果被写成了实参（结构数组）。
 下一步：在 apply 的 answer 写入处（`write_node_answer`/`function_apply` 的 result 绑定）查为什么
 read 的 apply 拿到了实参的值（很可能是 `c` cell 与参数/实参同类）。
+
+## 参数槽位绑定实验（round 53）
+
+`unify_parameter_slots` 的条件是 `parameter > 2 || supplied > 2`：当实参是结构值（数组长度 > 2）时，
+它会把**参数的 value cell 与结构数组的第 0 项**（名字表）并按槽 unify——这看起来正是
+“参数 image 落到类型 apply”的候选。
+
+实验：把条件改为只看 `parameter > 2`（结构实参不再触发槽位绑定），
+- 包装器测试仍得 0，套件仍 262/21——**无变化**；
+- 说明 read 的参数绑定没走这条路径（或不是该路径造成的）。
+
+已回退该实验。另一个读数：`[ans]` 显示多个 Apply 被答成 Array（prelude 的类型函数本就如此），
+所以“apply 答成数组”里只有 read 的 *值* 调用是异常的，需要按函数身份区分（值函数 vs 类型函数）再继续查。
