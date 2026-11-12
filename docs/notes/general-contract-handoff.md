@@ -1801,3 +1801,13 @@ frozen type half 的拷贝有关。
 即：graph 录制时需要把 `.native` 的空槽解析到**调用方的占位 buffer**，而 copy fix 之后这条供应商边不存在了。
 下一步：查 graph 录制时占位 buffer 的写入点（`recorded_buffer_payload` 期望 `.native` 已填），
 以及 copy fix 是否让 `.native` 的副本 cell 失去了 `field_sources`/投影边。
+
+## round 59
+
+- 让 buffer 走在 payload 为空时也沿 `frozen_reads` 追（`3692410a`）——该 cell 没有 frozen_read 条目，
+  套件仍 280/3；
+- 3 个失败全部集中在 **graph 录制**：graph 的参数（`GArg`）经 `Arg{.n a.n, .I a.in}` 实例化后，
+  `.I` 字段的 `.native` 副本 cell 既无 `field_sources` 也无 `frozen_reads`，录制找不到占位 buffer；
+- 这是 copy fix（`670a65e8`）对 frozen type half 的拷贝带来的：副本把原本共享的 frozen 引用变成了空 cell。
+  下一轮应让该副本在 `instantiate_requirement` 里**继承 frozen 引用**（现有代码只为 value != source 时插入，
+  而嵌套层的 source 可能已经不同），或让 graph 录制复用模板的 frozen 节点。
