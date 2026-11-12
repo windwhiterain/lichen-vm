@@ -690,16 +690,51 @@ where
         self.state[placeholder].ty = Some(expected_type);
     }
 
+    /// The parameter expr a call's own application cloned.
+    ///
+    /// # Invariant
+    /// The clone is read only while its cells are live, and only as the source
+    /// of a copy: a returned function's template parameter is shared by every
+    /// call, so pinning to it would decide the template from one argument.
+    pub(super) fn applied_parameter(&self, term: NodeId) -> Option<NodeId> {
+        let applied = self
+            .module
+            .applied_exprs
+            .get(&term)
+            .copied()
+            .filter(|applied| self.module.nodes.contains_key(*applied))?;
+        let function = self.module.function_apply_function(applied)?;
+        let AnyFunctionId::Dynamic(function) = function else {
+            return None;
+        };
+        let parameter = self.module.functions.get(function)?.parameter;
+        self.module
+            .nodes
+            .contains_key(parameter)
+            .then_some(parameter)
+    }
+
     /// The requirement a call's parameter states: the template and the type.
     ///
     /// # Invariant
     /// The requirement is the **pair** the parameter states: the template in
     /// its **value slot**, the type in its **type slot**.  A parameter that
     /// states only a type keeps the requirement in its type slot, as the
-    /// annotation's own term.
+    /// annotation's own term. A partial application's callee is the function
+    /// it returns, the same question the apply itself asks.
     fn expected_argument_requirement(&mut self, function: ExprId) -> Option<NodeId> {
+        // A returned function's parameter is the clone this call's own apply made;
+        // pinning to it keeps the template's cells out of the argument's check.
+        if let Some(term) = self.state[function].term
+            && let Some(parameter) = self.applied_parameter(term)
+        {
+            return Some(parameter);
+        }
         let function_expr = self.state[function].term?;
-        let callee = self.module.function_apply_function(function_expr)?;
+        let callee = self
+            .module
+            .function_apply_function(function_expr)
+            .or_else(|| self.curried_callee(function))?;
         let parameter = match callee {
             AnyFunctionId::Dynamic(fid) => self.module.functions[fid].parameter,
             AnyFunctionId::Static(sref) => {

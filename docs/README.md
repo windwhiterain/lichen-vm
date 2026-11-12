@@ -95,7 +95,7 @@ authority, and this table only names the state.
 | [Array attribute view](notes/array-attribute-view.md) | `lichen-lowlevel` (`lib`/`module`/`codec`/`static_module`), `lichen-highlevel` (`shape`/`checker`) | current |
 | [Compound element slots](notes/compound-element-slots.md) | `lichen-lowlevel` (`equality`/`evaluation`), `lichen-highlevel` (`checker`/`shape`), `lichen-compute`, `lichen-render`, `tree-sitter-lichen` | current |
 | [Constructor templates](notes/value-templates.md) | `lichen-language-lex`/`-parser`, `lichen-language` (`compile`, `persist`), `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`/`function`/`static_module`), `lichen-compute` | current (compute migration incomplete) |
-| [The template instantiation](notes/template-instantiation.md) | `lichen-lowlevel` (`template`) | current |
+| [The template instantiation](notes/template-instantiation.md) | `lichen-lowlevel` (`template`), `lichen-highlevel` (`checker`), `lichen-language` (tests) | current |
 | [Operator polymorphism](notes/operator-polymorphism.md) | `lichen-highlevel`, `lichen-lowlevel` (`assert`), `lichen-language`, `lichen-compute`, `lichen-std` | current |
 | [`core`: the built-in prelude](notes/core-prelude.md) | `lichen-language` (`core.lichen`), `lichen-registry` | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`), `lichen-language`, `lichen-doc` | current |

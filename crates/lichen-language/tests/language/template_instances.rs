@@ -1,0 +1,83 @@
+//! A struct template's open cells belong to the **instance**, never to the
+//! template: one use's Int field must not decide the type a later use's Float
+//! field fills. The forms are the spec's Ideal API 4 and 5
+//! (`docs/language-spec.md` §Ideal API).
+//!
+//! # Invariant
+//! Every template use copies the template's **open** cells — the value slot and
+//! the type slot alike — while a decided field type stays shared. A decided
+//! annotation therefore still constrains every instance.
+
+use lichen_highlevel::diagnostic::DiagKind;
+
+use lichen_language::compile;
+use lichen_language::diag::Stage;
+use lichen_language::run::evaluate;
+
+/// The single checker diagnostic of a refused program, and its kind.
+fn refused(source: &str) -> (String, DiagKind) {
+    let report = compile(source);
+    assert!(!report.ok(), "expected {source:?} to be refused");
+    let first = report.diagnostics.first().expect("a diagnostic");
+    assert_eq!(first.stage, Stage::Check, "a check-stage refusal");
+    let kind = first.check.as_ref().expect("a checker diagnostic").kind;
+    (first.message.clone(), kind)
+}
+
+/// The rendered `value: type` output of a program that must check.
+fn output(source: &str) -> String {
+    evaluate(source).expect("the program runs clean")
+}
+
+#[test]
+fn a_struct_types_wildcard_fields_stay_open_across_instances() {
+    assert_eq!(
+        output("D := {.a @any, .b @any}\n(D{.a 1, .b 2}, D{.a 1.5, .b 2.5})"),
+        "((1, 2), (1.5, 2.5)): Tuple"
+    );
+}
+
+#[test]
+fn an_inline_literal_domain_is_fresh_per_application() {
+    assert_eq!(
+        output(
+            "div := {.'dividend, .'dividor} -> dividend / dividor\n\
+             (div _{.dividend 1, .dividor 2}, div _{.dividend 1.0, .dividor 2.0})"
+        ),
+        "(0, 0.5): Tuple"
+    );
+}
+
+#[test]
+#[ignore = "an inline literal domain's type argument is shared by the returned function; the checker needs a per-call specialization (docs/notes/template-instantiation.md)"]
+fn a_function_generics_literal_domain_takes_anonymous_instances() {
+    assert_eq!(
+        output(
+            "div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor\n\
+             (div _ _{.dividend 1, .dividor 2}, div _ _{.dividend 1.0, .dividor 2.0})"
+        ),
+        "(0, 0.5): Tuple"
+    );
+}
+
+#[test]
+fn a_named_generic_types_instance_is_fresh_per_use() {
+    assert_eq!(
+        output(
+            "Div := 'T -> {.dividen @any: T, .dividor @any: T}\n\
+             ((Div _){.dividen 1, .dividor 2}, (Div _){.dividen 1.0, .dividor 2.0})"
+        ),
+        "((1, 2), (1.0, 2.0)): Tuple"
+    );
+}
+
+#[test]
+fn an_annotated_field_still_constrains_every_instance() {
+    assert_eq!(
+        output("D := {.a @any : Int}\n(D{.a 1}, D{.a 2})"),
+        "((1,), (2,)): Tuple"
+    );
+    let (message, kind) = refused("D := {.a @any : Int}\nD{.a 1.5}");
+    assert_eq!(kind, DiagKind::Annotation);
+    assert_eq!(message, "expected Int, found Float");
+}

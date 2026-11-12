@@ -6,13 +6,18 @@
 > and the checker has no clone arm: there is no source-level `@clone` any
 > more. Freshness comes from **function application** and from the checker's
 > **requirement instantiation** for direct compound templates; the latter
-> copies open value slots and shares every type and attribute. That is the
-> model the [direct template note](value-templates.md) records. The walk's own
+> copies open value slots **and open type cells**, and shares decided types and
+> attributes (§2.1). That is the model the [direct template
+> note](value-templates.md) records. The walk's own
 > rules are kept here because the apply's walk shares them and because the API
 > is still the lowlevel's only general-purpose instantiation.
 >
 > Points at: `crates/lichen-lowlevel/src/template.rs` (the walk),
 > `crates/lichen-highlevel/src/checker/templates.rs` (requirement instantiation),
+> `crates/lichen-highlevel/src/checker/structs.rs` (`applied_parameter`,
+> `expected_argument_requirement`) and `lambda.rs` (`check_app`) for the
+> returned-function rule,
+> `crates/lichen-language/tests/language/template_instances.rs` (the pins),
 > `crates/lichen-lowlevel/src/apply.rs` (the regroup the class topology uses),
 > `crates/lichen-lowlevel/src/function.rs` (the apply's own clone walk, whose
 > rules this one reuses), and
@@ -62,6 +67,51 @@ wildcard: the body's `@any : t` field is a requirement, not a capture
 position, and nothing writes into it. This walk clones a *template*, whose
 slots are capture positions: the instance's own cell replaces the wildcard, so
 the actual's value fills it.
+
+## 2.1 The checker's requirement instantiation
+
+The checker copies a direct compound template per use (`instantiate_requirement` in
+`crates/lichen-highlevel/src/checker/templates.rs`), and the same rule serves both a
+struct instance and a unify template: **an open value cell and an open type cell are
+fresh; a decided type, the attributes, the name table and the nominal id are shared.**
+`AnyLit::build` gives `@any` a fresh own type cell, so sharing that cell made the first
+instance decide the type every later instance inherited — the failure the spec's Ideal
+API 4 is about.
+
+An **application's function is the clone its own call made, not the template**.
+`applied_parameter` reads the clone recorded for the call (`Module::applied_exprs`), an
+anonymous instance (`_{...}`) is pinned to that clone's parameter, and `check_app` skips
+the type side that would unify the template the clone came from. A check the type side
+no longer performs still happens at the value side.
+
+Measured:
+
+- `D := {.a @any, .b @any}; (D{.a 1, .b 2}, D{.a 1.5, .b 2.5})` answered
+  `expected Int, found Float` at the second instance; it now answers both.
+- `div := {.'dividend, .'dividor} -> dividend / dividor` takes an `Int` pair and a
+  `Float` pair in one program.
+- The annotation still decides: `.a @any : Int` refuses `D{.a 1.5}` at check stage
+  (`Annotation`).
+- `examples/gc.lichen` declares `[8, 16]: Array` and answered `[none, none]: Array` at
+  HEAD; it answers its declared output now, because each call of
+  `add := 'x -> 'y -> x + y` needs its own inner parameter.
+
+**Open: the inline literal domain under a type parameter.**
+`div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor`, called twice as
+`div _ _{…}` with an `Int` and a `Float`, is still refused (`expected Float, found Int`):
+the inline literal's type argument is shared by the returned function's parameter, and
+the checker has no per-call specialization to copy it. The pinning test is
+`template_instances::a_function_generics_literal_domain_takes_anonymous_instances`
+(`#[ignore]`); the lowlevel replay in §3 is the mechanism that would supply the call's
+own cells.
+
+**Rejected: copying open type expressions.** Making the type slot fresh by copying any
+open type expression, rather than only a bare open cell, leaked the compute buffer's raw
+marker through `frozen_buffer_reuse::a_frozen_buffer_cell_still_feeds_the_next_launch`
+(`[raw 6, raw 8, raw 10, raw 12]` instead of `[6, 8, 10, 12]`): the type expression's own
+decided interior was copied with it. **Rejected: using the applied clone as the callee.**
+It makes a later call re-instantiate a function whose block has been dropped: `@gc`
+programs panicked intermittently in `gc.rs`'s `class_walk` (`invalid SlotMap key used`).
 
 ## 3. The rules
 

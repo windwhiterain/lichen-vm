@@ -99,9 +99,11 @@ where
     /// A requirement copy with its open value slots emptied.
     ///
     /// # Invariant
-    /// Only value positions are fresh; types, attributes, name table and
-    /// nominal id are shared.
-    fn instantiate_requirement(&mut self, expr: NodeId, depth: usize) -> NodeId {
+    /// A value position and an **open** type cell are fresh; a decided type,
+    /// the attributes, the name table and the nominal id are shared. `@any`
+    /// leaves its own type cell undecided, so sharing it would let one use
+    /// decide the type every later use inherits.
+    fn instantiate_requirement(&mut self, expr: NodeId, depth: usize, open_types: bool) -> NodeId {
         if depth > 64 {
             return expr;
         }
@@ -115,7 +117,7 @@ where
             return expr;
         };
         let source = value;
-        let value = self.instantiate_requirement_value(value, ty, depth + 1);
+        let value = self.instantiate_requirement_value_with(value, ty, depth + 1, open_types);
         // **The instance inherits the template's frozen reference**: the fresh cell is the
         // same frozen value, by reference.
         if value != source
@@ -134,6 +136,15 @@ where
         }
         let mut items = items.to_vec();
         items[0].node = AnyNodeId::Dynamic(value);
+        if open_types
+            && let AnyNodeId::Dynamic(type_node) = ty
+            && self
+                .module
+                .class_value(type_node)
+                .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
+        {
+            items[1].node = AnyNodeId::Dynamic(self.fresh_cell());
+        }
         let layout = self
             .module
             .node_value(AnyNodeId::Dynamic(expr))
@@ -151,6 +162,16 @@ where
         value: NodeId,
         ty: AnyNodeId,
         depth: usize,
+    ) -> NodeId {
+        self.instantiate_requirement_value_with(value, ty, depth, true)
+    }
+
+    fn instantiate_requirement_value_with(
+        &mut self,
+        value: NodeId,
+        ty: AnyNodeId,
+        depth: usize,
+        open_types: bool,
     ) -> NodeId {
         if depth > 64 {
             return value;
@@ -193,7 +214,11 @@ where
                             .node
                             .dynamic()
                             .map(|field| {
-                                AnyNodeId::Dynamic(self.instantiate_requirement(field, depth + 1))
+                                AnyNodeId::Dynamic(self.instantiate_requirement(
+                                    field,
+                                    depth + 1,
+                                    open_types,
+                                ))
                             })
                             .unwrap_or(item.node),
                         ..*item
@@ -213,9 +238,11 @@ where
                                 .node
                                 .dynamic()
                                 .map(|hole| {
-                                    AnyNodeId::Dynamic(
-                                        self.instantiate_requirement(hole, depth + 1),
-                                    )
+                                    AnyNodeId::Dynamic(self.instantiate_requirement(
+                                        hole,
+                                        depth + 1,
+                                        open_types,
+                                    ))
                                 })
                                 .unwrap_or(item.node),
                             ..*item
@@ -234,7 +261,11 @@ where
                         .node
                         .dynamic()
                         .map(|element| {
-                            AnyNodeId::Dynamic(self.instantiate_requirement(element, depth + 1))
+                            AnyNodeId::Dynamic(self.instantiate_requirement(
+                                element,
+                                depth + 1,
+                                open_types,
+                            ))
                         })
                         .unwrap_or(item.node),
                     ..*item
@@ -279,7 +310,7 @@ where
             self.module
                 .expr_value_half(expected_term)
                 .filter(|value| self.requirement_is_open(*value, expected_ty, 0))
-                .map(|_| self.instantiate_requirement(expected_term, 0))
+                .map(|_| self.instantiate_requirement(expected_term, 0, false))
                 .unwrap_or(expected_term)
         };
         // A formal's unify reads its slot identity directly; other values keep

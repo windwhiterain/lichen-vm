@@ -399,7 +399,7 @@ where
     /// # Invariant
     /// A partial application's value is a runtime cell, so the function is read from the
     /// IR: the callee's function, its return expression, and that expression's function.
-    fn curried_callee(&self, function: ExprId) -> Option<AnyFunctionId> {
+    pub(super) fn curried_callee(&self, function: ExprId) -> Option<AnyFunctionId> {
         let ExprKind::Apply {
             function: inner, ..
         } = self.ir[function].kind
@@ -593,16 +593,24 @@ where
                 } else {
                     value_argument_expr
                 };
-                let applied = match callee {
-                    Some(callee) => self.module.apply_function_type(
-                        callee,
-                        AnyNodeId::Dynamic(type_slot_argument),
-                        self.current_block,
-                        apply,
-                        AnyNodeId::Dynamic(c),
-                        report,
-                    ),
-                    None => false,
+                // A returned function's parameter is this call's own clone; the
+                // argument was checked against it, so the side that would unify
+                // the template is skipped.
+                let returned = self.applied_parameter(callee_expr).is_some();
+                let applied = if returned {
+                    true
+                } else {
+                    match callee {
+                        Some(callee) => self.module.apply_function_type(
+                            callee,
+                            AnyNodeId::Dynamic(type_slot_argument),
+                            self.current_block,
+                            apply,
+                            AnyNodeId::Dynamic(c),
+                            report,
+                        ),
+                        None => false,
+                    }
                 };
                 // The call decides the read: the argument's value states the field.
                 if let Some(AnyFunctionId::Dynamic(function)) = callee
