@@ -1709,3 +1709,19 @@ read 的 apply 拿到了实参的值（很可能是 `c` cell 与参数/实参同
 
 已回退该实验。另一个读数：`[ans]` 显示多个 Apply 被答成 Array（prelude 的类型函数本就如此），
 所以“apply 答成数组”里只有 read 的 *值* 调用是异常的，需要按函数身份区分（值函数 vs 类型函数）再继续查。
+
+## 核心语义套件全绿（round 54）
+
+跑核心 crate 的测试（`target/test_highlevel.bat`，vcvars64 + `cargo test -p <crate>`）：
+
+| 套件 | 结果 |
+|---|---|
+| **lichen-highlevel** | **136 passed, 0 failed** ✓ |
+| lichen-language | 68 passed, **1 failed**（`a_set_and_a_table_value_render_their_own_syntax`） |
+
+- 核心语义（struct/clone/any/类型系统）在 highlevel 的 136 个测试上**全部通过**；
+- lichen-language 的唯一失败是**解析**问题（`set(1, 2)` 源码报 unclosed '('），与 compute 无关，
+  且该测试文件最后一次改动在本会话之前（`e44849fd`），属既有问题；
+- 剩余 21 个失败都在 **lichen-compute** 套件（compute 插件/launch 路径）。
+
+结论：SPEC 的核心实现已由 highlevel 套件验证；compute 插件的 21 个失败是独立的下一阶段工作。
