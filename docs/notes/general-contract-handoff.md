@@ -1811,3 +1811,21 @@ frozen type half 的拷贝有关。
 - 这是 copy fix（`670a65e8`）对 frozen type half 的拷贝带来的：副本把原本共享的 frozen 引用变成了空 cell。
   下一轮应让该副本在 `instantiate_requirement` 里**继承 frozen 引用**（现有代码只为 value != source 时插入，
   而嵌套层的 source 可能已经不同），或让 graph 录制复用模板的 frozen 节点。
+
+## 全部 compute 测试通过（round 60）
+
+**修复**（`5b016643`）：`instantiate_requirement_value` 对**类型半是 frozen（Static）**的字段**引用**而不是拷贝。
+
+> 依据 SPEC §Clone 的效率规则：“reference node outside the applying function's scope”——
+> frozen 类型半命名的是函数作用域之外的值，所以是引用，不是拷贝。
+
+之前的 copy fix 把这类字段的共享节点复制成新 cell，graph 录制因此丢失调用方的占位 buffer，
+产生 3 个 `buf_element_class_recorded::*` 失败。
+
+**结果**：
+
+| 套件 | 结果 |
+|---|---|
+| lichen-compute | **283 passed, 0 failed, 1 ignored** ✓ |
+| lichen-highlevel | **136 passed, 0 failed** ✓ |
+| lichen-language | 68 passed, 1 failed（既有 `set(1,2)` 解析测试） |
