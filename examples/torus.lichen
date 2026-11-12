@@ -62,36 +62,36 @@ GIn := {.x (compute.Buf (compute.BufParam{.type Float, .length 9}))}
 GOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 9}))}
 GPar := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .in (GIn)}
 GArg := {.n @any : Int, .cols @any : Int, .alpha @any : Float, .I (GIn)}
-grid_raw := ('c = GPar) -> {
-  i := compute.range c.n
-  row := compute.row c
-  col := compute.col c
-  centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
-  above := (compute.read ((compute.Read _){.from c.in.x, .at ((row - 1) * c.cols + col)}) : Float)
-  below := (compute.read ((compute.Read _){.from c.in.x, .at ((row + 1) * c.cols + col)}) : Float)
-  left := if col == 0 then 0.0 else ((compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float))
-  right := if col == (c.cols - 1) then 0.0 else ((compute.read ((compute.Read _){.from c.in.x, .at (i + 1)}) : Float))
-  b_y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  GOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))}))}
+grid_raw := 'k = GPar -> {
+  i := compute.range k.n
+  row := compute.row k
+  col := compute.col k
+  centre := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
+  above := (compute.read ((compute.Read _){.from k.in.x, .at ((row - 1) * k.cols + col)}) : Float)
+  below := (compute.read ((compute.Read _){.from k.in.x, .at ((row + 1) * k.cols + col)}) : Float)
+  left := if col == 0 then 0.0 else ((compute.read ((compute.Read _){.from k.in.x, .at (i - 1)}) : Float))
+  right := if col == (k.cols - 1) then 0.0 else ((compute.read ((compute.Read _){.from k.in.x, .at (i + 1)}) : Float))
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  GOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + k.alpha * ((above + below + left + right) - 4.0 * centre))}))}
 }
 grid := compute.parallel grid_raw "cpu" (GOut)
-torus_raw := ('c = GPar) -> {
-  i := compute.range c.n
-  row := compute.row c
-  col := compute.col c
-  rows := (c.n / c.cols)
-  centre := (compute.read ((compute.Read _){.from c.in.x, .at i}) : Float)
-  above := if row == 0 then ((compute.read ((compute.Read _){.from c.in.x, .at ((rows - 1) * c.cols + col)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at ((row - 1) * c.cols + col)}) : Float))
-  below := if row == (rows - 1) then ((compute.read ((compute.Read _){.from c.in.x, .at col}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at ((row + 1) * c.cols + col)}) : Float))
-  left := if col == 0 then ((compute.read ((compute.Read _){.from c.in.x, .at (i + c.cols - 1)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i - 1)}) : Float))
-  right := if col == (c.cols - 1) then ((compute.read ((compute.Read _){.from c.in.x, .at (i - c.cols + 1)}) : Float)) else ((compute.read ((compute.Read _){.from c.in.x, .at (i + 1)}) : Float))
-  b_y := compute.buf (compute.BufParam{.type Float, .length c.n})
-  GOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))}))}
+torus_raw := 'k = GPar -> {
+  i := compute.range k.n
+  row := compute.row k
+  col := compute.col k
+  rows := (k.n / k.cols)
+  centre := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
+  above := if row == 0 then ((compute.read ((compute.Read _){.from k.in.x, .at ((rows - 1) * k.cols + col)}) : Float)) else ((compute.read ((compute.Read _){.from k.in.x, .at ((row - 1) * k.cols + col)}) : Float))
+  below := if row == (rows - 1) then ((compute.read ((compute.Read _){.from k.in.x, .at col}) : Float)) else ((compute.read ((compute.Read _){.from k.in.x, .at ((row + 1) * k.cols + col)}) : Float))
+  left := if col == 0 then ((compute.read ((compute.Read _){.from k.in.x, .at (i + k.cols - 1)}) : Float)) else ((compute.read ((compute.Read _){.from k.in.x, .at (i - 1)}) : Float))
+  right := if col == (k.cols - 1) then ((compute.read ((compute.Read _){.from k.in.x, .at (i - k.cols + 1)}) : Float)) else ((compute.read ((compute.Read _){.from k.in.x, .at (i + 1)}) : Float))
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  GOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + k.alpha * ((above + below + left + right) - 4.0 * centre))}))}
 }
 torus := compute.parallel torus_raw "cpu" (GOut)
 Fill := {.n @any : Int}
-fill_plane_raw := Fill{.'n : Int} -> {
-  i := compute.range n
+fill_plane_raw := 'k = Fill -> {
+  i := compute.range k.n
   d := compute.buf (compute.BufParam{.type Float, .length 9})
   v := (if i == 2 then 4.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
   GIn{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

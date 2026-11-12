@@ -29,12 +29,12 @@ Measured on the branch's first step (the type predicates and the compound set
 landed; the value shapes did not change):
 
 ```lichen
-F := ('x = table{_, Int}) -> x
+F := 'x = table{_, Int}) -> x
 (F table(1 => 2), F table("a" => 2))
 # expected ?, found table{Int, Int}
 # expected ?, found raw[raw[@any, Int], raw[@any, Int]]
 
-G := ('x = set{_}) -> x
+G := 'x = set{_}) -> x
 (G set(1), G set("a"))
 # expected SetType, found set{Int}
 # expected SetType, found set{string}

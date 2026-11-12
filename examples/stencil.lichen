@@ -17,7 +17,7 @@
     would need a `Select` whose arms are data, and the surface has none.\n\n\
     **The write address is the lane's own index.** A `compute.write` names a slot of an output \
     buffer exactly as long as the launch's extent \
-    (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range n` with `.at i` is a \
+    (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range k.n` with `.at i` is a \
     bijection and the answer does not depend on a schedule. The **read** address is the interesting \
     one: `[i - 1, i + 1]` is not a prefix of the buffer and not a slice of it, so a body that \
     reaches outside its own lane has to be checked against the device's tail-lane rule rather than \
@@ -82,32 +82,32 @@ XIn := {.x (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 XOut := {.y (compute.Buf (compute.BufParam{.type Float, .length 6}))}
 XPar := {.n @any : Int, .alpha @any : Float, .in (XIn)}
 XArg := {.n @any : Int, .alpha @any : Float, .I (XIn)}
-stencil_raw := XPar{.'n : Int, .'alpha : Float, .'in} -> {
-  i := compute.range n
-  centre := (compute.read ((compute.Read _){.from in.x, .at i}) : Float)
-  left := (compute.read ((compute.Read _){.from in.x, .at (i - 1)}) : Float)
-  right := (compute.read ((compute.Read _){.from in.x, .at (i + 1)}) : Float)
-  b_y := compute.buf (compute.BufParam{.type Float, .length n})
-  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + alpha * ((left + right) - 2.0 * centre))}))}
+stencil_raw := 'k = XPar -> {
+  i := compute.range k.n
+  centre := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
+  left := (compute.read ((compute.Read _){.from k.in.x, .at (i - 1)}) : Float)
+  right := (compute.read ((compute.Read _){.from k.in.x, .at (i + 1)}) : Float)
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + k.alpha * ((left + right) - 2.0 * centre))}))}
 }
 stencil := compute.parallel stencil_raw "cpu" (XOut)
-ring_raw := XPar{.'n : Int, .'alpha : Float, .'in} -> {
-  i := compute.range n
-  centre := (compute.read ((compute.Read _){.from in.x, .at i}) : Float)
-  left_base := (compute.read ((compute.Read _){.from in.x, .at ((max i 1) - 1)}) : Float)
-  left_wrap := (compute.read ((compute.Read _){.from in.x, .at (n - 1)}) : Float)
+ring_raw := 'k = XPar -> {
+  i := compute.range k.n
+  centre := (compute.read ((compute.Read _){.from k.in.x, .at i}) : Float)
+  left_base := (compute.read ((compute.Read _){.from k.in.x, .at ((max i 1) - 1)}) : Float)
+  left_wrap := (compute.read ((compute.Read _){.from k.in.x, .at (k.n - 1)}) : Float)
   left := left_base + ((left_wrap - left_base) * (if i == 0 then 1.0 else 0.0))
-  right_base := (compute.read ((compute.Read _){.from in.x, .at ((min i (n - 2)) + 1)}) : Float)
-  right_wrap := (compute.read ((compute.Read _){.from in.x, .at 0}) : Float)
-  right := right_base + ((right_wrap - right_base) * (if i == (n - 1) then 1.0 else 0.0))
-  b_y := compute.buf (compute.BufParam{.type Float, .length n})
-  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + alpha * ((left + right) - 2.0 * centre))}))}
+  right_base := (compute.read ((compute.Read _){.from k.in.x, .at ((min i (k.n - 2)) + 1)}) : Float)
+  right_wrap := (compute.read ((compute.Read _){.from k.in.x, .at 0}) : Float)
+  right := right_base + ((right_wrap - right_base) * (if i == (k.n - 1) then 1.0 else 0.0))
+  b_y := compute.buf (compute.BufParam{.type Float, .length k.n})
+  XOut{.y (compute.write ((compute.Write _){.to b_y, .at i, .value (centre + k.alpha * ((left + right) - 2.0 * centre))}))}
 }
 ring := compute.parallel ring_raw "cpu" (XOut)
 Fill := {.n @any : Int}
 xBuf := {.x (compute.Buf (compute.BufParam{.type Float, .length 6}))}
-fill_x_raw := Fill{.'n : Int} -> {
-  i := compute.range n
+fill_x_raw := 'k = Fill -> {
+  i := compute.range k.n
   d := compute.buf (compute.BufParam{.type Float, .length 6})
   v := (if i == 0 then 4.0 else 0.0) + (if i == 5 then 4.0 else 0.0)
   xBuf{.x (compute.write ((compute.Write _){.to d, .at i, .value v}))}

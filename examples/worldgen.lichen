@@ -40,78 +40,78 @@ InTile := {.biomes (compute.Buf (compute.BufParam{.type Int, .length 16384}))}
 
 PNoise := {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .in (InSeed)}
 ANoise := {.n @any : Int, .cols @any : Int, .scale @any : Int, .seed @any : Int, .I (InSeed)}
-noise_raw := ('p = PNoise) -> {
-  i := compute.range p.n
-  row := compute.row p
-  col := compute.col p
-  x := col / p.scale
-  y := row / p.scale
-  fx := int2float (col % p.scale) / int2float p.scale
-  fy := int2float (row % p.scale) / int2float p.scale
+noise_raw := 'k = PNoise -> {
+  i := compute.range k.n
+  row := compute.row k
+  col := compute.col k
+  x := col / k.scale
+  y := row / k.scale
+  fx := int2float (col % k.scale) / int2float k.scale
+  fy := int2float (row % k.scale) / int2float k.scale
   sx := fx * fx * (3.0 - 2.0 * fx)
   sy := fy * fy * (3.0 - 2.0 * fy)
-  h00 := int2float (((x * 7919) + (y * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
-  h10 := int2float ((((x + 1) * 7919) + (y * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
-  h01 := int2float (((x * 7919) + ((y + 1) * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
-  h11 := int2float ((((x + 1) * 7919) + ((y + 1) * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
+  h00 := int2float (((x * 7919) + (y * 104729) + (k.seed * 1299709)) % 65536) / 65535.0
+  h10 := int2float ((((x + 1) * 7919) + (y * 104729) + (k.seed * 1299709)) % 65536) / 65535.0
+  h01 := int2float (((x * 7919) + ((y + 1) * 104729) + (k.seed * 1299709)) % 65536) / 65535.0
+  h11 := int2float ((((x + 1) * 7919) + ((y + 1) * 104729) + (k.seed * 1299709)) % 65536) / 65535.0
   top := h00 + ((h10 - h00) * sx)
   bottom := h01 + ((h11 - h01) * sx)
   value := top + ((bottom - top) * sy)
-  b_f := compute.buf (compute.BufParam{.type Float, .length p.n})
+  b_f := compute.buf (compute.BufParam{.type Float, .length k.n})
   OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value value}))}
 }
 noise := compute.parallel noise_raw "cpu" (OutField)
 
 PMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .in (InField2)}
 AMix := {.n @any : Int, .cols @any : Int, .w @any : Float, .I (InField2)}
-mix_raw := PMix{.'n : Int, .'cols : Int, .'w : Float, .'in} -> {
-  i := compute.range n
-  a := (compute.read ((compute.Read _){.from in.a, .at i}) : Float)
-  b := (compute.read ((compute.Read _){.from in.b, .at i}) : Float)
-  b_f := compute.buf (compute.BufParam{.type Float, .length n})
-  OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value (a + ((b - a) * w))}))}
+mix_raw := 'k = PMix -> {
+  i := compute.range k.n
+  a := (compute.read ((compute.Read _){.from k.in.a, .at i}) : Float)
+  b := (compute.read ((compute.Read _){.from k.in.b, .at i}) : Float)
+  b_f := compute.buf (compute.BufParam{.type Float, .length k.n})
+  OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value (a + ((b - a) * k.w))}))}
 }
 mix := compute.parallel mix_raw "cpu" (OutField)
 
 PSmooth := {.n @any : Int, .cols @any : Int, .in (InField)}
 ASmooth := {.n @any : Int, .cols @any : Int, .I (InField)}
-smooth_raw := ('p = PSmooth) -> {
-  i := compute.range p.n
-  row := compute.row p
-  col := compute.col p
-  rows := p.n / p.cols
-  up := (compute.read ((compute.Read _){.from p.in.f, .at (((max row 1) - 1) * p.cols + col)}) : Float)
-  down := (compute.read ((compute.Read _){.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col)}) : Float)
-  left := (compute.read ((compute.Read _){.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1))}) : Float)
-  right := (compute.read ((compute.Read _){.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1)))}) : Float)
-  centre := (compute.read ((compute.Read _){.from p.in.f, .at i}) : Float)
+smooth_raw := 'k = PSmooth -> {
+  i := compute.range k.n
+  row := compute.row k
+  col := compute.col k
+  rows := k.n / k.cols
+  up := (compute.read ((compute.Read _){.from k.in.f, .at (((max row 1) - 1) * k.cols + col)}) : Float)
+  down := (compute.read ((compute.Read _){.from k.in.f, .at ((min (row + 1) (rows - 1)) * k.cols + col)}) : Float)
+  left := (compute.read ((compute.Read _){.from k.in.f, .at ((row * k.cols) + ((max col 1) - 1))}) : Float)
+  right := (compute.read ((compute.Read _){.from k.in.f, .at ((row * k.cols) + (min (col + 1) (k.cols - 1)))}) : Float)
+  centre := (compute.read ((compute.Read _){.from k.in.f, .at i}) : Float)
   value := (centre * 0.5) + ((up + down + left + right) * 0.125)
-  b_f := compute.buf (compute.BufParam{.type Float, .length p.n})
+  b_f := compute.buf (compute.BufParam{.type Float, .length k.n})
   OutField{.f (compute.write ((compute.Write _){.to b_f, .at i, .value value}))}
 }
 smooth := compute.parallel smooth_raw "cpu" (OutField)
 
 PBiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .in (InLand)}
 ABiome := {.n @any : Int, .cols @any : Int, .sea @any : Float, .ridge @any : Float, .I (InLand)}
-biome_raw := PBiome{.'n : Int, .'cols : Int, .'sea : Float, .'ridge : Float, .'in} -> {
-  i := compute.range n
-  e := (compute.read ((compute.Read _){.from in.height, .at i}) : Float)
-  m := (compute.read ((compute.Read _){.from in.moisture, .at i}) : Float)
-  b := if e < sea then 0 else (if e < ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
-  b_ids := compute.buf (compute.BufParam{.type Int, .length n})
+biome_raw := 'k = PBiome -> {
+  i := compute.range k.n
+  e := (compute.read ((compute.Read _){.from k.in.height, .at i}) : Float)
+  m := (compute.read ((compute.Read _){.from k.in.moisture, .at i}) : Float)
+  b := if e < k.sea then 0 else (if e < k.ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
+  b_ids := compute.buf (compute.BufParam{.type Int, .length k.n})
   OutIds{.ids (compute.write ((compute.Write _){.to b_ids, .at i, .value b}))}
 }
 biome := compute.parallel biome_raw "cpu" (OutIds)
 
 PTile := {.n @any : Int, .cols @any : Int, .seed @any : Int, .in (InTile)}
 ATile := {.n @any : Int, .cols @any : Int, .seed @any : Int, .I (InTile)}
-tile_raw := ('p = PTile) -> {
-  i := compute.range p.n
-  row := compute.row p
-  col := compute.col p
-  b := (compute.read ((compute.Read _){.from p.in.biomes, .at i}) : Int)
-  v := ((col * 7919) + (row * 104729) + (p.seed * 1299709)) % 4
-  b_ids := compute.buf (compute.BufParam{.type Int, .length p.n})
+tile_raw := 'k = PTile -> {
+  i := compute.range k.n
+  row := compute.row k
+  col := compute.col k
+  b := (compute.read ((compute.Read _){.from k.in.biomes, .at i}) : Int)
+  v := ((col * 7919) + (row * 104729) + (k.seed * 1299709)) % 4
+  b_ids := compute.buf (compute.BufParam{.type Int, .length k.n})
   OutIds{.ids (compute.write ((compute.Write _){.to b_ids, .at i, .value ((b * 4) + v)}))}
 }
 tile := compute.parallel tile_raw "cpu" (OutIds)

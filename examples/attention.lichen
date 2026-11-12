@@ -82,7 +82,7 @@
    `matmul`, `layernorm`, `rmsnorm` and `softmax` all run there unchanged, so the device is \
    available and the difference is this operator's. The `scores` kernel is **refused outright** by \
    the SPIR-V emitter: *a `Select`'s two arms are computed in different classes ([Int, Float])* — \
-   and the trigger is narrow and reproducible. `sqrt 4.0` runs, `sqrt (int2float n + 0.25)` (which \
+   and the trigger is narrow and reproducible. `sqrt 4.0` runs, `sqrt (int2float k.n + 0.25)` (which \
    is what `examples/rmsnorm.lichen` writes) runs, and **`sqrt (int2float k.dim)` does not**, for \
    the second extent or for the third leaf alike; adding one arithmetic term between the crossing \
    and the root, `sqrt (int2float k.dim + 0.0)`, runs and answers the same numbers. The crossing's \
@@ -136,7 +136,7 @@
 QK := {.q (compute.Buf (compute.BufParam{.type Float, .length 8})), .k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Scored := {.s (compute.Buf (compute.BufParam{.type Float, .length 4}))}
 ParS := {.n @any : Int, .keys @any : Int, .dim @any : Int, .in (QK)}
-scores_raw := ('k = ParS) -> {
+scores_raw := 'k = ParS -> {
   i := compute.range k.n
   query := compute.row k
   key := compute.col k
@@ -148,7 +148,7 @@ scores := compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,eleme
 QSV := {.s (compute.Buf (compute.BufParam{.type Float, .length 4})), .v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 OutA := {.o (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 ParA := {.n @any : Int, .dim @any : Int, .keys @any : Int, .in (QSV)}
-attend_raw := ('k = ParA) -> {
+attend_raw := 'k = ParA -> {
   i := compute.range k.n
   query := compute.row k
   column := compute.col k
@@ -165,20 +165,20 @@ QBuf := {.q (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 KBuf := {.k (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 VBuf := {.v (compute.Buf (compute.BufParam{.type Float, .length 8}))}
 Fill := {.n @any : Int}
-fill_q_raw := Fill{.'n : Int} -> {
-  i := compute.range n
+fill_q_raw := 'k = Fill -> {
+  i := compute.range k.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
   (QBuf{.q (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_k_raw := Fill{.'n : Int} -> {
-  i := compute.range n
+fill_k_raw := 'k = Fill -> {
+  i := compute.range k.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 1.0 else 0.0)
   (KBuf{.k (compute.write ((compute.Write _){.to d, .at i, .value v}))})
 }
-fill_v_raw := Fill{.'n : Int} -> {
-  i := compute.range n
+fill_v_raw := 'k = Fill -> {
+  i := compute.range k.n
   d := compute.buf (compute.BufParam{.type Float, .length 8})
   v := (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
   (VBuf{.v (compute.write ((compute.Write _){.to d, .at i, .value v}))})

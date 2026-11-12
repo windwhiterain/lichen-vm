@@ -137,7 +137,7 @@ reads.
 
 ```lichen
 # one lane per `out` element; the fold walks `in` by the tensor's own pitch
-mv := ('k = Par) -> {
+mv := 'k = Par) -> {
   i := compute.range k.n
   wb := k.in.w.buffer
   wsr := k.in.w.stride.row
@@ -204,7 +204,7 @@ Measured:
 
 - a selector that **captures** the tensor at the call site reads its named fields and answers
   (`(sel 0)(1)` is `3`);
-- a selector whose parameter is only **typed** now answers too: `dimsOf := ('d = Dims) ->
+- a selector whose parameter is only **typed** now answers too: `dimsOf := 'd = Dims) ->
   (d.shape.row, d.shape.column)` applied to a two-pair tensor answers `(2, 3)` (probe
   `zz_tensor_probe`'s `probe_a_typed_selector`). The deferral this note asked for landed in
   `01936889`: a formal's field read is recorded at definition and its field's declared type is
