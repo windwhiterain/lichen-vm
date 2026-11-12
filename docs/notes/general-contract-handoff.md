@@ -1489,3 +1489,28 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 
 下一步：查 `run_parallel_kernel` 的 `outputs` 分配与 ABI 的 write ordinal 绑定，
 确认 launch 的输出应绑定到 kernel 实际写入的那个 buffer。
+
+## 第二个 kernel 的读被读了两次，第二次用第一次的值当地址（round 42）
+
+`DBG_W` 探针（`ParallelState` 的 read/write）跑包装器测试：
+
+```
+[write] position=0 index=0 value=10      ← fill 的写：0,1,2 -> 10,11,12 ✓
+[write] position=0 index=1 value=11
+[write] position=0 index=2 value=12
+[read]  position=0 index=0 inputs=1
+[read]  position=0 index=10 inputs=1     ← 第二次读的地址 = 第一次读到的值(10)
+[write] position=0 index=0 value=0       ← 写 0（第二次读越界得 0）
+[read]  position=0 index=1 inputs=1
+[read]  position=0 index=11 inputs=1
+[write] position=0 index=1 value=0
+...
+```
+
+- fill launch 的写入**正确**（[10,11,12]）；
+- 第二个 kernel 每个 lane 读**两次**：先 `read(input, i)`（0/1/2 ✓），再 `read(input, v)`（10/11/12 越界 → 0），
+  写出的值是第二次读的结果（0）。正确应为 `v * 2` 用第一次读的 `v`。
+
+所以缺陷在 kernel 内部对 `v * 2` 的 lowering：`v` 被解析成了一个“以 `v` 为地址的 read”，多读了一次并丢掉原值。
+下一步：查 `Mul`/write 的 `.value` 操作数解析（`Lower`/`parameter_path`/`supplied`），
+让 `v * 2` 使用第一次 read 的结果节点，而不是再造一个 read。
