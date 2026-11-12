@@ -1776,3 +1776,11 @@ frozen type half 的拷贝有关。
 
 这 3 个正是 copy fix（`670a65e8`）引入（基线绿）。下一步：查该副本 cell 的 `field_sources`/投影链路，
 让 graph 的参数解析沿副本边走到实参的 buffer（与 host 侧解析一致）。
+
+## round 57 小结
+
+- 240/3 的 3 个失败仍指向 graph 参数解析到“无 payload 的副本 cell（5100）”；
+- 已让 `recorded_buffer_payload` 在**无 payload** 时也沿 `field_source_of` 追供应商（`1b9459aa`），
+  但 5100 没有 `field_sources` 条目，仍解析不到——套件保持 280/3；
+- 下一步需要查：`Arg{.n a.n, .I a.in}` 的 `.I` 字段副本（5100）为何没有 `field_sources` 边，
+  或者 graph 的 `cfg` 值路径（`value_at_path`）取到的 5100 与 check 期写入的 required 节点不一致。
