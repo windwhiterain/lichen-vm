@@ -1377,3 +1377,29 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 **undecided 节点若其自身位于 applying function 的作用域内，即使它的类横跨模块，也应 clone 并脱离原类**
 （SPEC 的“Clone an undecided node will detached from its original class”）。这需要改 clone gate，
 而不是 unify。
+
+## “pollution”的准确定义与最小例子（round 36）
+
+**定义**：一个 equality class 同时含有 **模块级节点**（owner = None）和 **函数作用域节点**（owner = Some(f)）。
+它的 `scope_summary` 变成 `None`（“reaches outside every scope”），于是 `class_inside_scope` 对其中任何成员都返回 false，
+clone gate 就会 **引用** 而不是 clone。`DBG_SPAN` 探针在 `merge_class_summaries` 里打印这类合并。
+
+**当前代码中它是普遍存在的**（纯语言例子 `T := {.a @any : Int}; f := 'n -> (T{.a n}).a; f 2` 就产生多条）：
+
+```
+[span] left=53  right=105 rep=53  owners=(None, Some(1), None)   ← 模块级 + 函数级
+[span] left=97  right=38  rep=97  owners=(Some(1), None, Some(1))
+...
+```
+
+这些多是类型/属性节点，**本身不产生错误答案**——例如下面这个最小例子当前答 **7**：
+
+```lichen
+Inner := {.x @any : Int}
+T := {.a Inner}
+f := 'n -> (T{.a Inner{.x n}}).a.x
+f 7
+```
+
+**只有在额外那次 e1 unify 存在时**，形参值 cell（83）的类才并进 owner=None 的 53 → summary None → 引用 → 答 `none`。
+所以“pollution”在当前代码里是一个**普遍但通常无害**的结构；导致 `none` 的是“**值 cell** 的类跨到了模块级”。
