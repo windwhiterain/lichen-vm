@@ -1325,3 +1325,25 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 
 尚未定论的是：字面量为何产生/解析到两份结果（是 `check_instantiate` 的结果节点与 `value_of(container)` 不同，还是字面量被检查了两次）。
 下一步测量：`check_instantiate` 里打印结果节点及其 `.x`，与读的 container(123)/`.x`(78) 对比。
+
+## 读写节点一致、差异在运行期（round 33）
+
+在**有/无 e1 unify** 两种状态下打印同一个例子（`any-nested-field`）的 check 期读数：
+
+```
+[inst-result] e=26 value_node=123 items=[57, 54, 83]      ← .x 字段值 = 83（形参 cell）
+[read-x]      container=123 third=83 value_node=78        ← 读走 lazy Index(123,2) 的 value
+```
+
+**两态完全相同**（container 123、third 83、read 的 value_node 78）。但答案一个 7、一个 `none`。
+
+所以差异不在 check 期的图/节点选择，而在**运行期 83 的类的值**：
+有 e1 unify 时 83 的类并入了 owner=None 的 53（模块级），类摘要 None → clone gate 判 outside → 引用；
+运行期形参写入落到 template cell 的类上，而 lazy 读最终解析到的 83 的类没有 7 → `none`。
+
+结论：`v[k] = e1`（把模板字段节点与副本做 check_unify）在实现里会下钻到字段 pair 的 **type/attribute 项**，
+把字面量侧（函数作用域）的项节点与模板侧（模块级）的项节点并类——这一步才是污染源，而不是“e1 该不该 unify”。
+按 §Any 的方向规则，值项不受影响；受影响的是 pair 的 type/attr 项。
+
+下一步（已定方向）：让 e1 的 unify 只比较/填充**字段的值项**，不要把 pair 的 type/attribute 项并类
+（类型/属性是常量，判等即可）。这需要在 struct 值的递归 unify 里区分值项与类型/属性项。
