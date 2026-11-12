@@ -82,6 +82,16 @@ where
                 shape::EXPR_TYPE_SLOT,
             )
             .and_then(|node| node.dynamic());
+            // A raw instance field (the SPEC's `e3`) has no attributes;
+            // a type's field is the `[raw value, attributes...]` expr.
+            if value_node.is_none()
+                && ty_node.is_none()
+                && self.module.node_operation(element).is_none()
+                && self.outlives_read(element)
+            {
+                let ty_node = self.fresh_cell();
+                return (element, element, ty_node);
+            }
             if let (Some(value_node), Some(ty_node)) = (value_node, ty_node)
                 && self.outlives_read(element)
                 && self.outlives_read(value_node)
