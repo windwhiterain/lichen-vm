@@ -109,7 +109,7 @@
     `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`，在 rank 3/contract 1 答
     `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`——都与参考一致。
     这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。12. **typed-only selector 已可用**（`zz_tensor_probe` 的 `probe_a_typed_selector`）：
-    `dimsOf := 'd = Dims) -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
+    `dimsOf := 'd = Dims -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
     named-tensors §5.2 里「refused」的读数属旧版本；deferral 是 `01936889` 落的。
     形状表选择器因此可以「写一次、所有张量共用」。
 
@@ -142,7 +142,7 @@
     `[2938, 7042, 3016, 7264, 3094, 7486, 3172, 7708, 3250, 7930]`，在 rank 3/contract 1 答
     `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`——都与参考一致。
     这就是 general contract API 的库形状：**库持有 kernel，宿主只给数据与 meta**。12. **typed-only selector 已可用**（`zz_tensor_probe` 的 `probe_a_typed_selector`）：
-    `dimsOf := 'd = Dims) -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
+    `dimsOf := 'd = Dims -> (d.shape.row, d.shape.column)` 作用在 two-pair 张量上答 `(2, 3)`。
     named-tensors §5.2 里「refused」的读数属旧版本；deferral 是 `01936889` 落的。
     形状表选择器因此可以「写一次、所有张量共用」。
 
@@ -563,7 +563,7 @@ class；若不同类，就是 `e3 = v[k]` 的递归 unify 没有在 `.native` �
 - **可用的函数形态**（已测，`probe_a_named_contraction_whole_arg`）：
 
   ```lichen
-  contract := ('arg = Arg) -> ((compute.plrun kernel arg) : Struct)
+  contract := 'arg = Arg -> ((compute.plrun kernel arg) : Struct)
   out := contract ((Arg){.meta meta, .I In{.a data_a.a, .b data_b.b, .plan dp.plan}})
   compute.collect out.c : Array
   ```
