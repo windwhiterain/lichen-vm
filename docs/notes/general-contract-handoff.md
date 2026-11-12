@@ -1470,3 +1470,22 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 
 下一步：以 host 侧解析到的节点（14878）为准，让 lowering 的输入路径也走到同一节点
 （对比 `recorded_input_node`/`value_at_path` 与 `recorded_buffer_payload` 的解析差异）。
+
+## 两个 launch 的链：outcome buffer ≠ write 的 buffer（round 41）
+
+在 lowering 的 `roles.inputs` 解析处加探针（`DBG_LOW`），跑包装器测试：**没有任何 `[lower-in]` 输出**——
+说明 kernel 内部的 `k.in.b` 读**不走**这里（roles.inputs），之前的“lowering 解析错”的定位需要修正。
+
+更早的读数（`DBG_IN`）显示：
+
+```
+[out] results=[[10, 0, 0, 0]]   ← fill launch 的 host outcome
+[in]  words=["10", "11", "12"]  ← 第二个 launch 的输入（生产者 buffer，三条都在）
+```
+
+即：**fill 的 write 把 10/11/12 写进了 `inbuf.z` 的 buffer，而 launch 的 host outcome 是另一个
+只含 [10,0,0,0] 的 buffer**。所以问题在 launch 的 **output 绑定**（outcome 收集的 buffer 与 kernel
+实际写的 buffer 不一致），而不是输入解析。
+
+下一步：查 `run_parallel_kernel` 的 `outputs` 分配与 ABI 的 write ordinal 绑定，
+确认 launch 的输出应绑定到 kernel 实际写入的那个 buffer。
