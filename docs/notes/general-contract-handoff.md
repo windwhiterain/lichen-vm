@@ -1449,3 +1449,24 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 或 prelude 被编译了多次）。两处实验均已回退，基线 262/21。
 
 本轮已提交：`8fa1de17`（raw 实例字段读作自身；纯语言形态与最小链都正确，套件计数不变）。
+
+## 包装器 kernel 的输入：host 对、lowering 错（round 40）
+
+`a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper`（应是 22，实得 0）的读数：
+
+```
+[in]  node=14878 payload=… words=["10", "11", "12"]      ← launch 收集输入时解析出的是生产者 buffer ✓
+[out] results=[[0, 0, 0, 0]]                              ← kernel 的输出全 0
+```
+
+- **host 侧**（`run_parallel_kernel` 之前的输入收集，compute.rs:1588 的 `recorded_buffer_payload`）解析正确：
+  第二个 launch 的输入就是生产者写入的 [10,11,12]；
+- **kernel 内部**读 `k.in.b` 时走 lowering（compute.rs:~7168 的
+  `recorded_input_node` / `value_at_path`），解析到的是**另一个（空的）buffer** → 读 0 → 写 0*2=0 → 输出 0。
+
+所以这 21 个失败里，这类“包装器 kernel”的根因是 **lowering 对 `k.in.b`（签名结构里的 Buf 字段）的解析**，
+而不是 launch 的输入收集。两条解析路径（host 的 `recorded_buffer_payload` 与 lowering 的
+`recorded_input_node`/`value_at_path`）用不同的规则，前者对、后者错。
+
+下一步：以 host 侧解析到的节点（14878）为准，让 lowering 的输入路径也走到同一节点
+（对比 `recorded_input_node`/`value_at_path` 与 `recorded_buffer_payload` 的解析差异）。
