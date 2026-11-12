@@ -1534,3 +1534,22 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 而不是再发射一次读（`supplied`/`lower_definition` 都可能重新走读节点）。
 
 另：用户澄清 **unify/merge 不触发 operation**，只有 evalu**ation** 才触发——后续分析不要把类合并当作求值。
+
+## 两次发射是**两个不同的 read 节点**（round 44）
+
+`DBG_BREAD`（打印读的 operand 数组）跑包装器测试：
+
+```
+[bread] operand=5214  op_items=[5212, 5213, 4723, 4468]  index_node=4468   ← 源 read（4 项）
+[bread] operand=13516 op_items=[13517, 13580]            index_node=13580  ← 另一个 read（2 项，index=v）
+```
+
+- 第一次：源 read 的 operand 数组有 4 项（buffer、index、…attribute）；
+- 第二次：operand 数组只有 2 项 `[buffer, v]`，index = 13580 = 第一次读的结果 `v`。
+
+所以不是“同一节点发射两次”，而是**体内存在两个 read 节点**：源 read（5214）和一个
+**index 为 `v` 的副本 read（13516）**——后者是 per-use 拷贝/`field_sources` 解析产生的。
+`v * 2` 的 lowering 经 `supplied`/`lower_definition` 解析到 13516，于是又发射了一次读。
+
+下一步：查 13516 的创建处（`instantiate_requirement` 对 read 结果的拷贝？`field_sources` 的边？），
+让 `v` 的解析复用它自己的值（第一次读的结果节点），而不是这个自引用的副本 read。
