@@ -1614,3 +1614,23 @@ read := 'x = (Read _) -> $read(x.from, x.at)
 结合第一条 read 的 index 是 **range 对象**（4468，Array 值，运行期求值成 lane 0/1/2）而不是 `i` 的 cell，
 `i`/`v` 的类合并（或 `.at` 与 `v` 的合并）是下一个要定位的点：
 在 `add_equality` 里筛出“经典 read 结果节点”的合并，找出是哪一次 unify（注解 `: Int` / 参数绑定 / 返回类型）建立的。
+
+## alias_read 把 x.at 与 read 结果并类（round 48）
+
+`DBG_ALIAS` 探针抓住了关键合并的调用者：
+
+```
+[alias] reader=6018 (LowOperator(Index))  target=13515 (ComputeOperator(Read))
+```
+
+- `alias_read`（Index/读的求值别名）把 `x.at`（6018）与 **read 操作节点 13515** 并成一类；
+- target 是“容器在当前 index 位置的项”——说明容器（参数 x 的实例）的 `.at` 项所在的类里
+  已经有 read 操作节点（13515），即 **`.at` 的 cell 与 read 结果同属一类**。
+
+`[eq2]` 另外两条相关合并：`13491(Array) ↔ 4468(Array, Apply)`（克隆的 index = 模板的 range）、
+`5617(Apply) ↔ 13514(Array)`（用户的 read 结果与一个数组）。
+
+所有“先 read 再写”的 kernel（`parallel_multi_output_collects_each_output` 得 [0,0,0] 应 [20,22,24]、
+`parallel_read_input_buffer`、包装器等）都共享这一条：**read 的结果与它自己的 `.at` 参数落在同一类**，
+于是第二次读用第一次读的值当地址。下一个落点：找出把 `.at` cell 与 read 结果并起来的那次 unify
+（不是 alias_read，它只是暴露者）。
