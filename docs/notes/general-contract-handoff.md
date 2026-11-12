@@ -1634,3 +1634,20 @@ read := 'x = (Read _) -> $read(x.from, x.at)
 `parallel_read_input_buffer`、包装器等）都共享这一条：**read 的结果与它自己的 `.at` 参数落在同一类**，
 于是第二次读用第一次读的值当地址。下一个落点：找出把 `.at` cell 与 read 结果并起来的那次 unify
 （不是 alias_read，它只是暴露者）。
+
+## x.at 读到了 read 调用自己的结果（round 49）
+
+`DBG_IDX`（Index 求值）抓到的链：
+
+```
+[idx] node=6018  container=5617 (read 的 apply)  index=0 len=5  element=13515 (read 操作)
+[idx] node=6061  container=6018 (x.at)           index=0 len=5  element=6019
+```
+
+- prelude 的 `x.at`（6018）的容器 = **用户 read 调用自己的 apply 节点 5617**，不是实参结构；
+- 5617 的值是一个 len=5 的数组，其 item 0 = read 操作节点（13515）。
+
+即：prelude 的参数 `x` 的 image 落到了 **read 调用自己的结果**上（循环绑定），而不是实参数值结构。
+SPEC §Clone 说“unify the argument with the parameter”；现在的实现把参数与 apply 结果并到了一起。
+下一步/或需用户指点：参数绑定处（`apply` 的 `unify_parameter_slots`/`parameter_image`/clone）哪里
+把参数与 apply 结果建立了 equality。
