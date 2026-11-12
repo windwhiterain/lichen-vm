@@ -1403,3 +1403,17 @@ f 7
 
 **只有在额外那次 e1 unify 存在时**，形参值 cell（83）的类才并进 owner=None 的 53 → summary None → 引用 → 答 `none`。
 所以“pollution”在当前代码里是一个**普遍但通常无害**的结构；导致 `none` 的是“**值 cell** 的类跨到了模块级”。
+
+## 回退越权改动（round 37）
+
+我把实例字段从实参裸值改成了类型侧的 pair（`value_items.extend(fields)`），**没有 SPEC 依据**，已回退。
+基线恢复 262/21。
+
+按 §Struct 的改写重新对照，实现与 SPEC 至少在这几处不一致，需要先确认编码再动手：
+
+1. `v := @raw[name_table, nominal_id, @raw None, @raw None]` —— `v` 的槽是 **raw None**；
+   实现里槽来自 per-use 副本（类型侧 pair）。
+2. `e3 = @raw v[slot]` —— **给定值 e3 先与 None 槽 unify**；实现里 e3 与 pair unify。
+3. `@raw v[slot] = e1` —— 模板字段值 e1 之后再写入；实现里没有这次写入（或只由副本携带）。
+4. 结果 `@raw[@raw v, Struct, ...]` —— 实例表达式的值 = v；实现里结果数组直接是 `[name_table, nominal_id, vals...]`。
+5. `let _{.n1 e1, .n2 e2} = s` 里 e1/e2 是 **pair 还是声明值**，决定第 3 步写入的是什么。
