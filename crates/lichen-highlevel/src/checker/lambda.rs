@@ -593,9 +593,7 @@ where
                 } else {
                     value_argument_expr
                 };
-                // A returned function's parameter is this call's own clone; the
-                // argument was checked against it, so the side that would unify
-                // the template is skipped.
+                // The parameter is this call's clone; the template's type side is skipped.
                 let returned = self.applied_parameter(callee_expr).is_some();
                 let applied = if returned {
                     true

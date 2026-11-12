@@ -1,12 +1,9 @@
-//! A struct template's open cells belong to the **instance**, never to the
-//! template: one use's Int field must not decide the type a later use's Float
-//! field fills. The forms are the spec's Ideal API 4 and 5
-//! (`docs/language-spec.md` §Ideal API).
+//! A template's open cells belong to the instance; its decided cells are shared.
 //!
 //! # Invariant
-//! Every template use copies the template's **open** cells — the value slot and
-//! the type slot alike — while a decided field type stays shared. A decided
-//! annotation therefore still constrains every instance.
+//! Every template use copies the template's open cells — the value slot and an
+//! undecided type cell alike — while a decided field type stays shared, so a
+//! decided annotation still constrains every instance.
 
 use lichen_highlevel::diagnostic::DiagKind;
 

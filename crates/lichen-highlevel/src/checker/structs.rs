@@ -723,8 +723,8 @@ where
     /// annotation's own term. A partial application's callee is the function
     /// it returns, the same question the apply itself asks.
     fn expected_argument_requirement(&mut self, function: ExprId) -> Option<NodeId> {
-        // A returned function's parameter is the clone this call's own apply made;
-        // pinning to it keeps the template's cells out of the argument's check.
+        // The parameter is this call's own clone; pinning to it keeps the
+        // template out of the argument's check.
         if let Some(term) = self.state[function].term
             && let Some(parameter) = self.applied_parameter(term)
         {
