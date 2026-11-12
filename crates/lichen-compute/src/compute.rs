@@ -6829,6 +6829,21 @@ where
         })
     };
     let mut payload = buf_payload::<P>(module, buffer);
+    // No payload: a per-use copy reaches the caller-supplied buffer by its edge.
+    for _ in 0..8 {
+        if payload.is_some() {
+            break;
+        }
+        let Some(source) = buffer
+            .dynamic()
+            .and_then(|node| field_source_of(module, node))
+        else {
+            break;
+        };
+        buffer = AnyNodeId::Dynamic(source);
+        let _ = module.evaluate_node(buffer, None);
+        payload = buf_payload::<P>(module, buffer);
+    }
     // Read the applied projection while the wrapper or its payload is still open.
     if buffer_open || payload_open(module, payload) {
         if let Some(projected) = recorded_applied_projection::<P>(module, block, buffer) {
