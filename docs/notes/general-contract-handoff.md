@@ -1596,3 +1596,21 @@ read := 'x = (Read _) -> $read(x.from, x.at)
 
 下一步：在参数绑定（`unify_parameter_slots`/`bind_field_sources`）处确认哪次 unify 把 `x.at` 与 `v` 并类，
 并按 SPEC 让参数绑定只复制槽值、不把结果并回参数字段。
+
+## 克隆的 .at 不是 field_sources 的候选（round 47）
+
+`DBG_BIND` 打印 `bind_field_sources` 的所有插入（candidate、supplied、path）：
+
+```
+[bind] candidate=12520 supplied=7570  path=[0]    value_projection=true
+[bind] candidate=12453 supplied=12692 path=[2, 0] value_projection=true
+[bind] candidate=13614 supplied=13435 path=[0]    value_projection=true
+...
+```
+
+- **13580（克隆的 `.at`）不在任何绑定里**——它不是经 `field_sources` 拿到值的；
+- 所以 13580 运行期等于 `v` 只能来自**类合并**：克隆的 `.at` 与调用结果 `v` 落在同一个 class。
+
+结合第一条 read 的 index 是 **range 对象**（4468，Array 值，运行期求值成 lane 0/1/2）而不是 `i` 的 cell，
+`i`/`v` 的类合并（或 `.at` 与 `v` 的合并）是下一个要定位的点：
+在 `add_equality` 里筛出“经典 read 结果节点”的合并，找出是哪一次 unify（注解 `: Int` / 参数绑定 / 返回类型）建立的。
