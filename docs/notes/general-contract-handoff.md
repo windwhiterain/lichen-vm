@@ -1347,3 +1347,15 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 
 下一步（已定方向）：让 e1 的 unify 只比较/填充**字段的值项**，不要把 pair 的 type/attribute 项并类
 （类型/属性是常量，判等即可）。这需要在 struct 值的递归 unify 里区分值项与类型/属性项。
+
+## 目标节点选择实验（round 34）
+
+尝试把 e3 的 unify 目标从字段 pair 改为 pair 的 value item（`value_item(field, 0)`），
+两种写法都让探针与套件大幅回退（`any-nested-field: expected Table, found raw[...]`，套件 146/137）。
+
+原因：pair 的 value item 与给定值的形状不同（给定值是 4 项 struct 值，value item 是单槽），
+当两侧都已定时 Unify 会按位置比较 → 表/结构错配。当前已回退。
+
+这说明：e3 必须与字段 pair 本身 unify（双方都未定时按类合并），
+而 pair 的类型/属性项造成的跨作用域并类只能在 **unify 的下钻层**区分值项与类型/属性项，
+不能在 checker 的调用点改目标。
