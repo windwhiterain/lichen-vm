@@ -1761,3 +1761,18 @@ lichen-language：68 passed, 1 failed（既有 set 解析测试）
 `buf_element_class_recorded::*`（float 元素类）——正是 copy fix（`670a65e8`）引入的 3 个；
 检查期报 `compute.graph: argument 0 of this dispatch is not a buffer`，疑与 copy fix 对
 frozen type half 的拷贝有关。
+
+## 剩余 3 个的解析点（round 56）
+
+`DBG_GIN`（graph 输入解析处）跑 `buf_element_class_recorded::*`：
+
+```
+[gin] position=0 path=[1, 0] found=Some(Dynamic(NodeId(5100v1)))
+```
+
+- 路径 `[1, 0]` = 参数结构第 1 个字段（`.I`）的值槽；
+- 找到 5100，但 `recorded_buffer_payload(5100)` 返回 None（`buf_payload` 对 5100 无值）→ 报 “argument 0 is not a buffer”；
+- 即 5100 是一个**未定/未连接**的 cell，`recorded_applied_projection` 也没能把它解析到 apply 的投影。
+
+这 3 个正是 copy fix（`670a65e8`）引入（基线绿）。下一步：查该副本 cell 的 `field_sources`/投影链路，
+让 graph 的参数解析沿副本边走到实参的 buffer（与 host 侧解析一致）。
