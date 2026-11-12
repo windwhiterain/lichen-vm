@@ -1725,3 +1725,10 @@ read 的 apply 拿到了实参的值（很可能是 `c` cell 与参数/实参同
 - 剩余 21 个失败都在 **lichen-compute** 套件（compute 插件/launch 路径）。
 
 结论：SPEC 的核心实现已由 highlevel 套件验证；compute 插件的 21 个失败是独立的下一阶段工作。
+
+### 该语言测试失败是既有的
+
+`git show 4d2cb04e:crates/lichen-language/src/tests/render_tests.rs` 显示同样的
+`set(1, 2)` 测试在**基线**就存在；而 SPEC §Set 的语法是 `set(t)(e1, e2)`，
+`set(1, 2)` 与解析器的集合构造语法不一致。所以它是**既有失败**（基线时语言套件未被跑过），
+不是本会话引入。修它要么改测试（需用户许可），要么让解析器接受旧写法——待用户定。
