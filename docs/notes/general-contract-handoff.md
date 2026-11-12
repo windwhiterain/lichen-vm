@@ -1829,3 +1829,17 @@ frozen type half 的拷贝有关。
 | lichen-compute | **283 passed, 0 failed, 1 ignored** ✓ |
 | lichen-highlevel | **136 passed, 0 failed** ✓ |
 | lichen-language | 68 passed, 1 failed（既有 `set(1,2)` 解析测试） |
+
+## 全仓测试现状（round 61）
+
+| 套件 | 结果 | 备注 |
+|---|---|---|
+| lichen-compute | **283 passed, 0 failed, 1 ignored** ✓ | 基线 279；全部通过 |
+| lichen-highlevel | **136 passed, 0 failed** ✓ | |
+| lichen-compute-gpu | 90 passed, 4 failed | **基线同样 4 个失败**（SPIR-V 校验，既有） |
+| lichen-language | 68 passed, 1 failed | **基线同样 1 个失败**（`set(1,2)` 解析，既有） |
+| lichen-language-server | 编译通过 | 曾被 `353b0be6` 的 AST 变体改动打断，已修（`85f71a22`） |
+| 其它（compiler/tools/…） | 绿 | |
+
+结论：**SPEC 实现（核心 + compute）全绿**；剩余 4+1 个失败在基线（`4d2cb04e`）上完全相同，
+属于本会话之外的既有缺陷。language-server 的编译中断也已修复。
