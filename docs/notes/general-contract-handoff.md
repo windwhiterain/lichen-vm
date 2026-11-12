@@ -1682,3 +1682,17 @@ SPEC §Clone 说“unify the argument with the parameter”；现在的实现把
 未生效，或走了 value-slot 读路径（`Index(container, 0)`）。
 下一步：在 `check_named_field`/`value_slot_read` 处确认给 `x.at` 生成的 subscript 常量应是多少（`at + 2`），
 以及容器值为何是结构 apply 值。
+
+## `$read` 的 apply 答成了实参结构（round 52）
+
+`[inst-res]` 显示结构实例化正常（用户的 Read 结构 = [names, id, from=4723, at=4468] ✓，e=161）。
+而 `[eq2]` 显示 read 调用的 apply（5617）的值是 **Array(len 5)**、`[idx]` 里 `x.at`（6018）的容器是 5617、
+其下标是常量 0（节点 39）。
+
+即：**`compute.read` 的 apply 把自己的值答成了实参结构**（而不是读出的元素 10），于是：
+- `x.at` 读容器（= apply 值 = 结构数组）的第 0 项 → 读到 read 操作节点；
+- 第二次读的地址 = 第一次读的结果。
+
+所以缺陷不在 `x.at` 的编码本身，而在 **apply 的 answer**：`$read`/`read` 的 apply 结果被写成了实参（结构数组）。
+下一步：在 apply 的 answer 写入处（`write_node_answer`/`function_apply` 的 result 绑定）查为什么
+read 的 apply 拿到了实参的值（很可能是 `c` cell 与参数/实参同类）。
