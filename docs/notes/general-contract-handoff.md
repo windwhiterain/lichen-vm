@@ -1435,3 +1435,17 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 
 据此我此前“结构字段是值、读就是元素本身”的读法**错误**，`7abf86f4` 已 revert（`b6ef5c48`），基线恢复 262/21。
 读字段 = 取字段表达式的 **raw 值**（item 0），实现原有的 pair 语义是对的。
+
+## 拒绝诊断的三重复（round 39）
+
+`an_output_position_that_is_not_a_buffer_is_refused` 期望 **1** 条 `expected Struct, found Int`，实际 **3** 条。
+本轮定位：
+
+- `DBG_DIAG` 探针显示**日记只有一条**：`seq=0 loc={expr:78, path:One(Type)} kind=Annotation errors=0..1`；
+- 在诊断装配处把“每条 entry 只渲染第一个 error”改掉也**无效**（仍 3 条）；
+- 在 `record_unify` 里按 `(expr, kind)` 去重同样**无效**。
+
+所以三条消息**不是**来自 checker 的日记渲染；需要继续查 `evaluate_raw` 的诊断装配（可能 store/registry 跨模块积累了同一诊断，
+或 prelude 被编译了多次）。两处实验均已回退，基线 262/21。
+
+本轮已提交：`8fa1de17`（raw 实例字段读作自身；纯语言形态与最小链都正确，套件计数不变）。
