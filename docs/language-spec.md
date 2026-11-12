@@ -79,17 +79,27 @@ Nodes inside same class must share same value, class is merged by unify.
 An value can be Type or an array of nodes.
 
 ## Unify
-Unify is a lowlevel action that unify two node will merge into one node if those satisfied:
-- both side are equal or any side is undecided.
+Unify is a lowlevel recursive action that unify two node will merge into one node if those satisfied:
 - recursive into nodes both side refers and apply the same rule.
+- if both side are recursively equal or any side is undecided, merge into one class.
 or else produce an unify error. 
+
+## Merge
+nodes are merged into one class by unify. evaluating node will trigger operations in all nodes in its class run. 
+
+after running an operation, unify the value to the class's value.
+
+for memory locality, the first value writing to a class will propagate to all member nodes.
+
+## Operation
+for effeciancy, one operation only run once.
 
 ## Attribute
 
 An expression is a raw array of attributes, value attribute is a lowlevel value, other attribute is an expression recursively, attributes is extentable.
 
 ```sytax
-expr := `raw[raw value, type, refinement, doc, ...]`
+expr := `@raw[@raw value, type, refinement, doc, ...]`
 ```
 
 > ```lichen @raw[...]``` is a lowlevel array that each element is a lowlevel value.
@@ -102,7 +112,7 @@ An annotated expr creats a new expression with each annotated attribute:
 - replaced by the corresponding annotation expression.
 
 ```sytax
-`@raw[value, ann1, ...] : ann2` -> `{ann1 = ann2; @raw[value, ann2, ...]}`
+`@raw[@raw value, ann1, ...] : ann2` -> `{ann1 = ann2; @raw[@raw value, ann2, ...]}`
 ``` 
 
 ## Type
@@ -170,10 +180,10 @@ name_table := @raw Table
 `{
   let _{.n1 e1, .n2 e2} = s;
   v := @raw[name_table, nominal_id, @raw None, @raw None]
-  @raw v[name_table["n1"]+2] = e1;
-  @raw v[name_table["n2"]+2] = e2;
   e3 = @raw v[name_table["n2"]+2]
   e4 = @raw v[name_table["n1"]+2]
+  @raw v[name_table["n1"]+2] = e1;
+  @raw v[name_table["n2"]+2] = e2;
   @raw[@raw v, Struct, ...]
 }`
 
@@ -288,12 +298,17 @@ Polymorphism at every application: @clone its expression, unify the argument wit
 > `@clone f`: see section `### Clone`.   
 
 ### Clone
+Clone is a recursive clone within certain scope, triggered by function apply.
 
-For undecided node, only clone if its class is in function `f`' scope, otherwise create a reference.
+Undecided node, if its class is in the applying function's scope, must be clome, otherwise reference it.
+
+For efficency:
+- Clone recursive into a decided node if it the "deep_decided" flag which set during deep evaluate is false.
+- Reference node outside the applying function's scope
 
 Clone an undecided node will detached from its original class for let-polymorphsim.
 
-Apply's body unify a side apply body that only enable evaluation the next time cloned with the function, so that if that clone made the function specialized, the side apply unify the specialized body apply to the original apply body.
+Auto create a side apply for inner function apply, the original apply's body unify a side apply's body, the side apply will not be able to evaluate util the next time be cloned by the outer function's apply, so that if the outer function applying clone made the innner applying function specialized, the specialized side apply's body can unify the unspecialized oringinal apply's body.
 
 ### Any
 
