@@ -1698,8 +1698,14 @@ impl<'a> NameClass<'a> {
                     self.expr(p);
                 }
             }
-            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) => {
                 for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::Set { ty, members, .. } => {
+                self.expr(ty);
+                for el in members {
                     self.expr(el);
                 }
             }
@@ -1730,7 +1736,8 @@ impl<'a> NameClass<'a> {
                     self.expr(&f.value);
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
+                self.expr(ty);
                 for (k, v) in entries {
                     self.expr(k);
                     self.expr(v);
@@ -2003,8 +2010,14 @@ impl Walk {
                     self.expr(p);
                 }
             }
-            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) => {
                 for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::Set { ty, members, .. } => {
+                self.expr(ty);
+                for el in members {
                     self.expr(el);
                 }
             }
@@ -2035,7 +2048,8 @@ impl Walk {
                     self.expr(&f.value);
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
+                self.expr(ty);
                 for (k, v) in entries {
                     self.expr(k);
                     self.expr(v);
@@ -2337,8 +2351,14 @@ impl<'a> ScopeCapture<'a> {
                     self.expr(p);
                 }
             }
-            Expr::Tuple(elems, _) | Expr::Set(elems, _) => {
+            Expr::Tuple(elems, _) => {
                 for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::Set { ty, members, .. } => {
+                self.expr(ty);
+                for el in members {
                     self.expr(el);
                 }
             }
@@ -2369,7 +2389,8 @@ impl<'a> ScopeCapture<'a> {
                     self.expr(&f.value);
                 }
             }
-            Expr::Table(entries, _) => {
+            Expr::Table { ty, entries, .. } => {
+                self.expr(ty);
                 for (k, v) in entries {
                     self.expr(k);
                     self.expr(v);
