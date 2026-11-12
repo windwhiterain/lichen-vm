@@ -44,7 +44,7 @@ sugar:
 ```sytax
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-` ...'a... -> ...` => `{a := _; ...a... -> ...}`
+` ...a... -> ...b...` => `Function{a := _; b:= _; @parameter ...a...; @body ...b...}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -53,6 +53,8 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 
 > Inside ```sytax `...` ``` is lichen code ```lichen ...```, inside ```sytax `<...>` ```  is sytax ```sytax ...```.
 > ```sytax ... => ...``` is sytax conversion.
+> `<expr> @raw-> <expr>` is lowlevel function.
+> `Function{<block_inner>}` is a function scope.
 
 ## Ideal API
 1. Uniform signature: use if all parameter play equal role.
@@ -69,6 +71,18 @@ div _{.dividend 2, .dividor 1}
 Div := {.dividend @any: Int, .dividor @any: Int}
 div := 'x = Div -> x.dividend / x.dividor
 div _{.dividend 2, .dividor 1}
+
+4. Wildcard generic: use if no extra constraint over generics.
+Div := {.dividen @any, .dividor @any}
+Div{.dividen 1,.dividor 2}, Div{.dividen 1.0,.dividor 2.0}
+div := {.'dividend, .'dividor} -> dividend / dividor
+div {.dividen 1,.dividor 2}, div{.dividen 1.0,.dividor 2.0}
+
+4. Function generic: can fomulate any constraint.
+Div := 'T -> {.dividen @any: 'T, .dividor @any: T}
+Div{.dividen 1,.dividor 2}, Div{.dividen 1.0,.dividor 2.0}
+div := {.'dividend: 'T, .'dividor: T} -> dividend / dividor
+div {.dividen 1,.dividor 2}, div{.dividen 1.0,.dividor 2.0}
 
 ## Lowlevel
 
@@ -279,14 +293,9 @@ Nodes inside same class can be classified by tag.
 
 ## Function
 
-Function is an expression with a specified undecided expression as parameter.
+Function scope with specified two expr: parameter and body.
 
-The parameter side is an ordinary expression (`lambda := expr => expr`), and the argument is unified with its value — the **domain**.
-A name written on the parameter side without a prime is an expression of the enclosing scope; a name with a prime is a **formal reference**, and it declares a parameter of this function, which binds that name in its body.
-The body may write either `'a` or `a` for that parameter. A primed body reference names only the innermost lambda's declared formals; plain names retain ordinary lexical closure.
-Several primed names on one parameter side are leaves of one parameter expression, not several parameters, and one name primed twice is one parameter.
-
-Polymorphism at every application: @clone its expression, unify the argument with cloned parameter.
+Polymorphism at every application: @clone function's expressions, unify the argument with the cloned parameter.
 
 ```sytax
 `Function` := `@raw[@raw FunctionType, Type, ...]`
