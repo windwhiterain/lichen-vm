@@ -68,23 +68,29 @@ div := {.'dividend: Int, .'dividor: Int} -> dividend / dividor
 div _{.dividend 2, .dividor 1} 
 ```
 3. Struct signature: use if the signature will be used else where.
+```
 Div := {.dividend @any: Int, .dividor @any: Int}
 div := 'x = Div -> x.dividend / x.dividor
 div _{.dividend 2, .dividor 1}
+```
 
 4. Wildcard generic: use if no extra constraint over generics.
+```
 Div := {.dividen @any, .dividor @any}
 Div{.dividen 1, .dividor 2}, Div{.dividen 1.0, .dividor 2.0}
 
 div := {.'dividend, .'dividor} -> dividend / dividor
-div {.dividen 1, .dividor 2}, div {.dividen 1.0, .dividor 2.0}
+div _{.dividen 1, .dividor 2}, div _{.dividen 1.0, .dividor 2.0}
+```
 
 5. Function generic: can fomulate any constraint.
+```
 Div := 'T -> {.dividen @any: T, .dividor @any: T}
 (Div _){.dividen 1,.dividor 2}, (Div _){.dividen 1.0,.dividor 2.0}
 
 div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor
-div _ {.dividen 1, .dividor 2}, div _ {.dividen 1.0,.dividor 2.0}
+div _ _{.dividen 1, .dividor 2}, div _ _{.dividen 1.0,.dividor 2.0}
+```
 
 ## Lowlevel
 
