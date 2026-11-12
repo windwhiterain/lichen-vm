@@ -1732,3 +1732,32 @@ read 的 apply 拿到了实参的值（很可能是 `c` cell 与参数/实参同
 `set(1, 2)` 测试在**基线**就存在；而 SPEC §Set 的语法是 `set(t)(e1, e2)`，
 `set(1, 2)` 与解析器的集合构造语法不一致。所以它是**既有失败**（基线时语言套件未被跑过），
 不是本会话引入。修它要么改测试（需用户许可），要么让解析器接受旧写法——待用户定。
+
+## 突破：e3 只对已定的供给值做 unify（round 55）
+
+**bisect 结果**（`git checkout <commit> -- crates/` + 构建 + 跑 compute 套件，代价 ~35s/次）：
+
+| commit | 结果 |
+|---|---|
+| 基线 `4d2cb04e` | **279 passed, 0 failed**（绿） |
+| `670a65e8`（copy fix） | 276 / 3（`buf_element_class_recorded::*`） |
+| `566f37e8`（WIP：无条件 e3 unify + supplied 追踪） | 252 / 27 |
+| 之后逐步修回到 HEAD 的 262 / 21 |
+
+`566f37e8` 把 `check_instantiate` 的 e3 unify 从“仅当供给值已定”改成**无条件**。
+恢复“仅当已定”（`c18ef097`）后：
+
+```
+compute 套件：280 passed, 3 failed   ← 从 262/21 恢复
+lichen-highlevel：136 passed, 0 failed ✓
+lichen-language：68 passed, 1 failed（既有 set 解析测试）
+```
+
+原理：无条件 unify 把**未定的供给值**的类并进槽的类，等于把每个 per-use 副本的类挪出函数作用域，
+后续 clone 便引用而非克隆，compute 链全断。仅当已定时 unify，副本保持自己的类。
+
+## 剩余 3 个
+
+`buf_element_class_recorded::*`（float 元素类）——正是 copy fix（`670a65e8`）引入的 3 个；
+检查期报 `compute.graph: argument 0 of this dispatch is not a buffer`，疑与 copy fix 对
+frozen type half 的拷贝有关。
