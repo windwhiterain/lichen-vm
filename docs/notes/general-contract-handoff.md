@@ -1359,3 +1359,21 @@ unify”是对的（`eac8af7a`），原因是：那次 unify 会把副本的类�
 这说明：e3 必须与字段 pair 本身 unify（双方都未定时按类合并），
 而 pair 的类型/属性项造成的跨作用域并类只能在 **unify 的下钻层**区分值项与类型/属性项，
 不能在 checker 的调用点改目标。
+
+## 类型/属性项不能只比较（round 35）
+
+在 `unify_array_items` 里给字段 pair 的类型项和属性项加“只判等、不并类”的 compare-only 分支，两种范围都测了：
+
+| 范围 | 探针 | 套件 |
+|---|---|---|
+| 类型项 + 属性项 | 全部 refused（`the container's type is not decided here`） | 92/191 |
+| 仅属性项 | `any-nested-field: 7` ✓ | 92/191 |
+
+- 类型项的类合并是**必须的**：checker 的类型解析依赖它（否则容器类型判成未定）；
+- 属性项的类合并同样被别处依赖（92/191）；
+- 两种都回退，基线恢复 262/21。
+
+所以“pollution 来自 pair 的 type/attr 并类”这条不能靠取消合并解决。剩下的可行方向只有 §Clone 一侧：
+**undecided 节点若其自身位于 applying function 的作用域内，即使它的类横跨模块，也应 clone 并脱离原类**
+（SPEC 的“Clone an undecided node will detached from its original class”）。这需要改 clone gate，
+而不是 unify。
