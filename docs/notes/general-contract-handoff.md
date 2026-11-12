@@ -1553,3 +1553,28 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 
 下一步：查 13516 的创建处（`instantiate_requirement` 对 read 结果的拷贝？`field_sources` 的边？），
 让 `v` 的解析复用它自己的值（第一次读的结果节点），而不是这个自引用的副本 read。
+
+## 副本 read 的 index 来自 prelude 的 `x.at`（round 45）
+
+prelude 的定义：
+
+```lichen
+Read := 'p = BufParam -> {.from (Buf p) # warp, .at @any : Int}
+read := 'x = (Read _) -> $read(x.from, x.at)
+```
+
+两次发射：
+
+```
+[bread] operand=5214  op_items=[5212, 5213, 4723, 4468]  ← 模板侧（4 项）
+[bread] operand=13516 op_items=[13517, 13580]            index=v  ← 克隆侧（2 项）
+```
+
+克隆侧的 `$read(x.from, x.at)` 里 **`x.at` 的值节点就是用户体内的 `v`**（第一次读的结果）：
+运行期 index=10（= read 的结果）证实 `.at` 与 `v` 落在了同一个类。
+
+也就是说：用户 `v := read(Read{.from k.in.b, .at i})` 之后，`v` 的节点被并进了 `Read` 实例的
+`.at` 槽（可能经 `: Int` 注解的 unify 或 struct 实例化），于是 clone 出的 `x.at` 用的是 `v` 的值。
+
+下一步：查这条合并的来处（`v` 与 `.at` 的 equality 建立点），确认是 `check_unify` 的哪一次
+（注解 / `e3` / 类型槽）把读结果并进了 `.at`。
