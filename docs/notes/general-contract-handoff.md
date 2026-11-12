@@ -1784,3 +1784,20 @@ frozen type half 的拷贝有关。
   但 5100 没有 `field_sources` 条目，仍解析不到——套件保持 280/3；
 - 下一步需要查：`Arg{.n a.n, .I a.in}` 的 `.I` 字段副本（5100）为何没有 `field_sources` 边，
   或者 graph 的 `cfg` 值路径（`value_at_path`）取到的 5100 与 check 期写入的 required 节点不一致。
+
+## 5100 是 Buf 包装结构值，其 payload 字段是空的（round 58）
+
+`DBG_GIN` 打印 found/source/value：
+
+```
+[gin] position=0 path=[1, 0] found=Some(5100) source=None value=Some("LowValue(Array(...")
+```
+
+- 5100 的值是 **Array**（`Buf` 包装的 struct 值），不是 `ComputeValue::Buffer`；
+- `buf_payload(5100)` = 第一字段（`.native`）的 value half，该 cell 是**空**的；
+- 两个供应商查找（`field_source_of(payload)`、`field_source_of(buffer)`）都失败；
+- `recorded_applied_projection` 也没找到 apply 投影（5100 不是 Index 链上的节点）。
+
+即：graph 录制时需要把 `.native` 的空槽解析到**调用方的占位 buffer**，而 copy fix 之后这条供应商边不存在了。
+下一步：查 graph 录制时占位 buffer 的写入点（`recorded_buffer_payload` 期望 `.native` 已填），
+以及 copy fix 是否让 `.native` 的副本 cell 失去了 `field_sources`/投影边。
