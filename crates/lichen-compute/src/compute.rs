@@ -6868,6 +6868,14 @@ where
             payload = AnyNodeId::Dynamic(source);
             continue;
         }
+        // A deferred read stands for the frozen node it named (`frozen_reads`).
+        if let Some(frozen) = payload
+            .dynamic()
+            .and_then(|node| module.frozen_reads.get(&node).copied())
+        {
+            payload = frozen;
+            continue;
+        }
         buffer = AnyNodeId::Dynamic(
             buffer
                 .dynamic()
