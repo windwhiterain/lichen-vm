@@ -155,6 +155,11 @@ where
         if depth > 64 {
             return value;
         }
+        // A frozen type half names a value outside every applying function: it is
+        // referenced, not copied.
+        if matches!(ty, AnyNodeId::Static(_)) {
+            return value;
+        }
         // A value read through `Index` has no class value until it runs.
         self.module.evaluate_node(AnyNodeId::Dynamic(value), None);
         let Some(held) = self
