@@ -89,6 +89,14 @@ where
             {
                 return (element, value_node, ty_node);
             }
+            // A struct field is its **value** (the SPEC's `e1`), not a
+            // `[value, type]` pair: the read is the element itself.
+            if value_node.is_none()
+                && self.outlives_read(element)
+                && self.outlives_read(container_value)
+            {
+                return (element, element, element);
+            }
         }
         // The lazy read: the element is the container's own item, and the
         // read's value and type are the element's own slots.
