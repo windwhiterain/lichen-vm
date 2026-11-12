@@ -1664,3 +1664,21 @@ SPEC §Clone 说“unify the argument with the parameter”；现在的实现把
 真正的异常在下一层：`x.at`（6018）的 Index 求值用了 **index=0**（应为 name_table["at"]+2），
 读到的元素是 13515（read 操作）。所以下一步是查 `x.at` 这个 Index 的**下标求值**为什么是 0
 （名字表 TableGet 的键/位置，或 `+2` 缺失）。
+
+## `.at` 的下标是常量 0（round 51）
+
+`DBG_IDX` 的 subscript 探针：
+
+```
+[sub] node=6061 subscript_node=39 (no operation)
+[sub] node=6018 subscript_node=39 (no operation)
+```
+
+- 两个 Index 的下标都是**同一个常量节点 39**（无 operation），求值 = 0；
+- 而按结构编码，`x.at` 的读应是 `name_table["at"] + 2`（非常量），或常量位置 `at + 2`；
+- 下标 0 使 `x.at` 读到容器数组的**第 0 项**（名字表/或 read 操作），而不是 `.at` 字段。
+
+所以问题在 checker 生成 `x.at` 读时选了**常量 0**：可能是 `position = Some(0)` 后 `at + STRUCT_VALUE_FIELD_BASE`
+未生效，或走了 value-slot 读路径（`Index(container, 0)`）。
+下一步：在 `check_named_field`/`value_slot_read` 处确认给 `x.at` 生成的 subscript 常量应是多少（`at + 2`），
+以及容器值为何是结构 apply 值。
