@@ -1578,3 +1578,21 @@ read := 'x = (Read _) -> $read(x.from, x.at)
 
 下一步：查这条合并的来处（`v` 与 `.at` 的 equality 建立点），确认是 `check_unify` 的哪一次
 （注解 / `e3` / 类型槽）把读结果并进了 `.at`。
+
+## 首个 read 的 operand 是用户结构值，克隆 read 的 .at = v（round 46）
+
+`DBG_BREAD` 的 operand 数组再看一次：
+
+```
+[bread] operand=5214  op_items=[5212, 5213, 4723, 4468]   ← 4 项 = 用户 `(Read _){...}` 的结构值
+[bread] operand=13516 op_items=[13517, 13580]             ← 2 项 = prelude 克隆的 [x.from, x.at]
+```
+
+- 第一条 read 的 operand 是**用户的结构值** `[names, id, from, at]`（buffer_read 会剥出 from/at）；
+- 第二条（prelude `read` 的克隆）的 `.at` = 13580 = 调用结果 `v`。
+
+因为结构值是在调用*之前*构造的，`v` 不可能作为它的字段出现——所以 `.at` 槽是在**调用之后**经类合并拿到 `v` 的
+（参数 `x` 的字段类与调用结果的类被并在一起；这也符合运行期“第二次读的 index = 第一次读的值”）。
+
+下一步：在参数绑定（`unify_parameter_slots`/`bind_field_sources`）处确认哪次 unify 把 `x.at` 与 `v` 并类，
+并按 SPEC 让参数绑定只复制槽值、不把结果并回参数字段。
