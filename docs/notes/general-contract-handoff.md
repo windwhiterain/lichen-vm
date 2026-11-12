@@ -1651,3 +1651,16 @@ read := 'x = (Read _) -> $read(x.from, x.at)
 SPEC §Clone 说“unify the argument with the parameter”；现在的实现把参数与 apply 结果并到了一起。
 下一步/或需用户指点：参数绑定处（`apply` 的 `unify_parameter_slots`/`parameter_image`/clone）哪里
 把参数与 apply 结果建立了 equality。
+
+## 用户裁定：参数只与实参绑定；实测实参解析是对的（round 50）
+
+用户裁定：**参数只与实参绑定，绝不与 apply 结果同类**。
+
+对照实现：apply 的 operand 数组 = `[function_value, value_argument_expr, c, callee_expr]`，
+`argument = operands[1]`，而 `value_argument_expr = self.value_of(argument)`（lambda.rs:475）✓。
+`[idx] node=6018 container=5617` 的 5617 是**结构字面量的 apply 值**（带 Array 值，len=5）——即实参本身 ✓，
+不是 apply 的结果。所以参数绑定这条**没有错**，我上一轮的怀疑不成立。
+
+真正的异常在下一层：`x.at`（6018）的 Index 求值用了 **index=0**（应为 name_table["at"]+2），
+读到的元素是 13515（read 操作）。所以下一步是查 `x.at` 这个 Index 的**下标求值**为什么是 0
+（名字表 TableGet 的键/位置，或 `+2` 缺失）。
