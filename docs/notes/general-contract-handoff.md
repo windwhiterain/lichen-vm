@@ -1417,3 +1417,21 @@ f 7
 3. `@raw v[slot] = e1` —— 模板字段值 e1 之后再写入；实现里没有这次写入（或只由副本携带）。
 4. 结果 `@raw[@raw v, Struct, ...]` —— 实例表达式的值 = v；实现里结果数组直接是 `[name_table, nominal_id, vals...]`。
 5. `let _{.n1 e1, .n2 e2} = s` 里 e1/e2 是 **pair 还是声明值**，决定第 3 步写入的是什么。
+
+## 用户的编码规则：非 raw 即 attribute（round 38）
+
+> “谁告诉你是值的？所有非 raw 都是 attributes”
+
+按这条重读 §Struct：
+
+```
+s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
+```
+
+- 外层表达式的 **item 0 是 raw**（`@raw[names, id, e1, e2]`，值数组），**其余项都是 attributes**（`Struct`、……）；
+- 字段表达式 `{.x @any : Int}` = `@raw[@raw @any, Int]` —— raw 值 `@any` + attribute `Int`；
+- 所以实现里的 `[value, type]` **不是**“值 + 类型”，而是 **raw 值 + attribute**（`EXPR_TYPE_SLOT = 1` 就是第一条 attribute）；
+- 实例化：`v := @raw[names, id, None, None]`（值数组），`e3 = v[k]`、`v[k] = e1`，结果 = `@raw[@raw v, Struct, ...]`。
+
+据此我此前“结构字段是值、读就是元素本身”的读法**错误**，`7abf86f4` 已 revert（`b6ef5c48`），基线恢复 262/21。
+读字段 = 取字段表达式的 **raw 值**（item 0），实现原有的 pair 语义是对的。
