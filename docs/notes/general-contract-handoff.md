@@ -1514,3 +1514,23 @@ s := @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]
 所以缺陷在 kernel 内部对 `v * 2` 的 lowering：`v` 被解析成了一个“以 `v` 为地址的 read”，多读了一次并丢掉原值。
 下一步：查 `Mul`/write 的 `.value` 操作数解析（`Lower`/`parameter_path`/`supplied`），
 让 `v * 2` 使用第一次 read 的结果节点，而不是再造一个 read。
+
+## 两次 BufferReadCall 的发射（round 43）
+
+`DBG_BREAD` 探针（`body.rs` 的 `buffer_read` 发射处）跑包装器测试，得到**两次发射**：
+
+```
+[bread] pos=0 index_value=ValueId(1)  index_node=4468  index_node_value=Array
+[bread] pos=0 index_value=ValueId(6)  index_node=13580 index_node_value=None
+```
+
+- 第一次读的 index 节点 = 4468（值是 Array，`compute.range` 的 range 对象）；
+- 第二次读的 index 节点 = 13580（无值），运行期求值成 10（= 第一次读的结果）——即这次读是
+  `read(input, v)`，`v` 是上一次读的结果；
+- 运行期探针（round 42）证实：每 lane 读两次（先 i、后 v），写出的值是第二次读的结果。
+
+所以缺陷是 **kernel 体内同一个 `compute.read` 被发射了两次**（一次 index=i 正确，一次 index=v）。
+下一次要查的是 `value()` 对 `v * 2` 中 `v` 的解析路径：它应复用第一次读的 IR 值，
+而不是再发射一次读（`supplied`/`lower_definition` 都可能重新走读节点）。
+
+另：用户澄清 **unify/merge 不触发 operation**，只有 evalu**ation** 才触发——后续分析不要把类合并当作求值。
