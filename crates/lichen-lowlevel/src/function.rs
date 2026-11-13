@@ -532,6 +532,7 @@ impl<P: Program> Module<P> {
         ctx.in_parameter = true;
         // The parameter's image: the clone, or the template's own cell.
         let parameter_image = self.node_apply(parameter, &mut ctx);
+        ctx.in_parameter = false;
         ctx.parameter_image = Some(parameter_image);
         let parameter_clones: Vec<NodeId> = ctx.remap.values().copied().collect();
         for clone in parameter_clones {

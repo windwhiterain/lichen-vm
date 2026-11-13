@@ -514,3 +514,21 @@ kept a separate `root_scope` object; the two `loop_marker` shapes then refused
 root until an owner write, so a clone created in a function's block still read as
 the root. Refreshing the summary at allocation fixes that, needs no separate root
 object, and leaves the spine walk's shapes as they were.
+
+## 9. The parameter walk ends with the parameter
+
+`node_apply` instantiates a body in two parts: the parameter's image, then the return.
+Only the first is the parameter's, and `ApplyCtx::in_parameter` is what says so: under it a
+node clones regardless of the class gate. The reset
+between the two parts was dropped in `40ad00b5` while the `closed` predicate went, so the
+flag stayed set for the whole body walk and every body node took the class gate instead of
+the proven-concrete early return. A proven node whose class lies inside the template's
+scope — a body's constant, the function's own value — was therefore cloned: cloning a
+`Function` value mints a closure, so recursion made one closure per level (`fib(10)` left
+103 `FunctionId`s where one function means one), and a constant in a body was no longer
+referenced in place.
+
+The reset is restored. Measured: lowlevel **167 passed / 0 failed / 1 ignored** (the five
+`function`/`recursion` tests that pin the in-place reference pass again), language **289**
+and its lib **69**, highlevel **136**, compute **283 / 1 ignored**, gpu **94**, examples
+unchanged.
