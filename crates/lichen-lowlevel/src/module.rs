@@ -358,6 +358,8 @@ impl<P: Program> Module<P> {
         });
         disjoint::make_set(&mut self.nodes, node);
         self.blocks[block].nodes.push(node);
+        // A lone class's summary is the node's place, which its block states.
+        self.refresh_class_summary(node);
         // Allocation with a concrete value is the second of the two value-write sites,
         // so the observation runs here too.
         if let Some(value) = value {

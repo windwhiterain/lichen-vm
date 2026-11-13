@@ -963,14 +963,14 @@ pub struct Node<P: Program> {
     operation: Option<Operation<P>>,
     /// The function whose body owns this node, or `None`; private, read via `node_function`.
     function: Option<FunctionId>,
-    /// The scope summary of this node's **class**, held by the class's
-    /// representative; `None` is the virtual root.
+    /// The scope summary of this node's **class**; `None` is the root scope.
     ///
     /// # Invariant
-    /// The summary is the nearest common ancestor of the owner scopes of every
-    /// member of the class, and it is read only from the representative: a
-    /// member's own slot is not a summary of anything. See
-    /// `docs/notes/apply-clone-ownership.md` §4.
+    /// The summary is the nearest common ancestor of the scopes of every member
+    /// of the class, and it is read only from the representative: a member's own
+    /// slot is not a summary of anything. Every node is placed, so a class that
+    /// reaches outside every function summarizes to the root — `None` is that
+    /// place, not an absence. See `docs/notes/apply-clone-ownership.md` §4.
     scope_summary: Option<Arc<Scope<FunctionId>>>,
     /// The node this clone is attributed through, or `None` for every other node.
     ///

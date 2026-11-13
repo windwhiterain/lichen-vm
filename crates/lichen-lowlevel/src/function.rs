@@ -681,6 +681,10 @@ impl<P: Program> Module<P> {
             }),
             None,
         );
+        // The replay lives where the apply happens, not in the template's shape.
+        let tag = self.nodes[node].function;
+        self.set_node_owner(operand, tag);
+        self.set_node_owner(replay, tag);
         // The run stamp is whether the operator runs; this scope has not run it.
         self.stamp_node_ran_if(replay, true);
         // The correspondence: one instantiation of the same template, whose cells stand for

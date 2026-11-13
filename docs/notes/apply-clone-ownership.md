@@ -442,3 +442,75 @@ compute suite is 136 passed / 104 failed / 1 ignored, one more failure than the
 137 / 103 baseline: `jit_inline_nested_function` now refuses the nested inline
 reduction because its index target is a computation. That regression is
 accepted for this fix and recorded here rather than hidden.
+
+## 8. Every node is placed (a wrapper is polymorphic)
+
+A function whose body *applies* another function to its own parameter used to be
+monomorphic across applications:
+
+```lichen
+inner := 'y -> y
+outer := 'x -> inner x
+(outer 1, outer 1.5)          # was: expected Int, found Float
+```
+
+The shipped surface made this bite everywhere: `+ - * /` and the four order
+comparisons route onto the `core` prelude, so a body that reads `a / b` is an
+inner apply too, and the spec's own ideal-API forms were refused by
+`lichen-compiler` while the language tests passed — `run::evaluate` compiles
+**without** the prelude, where `/` stays a `BinOp` and no inner apply exists.
+
+**Cause, traced** (ids from a prelude-free run; `core.lichen` as the file name
+skips the prelude). `outer`'s parameter value cell is `82`. After the first call
+its class is `{82, 109, 118, 366, 152}`: `82/109/118` owned by `outer`, `366` an
+**untagged clone** in `outer`'s block (a residue of the type-side apply), `152` the
+argument literal in the root block. An untagged member named the virtual root, so
+`class_inside_scope` answered false, the formal was **referenced**, the argument
+bound the template cell `82` to `USize(1)`, and the second call carried that answer
+into its clone.
+
+**Two rules replaced it.**
+
+**No virtual root: `None` is the root.**
+
+- The root is the absent scope, and it is a **place**, not an absence: `None` in a
+  summary names the root, and `merge_summaries` already let it absorb every other
+  summary because the root is every function's ancestor.
+- Every node is **placed** when it is allocated: its owner tag's scope, else the
+  scope of the function its block is homed in, else the root. A lone class's
+  summary is its member's own place (`Module::add_node` refreshes it), so an
+  untagged node created in a function's block is that function's, not the root's.
+  Before, an untagged node's summary was the root until some owner write happened,
+  and none ever did for a clone.
+- A class that does reach outside every function still summarizes to the root and
+  is referenced; the difference is that reaching it now takes a real top-level
+  cell, not merely a missing tag.
+
+With it, the trace's `366` is placed in `outer`'s scope by its block, the class is
+inside, the formal clones per call, and the argument binds the **clone**.
+
+**The prelude's `Pair` is instantiated per call.** A body that applies a routed
+operator still read as external for a second reason: `core`'s module-level
+`let Pair` put the operand template's cells in the **root** scope, so every
+operator's class reached it. `Pair` now sits inside each operator's own body
+(`docs/notes/core-prelude.md` §1), which places those cells in the call's scope.
+Without this second change the `inner`/`outer` wrapper above answers correctly and
+`div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor` still refuses.
+
+Measured on the shipped `lichen-compiler`: all five ideal-API forms answer —
+`sum3 (_[1, 2, 3])` → `6: Int`; `{.'dividend, .'dividor} -> dividend / dividor`
+and `'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor` → `(0, 0.5)`;
+`Div{…}` and `(Div _){…}` → `((1, 2), (1.0, 2.0))` — and so does
+`double := 'x -> x + x; (double 1, double 1.5)` → `(2, 3.0)`.
+
+Suites on these two changes: language 289 passed; highlevel 136 passed; compute
+283 passed / 1 ignored; lowlevel unchanged from `dev` (the same five pre-existing
+failures); **every example answers exactly what `dev` answered** (0-line diff over
+`examples/`).
+
+A first attempt placed untagged nodes by their block in `owner_scope` alone and
+kept a separate `root_scope` object; the two `loop_marker` shapes then refused
+`NonTailCall`. The cause was the summary write: a new node's summary stayed the
+root until an owner write, so a clone created in a function's block still read as
+the root. Refreshing the summary at allocation fixes that, needs no separate root
+object, and leaves the spine walk's shapes as they were.

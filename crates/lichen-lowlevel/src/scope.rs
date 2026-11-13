@@ -144,9 +144,8 @@ impl<F: Copy + Eq + std::fmt::Debug> Scope<F> {
 /// scopes they name.
 ///
 /// # Invariant
-/// The virtual root — the summary of a class with an unowned or invalid owner
-/// — absorbs every other summary: a class that reaches outside every scope
-/// reaches outside the scope of any one of them.
+/// `None` is the root scope, so it absorbs every other summary: the root is
+/// every function's ancestor, and a class reaching it lies inside none.
 pub(crate) fn merge_summaries<F: Copy + Eq + std::fmt::Debug>(
     left: Option<Arc<Scope<F>>>,
     right: Option<Arc<Scope<F>>>,
@@ -165,23 +164,33 @@ impl<P: Program> Module<P> {
             .and_then(|entry| entry.scope.clone())
     }
 
-    /// The scope the node's **owner** names, or `None` for the virtual root.
+    /// The scope the node is **placed** in; `None` is the root scope.
     ///
     /// # Invariant
-    /// A node with no owner, or one whose owner has been collected, names the
-    /// virtual root: it is outside every function's scope, so the class it
-    /// belongs to is referenced rather than cloned.
+    /// A node's owner tag names its scope; an untagged node is placed by the
+    /// function its block is homed in; and a block that homes no function is the
+    /// root. `None` is therefore the root scope — a real place every node and
+    /// every summary can name — not an absence.
     fn owner_scope(&self, node: NodeId) -> Option<Arc<Scope<FunctionId>>> {
-        let owner = self.nodes[node].function?;
-        self.function_scope(owner)
+        if let Some(owner) = self.nodes[node].function
+            && let Some(scope) = self.function_scope(owner)
+        {
+            return Some(scope);
+        }
+        let block = self.nodes[node].block;
+        self.blocks
+            .get(block)
+            .and_then(|block| block.functions.first().copied())
+            .and_then(|function| self.function_scope(function))
     }
 
-    /// The scope summary of the class `node` belongs to.
+    /// The scope summary of the class `node` belongs to; `None` is the root scope.
     ///
     /// # Invariant
-    /// The summary is the nearest common ancestor of the owner scopes of every
-    /// member of the class, and it is held by the class's representative.
-    /// `None` is the virtual root: the class reaches outside every scope.
+    /// The summary is the nearest common ancestor of the scopes of every member
+    /// of the class, and it is held by the class's representative. Every node is
+    /// placed, so a class that reaches outside every function summarizes to the
+    /// root: `None` is that place, not an absence.
     pub fn class_scope_summary(&self, node: NodeId) -> Option<Arc<Scope<FunctionId>>> {
         self.nodes.get(self.class_root(node))?.scope_summary.clone()
     }
@@ -190,10 +199,11 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// The verdict is a fact of the **class**, not of the node: every member
-    /// of one class reads the same answer, so a clone never splits a class.
+    /// of one class reads the same answer, so a clone never splits a class. A
+    /// class summarized to the root is inside no function's scope.
     pub fn class_inside_scope(&self, node: NodeId, scope: &Arc<Scope<FunctionId>>) -> bool {
         let Some(summary) = self.class_scope_summary(node) else {
-            return false; // the virtual root is inside no scope
+            return false; // the root scope is inside no function's scope
         };
         scope.is_ancestor_or_self(&summary)
     }
@@ -201,9 +211,9 @@ impl<P: Program> Module<P> {
     /// Recompute the class's summary from its members; the one writer of it.
     ///
     /// # Invariant
-    /// The summary is the nearest common ancestor of the members' owner
-    /// scopes, so a member whose owner changes cannot leave a stale summary
-    /// behind.
+    /// The summary is the nearest common ancestor of the members' places, so a
+    /// member whose place changes cannot leave a stale summary behind. Every
+    /// node is placed, so an absent summary names the root scope.
     pub(crate) fn refresh_class_summary(&mut self, node: NodeId) {
         let root = disjoint::find(&mut self.nodes, node);
         let next = self.nodes[root].equality.next();

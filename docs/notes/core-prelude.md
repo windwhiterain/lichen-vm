@@ -19,21 +19,22 @@
 ```lichen
 Num := set(Int, Float)
 in_num := 't -> t @in Num
-let Pair := (@any ! in_num, @any ! in_num)
-add := 'operands -> { operands = Pair; operands(0) + operands(1) }
+add := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) + operands(1) }
 -- …and one binding per remaining polymorphic operator
 ```
 
-Eleven bindings: the class domain `Num`, the predicate `in_num` that consults it,
-the direct template `Pair`, and one per polymorphic operator (`add`, `sub`,
-`mul`, `div`, `less`, `greater`, `less_or_equal`, `greater_or_equal`). Every one
-is an ordinary lichen definition — no compiler support, no native call — and
-the **contract** is the class refinement `(_ ! in_num)` inside the operand
-tuple's two positions, whose predicate is applied to the operand's *type*
-(`in_num = 't -> t @in Num`), so no type read is involved. `Pair` is a
-**direct template**: the match `operands = Pair` instantiates its two `@any`
-positions afresh, and those positions are the requirements the operands must
-meet. The
+Ten bindings: the class domain `Num`, the predicate `in_num` that consults it,
+and one per polymorphic operator (`add`, `sub`, `mul`, `div`, `less`,
+`greater`, `less_or_equal`, `greater_or_equal`). Every one is an ordinary lichen
+definition — no compiler support, no native call — and the **contract** is the
+class refinement `(_ ! in_num)` inside the operand tuple's two positions, whose
+predicate is applied to the operand's *type* (`in_num = 't -> t @in Num`), so no
+type read is involved. `Pair` is a **direct template**: the match
+`operands = Pair` instantiates its two `@any` positions afresh, and those
+positions are the requirements the operands must meet. Its `let` sits **inside
+each operator's body**, not at the module level: the template's cells then belong
+to the call's scope, so an operator-using wrapper stays polymorphic
+(`docs/notes/apply-clone-ownership.md` §8). The
 two-element operand group is what gives the operator its **tie** (the group is
 homogeneous) and its **arity** (the group has two positions).
 
