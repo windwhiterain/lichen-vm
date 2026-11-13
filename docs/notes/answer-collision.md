@@ -54,3 +54,39 @@ Three diagnostic defects were found on the way and fixed, all without touching t
 The compute suite is unchanged by all three (203 passed / 15 failed / 2 ignored) — what changed is that
 its failures explain themselves. Whether those thirteen programs *should* check is the compute side's
 decision, not a lowlevel defect: the engine is reporting a real disagreement between two answers.
+
+## The examples' family, measured
+
+`examples/convolution2d.lichen` is the smallest witness of the family that keeps
+`tools::examples::every_example_runs_and_prints_what_it_declares` red. Instrumenting
+`write_node_answer` named the shape:
+
+- the collision node is the `CIn` value passed as a kernel argument; its class holds the
+  instance and a **clone of the `CIn` type value** (`origin` = the type's declaration node),
+  and the disagreeing answers are two `ComputeValue::Buffer` handles inside that struct's
+  `.x` slot;
+- the write that collides comes from the node's own `Index` operation (`k.in`, the kernel
+  body's parameter read) during the checker's final deep pass, against a value the class
+  already carried;
+- the buffers are two different values: `CIn{.x x.x, …}` against `CIn{.x edge.x, …}`.
+
+What makes it fire is the **shared struct type value**, and the discriminators are measured
+with the example's own program, each run through `lichen-compiler`:
+
+| program | reading |
+|---|---|
+| one kernel call (`convolve` with `x.x`) | checks; runs |
+| three calls of **one** kernel, different buffers | checks; runs |
+| two **different** kernels, the *same* `CIn` argument values | checks; runs |
+| two different kernels, different buffers | **collision** |
+| two different kernels, the second given its own `CPar2` but sharing `CIn` | **collision** |
+| two different kernels, the second given its own `CPar2` **and** `CIn2` | checks; runs, declared answer |
+
+So the disagreement is not between two legitimate per-call values: it is one value written
+into a **type value's** field slot. `CIn`'s `.x` is declared with a constructor application
+(`compute.Buf (compute.BufParam{…})`), and `check_unify_expr` treats an explicit application as
+"already fresh", so the instance's field is unified against the materialised application in the
+type literal rather than against a per-instance clone; the first call's buffer lands in that
+slot, and the second call's buffer meets it. The narrowing is measured; which of the two
+writes the slot is the next probe, and the fix belongs in the struct-instance/annotation path
+(`crates/lichen-highlevel/src/checker/templates.rs`, `structs.rs`), not in the engine.
