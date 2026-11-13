@@ -98,9 +98,14 @@ Measured:
 
 **Open: the inline literal domain under a type parameter.**
 `div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor`, called twice as
-`div _ _{…}` with an `Int` and a `Float`, is still refused (`expected Float, found Int`):
-the inline literal's type argument is shared by the returned function's parameter, and
-the checker has no per-call specialization to copy it. The pinning test is
+`div _ _{…}` with an `Int` and a `Float`, is still refused: the second call's argument
+meets the first call's type (`expected Int, found Float`). The inline literal is the
+**inner function's own parameter**, so it lies in the inner function's scope, not in the
+applied outer function's: the outer application's clone references its field cells in
+place instead of copying them. Two calls' pinned parameters are distinct nodes, but the
+inner struct value and the field type cells behind them are the same nodes (measured),
+and the checker's copy only freshens a **bare** open type cell, not the term of `T`. The
+pinning test is
 `template_instances::a_function_generics_literal_domain_takes_anonymous_instances`
 (`#[ignore]`); the lowlevel replay in §3 is the mechanism that would supply the call's
 own cells.
