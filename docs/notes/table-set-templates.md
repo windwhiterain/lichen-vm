@@ -179,3 +179,19 @@ explicitly (`table(t)(k => v, …)`, `set(t)(e, …)`), the arrows are `->` for 
 lambda and `=>` for the entry — the spelling the implementation now uses — and
 an instance's type is still the shared kind rather than the type value the
 spec's `set{t}`/`table{kt, vt}` names.
+
+## 10. The renderer reads the raw slot
+
+A set value is `[element template, raw members]` and a table
+`[key template, value template, raw table]` (§8–§9), but the value printer kept the
+pre-raw shape: it read a set's members from the wrapper's own items, so a set rendered
+`set(@any, raw[…])`, and it read a table's handle as the wrapper itself, so a table
+rendered raw. `ValuePrinter::instance` now reads the raw slot
+(`shape::SET_VALUE_RAW_SLOT`, `shape::TABLE_VALUE_RAW_SLOT`), and a set reads
+`set(1, 2)` while a table reads `table(1 => "a")` — the spellings
+`render_tests::a_set_and_a_table_value_render_their_own_syntax` pins and the ones the
+type-argument slice (`e44849fd`) left unpinned. That test also still wrote the
+pre-type-argument set, `set(1, 2)`, whose parse failure hid the renderer: it is the lib
+suite's one red, and the test now writes the spec's `set(set{Int})(1, 2)`.
+
+Measured: language lib **69 / 0**, integration **289 / 0**.

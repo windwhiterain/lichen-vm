@@ -321,6 +321,27 @@ where
         None
     }
 
+    /// The raw handle of a table value.
+    ///
+    /// # Invariant
+    /// A table value is `[key template, value template, raw table]`, so the handle is
+    /// the raw slot's value and the wrapper itself is never a table.
+    fn table_handle(&self, value: P::Value) -> Option<P::Value> {
+        match value.as_enum() {
+            Some(LowValue::Table(_)) => Some(value),
+            Some(LowValue::Array(wrapper)) => {
+                // SAFETY: `wrapper` is the payload of a value being printed, whose
+                // items live in the module being rendered.
+                let items = unsafe { wrapper.items() };
+                let raw = self
+                    .module
+                    .node_value(items.get(shape::TABLE_VALUE_RAW_SLOT)?.node)?;
+                matches!(raw.as_enum(), Some(LowValue::Table(_))).then_some(raw)
+            }
+            _ => None,
+        }
+    }
+
     /// A table instance: the handle's entries, `table(k => v, …)`.
     ///
     /// # Invariant
@@ -328,7 +349,8 @@ where
     /// against their slots' type positions; a table with no entry reads
     /// `table()`, and an undecided payload is not a table at all.
     fn table_instance(&mut self, value: P::Value, shape: &[ArrayItem]) -> Option<String> {
-        let Some(LowValue::Table(table)) = value.as_enum() else {
+        let handle = self.table_handle(value)?;
+        let Some(LowValue::Table(table)) = handle.as_enum() else {
             return None;
         };
         if shape.len() != 2 {
@@ -378,25 +400,34 @@ where
         if marker == P::Value::table_type_marker() {
             return self.table_instance(value, shape);
         }
-        let Some(LowValue::Array(values)) = value.as_enum() else {
+        let Some(LowValue::Array(wrapper)) = value.as_enum() else {
             return None;
         };
-        // SAFETY: `values` is the payload of the value being printed, which
+        // SAFETY: `wrapper` is the payload of the value being printed, which
         // belongs to the module being rendered.
-        let values = unsafe { values.items() };
+        let wrapper = unsafe { wrapper.items() };
         if marker == P::Value::set_type_marker() {
-            // The shape is the element **slot** alone (a set has no length), so
-            // every member reads against its type position.
+            // A set value is `[element template, raw members]`: the members are the raw
+            // slot's items, not the wrapper's.
             if shape.len() != 1 {
                 return None;
             }
+            let raw = self
+                .module
+                .node_value(wrapper.get(shape::SET_VALUE_RAW_SLOT)?.node)?;
+            let Some(LowValue::Array(members)) = raw.as_enum() else {
+                return None;
+            };
+            // SAFETY: `members` is the payload of the raw slot, in the module
+            // being rendered.
+            let members = unsafe { members.items() };
             let element_ty = self
                 .printer
                 .slot_type_any(shape[0].node)
                 .unwrap_or(shape[0].node);
-            let mut out = Vec::with_capacity(values.len());
-            for v in values {
-                let (value, ty) = self.element_slot(v.node, element_ty);
+            let mut out = Vec::with_capacity(members.len());
+            for member in members {
+                let (value, ty) = self.element_slot(member.node, element_ty);
                 out.push(self.element_any(value, ty));
             }
             return Some(format!("set({})", out.join(", ")));

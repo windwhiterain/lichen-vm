@@ -177,6 +177,19 @@ pub const STRUCT_VALUE_ID_SLOT: usize = 1;
 /// A **struct value**'s first field: the name table and the nominal id hold
 /// the two slots before it.
 pub const STRUCT_VALUE_FIELD_BASE: usize = 2;
+/// A **set value**'s raw members — slot 1 of `[element template, raw members]`.
+///
+/// # Invariant
+/// The wrapper's slot 0 is the element template, a layout and not a member, so a
+/// set's members are the raw slot's own array items and never the wrapper's.
+pub const SET_VALUE_RAW_SLOT: usize = 1;
+/// A **table value**'s raw handle — slot 2 of
+/// `[key template, value template, raw table]`.
+///
+/// # Invariant
+/// The two slots before it are the key and value templates, so the handle is the
+/// raw slot's value and the wrapper itself never is a table.
+pub const TABLE_VALUE_RAW_SLOT: usize = 2;
 
 // --- shape-half layout: each kind names its own shape positions --------------
 
