@@ -76,7 +76,7 @@ authority, and this table only names the state.
 | [A class carries the call, not only the fact](notes/class-carries-the-call.md) | `lichen-lowlevel` (`equality`), `lichen-compute` | current |
 | [Handoff: the six tests still red against the SPEC](notes/handoff-remaining-six.md) | `lichen-compute`, `lichen-highlevel` (`checker`), `lichen-language` (freeze) | current |
 | [Non-termination is the program's own](notes/nontermination-is-the-programs.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`) | current |
-| [A colliding answer is a unify error](notes/answer-collision.md) | `lichen-lowlevel` (`equality`, `write_node_answer`), `lichen-compute` | current |
+| [One answer per class](notes/one-answer-per-class.md) | `lichen-lowlevel` (`equality`, `write_node_answer`), `lichen-highlevel` (`checker/templates`) | current |
 | [The read-path collection was disabled](notes/gc-trigger-disabled.md) | `lichen-lowlevel` (`evaluation`, `gc`) | historical |
 | [The `@gc` trigger: what decides a scope is done](notes/gc-trigger-design.md) | `lichen-lowlevel` (`evaluation`, `gc`), `lichen-language` (tests) | current |
 | [Floating point](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-render`, `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |

@@ -354,22 +354,7 @@ where
         DiagKind::Runtime => {
             let expected = printer.node(d.a);
             let found = printer.node(d.b);
-            // Two open cells name neither side; the collision's two values do.
-            if expected == "?" && found == "?" {
-                let named = |value: &Option<P::Value>| match value {
-                    Some(value) if !value.is_handle() => Some(format!("{value:?}")),
-                    _ => None,
-                };
-                match (named(&d.value_a), named(&d.value_b)) {
-                    (Some(expected), Some(found)) => format!(
-                        "expected ?, found ? — two answers met on one node: {expected} against \
-                         {found} (`docs/notes/answer-collision.md`)"
-                    ),
-                    _ => "expected ?, found ? — two answers met on one node \
-                          (`docs/notes/answer-collision.md`)"
-                        .to_string(),
-                }
-            } else if expected == found {
+            if expected == found {
                 // A type names both sides alike; the values that met are the difference.
                 let expected_value = d.value_a.and_then(|value| printer.diagnostic_value(value));
                 let found_value = d.value_b.and_then(|value| printer.diagnostic_value(value));

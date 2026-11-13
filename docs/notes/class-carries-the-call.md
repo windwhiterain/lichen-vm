@@ -750,4 +750,4 @@ leaves 2 and 1, the matmul example's first product element answers `58.0` again,
 survey's drifts drop from six to four (`gemv` and `matmul` clean, `topk` still drifts), and
 the compute suite stays 226/14.
 
-The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
+A class holds one answer, and a write that disagrees with it is an ordinary unify failure; the rule and the defect that used to produce one are in [one answer per class](one-answer-per-class.md).

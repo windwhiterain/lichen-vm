@@ -235,11 +235,11 @@ reverted and are **not** part of this note's branch.
 > below this note's original one recorded 6 drifted before that fix.
 >
 > **A still later reading** (after `compute.graph`'s binding-conflict suppression) counts **9
-> panicked, 4 drifted**: `worldgen.lichen` now reports an answer collision at `63:10`
-> (`two answers met on one node`) where it was clean in the reading above. The regression is
+> panicked, 4 drifted**: `worldgen.lichen` now reports a unify failure at `63:10`
+> where it was clean in the reading above. The regression is
 > not attributable to the two `compute.rs` commits — disabling both still panics — so it is
-> latent in the mark era and only now surfaced; it is left for its own round. The panics are the same answer-collision
-> family (`filter`, `lazy_infinite`, `mathlib`, `pooling`, `silu`, `stencil`, `torus`,
+> latent in the mark era and only now surfaced; it is left for its own round. The panics are the same
+> `compute.plrun` read family (`filter`, `lazy_infinite`, `mathlib`, `pooling`, `silu`, `stencil`, `torus`,
 > `worldgen`). The drifts are the three named below **plus** `gemv`, `matmul` and `topk`,
 > whose declared arrays differ from what the program prints. Measured cause: disabling the
 > requirement mark (`check_unify_expr`'s insert) makes those three clean again and turns
@@ -249,19 +249,25 @@ reverted and are **not** part of this note's branch.
 > identical list).
 
 The survey now walks **49** examples: **37 clean, 8 panicked, 3 drifted, 1 skipped**
-(`compute_jit.lichen`). The 8 panics are **all the same answer collision**, not the
-released-block reference this note was written about:
+(`compute_jit.lichen`). The 8 panics are **all the same unify failure** on a `compute.plrun`
+read, not the released-block reference this note was written about:
 
 ```text
-error: expected ?, found ? — two answers met on one node (`answer-collision.md`)
+error: expected ?, found ?
    --> 68:12  examples/filter.lichen
  68 | smooth := (compute.plrun fill_smooth (Fill{.n 3}) : Struct).smooth
 ```
 
 The same shape recurs at `mathlib.lichen:181` and the other six. Every one is a
-`compute.plrun(...).field` read hitting the collision, i.e. the class/template family
+`compute.plrun(...).field` read hitting the failure, i.e. the class/template family
 that [class-carries-the-call](class-carries-the-call.md) and the spec proposal describe —
 so the examples test cannot be fixed independently of that family.
+
+**Re-measured after the frozen-requirement fix** ([one-answer-per-class](one-answer-per-class.md)):
+`convolution2d` now runs and prints its declared values, and the survey reads
+**33 clean, 8 panicked, 7 drifted**: the panics are `generate`, `lazy_infinite`, `mathlib`,
+`silu`, `stencil`, `table`, `torus`, `worldgen`; the drifts are `convolution2d`, `decode_loop`,
+`filter`, `import/geometry`, `import/math`, `let_polymorphism`, `placeholder`.
 
 The 3 drifts likewise belong elsewhere: `decode_loop` and `generate` print `raw none`
 where the declared values are the collected arrays (the same class/template family), and

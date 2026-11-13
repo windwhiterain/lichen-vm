@@ -543,18 +543,16 @@ need a node-local producer for `r`.
   | GEMV's two buffers, read, unequal (12 and 3) | *"a `compute.collect` reads every element of one buffer, and its buffer position holds nothing (the empty value of a failed read)"* |
   | non-square matmul's two, unequal (6 and 9) | *"expected ?, found ?"* |
 
-  **The `expected ?, found ?` rows are answer collisions, and the collision is intended.** A
-  correspondence evaluated twice mints a cell each, `write_node_answer`
-  (`lichen-lowlevel/src/equality.rs`) unifies the new answer with the one already propagated into the
-  class, the two element placeholders are `GraphValue(1)` against `GraphValue(0)`, and the engine
-  reports the disagreement — the maintainer's ruling is *"答案相撞就 unify error 啊，有什么问题"*
-  ([answer-collision](answer-collision.md), which also records the two diagnostic defects fixed on the
-  way: the missing span and the dropped `value_a`/`value_b`). **And what decides which rows collide is
+  **The `expected ?, found ?` rows are unify failures.** A correspondence evaluated twice
+  mints a cell each, and `write_node_answer` (`lichen-lowlevel/src/equality.rs`) writes the
+  second into the class the first already filled, so the engine reports the disagreement as an
+  ordinary unify failure — one class holds one answer
+  ([one-answer-per-class](one-answer-per-class.md)). **And what decides which rows fail is
   the step's return, not its argument: annotating it is the spelling.** The same one-buffer program that
-  collides as above **runs** when the step's last expression carries its type —
+  fails as above **runs** when the step's last expression carries its type —
   `compute.plrun k2 (…) : Out2` answers `[2, 4, 6]`, the argument buffer `[1, 2, 3]` doubled twice — and
   a two-dispatch step that reads the argument buffer answers `[4, 8, 12]`. A `~ "claim:…"` mark does
-  **not** substitute for the annotation (the claimed variant still collides). So the collision is the
+  **not** substitute for the annotation (the claimed variant still fails). So the failure is the
   recording's re-drive minting a second answer **when the return is not nameable in the first
   evaluation**, which is the compute side's decision, and **an argument buffer is not a blocker on the
   graph leg**: the probe `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs` runs

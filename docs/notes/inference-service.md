@@ -703,7 +703,7 @@ Three verdicts were given and are recorded here rather than left in a transcript
      first rule and the node-count one below, and the exact cell-matching condition is still to
      be pinned down. It is recorded here as a warning rather than as a rule, because a reader who
      took it as one would exclude the shape that already works.
-   A **one-node** step also failed, first at record with *"two answers met on one node"* and then
+   A **one-node** step also failed, first at record with *"expected ?, found ?"* and then
    at run with *"node 0 was given value 2 as a buffer"*. Both were the conflation itself: a
    kernel's parameter cell is not a graph input slot. The run half is fixed in
    [`finish`](../../crates/lichen-compute/src/compute/graph.rs): an input's value number is its
