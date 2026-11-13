@@ -64,8 +64,11 @@ that loads the three matrices, multiplies, adds and stores.
   strides `K`, `N`, `N`), `OpCooperativeMatrixMulAddKHR` with the signed-component
   mask, `OpCooperativeMatrixStoreKHR` for the result.
 - **Capabilities**: `Shader`, `Int8`, `StorageBuffer8BitAccess`,
-  `CooperativeMatrixKHR`, and the `SPV_KHR_8bit_storage` and
-  `SPV_KHR_cooperative_matrix` extension declarations.
+  `CooperativeMatrixKHR`, `VulkanMemoryModel`, and the `SPV_KHR_8bit_storage`,
+  `SPV_KHR_cooperative_matrix` and `SPV_KHR_vulkan_memory_model` extension
+  declarations. The memory model is the Vulkan one: `SPV_KHR_cooperative_matrix`
+  requires `VulkanMemoryModel` beside the other two capabilities, and that
+  capability requires `OpMemoryModel Logical Vulkan`.
 
 The workgroup is one subgroup so the collective load/multiply/store happens once; a
 wider workgroup would run the product once per subgroup and store `C` twice.

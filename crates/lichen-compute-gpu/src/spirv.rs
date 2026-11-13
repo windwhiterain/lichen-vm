@@ -214,15 +214,12 @@ const SCOPE_WORKGROUP: u32 = 2;
 const SCOPE_DEVICE: u32 = 1;
 /// `SpvScopeSubgroup`: the scope a `Warp` exchange's barrier is ordered at.
 const SCOPE_SUBGROUP: u32 = 3;
-const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
-/// `AcquireRelease | WorkgroupMemory`, the semantics a `Warp` expr's barrier is ordered at.
+/// `AcquireRelease | WorkgroupMemory`: the semantics both barriers at workgroup scope carry.
 ///
 /// # Invariant
-/// **The acquire/release bits are what make the exchange sound and are not the workgroup
-/// barrier's**: the staged value is a register, so ordering it is an acquire/release, and
-/// `WorkgroupMemory` alone orders shared memory — which a `Warp` slice has none of. It stays the
-/// memory scope because that must not be *narrower* than the execution scope, and `Subgroup` is
-/// narrower than it.
+/// **A storage-class semantics bit must come with a non-relaxed order** (Vulkan's
+/// `VUID-StandaloneSpirv-MemorySemantics-10871`): a barrier naming `WorkgroupMemory` with a
+/// relaxed order is invalid, so the shared-memory barrier takes the acquire/release bits too.
 const MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY: u32 = 0x108;
 /// `AcquireRelease`, the semantics a staged **store**'s barrier is ordered at.
 ///
@@ -4071,7 +4068,7 @@ fn assemble(
                 vec![
                     ids.uint,
                     ids.barrier_semantics,
-                    MEMORY_SEMANTICS_WORKGROUP_MEMORY,
+                    MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY,
                 ],
             ),
             Inst::new(

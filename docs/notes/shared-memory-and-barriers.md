@@ -1204,8 +1204,11 @@ data; the barrier is a position in the emitted code, and that position is *immed
 before the read's definition* — the earliest point at which the reader could observe the
 writer, and so the only point one barrier can serve. That is well defined and needs no
 search. **And the barrier is the block's**: `OpControlBarrier` with `Workgroup` execution scope
-and `WorkgroupMemory` semantics (`spirv.rs`'s `SCOPE_WORKGROUP` and
-`MEMORY_SEMANTICS_WORKGROUP_MEMORY`), one per recorded expr. A narrower barrier — a warp or a
+and `AcquireRelease | WorkgroupMemory` semantics (`spirv.rs`'s `SCOPE_WORKGROUP` and
+`MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY`), one per recorded expr. The
+acquire/release bits are not optional: Vulkan requires a non-relaxed order beside any
+storage-class semantics bit (`VUID-StandaloneSpirv-MemorySemantics-10871`), and `spirv-val`
+refuses a `WorkgroupMemory`-only barrier. A narrower barrier — a warp or a
 subgroup — is not in this landing, and inserting one is what would make the warp's width a
 question at all. **What is not well defined is a read under divergent control flow**: SPIR-V
 requires `OpControlBarrier` in uniform control flow, so a barrier placed with the read

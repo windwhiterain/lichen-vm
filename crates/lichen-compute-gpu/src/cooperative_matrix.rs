@@ -31,6 +31,17 @@ pub struct Bindings {
 /// SPIR-V's storage class for the three buffers.
 const STORAGE_BUFFER: u32 = 12;
 
+/// `SpvCapabilityVulkanMemoryModel`.
+///
+/// # Invariant
+/// `SPV_KHR_cooperative_matrix` requires it wherever `Shader` and `CooperativeMatrixKHR` are
+/// declared; `spirv-val` refuses the module without it. Its own extension carries it: the module
+/// is SPIR-V 1.3, where the capability is only an extension's.
+const CAPABILITY_VULKAN_MEMORY_MODEL: u32 = 5345;
+
+/// `SpvMemoryModelVulkan`: the memory model the Vulkan capability requires.
+const MEMORY_MODEL_VULKAN: u32 = 3;
+
 /// The module: one entry point that loads, multiplies and stores, every lane of one
 /// subgroup executing together.
 ///
@@ -88,14 +99,19 @@ pub fn module(bindings: Bindings) -> Vec<u32> {
         words.push(((operands.len() as u32 + 1) << 16) | u32::from(op));
         words.extend_from_slice(operands);
     };
-    // Capabilities: the shader, its 8-bit components and the cooperative matrix.
+    // Capabilities: the shader, its 8-bit components, the cooperative matrix, and the Vulkan
+    // memory model.
     push(op::CAPABILITY, &[1]);
     push(op::CAPABILITY, &[39]);
     push(op::CAPABILITY, &[4448]);
     push(op::CAPABILITY, &[6022]);
+    // `VulkanMemoryModel`: required beside the cooperative matrix, and it requires the model below.
+    push(op::CAPABILITY, &[CAPABILITY_VULKAN_MEMORY_MODEL]);
     for extension in [
         b"SPV_KHR_8bit_storage\0".as_slice(),
         b"SPV_KHR_cooperative_matrix\0",
+        // The capability above is an extension's at SPIR-V 1.3.
+        b"SPV_KHR_vulkan_memory_model\0",
     ] {
         let mut operands = Vec::new();
         for chunk in extension.chunks(4) {
@@ -105,7 +121,8 @@ pub fn module(bindings: Bindings) -> Vec<u32> {
         }
         push(op::EXTENSION, &operands);
     }
-    push(op::MEMORY_MODEL, &[0, 1]);
+    // Logical addressing and the Vulkan memory model: the model the capability above names.
+    push(op::MEMORY_MODEL, &[0, MEMORY_MODEL_VULKAN]);
     let mut entry = vec![5, function];
     entry.extend(spv_string(b"main\0"));
     push(op::ENTRY_POINT, &entry);
