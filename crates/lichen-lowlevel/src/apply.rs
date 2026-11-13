@@ -472,6 +472,14 @@ impl<P: Program> Module<P> {
                 }
                 result
             }
+            // A function result is the call's value; the next application reads it.
+            Some(LowValue::Function(_)) => {
+                if self.nodes[node].value.is_none() {
+                    self.write_node_value(node, result);
+                }
+                self.unify(node, applied);
+                result
+            }
             _ => result,
         }
     }

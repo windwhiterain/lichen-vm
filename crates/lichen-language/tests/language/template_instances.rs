@@ -46,7 +46,6 @@ fn an_inline_literal_domain_is_fresh_per_application() {
 }
 
 #[test]
-#[ignore = "an inline literal domain's type argument is shared by the returned function; the checker needs a per-call specialization (docs/notes/template-instantiation.md)"]
 fn a_function_generics_literal_domain_takes_anonymous_instances() {
     assert_eq!(
         output(

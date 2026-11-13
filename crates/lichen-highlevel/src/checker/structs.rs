@@ -714,6 +714,25 @@ where
             .then_some(parameter)
     }
 
+    /// The applied clone's return type: the side apply's own result type.
+    pub(super) fn applied_return_type(&self, term: NodeId) -> Option<NodeId> {
+        let applied = self
+            .module
+            .applied_exprs
+            .get(&term)
+            .copied()
+            .filter(|applied| self.module.nodes.contains_key(*applied))?;
+        let function = self.module.function_apply_function(applied)?;
+        let AnyFunctionId::Dynamic(function) = function else {
+            return None;
+        };
+        let return_type = self.module.functions.get(function)?.return_type;
+        self.module
+            .nodes
+            .contains_key(return_type)
+            .then_some(return_type)
+    }
+
     /// The requirement a call's parameter states: the template and the type.
     ///
     /// # Invariant

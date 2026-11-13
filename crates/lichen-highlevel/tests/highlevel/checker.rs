@@ -126,7 +126,8 @@ fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[Nod
             b.module.node_value(AnyNodeId::Dynamic(ids[0])),
             Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
         )
-        && ids[1] == b.type_expr
+        // One class means equal: a clone of the universe is the universe.
+        && b.module.class_root(ids[1]) == b.module.class_root(b.type_expr)
 }
 
 /// An expr's width in the checked program: the value and type slots plus one

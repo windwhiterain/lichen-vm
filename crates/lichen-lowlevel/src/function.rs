@@ -127,12 +127,6 @@ struct ApplyCtx<'a> {
     /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
     /// a closure's fresh id.
     tag: Option<FunctionId>,
-    /// The closure memo: a cell's own closure, and the reach it is on.
-    ///
-    /// # Invariant
-    /// One entry per cell the pass judges, so the proof runs once per cell and
-    /// a cycle among decided cells is settled by the first verdict.
-    closure: HashMap<NodeId, Option<bool>>,
     remap: &'a mut HashMap<NodeId, NodeId>,
     /// A source [`FunctionId`] → the fresh closure this walk minted for it.
     ///
@@ -530,7 +524,6 @@ impl<P: Program> Module<P> {
             in_parameter: false,
             minted_keys: None,
             tag: self.nodes[node].function,
-            closure: HashMap::new(),
             remap: &mut remap,
             minted: &mut minted,
         };
@@ -539,7 +532,6 @@ impl<P: Program> Module<P> {
         ctx.in_parameter = true;
         // The parameter's image: the clone, or the template's own cell.
         let parameter_image = self.node_apply(parameter, &mut ctx);
-        ctx.in_parameter = false;
         ctx.parameter_image = Some(parameter_image);
         let parameter_clones: Vec<NodeId> = ctx.remap.values().copied().collect();
         for clone in parameter_clones {
@@ -890,12 +882,6 @@ impl<P: Program> Module<P> {
             && operation.is_none()
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
-        // A **closed** cell is shared: decided content, closed all the way down.
-        let rehomed = matches!(
-            value.and_then(|value| value.as_enum()),
-            Some(LowValue::Function(_))
-        );
-        let closed = !rehomed && self.template_content_is_closed(node, None, &mut ctx.closure);
         // A scope's content is this call's; a clone of a scope's node is scoped too.
         let scoped = self.blocks[block].parent.is_some()
             || self.blocks[self.nodes[template_root].block]
@@ -906,7 +892,8 @@ impl<P: Program> Module<P> {
             || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
             || wildcard
-            || (!proven_concrete && !closed)
+            // SPEC §Clone: a decided node without the deep pass is cloned.
+            || !proven_concrete
             || scoped
             || self.value_holds_foreign_function(value, ctx.anchor);
         if !depends_on_parameter {
@@ -919,8 +906,10 @@ impl<P: Program> Module<P> {
             && operation.is_some()
             && (self.function_descends_from(function, ctx.anchor)
                 || self.functions[ctx.anchor].nodes.contains(&node));
-        if !class_inside && !replay_operation && !wildcard {
-            return node; // outside the scope — reference as-is
+        // SPEC §Clone: a proven unowned node is canonical; an undecided one detaches.
+        let canonical = proven_concrete && self.nodes[node].function.is_none();
+        if (!class_inside || canonical) && !replay_operation && !wildcard {
+            return node; // reference as-is
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
         let scope = block;
@@ -934,13 +923,8 @@ impl<P: Program> Module<P> {
         // The clone's origin is the node it instantiates, so a reader holding the clone can
         // reach the source node.
         self.nodes[clone].origin = Some(node);
-        // The owner tag: an apply's clones take the apply node's owner; a closure's own scope
-        // takes the fresh id.
-        let owner = match ctx.closure_scope {
-            Some(scope) if scope.contains(&node) => ctx.tag,
-            Some(_) => function,
-            None => ctx.tag,
-        };
+        // The owner tag: an apply's clones belong to the scope the apply happens in.
+        let owner = ctx.tag;
         self.set_node_owner(clone, owner);
         if let Some(parameter_image) = ctx.parameter_image {
             self.record_clone_parameter(clone, ctx.parameter, parameter_image);
@@ -1173,7 +1157,6 @@ impl<P: Program> Module<P> {
                     in_parameter: false,
                     minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
-                    closure: HashMap::new(),
                     remap: ctx.remap,
                     minted,
                 };
@@ -1182,7 +1165,10 @@ impl<P: Program> Module<P> {
                     .map(|&id| self.node_apply(id, &mut inner))
                     .collect();
                 let r#return = self.node_apply(r#return, &mut inner);
+                // The mint's parameter is its own; its open cells detach into it.
+                inner.in_parameter = true;
                 let parameter = self.node_apply(template_parameter, &mut inner);
+                inner.in_parameter = false;
                 // The enclosing pass clones its own parameter when it reaches it.
                 inner.remap.remove(&template_parameter);
                 // A hand-built function (a lowlevel test) may leave

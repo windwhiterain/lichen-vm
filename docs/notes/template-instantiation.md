@@ -96,26 +96,42 @@ Measured:
   HEAD; it answers its declared output now, because each call of
   `add := 'x -> 'y -> x + y` needs its own inner parameter.
 
-**Open: the inline literal domain under a type parameter.**
+**The inline literal domain under a type parameter.**
 `div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor`, called twice as
-`div _ _{…}` with an `Int` and a `Float`, is still refused: the second call's argument
-meets the first call's type (`expected Int, found Float`). The inline literal is the
-**inner function's own parameter**, so it lies in the inner function's scope, not in the
-applied outer function's: the outer application's clone references its field cells in
-place instead of copying them. Two calls' pinned parameters are distinct nodes, but the
-inner struct value and the field type cells behind them are the same nodes (measured),
-and the checker's copy only freshens a **bare** open type cell, not the term of `T`. The
-pinning test is
-`template_instances::a_function_generics_literal_domain_takes_anonymous_instances`
-(`#[ignore]`); the lowlevel replay in §3 is the mechanism that would supply the call's
-own cells.
+`div _ _{…}` with an `Int` and a `Float`, was refused (`expected Int, found Float`).
+The fix is §Clone's own sentence: **an undecided node detaches from its class**. The
+clone's class gate used to reference every node whose class named an outside cell,
+including an undecided `T`; the first call then decided the template's type. The gate
+now references only a node the deep pass **proved** (`evaluated_deep.undecided` false),
+so an undecided cell always detaches, whatever its class names.
+
+The maintainer's verdicts the fix rests on: **there is no virtual root** (a node
+belongs to the function scope where it was created; `alloc_node` tags it with
+`current_function`); the **applying function's scope is the callee's**, not the call
+site's; the clone recurses into a decided node unless the deep pass proved it.
+
+Two rules complete the fix. A **proven** node with **no owner** is a canonical
+structure (the universe, a type constant): the clone references it in place, so a
+call's type keeps the canonical `[int, Type]` node instead of a clone of it. And a
+call's result cell takes the **instanced** return type (`applied_return_type` reads the
+applied clone's function), never the template's open declaration.
+
+Measured: both drivers answer the program `(0, 0.5): Tuple`, the pin
+`template_instances::a_function_generics_literal_domain_takes_anonymous_instances` is
+enabled and passes, the language suite is 289 passed / 0 failed / 0 ignored, the
+highlevel suite 136 passed, and the compute suite 283 passed / 1 ignored (its known
+skip).
 
 **Rejected: copying open type expressions.** Making the type slot fresh by copying any
 open type expression, rather than only a bare open cell, leaked the compute buffer's raw
 marker through `frozen_buffer_reuse::a_frozen_buffer_cell_still_feeds_the_next_launch`
 (`[raw 6, raw 8, raw 10, raw 12]` instead of `[6, 8, 10, 12]`): the type expression's own
-decided interior was copied with it. **Rejected: using the applied clone as the callee.**
-It makes a later call re-instantiate a function whose block has been dropped: `@gc`
+decided interior was copied with it. The **guarded** form (copy only on the instance
+path, when the slot's own value is open) was tried again and broke the two pins that
+require a struct type's wildcard fields to stay open across instances
+(`a_struct_types_wildcard_fields_stay_open_across_instances`), so the decision stands:
+the type expression is not the instance's to rewrite. **Rejected: using the applied
+clone as the callee.**It makes a later call re-instantiate a function whose block has been dropped: `@gc`
 programs panicked intermittently in `gc.rs`'s `class_walk` (`invalid SlotMap key used`).
 
 ## 3. The rules
@@ -125,8 +141,10 @@ programs panicked intermittently in `gc.rs`'s `class_walk` (`invalid SlotMap key
   the class needs a fresh cell (one of its members is open); otherwise the
   class is referenced in place, as a whole. The scope is the **template's own**,
   not the caller's: the caller names where the instance lands, not the lexical
-  scope being instantiated. A template with no owner has no source scope, so
-  no unmarked class is inside one: the virtual root is external, never neutral.
+  scope being instantiated. **There is no virtual root** (maintainer's verdict):
+  every node belongs to the function scope where it was created; the checker's
+  `alloc_node` tags it with `current_function`, and the implementation's `None`
+  summary is the representation gap §2.1 measures, not a scope of its own.
   The caller's marking wins over all of this: a marked cell is referenced in
   place, and a marked root shares the whole template. The rule and its
   measurements are in [`apply-clone-ownership.md`](apply-clone-ownership.md) §4.

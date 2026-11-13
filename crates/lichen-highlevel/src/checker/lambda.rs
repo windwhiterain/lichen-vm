@@ -507,23 +507,28 @@ where
         let type_argument_expr = value_argument_expr;
         // A decided callee states the result type now; the runtime binds the same cell.
         let c = self.fresh_cell();
-        let declared_return = match callee {
-            // A frozen callee states its signature, not the call's own type cell.
-            Some(AnyFunctionId::Static(_)) => None,
-            Some(AnyFunctionId::Dynamic(fid)) => {
-                let declared = self.module.functions[fid].return_type;
-                // Only a decided return type is a fact the call can state now; an
-                // open one belongs to the runtime apply.
-                let decided = self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(declared))
-                    .is_some()
-                    || self.module.class_low_type(declared).is_some();
-                decided.then_some(Some(AnyNodeId::Dynamic(declared)))
-            }
-            None => None,
-        }
-        .flatten();
+        // The result type is the **instanced** return type, not the declaration.
+        let declared_return = self
+            .applied_return_type(callee_expr)
+            .map(AnyNodeId::Dynamic)
+            .or_else(|| {
+                match callee {
+                    // A frozen callee states its signature, not the call's own type cell.
+                    Some(AnyFunctionId::Static(_)) => None,
+                    Some(AnyFunctionId::Dynamic(fid)) => {
+                        let declared = self.module.functions[fid].return_type;
+                        // Only a decided return type is a fact the call can state
+                        // now; an open one belongs to the runtime apply.
+                        let decided = self
+                            .module
+                            .node_value(AnyNodeId::Dynamic(declared))
+                            .is_some()
+                            || self.module.class_low_type(declared).is_some();
+                        decided.then_some(AnyNodeId::Dynamic(declared))
+                    }
+                    None => None,
+                }
+            });
         if let Some(declared) = declared_return {
             self.module.unify_ref(AnyNodeId::Dynamic(c), declared);
         }
