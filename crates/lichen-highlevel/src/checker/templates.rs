@@ -10,7 +10,7 @@ use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 
 use super::Checker;
-use crate::program::{Ctx, HighProgram, TypeOperator, ValueType};
+use crate::program::{HighProgram, TypeOperator, ValueType};
 
 impl<P: HighProgram> Checker<P>
 where
@@ -365,28 +365,12 @@ where
         } else {
             actual_term
         };
-        // SPEC §Unify: `a = b` is `a <: b`. A parameter side's unify (`'k = K`) annotates
-        // the formal's **type** with the expression; the value stays the call's. Only a
-        // struct literal is read this way: a set/table type's value half is its table.
-        let expected_is_type = self.parameter_side
-            && matches!(self.ir[expected].kind, ExprKind::Struct { .. });
-        if direct && expected_is_type {
-            if let Some(expected_value) = self.module.expr_value_half(expected_term) {
-                self.check_unify(
-                    actual_ty,
-                    expected_value,
-                    self.loc(actual, 0),
-                    DiagKind::Annotation,
-                );
-            }
-        } else {
-            self.check_unify(
-                found,
-                expected_term,
-                self.loc(actual, 0),
-                DiagKind::Annotation,
-            );
-        }
+        self.check_unify(
+            found,
+            expected_term,
+            self.loc(actual, 0),
+            DiagKind::Annotation,
+        );
         // The unify's own value is the actual's: the expected side states what
         // the actual must be, not what it is.
         self.state[e].term = Some(actual_term);

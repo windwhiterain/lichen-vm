@@ -83,10 +83,7 @@ where
         // Push one frame even when the side declares no formal.
         self.scopes.push(scope);
         // Check the arbitrary parameter expression; its value is the domain.
-        let parameter_side = self.parameter_side;
-        self.parameter_side = true;
         self.check_expr(parameter);
-        self.parameter_side = parameter_side;
         let domain = self.state[parameter]
             .term
             .expect("the parameter side is compiled");
