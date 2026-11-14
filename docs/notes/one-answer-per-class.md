@@ -538,6 +538,20 @@ probe is the array a frozen op keeps versus the three nodes the checker built.
 `.worktrees/strict-fix` (branch `strict-clean`); the main checkout stays on `dev` with the
 maintainer's uncommitted spec edit untouched.
 
+**Measured: the kernel item is a plain `@any` field value with no operation.** The launch
+operand's first item (the kernel's `native`) is not a read node: `ITEMOP` prints
+`operator=None operand=None` for it, and the same is true of its clone. The freeze never held an
+operation for it to lose — a probe counted every operation the ReadOnly freeze dropped by value
+kind and **none** was a wildcard (they were arrays, tables and usizes), so keeping a wildcard's
+operation is inert here. The checker resolved `k.native` against the declared type at check time
+(`k`'s value was the type `K`, so the field's position was constant) and handed the build the
+field's `@any` **value node** — a plain cell with no read to re-run. The argument therefore has
+no path into it, which is why the launch gate stays blocked.
+
+Two SPEC-motivated changes landed as WIP (`8b487d8f`): the ReadOnly freeze keeps a wildcard's
+operation, and the clone walk keeps a wildcard-clone's operation with its operand walked and the
+local remapped. Both are inert for this program and are kept for the general rule.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
