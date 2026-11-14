@@ -356,6 +356,17 @@ branch can be linked (the build note's warning). Every WIP measurement must be t
 `cargo clean -p` of the workspace crates or with a per-branch `CARGO_TARGET_DIR`; the strict
 baseline needs a clean re-measure.
 
+**Clean re-measure and the real blocker.** With a clean rebuild of the workspace crates the
+strict tree answers `(raw none, raw none)` again: the collide in the previous round was a stale
+build. The gate trace then shows the launch clones' operand items: the kernel item
+(`k.native`) is an open cell. Inspecting why: the frozen wrapper's parameter `k` is *decided*
+at freeze (its value is the type `K`), so per SPEC §Clone its clone is a **reference** and the
+body's `k.native` reads the type `K`, not the argument kernel. But SPEC §Unify says `a = b` is
+`a <: b`, so `'k = K` is an annotation: the formal's *value* should stay fresh and its *type*
+be `K`. The implementation writes `K` into the parameter's **value** cell. That is the next
+piece: compile `'k = K` as value-fresh plus type-`K`, so the argument fills the cloned
+parameter's value and `k.native` reads the kernel.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
