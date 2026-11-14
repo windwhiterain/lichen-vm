@@ -141,3 +141,32 @@ deletions), not in the forms. The named-type instance (`CIn2{.a 6, .b 3}`) and t
 type-in-value fields also answer `none`, so the forms cannot be exercised through them on
 this branch. The next step is to restore the form-3 behaviour on the rebased branch before
 judging the example's usages.
+
+### The Nested form (6), audited
+
+The SPEC now carries form 6:
+
+```lichen
+A := {.x @any: Int, .y @any: Float}
+B := {.a A, .z @any: String}
+f := {.'a=A, .'b=B, .w': Type} -> ...
+```
+
+- **`B := {.a A, …}` is the pattern the examples use** for `CIn`/`CPar` (`{.x (compute.Buf …)}`,
+  `{.in (CIn)}`). The Nested section therefore **sanctions it**: the earlier review's verdict
+  that a type in a field's value position is "not an Ideal API form" is superseded, and the
+  collide in `convolution2d` is an implementation gap, not a non-conformant usage.
+- **`String` does not resolve**: the language spells the builtin `string`
+  (`B := {.a A, .z @any: string}` parses), so form 6's `String` is a typo in the SPEC.
+- **The signature spelling is not understood**: `f := {.'a=A, .'b=B}` with the caller
+  `f _{.a …, .b …}` reports `no field named b in the struct type Struct` — the anonymous
+  signature does not give the instance a name table, so the field lookup is on the generic
+  `Struct`.
+- **The named nested form is undecided**: with
+  `S := {.a A, .b B}; f := 's = S -> s.a.x; f _{…}` the answer is `(none, none)` — the same
+  reading the plain form 3 gives on the **rebased** branch (it answered `(2, 2)` before the
+  rebase).
+
+So the red tests' first blocker is the rebase regression on the struct-signature call path,
+and form 6's own two spellings (`String`, the anonymous signature) are additional
+conformance findings.
