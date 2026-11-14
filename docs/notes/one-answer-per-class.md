@@ -94,6 +94,34 @@ stay until those are understood: the array instance's dependent length stopped b
 (`('n -> {A := [@any : Int, n]; A[1, 2, 3]}) 5` no longer fails), and the annotation path broke
 the compute package load (`expected raw[?a, ?b], found 0` at `compute = import "compute.lichen"`).
 
+## The SPEC's constructions are three, not one
+
+The two measured failures are not a defect of the SPEC. The SPEC gives a **different rule for
+each construction**, and the implementation applies one routine to all of them:
+
+| construction | SPEC rule | consequence |
+|---|---|---|
+| struct instance `s{…}` | `v := @raw[name_table, nominal_id, @raw None, …]`; `e3 = v[…]`, `e1 = v[…]` | fresh field cells of this use's own `v` |
+| array instance `e0[e1, e2]` | `let [template, length] := e0; length = 2; e1 = template; e2 = template` | **unified against the template's cells**, length included |
+| table / set instance | `let table{kt, vt} = t; k1 = kt; …` / `let set{t} = t; e1 = t` | unified against the template's cells |
+| function apply `f a` | `@clone`: undecided node in the applying scope → clone; decided → reference (`### Any`: an `Any` cell becomes `None` per use) | the application clone |
+
+The array instance's `length = 2` is a **unify with the template's length cell**, so a
+parameter-dependent length (`A := [@any : Int, n]`) stays the parameter's node and the later
+call conflicts with the literal count. Cloning the template at the array instance detaches
+that cell, and the check disappears — measured: the array instance on `clone_template` fails
+`a_dependent_array_length_rejects_other_lengths`, while on its own routine it passes, and the
+probe `('n -> {A := [@any : Int, n]; A[1, 2, 3]}) 5` fails at the call as the rule says. The
+annotation path is `a : T`, a unify of the annotated attribute with the expected expression
+(`## Annotation`), not an application: applying the application clone there breaks the compute
+package load.
+
+**Verdict.** The SPEC is coherent; the implementation is what is wrong — it has one
+instantiation routine serving three constructions, and any single rule substituted for all
+three contradicts one of them. The repair is per construction: struct → `v`'s fresh cells;
+array/table/set → unify against the template (only `Any` cells are per use); annotation →
+unify, no instantiate; application → `@clone`.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
