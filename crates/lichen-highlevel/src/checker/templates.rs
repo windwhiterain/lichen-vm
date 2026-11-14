@@ -10,7 +10,7 @@ use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 
 use super::Checker;
-use crate::program::{HighProgram, TypeOperator, ValueType};
+use crate::program::{Ctx, HighProgram, TypeOperator, ValueType};
 
 impl<P: HighProgram> Checker<P>
 where
@@ -365,12 +365,32 @@ where
         } else {
             actual_term
         };
-        self.check_unify(
-            found,
-            expected_term,
-            self.loc(actual, 0),
-            DiagKind::Annotation,
+        // SPEC §Unify: `a = b` is `a <: b`. A formal unified with a **type** expression
+        // (`'k = K`) constrains the formal's type; its value stays the call's.
+        let universe = self.universe();
+        let expected_is_type = crate::shape::is_universe_any(
+            &mut self.module,
+            universe,
+            AnyNodeId::Dynamic(expected_ty),
         );
+        if direct
+            && expected_is_type
+            && let Some(expected_value) = self.module.expr_value_half(expected_term)
+        {
+            self.check_unify(
+                actual_ty,
+                expected_value,
+                self.loc(actual, 0),
+                DiagKind::Annotation,
+            );
+        } else {
+            self.check_unify(
+                found,
+                expected_term,
+                self.loc(actual, 0),
+                DiagKind::Annotation,
+            );
+        }
         // The unify's own value is the actual's: the expected side states what
         // the actual must be, not what it is.
         self.state[e].term = Some(actual_term);
