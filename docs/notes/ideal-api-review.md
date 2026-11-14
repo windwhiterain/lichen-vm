@@ -120,3 +120,24 @@ value** — the generic `Struct` against a specific struct type. The next questi
 the two the annotation is meant to compare: the SPEC's `: T` unifies the *type attribute*
 with T, so a struct value can only be annotated `: Struct`; annotating it `: CIn` compares
 the generic template with the concrete type value and cannot succeed.
+
+### Conformance of the Ideal API forms
+
+The SPEC's own form-3 program was run twice as it stands:
+
+```lichen
+Div := {.dividend @any: Int, .dividor @any: Int}
+div := 'x = Div -> x.dividend / x.dividor
+(div _{.dividend 6, .dividor 3}, div _{.dividend 8, .dividor 4})
+```
+
+- **Before the rebase onto dev `e28164e8`:** `(2, 2)`, `EXIT=0` — the form works.
+- **After the rebase** (same program, fresh `LICHEN_HOME`): `(none, none)` — both calls are
+  undecided.
+
+So the implementation does support the Ideal API's forms; the regression is in the rebase
+adaptation (the dropped `resolved_field`/named-field callee arm, or dev's declared-field
+deletions), not in the forms. The named-type instance (`CIn2{.a 6, .b 3}`) and the
+type-in-value fields also answer `none`, so the forms cannot be exercised through them on
+this branch. The next step is to restore the form-3 behaviour on the rebased branch before
+judging the example's usages.
