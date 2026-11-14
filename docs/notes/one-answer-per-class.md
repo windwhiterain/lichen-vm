@@ -412,6 +412,21 @@ value arrives later. The SPEC sugar (`@any` in the end) must therefore write `An
 formal's class **before** that decision, or the first-write rule hands the class K. Whether the
 sugar runs before the definition pass decides the annotation is the next question.
 
+n**Measured: the sugar does not unlock the launch, and the SPEC's Any direction blocks the
+argument.** The sugar placed after the body (the SPEC's "in the end") compiles and the prelude
+loads, but `convolution2d` still prints `(raw none, raw none)`. The reason is the SPEC's own
+`### Any` direction: *"Only merge if another side is right side and undecided."* At the call the
+SPEC writes `a = p_clone` -- the argument on the left, the cloned parameter on the right -- and
+the parameter is `@any` (per the sugar), so the "another side" is the argument (the left), not
+the right side: **no merge**, and the argument never fills the parameter. The body's reads
+(`k.native`, `a`) then see `Any`, and the launch's kernel/cfg operands stay empty. The
+implementation makes the examples work by instantiating the declared type per use at check time
+(the checker's instantiation), not by this unify.
+
+So the strict question is now textual: either the SPEC needs a rule by which the argument fills
+the cloned parameter's `@any` (the Apply section's `a = p_clone` direction working through the
+Any rule), or the checker's per-use instantiation is the intended realization and the SPEC's
+Any/Function text should say so. That is the maintainer's call.
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
