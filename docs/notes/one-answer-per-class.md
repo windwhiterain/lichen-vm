@@ -265,9 +265,20 @@ copies) fails `expected ?, found ?` at `102:79` — the collide. Strict (no copi
 prints `(raw none, raw none)` with **no `PLRUN eval`**. With `DBG_PL` the running launch node
 is printed (`module.current_operator_node()`): on dev the launch runs at **five distinct op
 nodes** (33k–45k), not the prelude's one template op — so the apply clone does produce a
-per-call launch when the copies are present. On strict, the compute calls' Apply nodes
-(`CHECKAPP … apply=NodeId(1198…)` and its siblings) are **never evaluated** at all: they appear
-only in the check-time line.
+per-call launch when the copies are present.
+
+**Corrected: those Apply nodes are the prelude's own calls, not the program's.** With the
+block printed in `check_app`, `NodeId(1198…)` and its siblings are in blocks 9/13/15/22 — the
+prelude functions' blocks during the definition pass. The program's root-block calls resolve
+to `Dynamic(FunctionId(7))`, `Static(ModuleKey(0), …)` or `None`; **no root call has a
+module-1 callee**. So the earlier sentence "the compute calls' Apply nodes are never evaluated"
+was about the prelude's internal calls, which are expected to stay lazy at definition time.
+A second scan found no dynamic function whose node list contains an External operator, so the
+`$plrun` native op (`NodeId(2456)`, built while the prelude was checked in function 21) is not
+reachable through any dynamic function's scope. How the program's `compute.plrun` call reaches
+the wrapper body on the host side is the open question; the next probe is the root call's
+`Dynamic(FunctionId(7))` identity and whether the native op is represented in the frozen module
+only.
 
 ## What the diagnostic is now
 
