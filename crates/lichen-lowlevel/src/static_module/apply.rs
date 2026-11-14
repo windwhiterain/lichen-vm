@@ -32,7 +32,6 @@ impl<P: Program> Module<P> {
                 let f = &static_module.functions[function.index.0];
                 (f.r#return, f.parameter, f.asserts.len())
             };
-            let parameter_value = static_array_item(&static_module, function.module, parameter, 0);
             let mut ctx = StaticApplyCtx {
                 target: block,
                 module: static_module,
@@ -48,7 +47,6 @@ impl<P: Program> Module<P> {
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
-                parameter_value,
             };
             // The parameter image comes first, so return fields share its instance.
             let parameter_image = self.static_node_apply(parameter, &mut ctx);
@@ -152,7 +150,6 @@ impl<P: Program> Module<P> {
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
-                parameter_value: None,
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.record_applied_expr(node, applied);
@@ -267,7 +264,6 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted: HashMap::new(),
-            parameter_value: None,
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -371,7 +367,6 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted,
-            parameter_value: None,
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
@@ -598,21 +593,14 @@ impl<P: Program> Module<P> {
             node.low_shape.clone(),
         );
         // The class decides: outside the source is shared; a nested re-home also accepts the enclosing scope.
-        // SPEC §Clone: a cloned undecided node detaches from its original class, so the
-        // applied formal's value is per-call even though its class is shared with the
-        // declaration -- it is never a shared outer instance.
-        let is_parameter_value = Some(local) == ctx.parameter_value;
-        let inside = is_parameter_value
-            || !undecided
+        let inside = !undecided
             || ctx.rule.inside(&ctx.module, local, ctx.source)
             || ctx
                 .enclosing_source
                 .is_some_and(|source| ctx.rule.inside(&ctx.module, local, source));
         // The canonical outer instance of a shared cell: one cell per frozen
         // cell, reused on every later encounter.
-        if let Some(instance) = ctx.rule.outer_instance(local)
-            && !is_parameter_value
-        {
+        if let Some(instance) = ctx.rule.outer_instance(local) {
             // The current verdict decides the owner: a class inside the
             // current scope is promoted out of the unowned state.
             if undecided && inside && self.nodes[instance].function.is_none() {
@@ -638,16 +626,16 @@ impl<P: Program> Module<P> {
         if let Some(shape) = template_shape {
             self.seed_class_low_type(clone, shape);
         }
-        if (undecided || is_parameter_value) && inside {
+        if undecided && inside {
             // A capture cloned for the enclosing call takes that call's tag, never the closure's.
-            let owner = if is_parameter_value || ctx.rule.inside(&ctx.module, local, ctx.source) {
+            let owner = if ctx.rule.inside(&ctx.module, local, ctx.source) {
                 ctx.tag
             } else {
                 ctx.enclosing_tag
             };
             self.set_node_owner(clone, owner);
         }
-        if undecided || is_parameter_value {
+        if undecided {
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
@@ -663,7 +651,7 @@ impl<P: Program> Module<P> {
             // value is never carried: SPEC §Clone detaches it, so the call's argument
             // is the clone's value.
             let value = ctx.module.read(local);
-            let mapped = if carried && !is_parameter_value {
+            let mapped = if carried {
                 value.map(|value| self.static_remap_value(value, ctx))
             } else {
                 None
@@ -1058,11 +1046,4 @@ struct StaticApplyCtx<P: Program> {
     /// one of the two closures only — the other would read its own shell in place and
     /// run no parameter check.
     minted: HashMap<StaticFunctionRef, FunctionId>,
-    /// The applied formal's **value cell** in the frozen module.
-    ///
-    /// # Invariant
-    /// SPEC §Clone: a cloned undecided node detaches from its original class, so the
-    /// formal's value is per-call even though its class is shared with the declaration:
-    /// it is cloned fresh and must never be a shared outer instance.
-    parameter_value: Option<LocalNodeId>,
 }
