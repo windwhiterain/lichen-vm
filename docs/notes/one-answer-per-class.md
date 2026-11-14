@@ -489,6 +489,20 @@ not the SPEC's `a = p_clone` merge: the formal's value never receives the argume
 launch's kernel stays `Any`. The chain that must change is the parameter check itself (its value
 position), not the clone walk's carrying.
 
+**Corrected by the IN/OUT probe: the value position does merge.** A probe inside
+`apply_parameter_check` prints the parameter image's value at entry and at exit. For the launch's
+inner wrapper (`function 20`): `PCHECK-IN param=2225 param_value=None arg=2160
+arg_value=Some(Array 0x…680)` → `PCHECK-OUT param=2225 param_value=Some(Array 0x…680) errors=0` —
+the same handle. So `apply_parameter_check` **does** fill the clone's value with the argument's,
+and the paragraph above's "type comparison only" was the post-check value mistaken for a frozen
+one.
+
+**The missing stage: no parameter check receives the kernel.** Not one `PCHECK-IN` in the run
+carries a `Function` argument. The outer `plrun convolve` stage is therefore never
+parameter-checked: the wrapper's `k` never binds the kernel, and the launch's kernel operand is
+the check-time resolution of the declared type's `@any` field. The next probe is where that outer
+stage is folded (the checker's callee resolution or the curried return), not the parameter check.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
