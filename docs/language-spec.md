@@ -7,7 +7,7 @@ Illustration only, not precise.
 core:
 ```sytax
 program := block_inner
-expr := name | atom | unify | lambda | apply | block | annotated | compound | access | instanciate
+expr := name | atom | unify | lambda | apply | block | annotated | compound | access | instantiate
 block := `{` block_inner `}`
 block_inner := ( (stmt | expr) sep)* expr
 sep := `,` | `;` | `\n`
@@ -35,13 +35,14 @@ set_instanciate := `set` glue `(` expr'set `)` glue `(` (expr sep)* `)`
 tuple_access := tuple glue `(` expr `)` 
 struct_access := struct `.` name
 array_access := array glue `[` expr `]`
-atom := number | string | `_` | @any | builtin
+atom := number | string | `_` | builtin
 ```
 
 > In ```sytax <sytax>'<tag>```, `'<tag>` has no sytax meaning, just a tag to that sytax.
 
 sugar:
 ```sytax
+`a <: b ` => `a = b _`  
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
 ` ...a... -> ...b...` => `Function{a := _; b:= _; @parameter ...a...; @body ...b...}`
@@ -59,37 +60,32 @@ bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>
 ## Ideal API
 1. Uniform signature: use if all parameter play equal role.
 ```
-sum3 := [@any: Int, 3]['a, 'b, 'c] -> 'a + 'b + 'c
+sum3 := [_ -> (_: Int), 3]['a, 'b, 'c] -> 'a + 'b + 'c
 sum3 (_[1, 2, 3])
 ```
-2. Named signature: use if the signature will not be used else where.
+2. Named signature: use if the signature will not be used in other API.
 ```
 div := {.'dividend: Int, .'dividor: Int} -> dividend / dividor
 div _{.dividend 2, .dividor 1} 
 ```
-3. Struct signature: use if the signature will be used else where.
+3. Struct signature: use if the signature will be used in other API.
 ```
-Div := {.dividend @any: Int, .dividor @any: Int}
-div := 'x = Div -> x.dividend / x.dividor
+Div := _ -> {.dividend _: Int, .dividor _: Int}
+div := 'x = Div _ -> x.dividend / x.dividor
 div _{.dividend 2, .dividor 1}
 ```
 
-4. Wildcard generic: use if no extra constraint over generics.
+4. Function generic: can formulate any constraint.
 ```
-Div := {.dividen @any, .dividor @any}
-Div{.dividen 1, .dividor 2}, Div{.dividen 1.0, .dividor 2.0}
-
-div := {.'dividend, .'dividor} -> dividend / dividor
-div _{.dividen 1, .dividor 2}, div _{.dividen 1.0, .dividor 2.0}
-```
-
-5. Function generic: can fomulate any constraint.
-```
-Div := 'T -> {.dividen @any: T, .dividor @any: T}
-(Div _){.dividen 1,.dividor 2}, (Div _){.dividen 1.0,.dividor 2.0}
-
 div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor
 div _ _{.dividen 1, .dividor 2}, div _ _{.dividen 1.0,.dividor 2.0}
+```
+
+5. Nested
+```
+A := _ -> {.'x: Int, .'y: Float}
+B := _ -> {.a A _, .'z: String}
+f := {.a A _, .b B _, .'w: Type} -> ...
 ```
 
 ## Lowlevel
@@ -173,8 +169,8 @@ Array unify every element expression to a template expression.
 `e0[e1, e2]` := `{
   let [template, length] := e0
   length = 2
-  e1 = template
-  e2 = template
+  e1 <: template
+  e2 <: template
   raw[raw[template, e1, e2], Array, ...]
 }`
 
@@ -191,16 +187,16 @@ Struct is a special tuple that:
 `Struct` := `@raw[@raw StructType, Type, ...]`
 
 `
-s := {.n1 e1 .n2 e2}
+s := _ -> {.n1 e1 .n2 e2}
 name_table := @raw Table
 ` 
 
-`s` := `@raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]`
+`s` := `_ -> @raw[@raw[name_table, nominal_id, e1, e2], Struct, ...]`
 
 `s{.n2 e3, .n1 e4}` 
 := 
 `{
-  let _{.n1 e1, .n2 e2} = s;
+  let _{.n1 e1, .n2 e2} <: s ;
   v := @raw[name_table, nominal_id, @raw None, @raw None]
   e3 = @raw v[name_table["n2"]+2]
   e4 = @raw v[name_table["n1"]+2]
@@ -224,10 +220,10 @@ name_table := @raw Table
 `
 {
   let table{kt, vt} = t
-  k1 = kt
-  k2 = kt
-  v1 = vt
-  v2 = vt
+  k1 <: kt
+  k2 <: kt
+  v1 <: vt
+  v2 <: vt
   @raw[kt, vt, @raw Table(k1 => v1, k2 => v2), ...]
 }
 `
@@ -243,49 +239,22 @@ name_table := @raw Table
 `
 {
   let set{t} = t
-  e1 = t
-  e2 = t
+  e1 <: t
+  e2 <: t
   @raw[t, @raw Set(e1, e2), ...]
 }
 `
 ```
 
-## Subtype
-
-Unify is directed, extend to subtype, which made unify order, annotations matters.
-
-```sytax
-`a = b` => `a <: b`
-```
-
-### Attribute
+### Attribute Subtype
 
 Attributes can resgister a custom function `is_subtype` to override its subtype behavior.
 
 Subtype via post unify error suppression.
 
-### Any
-
-`Any` is an special value that a node has `Any` value is still undecided. 
-
-Useful to give an undecided node a guarantee that it will never be decided. 
-
-Subtype via lowlevel unify exception:
-- Always unify success.
-- Can recurise into lowlevel array, not lowlevel function, with everything `Any`.
-- Only merge if another side is right side and undecided.
-
-```sytax
-`@any` := `@raw Any`
-`_ = @any` := `_`
-`{a := _; @any = a}` := `@any`
-`{ret = @raw [@raw None, @raw None]; @raw Any = ret; ret}` := @raw[@raw Any, @raw Any]`
-`{ret = @raw None -> @raw None; @raw Any = ret; ret}` := `@raw None -> @raw None`
-```  
-
 ## Undecided
 
-Undeicde is a state of lowlevel node that has no value.
+Undecide is a state of lowlevel node that has no value.
 
 Placeholder `_` is an undecided expression that its attribute array node is undecided.
 
@@ -301,7 +270,9 @@ Nodes inside same class can be classified by tag.
 
 ## Function
 
-Function scope with specified two expr: parameter and body.
+Function is a lowlevel scope with specified two expr: parameter and body.
+
+Function scope is hierarchical, nodes in child scope also belongs to parent scope.
 
 Polymorphism at every application: @clone function's expressions, unify the argument with the cloned parameter.
 
@@ -317,7 +288,9 @@ Polymorphism at every application: @clone function's expressions, unify the argu
 ### Clone
 Clone is a recursive clone within certain scope, triggered by function apply.
 
-Undecided node, if its class is in the applying function's scope, must be clome, otherwise reference it.
+Undecided node, if the outer most scope among its class members is or inside the applying function's scope, must be clone. 
+
+Clone more nodes should make not change to the language behaviour.
 
 For efficency:
 - Clone recursive into a decided node if it the "deep_decided" flag which set during deep evaluate is false.
@@ -325,17 +298,9 @@ For efficency:
 
 Clone an undecided node will detached from its original class for let-polymorphsim.
 
+Cloned node lives in the scope where the apply happens.
+
 Auto create a side apply for inner function apply, the original apply's body unify a side apply's body, the side apply will not be able to evaluate util the next time be cloned by the outer function's apply, so that if the outer function applying clone made the innner applying function specialized, the specialized side apply's body can unify the unspecialized oringinal apply's body.
-
-### Any
-
-Clone an node with `Any` value produce an undecide node with `None` value if its class's scope is equal to the apply function scope.
-
-Sugar: Function auto unify `@any` to parameter in the end so unannotated part become `Any`
-
-```sytax
-`'x -> {...; expr}` => `'x -> {...; return expr; @any = x;}`
-```
 
 ## Preprocessor block
 
