@@ -27,49 +27,6 @@ impl<P: Program> Module<P> {
         true
     }
 
-    /// Unify the parameter's positions with the argument's, **without recording**
-    /// anything.
-    ///
-    /// # Invariant
-    /// Every position is unified, the attribute positions included: the parameter's
-    /// positions and the argument's are the same expression's slots
-    /// (spec §3, "Every attribute is handled like the type").
-    pub(super) fn unify_parameter_slots(&mut self, cloned_param: NodeId, argument: AnyNodeId) {
-        // The reporting side owns the failure; this binding only needs the classes.
-        let recorded = self.unify_errors.len();
-        let lengths = (
-            unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
-            // SAFETY: the argument ref is live; the compare only reads it.
-            unsafe { self.array_items_ref(argument) }.map(|items| items.len()),
-        );
-        match lengths {
-            (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
-                // SAFETY: both nodes are live members of this module; the unify only
-                // reads them.
-                let parameters = unsafe { self.array_items(cloned_param) };
-                // SAFETY: the argument ref is live; the compare only reads it.
-                let supplieds = unsafe { self.array_items_ref(argument) };
-                let width = parameters
-                    .map_or(0, |items| items.len())
-                    .max(supplieds.map_or(0, |items| items.len()));
-                for slot in 0..width {
-                    let (Some(parameters), Some(supplieds)) = (parameters, supplieds) else {
-                        break;
-                    };
-                    let (Some(left), Some(right)) = (parameters.get(slot), supplieds.get(slot))
-                    else {
-                        continue;
-                    };
-                    self.unify_ref(left.node, right.node);
-                }
-            }
-            _ => {
-                self.unify_ref(AnyNodeId::Dynamic(cloned_param), argument);
-            }
-        }
-        self.unify_errors.truncate(recorded);
-    }
-
     /// The post-clone parameter check shared by both apply paths.
     ///
     /// # Invariant

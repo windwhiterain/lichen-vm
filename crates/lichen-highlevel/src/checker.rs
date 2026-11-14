@@ -1257,45 +1257,6 @@ where
         }
     }
 
-    /// The **value** of a field in a struct **type** value: the field's declared type.
-    ///
-    /// # Invariant
-    /// A type literal's field value **is** its declared type, so the lookup reads the
-    /// field's value slot, not its type slot.
-    fn declared_field_value(&self, container: AnyNodeId, name: &'static str) -> Option<AnyNodeId> {
-        let table = crate::shape::value_item(&self.module, container, 0)?;
-        let table =
-            lichen_utils::extend::AsEnum::<LowValue>::as_enum(&self.module.node_value(table)?)?
-                .clone();
-        let LowValue::Table(table) = table else {
-            return None;
-        };
-        let at = self.module.name_table_index(table, name)?;
-        let field = crate::shape::value_item(
-            &self.module,
-            container,
-            at + crate::shape::STRUCT_VALUE_FIELD_BASE,
-        )?;
-        crate::shape::value_item(&self.module, field, crate::shape::EXPR_VALUE_SLOT)
-    }
-
-    /// The field's declared type and value from a container's value.
-    fn resolved_field(
-        &mut self,
-        container_value: NodeId,
-        name: &'static str,
-    ) -> Option<(NodeId, NodeId)> {
-        let table = self.struct_name_table(container_value)?;
-        let at = self.module.name_table_index(table, name)?;
-        let index = self.usize_node(at + crate::shape::STRUCT_VALUE_FIELD_BASE);
-        let (_, value, ty) = self.value_slot_read(
-            container_value,
-            index,
-            Some(at + crate::shape::STRUCT_VALUE_FIELD_BASE),
-        );
-        Some((ty, value))
-    }
-
     /// A node owned by the current function — the checker's only node creation
     /// point.
     ///
