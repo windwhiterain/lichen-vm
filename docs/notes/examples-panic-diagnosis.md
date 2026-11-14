@@ -263,12 +263,6 @@ The same shape recurs at `mathlib.lichen:181` and the other six. Every one is a
 that [class-carries-the-call](class-carries-the-call.md) and the spec proposal describe —
 so the examples test cannot be fixed independently of that family.
 
-**Re-measured after the frozen-requirement fix** ([one-answer-per-class](one-answer-per-class.md)):
-`convolution2d` now runs and prints its declared values, and the survey reads
-**33 clean, 8 panicked, 7 drifted**: the panics are `generate`, `lazy_infinite`, `mathlib`,
-`silu`, `stencil`, `table`, `torus`, `worldgen`; the drifts are `convolution2d`, `decode_loop`,
-`filter`, `import/geometry`, `import/math`, `let_polymorphism`, `placeholder`.
-
 The 3 drifts likewise belong elsewhere: `decode_loop` and `generate` print `raw none`
 where the declared values are the collected arrays (the same class/template family), and
 `import/math` is the parked wrapper rendering (`class-channel.md` §1.1.2's
