@@ -103,13 +103,7 @@ where
     /// the attributes, the name table and the nominal id are shared. `@any`
     /// leaves its own type cell undecided, so sharing it would let one use
     /// decide the type every later use inherits.
-    fn instantiate_requirement(
-        &mut self,
-        expr: NodeId,
-        depth: usize,
-        open_types: bool,
-        fresh: bool,
-    ) -> NodeId {
+    fn instantiate_requirement(&mut self, expr: NodeId, depth: usize, open_types: bool) -> NodeId {
         if depth > 64 {
             return expr;
         }
@@ -123,8 +117,7 @@ where
             return expr;
         };
         let source = value;
-        let value =
-            self.instantiate_requirement_value_with(value, ty, depth + 1, open_types, fresh);
+        let value = self.instantiate_requirement_value_with(value, ty, depth + 1, open_types);
         // **The instance inherits the template's frozen reference**: the fresh cell is the
         // same frozen value, by reference.
         if value != source
@@ -170,24 +163,22 @@ where
         ty: AnyNodeId,
         depth: usize,
     ) -> NodeId {
-        self.instantiate_requirement_value_with(value, ty, depth, true, true)
+        self.instantiate_requirement_value_with(value, ty, depth, true)
     }
 
-    /// `fresh`: an instance's own value is new (SPEC §Struct `v := … None …`); an
-    /// argument's requirement is the value itself.
     fn instantiate_requirement_value_with(
         &mut self,
         value: NodeId,
         ty: AnyNodeId,
         depth: usize,
         open_types: bool,
-        fresh: bool,
     ) -> NodeId {
         if depth > 64 {
             return value;
         }
-        // A frozen type half is referenced, not copied -- an instance's own value is the exception.
-        if matches!(ty, AnyNodeId::Static(_)) && !fresh {
+        // A frozen type half names a value outside every applying function: it is
+        // referenced, not copied.
+        if matches!(ty, AnyNodeId::Static(_)) {
             return value;
         }
         // A value read through `Index` has no class value until it runs.
@@ -227,7 +218,6 @@ where
                                     field,
                                     depth + 1,
                                     open_types,
-                                    fresh,
                                 ))
                             })
                             .unwrap_or(item.node),
@@ -252,7 +242,6 @@ where
                                         hole,
                                         depth + 1,
                                         open_types,
-                                        fresh,
                                     ))
                                 })
                                 .unwrap_or(item.node),
@@ -276,7 +265,6 @@ where
                                 element,
                                 depth + 1,
                                 open_types,
-                                fresh,
                             ))
                         })
                         .unwrap_or(item.node),
@@ -322,7 +310,7 @@ where
             self.module
                 .expr_value_half(expected_term)
                 .filter(|value| self.requirement_is_open(*value, expected_ty, 0))
-                .map(|_| self.instantiate_requirement(expected_term, 0, false, false))
+                .map(|_| self.instantiate_requirement(expected_term, 0, false))
                 .unwrap_or(expected_term)
         };
         // A formal's unify reads its slot identity directly; other values keep
