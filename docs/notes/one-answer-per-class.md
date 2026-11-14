@@ -178,6 +178,13 @@ read path: `expected Struct, found @any` at `k.in.x`, because the kernel's read 
 declaration keeps the type value, the instance's `v` keeps the buffer, and the read's value
 comes from the launch's cfg.
 
+**The launch's op is never even attempted.** On the strict branch, the `ParLaunch` op node is
+built (the checker's `build` prints its id), and the evaluator's stamp trace lists every
+operation it skipped after one attempt — the launch op is in **neither** list: it is never
+evaluated. So the statement's deep evaluation does not force the annotated launch expression
+at all; the launch is not lazy-after-a-failed-attempt, it is unreached. The next probe is the
+deep pass over the `blurred` statement's term (the annotated expr), not the launch's operand.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
