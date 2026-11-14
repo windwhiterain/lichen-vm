@@ -412,7 +412,7 @@ value arrives later. The SPEC sugar (`@any` in the end) must therefore write `An
 formal's class **before** that decision, or the first-write rule hands the class K. Whether the
 sugar runs before the definition pass decides the annotation is the next question.
 
-n**Measured: the sugar does not unlock the launch, and the SPEC's Any direction blocks the
+**Measured: the sugar does not unlock the launch, and the SPEC's Any direction blocks the
 argument.** The sugar placed after the body (the SPEC's "in the end") compiles and the prelude
 loads, but `convolution2d` still prints `(raw none, raw none)`. The reason is the SPEC's own
 `### Any` direction: *"Only merge if another side is right side and undecided."* At the call the
