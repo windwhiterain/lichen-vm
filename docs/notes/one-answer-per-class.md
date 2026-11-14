@@ -402,8 +402,15 @@ end so unannotated part become `Any`"*, and §Function: `f a` => `{let (p_clone 
 argument unifies with the cloned parameter (`a = p_clone`, the argument on the left). A direct
 try -- writing `Any` into the formal's value cell before the parameter side is checked -- breaks
 the prelude with `expected TypeFunction, found ?a => ?b`: the sugar must apply *in the end* and
-only to the unannotated part, and the type-side checks must still see the declared type. That is
-the next implementation step.
+only to the unannotated part, and the type-side checks must still see the declared type. That is the next implementation step.
+
+**Measured: the annotation's value half is undecided at check time.** A probe on the formal
+unify prints the expected term's slot: five items `[value: None, type: None, attr…]`, and
+`expr_value_half` is an **undecided** node. The type expression's value is only decided by the
+definition pass, so the merge is lazy: the formal's class and K's class merge now, and K's
+value arrives later. The SPEC sugar (`@any` in the end) must therefore write `Any` into the
+formal's class **before** that decision, or the first-write rule hands the class K. Whether the
+sugar runs before the definition pass decides the annotation is the next question.
 
 ## What the diagnostic is now
 
