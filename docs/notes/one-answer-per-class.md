@@ -286,13 +286,23 @@ frozen `[value, type]` expr; its first item for the compute module is a
 `LowValue::Function(Static(module 1, index N))` (measured: four used names bind
 `StaticFunctionId(1..4)`). Two resolution paths were added on the WIP branch
 (`spec/instance-v` `05fa1c42`): resolve the callee from the name's own value
-(`static_function_of_callee(value_of(function))`) and through a curated application's next stage
+(`static_function_of_callee(value_of(function))`) and through a curried application's next stage
 (`static_function_return_function`, the frozen return expr's value). They make **30 module-1
 callees resolve inside the prelude**, but the program's five root `compute.plrun` calls still
 resolve to `None`: their callee expr's value half is a leaf with no value (an undecided field
 read of the imported binding), so neither `function_apply_function` nor
 `static_function_of_callee` finds the function. Resolving *that* field read is the next piece —
 and it is what makes the apply, and therefore the per-call clone, happen at run time.
+
+**Measured: the field read resolves structurally, and the apply ops run -- but the launch does
+not.** Two more WIP additions (`spec/instance-v` `3fa55ccb`): a structural
+`static_function_of_callee(callee_expr)` (the field-read chain names the frozen function), and a
+fresh function-value leaf as the apply's callee operand when the read has no value. After them
+the root calls resolve (to `Static(ModuleKey(0), 19/20/30)`) and their apply ops are evaluated
+(`APPLYOP` appears for them), but `PLRUN eval` is still zero: applying those functions does not
+reach the `$plrun` native op. Whether module 0's 19/20/30 are the spliced compute wrappers is
+unverified; the next probe is the callee's body (does it contain the native op?) and what its
+static apply clones.
 
 ## What the diagnostic is now
 
