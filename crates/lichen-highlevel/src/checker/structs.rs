@@ -231,10 +231,17 @@ where
         let container_value = self.value_of(container);
         self.read_site = Some(self.loc(e, 0));
         // The field's position: the name table's own entry, when the value is
-        // decided.
+        // decided. A **formal** container keeps the lazy read: its value at check time is
+        // the declared type, and the read must re-run against the call's argument
+        // (SPEC §Function: the cloned parameter is what the body reads).
+        let formal_container = self.is_formal_rooted(container);
         let table = self.struct_name_table(container_value);
-        let position = table.and_then(|table| self.module.name_table_index(table, name));
-        if table.is_some() && position.is_none() {
+        let position = if formal_container {
+            None
+        } else {
+            table.and_then(|table| self.module.name_table_index(table, name))
+        };
+        if table.is_some() && position.is_none() && !formal_container {
             // A struct without this field: the name rides in the entry, so the
             // language layer can append a did-you-mean clause.
             self.record_guard(

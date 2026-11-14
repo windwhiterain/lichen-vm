@@ -1243,10 +1243,16 @@ where
     }
 
     /// The innermost formal a read's container is rooted at, if any.
+    ///
+    /// # Invariant
+    /// Every enclosing lambda's formals are searched, not just the innermost one: a body
+    /// reads a capture from an outer lambda's parameter, and that parameter is still the
+    /// cell the call binds.
     fn formal_root(&self, e: ExprId) -> Option<ExprId> {
-        let formals = self.current_parameters.last()?;
-        if formals.contains(&e) {
-            return Some(e);
+        for formals in self.current_parameters.iter().rev() {
+            if formals.contains(&e) {
+                return Some(e);
+            }
         }
         match self.ir[e].kind {
             ExprKind::Field { container, .. } | ExprKind::NamedField { container, .. } => {
