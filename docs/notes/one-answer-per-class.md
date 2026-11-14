@@ -300,9 +300,14 @@ not.** Two more WIP additions (`spec/instance-v` `3fa55ccb`): a structural
 fresh function-value leaf as the apply's callee operand when the read has no value. After them
 the root calls resolve (to `Static(ModuleKey(0), 19/20/30)`) and their apply ops are evaluated
 (`APPLYOP` appears for them), but `PLRUN eval` is still zero: applying those functions does not
-reach the `$plrun` native op. Whether module 0's 19/20/30 are the spliced compute wrappers is
-unverified; the next probe is the callee's body (does it contain the native op?) and what its
-static apply clones.
+reach the `$plrun` native op. The probe answers why: module 0's 19/20/30 have
+`has_compute_op=false` (measured with `static_function_compute_operator`), so they are **not**
+the wrappers. The functions that do carry the launch are module 0's 21/22/23 and module 1's
+2/3 (`has_compute_op=true`), and they resolve in the prelude's own blocks but not for the
+program's calls. So the field-read fallback **mis-resolves**: `static_function_of_callee`
+reads a subscript (`resolve_read(callee, 0)`), while `compute.plrun` is a *name* read whose
+chain is `TableGet(names, name) + base`, so it picks the wrong node. Resolving the imported
+package's field by name is the next piece, and it must not go through the subscript helper.
 
 ## What the diagnostic is now
 
