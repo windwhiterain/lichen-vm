@@ -122,6 +122,18 @@ three contradicts one of them. The repair is per construction: struct → `v`'s 
 array/table/set → unify against the template (only `Any` cells are per use); annotation →
 unify, no instantiate; application → `@clone`.
 
+**Measured on the strict version (WIP branch `spec/instance-v`, `f48883c4`, not merged).**
+With the copies removed — the struct instance built from the argument terms, the array
+instance unified against the template, the annotation not instantiated — `convolution2d.lichen`
+**checks** (the collide is gone) but its result is `(raw none, raw none)`. The reason is a
+second implementation defect, not the SPEC: the kernel body's field reads
+(`Module::parameter_annotations` / `declared_field_value` in `checker/structs.rs` and
+`resolve_kernel_reads` in `checker.rs`) resolve through the **declared type template**, whose
+open cells the old copy used to fill with the argument. Reading through the instance (`v`)
+instead is the next piece. The copy in `check_unify_expr` is also what carried the type
+template's clone (origin 185 in the measured class) into the instance's class, i.e. the
+collision's source on the annotation path.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
