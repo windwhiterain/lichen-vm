@@ -100,3 +100,39 @@ syntax: `'x = Div _` is an application, so the clone covers it by construction.
   decides whether `<:` is total or requires function templates everywhere; the
   census answers it. The SPEC only ever applies templates.
 - The compute frozen mirror's `@any` → fresh-hole handling migrates with M7.
+
+## Baseline (dev `174379fb`, measured by the recon worker)
+
+`cargo check --workspace` green (warnings in lichen-serve). The suite is
+**known-red**; the migration's bar is no new failures and the SPEC forms working.
+Per binary (`cargo test --workspace --no-fail-fast -- --test-threads=8`):
+
+| binary | passed | failed | ignored |
+|---|---|---|---|
+| lichen_compute (integration) | 135 | **148** | 1 |
+| compute_gpu | 90 | **4** | 0 |
+| language (integration) | 278 | **11** | 0 |
+| language_server (integration) | 21 | **1** | 0 |
+| serve | 10 | **1** | 0 |
+| highlevel | 136 | 0 | 0 |
+| basic (lowlevel) | 167 | 0 | 1 |
+| lichen_language (lib) | 69 | 0 | 0 |
+| parser | 62 | 0 | 0 |
+| kernel_ir | 46 | 0 | 0 |
+| language_server (lib) | 32 | 0 | 0 |
+| preprocess | 26 | 0 | 0 |
+| lex | 22 | 0 | 0 |
+| graph_runs | 17 | 0 | 0 |
+| package | 15 | 0 | 0 |
+| lichen_compute (lib) | 14 | 0 | 0 |
+| line_model | 13 | 0 | 0 |
+| fusion_bridge | 10 | 0 | 0 |
+| registry | 8 | 0 | 0 |
+| runtime | 4 | 0 | 0 |
+| analyze | 2 | 0 | 0 |
+| normalize_infinity | 2 | 0 | 0 |
+| pack_install / directive_span | 1 each | 0 | 0 |
+
+The compute failures are the incomplete compute migration
+([value-templates](value-templates.md)); the dominant reading is
+`compute.graph: this function's return is not a value a graph can hand back`.
