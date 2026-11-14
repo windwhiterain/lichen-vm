@@ -469,6 +469,17 @@ Also recorded: the WIP branch had accumulated **mixed** uncommitted states (a pa
 were stale artifacts. A clean reconstruction now lives on branch `strict-clean` (base `8ca8493b`),
 verified with a clean build: `(raw none, raw none)`.
 
+**Measured: the capture re-home does run; the kernel still does not arrive.** On `strict-clean`
+(`287a4835`, clean build) the reading is still `(raw none, raw none)`. A probe in
+`static_clone_function` shows the inner wrapper closure (`StaticFunctionId(20)`) **is re-homed**
+five times -- once per `plrun` call -- with `open_captures=true`, so the capture path executes.
+The remaining gap is that the re-homed body's `k` still reads `Any` rather than the kernel: the
+outer apply's parameter clone does not carry `convolve` into the capture the re-home maps. The
+next probe is the outer apply's `apply_parameter_check` result (does the `k` clone receive the
+argument?) and the re-home's remap of that capture. (The collide seen in one probe run was a
+build artifact again: an incremental rebuild on the shared `target/`; the clean build says
+`raw none`.)
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
