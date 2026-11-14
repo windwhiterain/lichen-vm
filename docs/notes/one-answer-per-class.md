@@ -393,6 +393,18 @@ value. So the formal annotation cannot be read through the value half; it needs 
 type-denotation representation (what `check_ann` uses for `x : T`). Last known-good WIP is
 `8ca8493b`; `d6cf7479`, `2ffb405b` are red checkpoints that break the compute package.
 
+**The maintainer's reading and the SPEC sugar.** The verdict on the formal route: *"`=` is unify,
+there is no ambiguity"* -- so the formal-annotation reinterpretation is withdrawn (`35cebbb5`
+reverts it). Re-reading §Undecided/`Any`: *"Sugar: Function auto unify `@any` to parameter in the
+end so unannotated part become `Any`"*, and §Function: `f a` => `{let (p_clone -> body_clone) =
+@clone (p -> body); a = p_clone; body_clone}`. Per that sugar the formal's **value** is `Any`
+(so a parameter annotation stays on the type and the call's argument fills the value), while the
+argument unifies with the cloned parameter (`a = p_clone`, the argument on the left). A direct
+try -- writing `Any` into the formal's value cell before the parameter side is checked -- breaks
+the prelude with `expected TypeFunction, found ?a => ?b`: the sugar must apply *in the end* and
+only to the unannotated part, and the type-side checks must still see the declared type. That is
+the next implementation step.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
