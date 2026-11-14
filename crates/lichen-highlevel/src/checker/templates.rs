@@ -17,30 +17,6 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
-    pub(super) fn is_compound_type(&mut self, ty: NodeId) -> bool {
-        self.is_struct_layout(ty)
-            || crate::shape::is_array_type_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )
-            || crate::shape::is_tuple_type_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )
-            || crate::shape::is_table_type_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )
-            || crate::shape::is_set_type_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(ty),
-            )
-    }
-
     /// `a = b` — the unify of the **actual** with the **expected**.
     ///
     /// # Invariant
@@ -132,21 +108,6 @@ where
     /// Whether an expression's value is already decided.
     pub(super) fn actual_value_is_decided(&self, value: NodeId) -> bool {
         self.module.node_value(AnyNodeId::Dynamic(value)).is_some()
-    }
-
-    /// The nearest binding of a parameter, with its term replaced.
-    ///
-    /// # Invariant
-    /// The **nearest** scope wins: a shadowing parameter's own binding is the
-    /// one a use reads. The function's parameter record is not touched, so the
-    /// argument is still bound before the body runs.
-    fn update_binding_term(&mut self, parameter: ExprId, term: NodeId) {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(binding) = scope.get_mut(&parameter) {
-                binding.term = term;
-                return;
-            }
-        }
     }
 
     /// Whether the template's **length** depends on an enclosing lambda
