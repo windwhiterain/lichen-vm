@@ -136,3 +136,37 @@ Per binary (`cargo test --workspace --no-fail-fast -- --test-threads=8`):
 The compute failures are the incomplete compute migration
 ([value-templates](value-templates.md)); the dominant reading is
 `compute.graph: this function's return is not a value a graph can hand back`.
+
+## Acceptance probes (the SPEC's forms, run through `lichen-compiler`)
+
+The core work is verified against these programs (the language front end is the
+faithful runner; an IR probe carries no core prelude). Each must answer a decided
+value of the stated class; `none` is a failure.
+
+1. Uniform: `sum3 := [_ -> (_: Int), 3]['a, 'b, 'c] -> 'a + 'b + 'c` then
+   `sum3 (_[1, 2, 3])` → `6: Int`.
+2. Named: `div := {.'dividend: Int, .'dividor: Int} -> dividend / dividor` then
+   `div _{.dividend 2, .dividor 1}` → `2: Int`.
+3. Struct signature: `Div := _ -> {.dividend _: Int, .dividor _: Int}`;
+   `div := 'x = Div _ -> x.dividend / x.dividor`;
+   `(div _{.dividend 6, .dividor 3}, div _{.dividend 8, .dividor 4})` → `(2, 2)`
+   — both calls decided, the second not contaminated by the first.
+4. Function generic: `div := 'T -> {.'dividend: T, .'dividor: T} -> dividend / dividor`;
+   `(div _ _{.dividend 4, .dividor 2}, div _ _{.dividend 1.0, .dividor 2.0})` →
+   an Int-class and a Float-class answer, neither `none`, no cross-class leak.
+5. Nested: `A := _ -> {.'x: Int, .'y: Float}`; `B := _ -> {.a A _, .'z: string}`;
+   `f := {.a A _, .b B _, .'w: Type} -> ...` checks; a concrete call's field reads
+   through the nested instance answer.
+6. Wildcard freshness: `D := _ -> {.a _, .b _}`;
+   `(D{.a 1, .b 2}, D{.a 1.5, .b 2.5})` → both instances answer (the old
+   `expected Int, found Float` collide is gone).
+7. Capture + per-call freshness: `a := 42; k := 'x -> x + a; (k 1, k 2)` →
+   `(43, 44)`.
+8. The compute regression probe ([value-templates](value-templates.md)):
+   `a := 42; k := compute.jit ('x -> x + a); compute.launch k 1` → `43: Int`
+   (compute path; bar: no worse than baseline).
+
+The 11 red `language` tests at baseline are exactly this surface
+(`template_instances`, `callee_inference`, `field_read_kinds`, `pipeline`); the
+migration turns them green. The 148 compute failures are the incomplete compute
+migration; the bar there is no new failures.
