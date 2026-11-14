@@ -602,6 +602,16 @@ five times; `convolution2d` still hits the CIn collide, because the declared `Bu
 has a member at the root — the outermost place there is — so the type is still referenced and both
 instances merge into it.
 
+**The maintainer's principle: a template's reference declares the node monomorphic.** *"既然模板里
+引用了外层 node，说明模板就是认为这个 node 是单态的，单态当然就必须给一样的值了。"* So a
+referenced outside node is single-instance by intent: every application must supply the same value,
+and two different values are a genuine unify conflict — which is exactly the CIn collide. The
+consequence for the wrapper is not a different check but a **clone**: the wrapper's calls supply
+different buffers, so the declared type it references is *polymorphic in fact*; a template that
+references it has made the wrong call, and the type must be one of the function's cloned
+expressions (§Function). The next implementation step is the per-apply clone of the declared type
+graph the parameter's type cell names.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
