@@ -586,6 +586,17 @@ application** — the type is one of the function's expressions, which SPEC §Fu
 application. The next step is therefore to give the parameter image's **type cell** its own clone
 per apply, so each call's merges write into its own type copy.
 
+**The special cases are gone; the Clone rule is what it is.** The maintainer's
+*"你又在搞特殊？"* removed the `is_parameter_value` flag, its ctx field and every branch it
+guarded (`bc669628`); the launch still runs five times. The clone decision is again the SPEC's
+one sentence, implemented as `Module::class_inside_scope`, whose code invariant reads: *"The
+verdict is a fact of the class, not of the node … A class summarized to the root is inside no
+function's scope."* Measured consequence for the collide: the declared `Buf` type's fields are
+undecided (`@any` = `Any`, never decided) but their class's summary is the root, so §Clone's
+"otherwise reference it" makes them shared, and both `CIn` instances' arguments merge into them.
+That is the rule's output, not a special case; changing it would reword an invariant in
+`scope.rs` and needs the maintainer's word.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
