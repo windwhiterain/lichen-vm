@@ -1,0 +1,102 @@
+# The Any removal: function templates replace the wildcard
+
+> Status: **in progress.** The migration plan and decisions for the SPEC edit
+> (dev `174379fb`) that deletes `@any`/`Any` and makes polymorphism entirely
+> function templates. The measurements it builds on are
+> [ideal-api-review](ideal-api-review.md) (the new forms refused),
+> [one-answer-per-class](one-answer-per-class.md) (the collide and the strict
+> construction's `raw none`), and [value-templates](value-templates.md) (the
+> direct-template model this migration supersedes).
+
+## What the SPEC changed
+
+- `atom` no longer lists `@any`; both `### Any` sections (Subtype, Clone) are
+  deleted, including the auto sugar `'x -> {…; @any = x;}`.
+- New sugar: `a <: b` => `a = b _`. Every compound construction (array element,
+  struct destructuring, table key/value, set element) now uses `<:` where it
+  used `=`.
+- The Ideal API is rewritten on **function-typed types**: `Div := _ -> {…}`,
+  `div := 'x = Div _ -> …`, nested `B := _ -> {.a A _, .'z: String}`. The old
+  wildcard-generic form (4) is gone; form 4 is now the function generic.
+- §Struct: a struct type declaration is `s := _ -> {…}`; the instance
+  destructures with `let _{…} <: s`.
+- §Clone: an undecided node is cloned when **the outermost scope among its
+  class members** is or inside the applying function's scope; cloned nodes live
+  in the scope where the apply happens; "Clone more nodes should make not change
+  to the language behaviour".
+
+## The model reversal
+
+[value-templates](value-templates.md) records the current model: a template is a
+**direct compound value** with `@any` open slots, instantiated per use by the
+checker's `instantiate_requirement`, never applied; `<:` is not a spelling.
+The new SPEC reverses each of those rulings: a template is a **function**
+(`_ -> compound`), freshness comes from **application** (the apply's clone), and
+`<:` is the sugar that applies the template. The wildcard value `Any` — whose
+unify rules (always succeed, recurse into arrays, directional merge) propagated
+it into classes and compounds, the contamination this migration removes — has no
+replacement value: an open position is a plain undecided cell (`_`, no value),
+and its per-use freshness is structural (clone), not a special value.
+
+[one-answer-per-class](one-answer-per-class.md) traced why the direct model
+could not be repaired in place: with the check-time copies removed the collide
+disappears but the launch's operand stays undecided, because "the apply's clone
+covers that whole expression — the cloned parameter's cells are what the
+argument unifies with". The function-template model is that sentence made
+syntax: `'x = Div _` is an application, so the clone covers it by construction.
+
+## Decisions
+
+- **M1 — `@any` becomes `_`.** Every wildcard value position is a placeholder
+  (undecided cell). `LowValue::Any` is deleted; an open cell is a node with no
+  value. All Any special cases in unify/evaluation/clone/codec go with it.
+- **M2 — `<:` is surface sugar** `a = b _`, desugared to the existing
+  unify/apply/placeholder nodes. Its right side is a template function; compound
+  types store function templates (Ideal API form 1: `[_ -> (_: Int), 3]`).
+- **M3 — `_ -> e` declares one hole parameter.** The SPEC's `_ -> {…}` is a
+  function of one undecided parameter, not a zero-parameter thunk. This
+  supersedes [placeholder-anywhere](placeholder-anywhere.md)'s "declares no
+  parameter" reading; that note is updated with the migration.
+- **M4 — a struct type is a function; an instance is fresh construction.**
+  `s := _ -> {…}`; `s{…}` builds the SPEC's `v` with fresh field cells; a type
+  used as an annotation is applied (`Div _`). The generic `Struct` template
+  unifies with a concrete struct type value in the annotation check (the
+  `expected @any, found Struct` finding).
+- **M5 — the clone rule is the SPEC's.** Outermost scope among class members;
+  clones land in the apply's scope; over-cloning is behaviour-preserving. The
+  measured compute regression of the class-wide verdict
+  ([value-templates](value-templates.md), commit `14285cd8`, 112 → 67) is the
+  reason the rule is read in the cloning direction: `strict-clean`'s `5fcc181a`
+  implements the outermost-member verdict and is the starting point.
+- **M6 — the auto `@any = x` sugar is deleted.** An unannotated parameter part
+  stays undecided; nothing guarantees it "never decides" — per-application
+  freshness replaces that guarantee.
+- **M7 — requirement instantiation retires.** The checker's
+  `instantiate_requirement` copies are replaced by application: struct instance
+  → fresh `v`; array/table/set element → unify against `template _`; annotation
+  → plain unify; application → clone. The three-construction table of
+  [one-answer-per-class](one-answer-per-class.md) collapses into application +
+  construction.
+- **M8 — the artifact format bumps.** `Any`'s codec tag dies; frozen artifacts
+  are rebuilt, not loaded (no forward compatibility).
+- **M9 — SPEC typo:** form 5's `String` is the builtin `string`
+  ([ideal-api-review](ideal-api-review.md) measured it unresolved).
+
+## Work packages
+
+1. **surface** (`feature/any-migration-surface`): the additive `<:` sugar.
+2. **templates**: function-template semantics with `@any` still present —
+   hole-parameter lambdas, template application, instantiation of an applied
+   result, the M5 clone rule, the undecided formal interior. Verified against
+   the SPEC's five Ideal API forms.
+3. **any-removal**: delete `Any`/`@any`/`AnyLit`/the auto sugar/requirement
+   instantiation; migrate every `.lichen` usage (examples, std, compute, tests)
+   to the new forms; codec bump. Lands on top of templates.
+4. **docs**: this note, the superseded notes, the SPEC typo, the code invariants.
+
+## Open questions
+
+- What apply does today with a decided non-function callee (e.g. `Int _`)
+  decides whether `<:` is total or requires function templates everywhere; the
+  census answers it. The SPEC only ever applies templates.
+- The compute frozen mirror's `@any` → fresh-hole handling migrates with M7.
