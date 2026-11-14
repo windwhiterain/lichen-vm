@@ -228,6 +228,17 @@ template's cells. Per SPEC §Function the launch must be the *applied* body -- o
 call -- which means the compute wrapper's run-time apply path has to work, or the launch has to
 move to the call site.
 
+**Measured: the run-time apply never runs for the compute wrapper.** The four Apply
+evaluations whose callee is an empty cell sit in the prelude functions' own blocks (9, 13, 15,
+22); the root-level `blurred`/`replicated` calls never reach the callee evaluation, and the
+static-apply trace has no `ModuleKey(1)` application at all. So `static_function_apply` is
+never entered for the compute module: the wrapper body is never instantiated per call at run
+time, and the dev branch's launches are made at check time, with the checker's copies wiring
+each call into the single template op. Getting the launch to be the applied body (SPEC
+§Function) therefore means making the frozen compute module's run-time apply work —
+materialize the function value and clone the body per call — not a smaller edit in the
+checker.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
