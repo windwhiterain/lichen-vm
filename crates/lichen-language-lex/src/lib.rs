@@ -139,6 +139,8 @@ pub enum TokenKind {
     Dollar,
     /// '=' -- an expression-level unify: `actual = expected`.
     Equals,
+    /// '<:' -- the subtype sugar: `a <: b` is `a = b _` (`docs/language-spec.md` §Syntax).
+    Subtype,
     /// '==' -- equality.
     Eq,
     /// '!=' -- inequality (the same generalized equality as `==`, negated).
@@ -260,6 +262,7 @@ impl TokenKind {
             TokenKind::Bang => "'!'",
             TokenKind::Dollar => "'$'",
             TokenKind::Equals => "'='",
+            TokenKind::Subtype => "'<:'",
             TokenKind::Eq => "'=='",
             TokenKind::Neq => "'!='",
             TokenKind::Leq => "'<='",
@@ -422,6 +425,8 @@ enum RawToken {
     Neq,
     #[token("<=")]
     Leq,
+    #[token("<:")]
+    Subtype,
     #[token(">=")]
     Geq,
     #[token("+")]
@@ -887,6 +892,7 @@ fn raw_to_kind(
         RawToken::Eq => Some(TokenKind::Eq),
         RawToken::Neq => Some(TokenKind::Neq),
         RawToken::Leq => Some(TokenKind::Leq),
+        RawToken::Subtype => Some(TokenKind::Subtype),
         RawToken::Geq => Some(TokenKind::Geq),
         RawToken::Plus => Some(TokenKind::Plus),
         RawToken::Minus => Some(TokenKind::Minus),

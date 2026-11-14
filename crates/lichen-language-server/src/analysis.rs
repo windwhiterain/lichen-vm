@@ -1518,6 +1518,7 @@ fn classify_token_kind(
         | TokenKind::Bang
         | TokenKind::Dollar
         | TokenKind::Equals
+        | TokenKind::Subtype
         | TokenKind::Eq
         | TokenKind::Neq
         | TokenKind::Leq

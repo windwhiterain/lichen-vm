@@ -251,13 +251,12 @@ fn angle_brackets_lex_as_their_own_tokens() {
             TokenKind::Eof,
         ]
     );
-    // `<:` is not a spelling: it lexes as `<` and `:`.
+    // `<:` is one token (the subtype sugar), never `<` then `:`.
     assert_eq!(
         kinds("a <: b"),
         vec![
             TokenKind::Name("a".to_string()),
-            TokenKind::LAngle,
-            TokenKind::Colon,
+            TokenKind::Subtype,
             TokenKind::Name("b".to_string()),
             TokenKind::Eof,
         ]
