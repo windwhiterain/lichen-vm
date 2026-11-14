@@ -141,6 +141,18 @@ template each carry, not in every kernel. So the read-path change is a prerequis
 removing the copies, not a follow-up: with the copies gone the collide disappears, but the
 value a launch reads has no declaration-side carrier.
 
+**Traced one step further (strict branch `33d92bab`).** With `DBG_PL` on the launch, the strict
+version prints **no** `PLRUN` line: the kernel launch never runs, so the result is `raw none`.
+The partial strict state (annotation copy kept) does print the launch's input paths
+(`[3, 0]`, `[3, 1]`) and resolves the two `CIn` slots, and then collides — so the input
+resolution works; what changes is whether the launch happens at all. The parallel op's run
+requires a **materialized** function (`function_materialized`, and the fragment compile reads
+the codomain declaration), and the annotation copy was what decided the declared parameter
+type's cells. Per the SPEC the declaration's open cells are not values, so the fragment cannot
+be compiled from them: the compile must happen at the launch with the applied argument, or be
+independent of the declaration's open cells. That is the next piece, and it is larger than the
+instance construction itself.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
