@@ -170,6 +170,14 @@ with — and the checker's check-time copy in `check_unify_expr` is not that clo
 remaining work is at the apply; the launch's operand stays undecided until the clone covers
 the parameter expression. That is the SPEC's sentence, not a new mechanism.
 
+**A negative result on the SPEC's `Any` form.** Rewriting the compute structs as
+`{.x @any : (compute.Buf …)}` (the SPEC's polymorphic field form) is refused by the compute
+read path: `expected Struct, found @any` at `k.in.x`, because the kernel's read needs the
+**Buf value** in the declaration's field, not the wildcard. So the examples' type-valued field
+(`{.x (compute.Buf …)}`) is what that path requires, and the instance rule must handle it: the
+declaration keeps the type value, the instance's `v` keeps the buffer, and the read's value
+comes from the launch's cfg.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
