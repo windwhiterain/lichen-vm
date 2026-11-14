@@ -103,13 +103,7 @@ where
     /// the attributes, the name table and the nominal id are shared. `@any`
     /// leaves its own type cell undecided, so sharing it would let one use
     /// decide the type every later use inherits.
-    fn instantiate_requirement(
-        &mut self,
-        expr: NodeId,
-        depth: usize,
-        open_types: bool,
-        copy_frozen: bool,
-    ) -> NodeId {
+    fn instantiate_requirement(&mut self, expr: NodeId, depth: usize, open_types: bool) -> NodeId {
         if depth > 64 {
             return expr;
         }
@@ -123,8 +117,7 @@ where
             return expr;
         };
         let source = value;
-        let value =
-            self.instantiate_requirement_value_with(value, ty, depth + 1, open_types, copy_frozen);
+        let value = self.instantiate_requirement_value_with(value, ty, depth + 1, open_types);
         // **The instance inherits the template's frozen reference**: the fresh cell is the
         // same frozen value, by reference.
         if value != source
@@ -170,7 +163,7 @@ where
         ty: AnyNodeId,
         depth: usize,
     ) -> NodeId {
-        self.instantiate_requirement_value_with(value, ty, depth, true, true)
+        self.instantiate_requirement_value_with(value, ty, depth, true)
     }
 
     fn instantiate_requirement_value_with(
@@ -179,22 +172,14 @@ where
         ty: AnyNodeId,
         depth: usize,
         open_types: bool,
-        copy_frozen: bool,
     ) -> NodeId {
         if depth > 64 {
             return value;
         }
-        // A frozen type half is referenced, not copied -- unless an instance's own template
-        // copies an open cell.
+        // A frozen type half names a value outside every applying function: it is
+        // referenced, not copied.
         if matches!(ty, AnyNodeId::Static(_)) {
-            let open = copy_frozen
-                && self
-                    .module
-                    .class_value(value)
-                    .is_some_and(|held| self.module.value_holds_open_cell(held, 0));
-            if !open {
-                return value;
-            }
+            return value;
         }
         // A value read through `Index` has no class value until it runs.
         self.module.evaluate_node(AnyNodeId::Dynamic(value), None);
@@ -233,7 +218,6 @@ where
                                     field,
                                     depth + 1,
                                     open_types,
-                                    copy_frozen,
                                 ))
                             })
                             .unwrap_or(item.node),
@@ -258,7 +242,6 @@ where
                                         hole,
                                         depth + 1,
                                         open_types,
-                                        copy_frozen,
                                     ))
                                 })
                                 .unwrap_or(item.node),
@@ -282,7 +265,6 @@ where
                                 element,
                                 depth + 1,
                                 open_types,
-                                copy_frozen,
                             ))
                         })
                         .unwrap_or(item.node),
@@ -328,7 +310,7 @@ where
             self.module
                 .expr_value_half(expected_term)
                 .filter(|value| self.requirement_is_open(*value, expected_ty, 0))
-                .map(|_| self.instantiate_requirement(expected_term, 0, false, false))
+                .map(|_| self.instantiate_requirement(expected_term, 0, false))
                 .unwrap_or(expected_term)
         };
         // A formal's unify reads its slot identity directly; other values keep

@@ -460,7 +460,7 @@ impl<P: Program> Module<P> {
     /// An open cell is a node with no value or with `Any` — the wildcard a template's
     /// field states, which the SPEC calls undecided. It is what distinguishes a template's
     /// requirement from a thing's answer.
-    pub fn value_holds_open_cell(&self, value: P::Value, depth: usize) -> bool {
+    fn value_holds_open_cell(&self, value: P::Value, depth: usize) -> bool {
         if depth > 8 {
             return false;
         }
