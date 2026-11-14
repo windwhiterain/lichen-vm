@@ -72,5 +72,24 @@ scalars (`Int`), but its `@any: (compute.Buf …)` case with a struct argument d
 The erroring usages are the **type-in-value-position fields** (`{.x (compute.Buf …)}`)
 and the **dependent inner parameter** (`'a = (k.I _)`). The first is not an Ideal API
 form; the Ideal API's replacement for it is rejected by this implementation with
-`expected @any, found Struct`. The second has no Ideal API form at all — the SPEC's
-forms only parameterize over types, not over a value parameter's field.
+`expected @any, found Struct`. The second has no Ideal API form at all — the SPEC's forms only parameterize over types, not over a value parameter's field.
+
+## Why `@any` and `Struct` report a unify error
+
+Measured (`DBG_APPLY` probes in `unify_inner`'s recording sites, then removed):
+
+- The failing unify is at **slot 0, the value position**: the shared `Struct` template
+  marker (`LowValue::TypeValue(TypeStruct)`, the type every struct value carries) against a
+  struct **type value** (an `Array` holding the instance's name table and fields).
+- `record_error` receives exactly that pair, twice, once per `CIn` instance
+  (`102:72`, `102:76`).
+- The comparison that fails is `value_expr_equal`'s raw `value_eq`: the template marker and
+  the array are different values, so the unify errors. The `@any` in the message is the
+  field's wildcard value on the other side, not the side that conflicts.
+
+So the report is not "`@any` versus `Struct`": it is the **`Struct` template against a
+concrete struct type value**. Per the SPEC §Struct the template is the shared layout every
+struct value instantiates (`v := @raw[name_table, nominal_id, @raw None, …]`), so the two
+should unify; the implementation compares their raw values instead. That is the next fix:
+the `Struct` template is a wildcard for struct-typed positions, exactly as `@any` is for
+values.
