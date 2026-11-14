@@ -564,6 +564,21 @@ and the codomain now reach the ParLaunch's run.
 instance's unify. That collide is the remaining strict issue; the launch itself is no longer the
 blocker.
 
+
+**Measured: the collide is the annotation check's merge into the declared type.** A probe in
+`record_error` prints the conflicting nodes; the fatal pair is two **different** buffers
+(`Buffer(Float)` with different arena pointers). The checker's struct instantiation
+(`check_instantiate`) checks each argument against the template's field, and for a field that
+declares a type (`{.x (compute.Buf …)}`) it calls `check_unify(actual_ty, declared)` — a merging
+unify that writes the argument's type into the declared Buf type's own field cells. The declared
+type is one shared node, so the second `CIn` instance's buffer meets the first's in the Buf
+template's `.native` cell: `blurred`'s `x.x` and `replicated`'s `edge.x`.
+
+The SPEC says `a = b` **is** `a <: b` — a check. `Checker::check_unify` uses
+`Module::try_unify`, which merges the two classes and only *then* reports an error; there is no
+non-committing subtype check in the lowlevel. That is the missing mechanism, and it is the same
+tension as every earlier round: the declared type is decided, so §Clone references it, so every
+use writes into it.
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
