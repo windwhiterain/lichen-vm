@@ -208,6 +208,15 @@ version. The former copy's evaluation is what resolved them. Per SPEC §Function
 clone is what must put the argument in the cloned parameter's cells; that is the piece still
 missing, and it is larger than everything tried so far.
 
+**Measured: the apply's clone never visits the native call.** A trace of `node_apply` filtered to
+External operators prints **zero** lines for `convolution2d`: the clone walk covers the
+parameter, the return, the condition and the asserts (`instantiate_stamped`), and a decided
+read carries its mapped value instead of cloning its operator graph. So the plrun body's
+native call is never cloned per application, and its operands stay the template's cells.
+The next piece is to make the body's statement nodes part of the clone: the read that returns
+the body's field must clone the field's own operator when the template answer is open, not
+only its value.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
