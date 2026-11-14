@@ -488,24 +488,6 @@ where
                     .static_function_of_callee(function_value)
                     .map(AnyFunctionId::Static)
             })
-            // The imported package's **field by name**: the namespace value's own field
-            // states the export slot, whose value half names the frozen function.
-            .or_else(|| {
-                let ExprKind::NamedField { container, name } = self.ir[function].kind else {
-                    return None;
-                };
-                let container_value = self.value_of(container);
-                let (_, field) = self.resolved_field(container_value, name)?;
-                let function = self
-                    .module
-                    .function_value_function(AnyNodeId::Dynamic(field))
-                    .or_else(|| {
-                        let half = self.module.expr_value_half(field)?;
-                        self.module
-                            .function_value_function(AnyNodeId::Dynamic(half))
-                    })?;
-                Some(function)
-            })
             .or_else(|| {
                 self.module
                     .static_function_of_callee(callee_expr)
