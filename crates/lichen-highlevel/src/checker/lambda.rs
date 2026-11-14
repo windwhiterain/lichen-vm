@@ -469,6 +469,19 @@ where
         let function_ty = self.state[function].ty.unwrap();
         // The callee's **expr** names the function: its value half holds it.
         let callee_expr = self.state[function].term.unwrap();
+        if std::env::var("DBG_PL").is_ok() {
+            let kind = match self.ir[function].kind {
+                ExprKind::NamedField { name, .. } => format!("named({name})"),
+                ExprKind::Field { .. } => "field".to_string(),
+                ExprKind::Index { .. } => "index".to_string(),
+                _ => "other".to_string(),
+            };
+            eprintln!(
+                "CALLEE-EXPR e={function:?} kind={kind} term={callee_expr:?} value={:?}",
+                self.module.node_value(AnyNodeId::Dynamic(callee_expr))
+            );
+        }
+
         let callee = self
             .module
             .function_apply_function(callee_expr)
@@ -488,8 +501,24 @@ where
                     .static_function_of_callee(function_value)
                     .map(AnyFunctionId::Static)
             })
-            // A field read of an imported package: the read's own chain names the frozen
-            // function, so it is resolved structurally before it is evaluated.
+            // The imported package's **field by name**: the namespace value's own field
+            // states the export slot, whose value half names the frozen function.
+            .or_else(|| {
+                let ExprKind::NamedField { container, name } = self.ir[function].kind else {
+                    return None;
+                };
+                let container_value = self.value_of(container);
+                let (_, field) = self.resolved_field(container_value, name)?;
+                let function = self
+                    .module
+                    .function_value_function(AnyNodeId::Dynamic(field))
+                    .or_else(|| {
+                        let half = self.module.expr_value_half(field)?;
+                        self.module
+                            .function_value_function(AnyNodeId::Dynamic(half))
+                    })?;
+                Some(function)
+            })
             .or_else(|| {
                 self.module
                     .static_function_of_callee(callee_expr)
