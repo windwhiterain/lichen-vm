@@ -301,18 +301,6 @@ where
         let expected_term = self.state[expected].term.expect("the expected is compiled");
         let actual_ty = self.state[actual].ty.expect("the actual has a type");
         let expected_ty = self.state[expected].ty.expect("the expected has a type");
-        // A direct template is copied per use; an explicit constructor
-        // application is already fresh.
-        let expected_term = if matches!(self.ir[expected].kind, ExprKind::Apply { .. }) {
-            // An explicit constructor application is already fresh.
-            expected_term
-        } else {
-            self.module
-                .expr_value_half(expected_term)
-                .filter(|value| self.requirement_is_open(*value, expected_ty, 0))
-                .map(|_| self.instantiate_requirement(expected_term, 0, false))
-                .unwrap_or(expected_term)
-        };
         // A formal's unify reads its slot identity directly; other values keep
         // the lazy read required by the lowering contract.
         let direct = self.formal_actual(actual);
