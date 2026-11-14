@@ -9,7 +9,7 @@ use lichen_utils::extend::AsEnum;
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
-use crate::program::{HighProgram, TypeOperator, ValueType};
+use crate::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
 use super::Checker;
@@ -850,6 +850,9 @@ where
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
+        // SPEC §Struct: an instance is `v := @raw[name_table, nominal_id, @raw None, …]` — the
+        // fields are this use's own (the argument terms below), never the template's cells.
+
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(
@@ -968,14 +971,32 @@ where
                 self.module
                     .field_sources
                     .insert(required_value, actual_value);
-                // A decided supplied value joins the slot; an undecided one has none to join.
+                // A decided supplied value states the field. A field that declares a **type**
+                // (`{.x (compute.Buf …)}`) states the argument's type, so the check is the
+                // argument's type against it; every other field is unified with the argument.
                 if self.actual_value_is_decided(actual_value) {
-                    self.check_unify(
-                        vals[*argument],
-                        field,
-                        self.loc(argument_expr, 1),
-                        DiagKind::Annotation,
-                    );
+                    let universe = self.universe();
+                    let declared_type =
+                        shape::value_item(&self.module, AnyNodeId::Dynamic(field), 1);
+                    let declares_a_type = declared_type.is_some_and(|ty| {
+                        crate::shape::is_universe_any(&mut self.module, universe, ty)
+                    });
+                    let declared = self.module.expr_value_half(field);
+                    let actual_ty = self.state[argument_expr].ty;
+                    let _ = match (declares_a_type, declared, actual_ty) {
+                        (true, Some(declared), Some(actual_ty)) => self.check_unify(
+                            actual_ty,
+                            declared,
+                            self.loc(argument_expr, 1),
+                            DiagKind::Annotation,
+                        ),
+                        _ => self.check_unify(
+                            vals[*argument],
+                            field,
+                            self.loc(argument_expr, 1),
+                            DiagKind::Annotation,
+                        ),
+                    };
                 }
                 if !self.actual_value_is_decided(actual_value) {
                     // Undecided values cannot mismatch; check only type and attributes.

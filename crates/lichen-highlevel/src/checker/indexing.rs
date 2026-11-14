@@ -226,6 +226,8 @@ where
         let template_value = self.array_constructor_value(template);
         self.module
             .evaluate_node(AnyNodeId::Dynamic(template_value), None);
+        // SPEC §Compound, array instance: `let [template, length] := e0; length = 2;
+        // e1 = template; …` — the elements and the length unify with the template's cells.
         let (requirement, template_count) = match self.template_shape(template_value) {
             Some(shape) => shape,
             None => {
