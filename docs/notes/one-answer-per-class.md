@@ -497,11 +497,23 @@ the same handle. So `apply_parameter_check` **does** fill the clone's value with
 and the paragraph above's "type comparison only" was the post-check value mistaken for a frozen
 one.
 
-**The missing stage: no parameter check receives the kernel.** Not one `PCHECK-IN` in the run
+**Superseded by the fix below.** The reading was: not one `PCHECK-IN` in the run
 carries a `Function` argument. The outer `plrun convolve` stage is therefore never
 parameter-checked: the wrapper's `k` never binds the kernel, and the launch's kernel operand is
-the check-time resolution of the declared type's `@any` field. The next probe is where that outer
-stage is folded (the checker's callee resolution or the curried return), not the parameter check.
+the check-time resolution of the declared type's `@any` field. The next probe is where that outer stage is folded (the checker's callee resolution or the
+curried return), not the parameter check.
+
+**Fixed: the curried stage's apply was folded away by the operand.** The callee chain
+(`check_app`) resolved a curried partial application through `curried_callee`, naming the *next*
+stage, and the operand fallback then built the apply's function operand as `Function(Static(stage))`
+whenever the callee expr's value was undecided. So the launch's operand named the inner wrapper
+directly and the outer `plrun convolve` stage never ran. The fallback now applies only to a
+**direct** callee (`from_curried`): a curried stage's value is the previous apply's result, so that
+apply must run first. Measured after the fix (`15353da6`): module-0 function 19 is applied and
+parameter-checked five times (once per call), and its param value goes `None` → the kernel
+argument's array — `k` binds the kernel. `convolution2d` still prints `(raw none, raw none)`:
+the `$plrun` op itself does not reach the compute crate's run yet (`PLRUN eval` = 0), so the next
+target is the native op's dispatch from function 21's body.
 
 ## What the diagnostic is now
 
