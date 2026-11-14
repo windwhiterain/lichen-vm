@@ -367,6 +367,15 @@ be `K`. The implementation writes `K` into the parameter's **value** cell. That 
 piece: compile `'k = K` as value-fresh plus type-`K`, so the argument fills the cloned
 parameter's value and `k.native` reads the kernel.
 
+**Measured: the formal-type branch is inert because the detection is wrong.** The WIP branch
+(`spec/instance-v` `efc0f03f`) adds the branch: a direct formal unified with a type constrains its
+**type** (`check_unify(actual_ty, expected_value)`), leaving the value fresh. But
+`is_universe_any(expected_ty)` is **false for every direct formal** (`FORMAL-UNIFY ... is_type=false`
+in the prelude), so the old value-write path still runs. The right predicate is the next fix: the
+checker does not type a type expression (`K`) with the universe node, so the test must read the
+expected side the way `type_denotation`/`universe_is_any` does rather than comparing
+`expected_ty` to the universe class.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
