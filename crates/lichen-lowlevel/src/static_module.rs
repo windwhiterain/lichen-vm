@@ -205,6 +205,39 @@ impl<P: Program> Module<P> {
             .is_some_and(|function| function.parameter == function.r#return)
     }
 
+    /// The frozen function a curried body returns: the next stage of `f a b`.
+    ///
+    /// # Invariant
+    /// Read from the return expr's value, which a lambdas' frozen answer states as
+    /// `Function(Static(..))`; nothing is evaluated or materialized here.
+    pub fn static_function_return_function(
+        &self,
+        function: StaticFunctionRef,
+    ) -> Option<StaticFunctionRef> {
+        let module = self.static_module(function.module);
+        let return_expr = module.functions.get(function.index.0)?.r#return;
+        // The return expr is a slot `[value, type]`: its first item is the answer.
+        let expr = StaticNodeId {
+            module: function.module,
+            index: return_expr,
+        };
+        let value = self.static_read(expr)?;
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return None;
+        };
+        // SAFETY: the frozen array's payload lives in a registered module, pinned by the
+        // registry's `Arc`.
+        let item = unsafe { array.items() }.first()?.node;
+        let value = match item {
+            AnyNodeId::Static(sref) => self.static_read(sref),
+            AnyNodeId::Dynamic(node) => self.node_value(AnyNodeId::Dynamic(node)),
+        };
+        match value.and_then(|value| value.as_enum()) {
+            Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
+            _ => None,
+        }
+    }
+
     /// Read a static node's solved value verbatim, or [`None`] for a residual
     /// with no cached answer.
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {
