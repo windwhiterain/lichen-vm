@@ -340,10 +340,21 @@ ids) -- the "referenced, not cloned" guess was wrong. One of the launch clones (
 reach the External arm (`EXTERNAL node=3095 operand=3096 operand_value=Some(Array)`) but the
 compute gate never prints for it (`GATE op=3095` absent): its `run_deferred` returns before the
 item loop, i.e. the operand deep evaluation answers `None` although the operand node holds an
-`Array`. So the next probe is the **dispatch**: whether the host operator enum routes this
-clone to the compute crate's `run_deferred` at all, and why `evaluate_node_deep(operand)` answers
-`None` for a node whose value is `Some`. The item gate itself (previous rounds' blocker) is not
-reached here.
+`Array`.
+
+**Measured: the dispatch reaches the compute run_deferred; the item check is the blocker.** A
+probe inside the compute `run_deferred` shows `RD operand=.. deep=true undecided=true` for the
+compute calls: the deep walk answers `Some` (the operand array), and `node_is_undecided` is true
+because an item is open. So the previous round's "deep answers None" was wrong — the item loop
+is reached and returns `None` on an undecided item, exactly the earlier gate. The open item is a
+cloned parameter cell whose value never resolves.
+
+**A warning on build hygiene.** The same clean WIP tree (`8ca8493b`) answered `(raw none)` in the
+round-6 run and `expected ?, found ?` at `102:79` in this round's run, both with a fresh
+`LICHEN_HOME`. Branch switching shares one `target/`, so incremental artifacts from another
+branch can be linked (the build note's warning). Every WIP measurement must be taken after a
+`cargo clean -p` of the workspace crates or with a per-branch `CARGO_TARGET_DIR`; the strict
+baseline needs a clean re-measure.
 
 ## What the diagnostic is now
 
