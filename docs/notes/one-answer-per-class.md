@@ -334,6 +334,17 @@ op (whose parameter cells are open) instead of cloning it, so the clone evaluate
 body. Whether the node is a fresh clone or the template's ref is the next probe, and the scope
 rule that answers it is SPEC §Clone's "if its class is in the applying function's scope".
 
+**Measured: the native op is cloned, and its operand gate is not reached.** With a probe in
+`static_node_apply`, the frozen native ops are **cloned** (259 `SNODE-FOREIGN` lines, fresh node
+ids) -- the "referenced, not cloned" guess was wrong. One of the launch clones (`3095`) does
+reach the External arm (`EXTERNAL node=3095 operand=3096 operand_value=Some(Array)`) but the
+compute gate never prints for it (`GATE op=3095` absent): its `run_deferred` returns before the
+item loop, i.e. the operand deep evaluation answers `None` although the operand node holds an
+`Array`. So the next probe is the **dispatch**: whether the host operator enum routes this
+clone to the compute crate's `run_deferred` at all, and why `evaluate_node_deep(operand)` answers
+`None` for a node whose value is `Some`. The item gate itself (previous rounds' blocker) is not
+reached here.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
