@@ -385,6 +385,14 @@ the type value (a `TypeTable` yields a `Table`), so the type-vs-value distinctio
 semantic predicate, not the IR kind. The formal-annotation branch is the right shape but the
 detection is still the open question.
 
+**Measured: even a struct-only annotation is mis-read; the value half is the name table.** The
+WIP `2ffb405b` restricts the annotation detection to `ExprKind::Struct` and unifies
+`check_unify(actual_ty, expr_value_half(expected_term))`. It still fails with `expected Struct,
+found Table`: at unify time a struct literal's value half is its **name table**, not the struct
+value. So the formal annotation cannot be read through the value half; it needs the checker's
+type-denotation representation (what `check_ann` uses for `x : T`). Last known-good WIP is
+`8ca8493b`; `d6cf7479`, `2ffb405b` are red checkpoints that break the compute package.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
