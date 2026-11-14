@@ -469,20 +469,7 @@ where
         let function_ty = self.state[function].ty.unwrap();
         // The callee's **expr** names the function: its value half holds it.
         let callee_expr = self.state[function].term.unwrap();
-        if std::env::var("DBG_PL").is_ok() {
-            let kind = match self.ir[function].kind {
-                ExprKind::NamedField { name, .. } => format!("named({name})"),
-                ExprKind::Field { .. } => "field".to_string(),
-                ExprKind::Index { .. } => "index".to_string(),
-                _ => "other".to_string(),
-            };
-            eprintln!(
-                "CALLEE-EXPR e={function:?} kind={kind} term={callee_expr:?} value={:?}",
-                self.module.node_value(AnyNodeId::Dynamic(callee_expr))
-            );
-        }
-
-        let callee = self
+        let direct_callee = self
             .module
             .function_apply_function(callee_expr)
             .or_else(|| {
@@ -523,9 +510,15 @@ where
                 self.module
                     .static_function_of_callee(callee_expr)
                     .map(AnyFunctionId::Static)
-            })
-            .or_else(|| self.curried_callee(function))
+            });
+        // A **curried partial application** names the next stage, not this call's callee:
+        // its value is the previous apply's result, so the apply must run before the
+        // operand can name the stage (`docs/notes/curried-apply.md`).
+        let curried_callee = self
+            .curried_callee(function)
             .or_else(|| self.static_curried_callee(function));
+        let from_curried = direct_callee.is_none() && curried_callee.is_some();
+        let callee = direct_callee.or(curried_callee);
         // The callee's **parameter expr** states its requirement: the same read as
         // its type slot (`docs/notes/attributes.md`).
         let parameter_expr = match callee {
@@ -628,12 +621,15 @@ where
         // **One apply per call**: this node's check pass states the signature and its
         // run computes the value. A frozen callee's value is a fact, so the operand
         // names the same function the check resolved even before its read is evaluated.
+        // A curried stage is excluded: its value is the previous apply's result, and the
+        // operand must evaluate that apply rather than name the stage directly.
         let function_value = match callee {
             Some(AnyFunctionId::Static(function))
-                if self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(function_value))
-                    .is_none() =>
+                if !from_curried
+                    && self
+                        .module
+                        .node_value(AnyNodeId::Dynamic(function_value))
+                        .is_none() =>
             {
                 self.alloc_node(
                     self.current_block,

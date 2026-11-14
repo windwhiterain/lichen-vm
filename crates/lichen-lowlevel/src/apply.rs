@@ -44,19 +44,6 @@ impl<P: Program> Module<P> {
         // Evaluate the argument only to the depth the pattern references, so an
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
-        let dbg = std::env::var("DBG_APPLY").is_ok();
-        if dbg {
-            let param_value = self
-                .expr_value_half(cloned_param)
-                .and_then(|value| self.node_value(AnyNodeId::Dynamic(value)));
-            let arg_node = argument.dynamic();
-            let arg_value = arg_node
-                .and_then(|node| self.expr_value_half(node))
-                .and_then(|value| self.node_value(AnyNodeId::Dynamic(value)));
-            eprintln!(
-                "PCHECK-IN param={cloned_param:?} param_value={param_value:?} arg={argument:?} arg_value={arg_value:?}"
-            );
-        }
         let pre_unify_errors = self.unify_errors.len();
         // The failing position: slot 0 is the value, 1 the type, later attributes.
         let mut attribute_failed = false;
@@ -106,15 +93,6 @@ impl<P: Program> Module<P> {
                 self.unify_ref(AnyNodeId::Dynamic(cloned_param), argument);
             }
         };
-        if dbg {
-            let param_value = self
-                .expr_value_half(cloned_param)
-                .and_then(|value| self.node_value(AnyNodeId::Dynamic(value)));
-            eprintln!(
-                "PCHECK-OUT param={cloned_param:?} param_value={param_value:?} errors={}",
-                self.unify_errors.len() - pre_unify_errors
-            );
-        }
         if self.unify_errors.len() == pre_unify_errors {
             return;
         }
