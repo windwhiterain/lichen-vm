@@ -9469,6 +9469,13 @@ where
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
+        if std::env::var("DBG_APPLY").is_ok() {
+            eprintln!(
+                "PLBUILD args={} values={:?}",
+                args.len(),
+                args.iter().map(|arg| arg.value).collect::<Vec<_>>()
+            );
+        }
         let native = &args[0];
         let a = &args[1];
         // The declared codomain rides as the third operand: the result's layout is
