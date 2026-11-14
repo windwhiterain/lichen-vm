@@ -515,6 +515,18 @@ argument's array — `k` binds the kernel. `convolution2d` still prints `(raw no
 the `$plrun` op itself does not reach the compute crate's run yet (`PLRUN eval` = 0), so the next
 target is the native op's dispatch from function 21's body.
 
+**Measured: the dispatch is fine; the launch op's operand items block the gate.** Two more
+probes (`0eb2539a`): `RD-ENTRY` prints the compute operator entering
+`ComputeOperator::run_deferred`, and `G3` prints every operand item's value. `ParLaunch` enters
+`run_deferred` **nine times**, so the lang-operator dispatch works. The gate then blocks: the
+frozen launch op's operand has two items, `[Some(Any), None]` (the kernel's native is the
+declared `@any`, the cfg is the frozen parameter's cell), and the per-call clone's operand shows
+a **single** `None` item. Neither carries the bound kernel/cfg, so `self.run` is never reached
+(`PLRUN eval` = 0 was also because that print is gated on `DBG_PL`, not evidence of no run).
+`PLRUN`'s own print is in the `run` arm; the gate's `None` is what stops it. The next question is
+why the cloned operand's items do not map to the parameter image's value (the argument), i.e. the
+clone walk's operand remap against the remapped parameter cells.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
