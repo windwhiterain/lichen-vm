@@ -1,3 +1,4 @@
+
 # The erroring API usages against the Ideal API
 
 > Status: **review.** This note audits the field/parameter spellings that the strict
@@ -93,3 +94,29 @@ struct value instantiates (`v := @raw[name_table, nominal_id, @raw None, …]`),
 should unify; the implementation compares their raw values instead. That is the next fix:
 the `Struct` template is a wildcard for struct-typed positions, exactly as `@any` is for
 values.
+
+### The call site, measured
+
+The failing pair comes from `check_instantiate`'s **type-declaring-field branch**
+(`crates/lichen-highlevel/src/checker/structs.rs:993`):
+
+```rust
+let declared = self.module.expr_value_half(field);   // the field's VALUE half
+let actual_ty = self.state[argument_expr].ty;        // the argument's TYPE
+self.check_unify(actual_ty, declared, …)
+```
+
+For a field written `@any: (CIn)` the field's **value half resolves to the declared type
+value** (the `CIn` array), while the argument's type is the shared `Struct` template
+(`[StructType, ↺]`, every struct value's type). The descent recorded at the recording site:
+root `(34560, 1185)` → slot 1 (the type position) → the two type exprs `(34, 774)` → slot 0
+their values `(8, 770)` — node 8 is the `StructType` marker, node 770 the struct type value.
+That is exactly the Array-versus-StructType pair: the SPEC's annotation sugar
+(`ann1 = ann2`) unifies the argument's type attribute with the annotation expression, and the
+two are the generic template and a concrete type value.
+
+So the unify is *by design* the annotation check, and the pair is a **type versus a type
+value** — the generic `Struct` against a specific struct type. The next question is which of
+the two the annotation is meant to compare: the SPEC's `: T` unifies the *type attribute*
+with T, so a struct value can only be annotated `: Struct`; annotating it `: CIn` compares
+the generic template with the concrete type value and cannot succeed.
