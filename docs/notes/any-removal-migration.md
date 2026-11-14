@@ -94,13 +94,37 @@ syntax: `'x = Div _` is an application, so the clone covers it by construction.
    to the new forms; codec bump. Lands on top of templates.
 4. **docs**: this note, the superseded notes, the SPEC typo, the code invariants.
 
-## Open questions
+## Open questions, resolved by the recon measurement
 
-- What apply does today with a decided non-function callee (e.g. `Int _`)
-  decides whether `<:` is total or requires function templates everywhere; the
-  census answers it. The SPEC only ever applies templates.
+- **Apply is partial; `<:` requires a function template.** A decided
+  non-function callee is refused today (`EvalError::ApplyTarget` at run time,
+  `evaluation.rs:336-400`; a Guard unify against the `FunctionType` template at
+  check time, `lambda.rs:540-545`). The SPEC only ever applies templates, so no
+  identity-application rule is added: a compound type's element/key/value
+  template is a function (form 1), and a bare type value in a template position
+  migrates to one (`[Int, 3]` → `[_ -> (_: Type), 3]` for type-valued elements,
+  `[_ -> (_: Int), 3]` for Int elements).
+- **The instantiation gate is where the new form dies.** `check_instantiate`
+  (`structs.rs:820-876`) accepts only a struct layout; `Div _` is applied
+  lazily, so the gate sees the unapplied `TypeFunction` and refuses
+  (`InstantiateCallee`). The core fix evaluates the template application before
+  the gate.
+- **The auto-`@any` sugar is five cooperating mechanisms, not one site**
+  (recon report §3a): the parser's value-less annotation fold and `.'name`
+  formal head, the checker's shared default wildcard, the identity-lambda Any
+  write (`lambda.rs:126-142`), normalize reading Any as decided content
+  (`evaluation.rs:884`), and the clone Any→hole arms. All become hole-based;
+  the equivalence to prove is at `class_answer_is_decided` (`function.rs:605`)
+  and `answer_elements_are_undecided` (`apply.rs:464`), which read Any, not
+  emptiness.
+- **The clone verdict change is `strict-clean`'s `5fcc181a`** (outermost member
+  scope): it applies cleanly on dev. It is the SPEC's own reworded sentence
+  (the language spec is authoritative, so this is a migration, not an
+  unpermitted invariant reword). It does NOT fix the CIn collide by itself
+  (the declared class has a root member); the function-template application is
+  what fixes that. `8552d500` does not apply on dev (dev has no
+  `parameter_value` field) and is not needed.
 - The compute frozen mirror's `@any` → fresh-hole handling migrates with M7.
-
 ## Baseline (dev `174379fb`, measured by the recon worker)
 
 `cargo check --workspace` green (warnings in lichen-serve). The suite is
