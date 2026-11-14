@@ -552,6 +552,18 @@ Two SPEC-motivated changes landed as WIP (`8b487d8f`): the ReadOnly freeze keeps
 operation, and the clone walk keeps a wildcard-clone's operation with its operand walked and the
 local remapped. Both are inert for this program and are kept for the general rule.
 
+**The launch runs.** Two changes (`61c537e0`): `check_named_field` keeps the **lazy** field read
+when the container is rooted at a **formal** (its value at check time is the declared type, so a
+constant position named the declaration's value cell and the read had nothing to re-run), and
+`formal_root` searches **every** enclosing lambda's formals, not just the innermost one — the
+body's `k` is an outer lambda's parameter and is still the cell the call binds. Measured:
+`PLRUN eval` fires **five times** (once per call in the chain), so the kernel's `native`, the cfg
+and the codomain now reach the ParLaunch's run.
+
+`convolution2d` then fails with `expected ?, found ?` at `102:79` — the `CIn{.x x.x, .w weights.w}`
+instance's unify. That collide is the remaining strict issue; the launch itself is no longer the
+blocker.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
