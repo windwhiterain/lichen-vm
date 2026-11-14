@@ -306,8 +306,21 @@ the wrappers. The functions that do carry the launch are module 0's 21/22/23 and
 2/3 (`has_compute_op=true`), and they resolve in the prelude's own blocks but not for the
 program's calls. So the field-read fallback **mis-resolves**: `static_function_of_callee`
 reads a subscript (`resolve_read(callee, 0)`), while `compute.plrun` is a *name* read whose
-chain is `TableGet(names, name) + base`, so it picks the wrong node. Resolving the imported
-package's field by name is the next piece, and it must not go through the subscript helper.
+chain is `TableGet(names, name) + base`, so it picks the wrong node.
+Resolving the imported package's field by name is the next piece, and it must not go through
+the subscript helper.
+
+**Measured: the field-by-name resolution names the wrapper, and the launch is still not run.**
+The new WIP path (`spec/instance-v` `8ca8493b`) resolves a `NamedField` callee through the
+namespace value's own field (`resolved_field` + the export slot's value half), ordered before the
+subscript helper. With it, `compute.plrun` resolves to module-0 **19** (the outer lambda) and the
+outer apply to module-0 **20** (the inner body, **four foreign operators** = the launches). So
+the wrapper is resolved correctly now -- the earlier "19/20/30 are not the wrappers" was the
+subscript helper's mis-resolution. The remaining gap: the program's five root calls' Apply ops
+are still **not evaluated** by the deep pass (the four `APPLY-NONE` cases are the prelude's own
+definition-pass calls), so the cloned body and its launch never run. Forcing the annotated
+statement's term (`ANN-EVAL`) evaluates it to a value but still no `PLRUN`: the call op behind
+the annotation is not what the deep pass forces. That is the next probe.
 
 ## What the diagnostic is now
 
