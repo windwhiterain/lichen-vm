@@ -60,22 +60,26 @@ closed-cell distinction. It was reverted.
 ```
 
 An instance's field is a **fresh `None` cell** of its own `v`; the template's field (`e1`,
-`e2`) is only the requirement. So `check_instantiate` must build `v` with fresh field cells
-and unify the arguments into those cells; the template's field node must never be the node a
-use's value lands in. The frozen reference stays where it belongs — in a value handed over as
-an argument (`5b016643`'s graph placeholder), not in a struct instance's construction.
+`e2`) is only the requirement. So the instance construction copies what stands in a field
+position; the template's field node is never the node a use's value lands in. The frozen
+reference stays where the SPEC puts it — in a value handed over as an argument
+(`5b016643`'s graph placeholder), not in an instance's construction.
 
-**A straight reading of the snippet is blocked in the current representation.** The checker's
-struct value is `[name table, nominal id, field *slot*…]`, where a field slot's value carries
-the declared field's value (`compute.Buf (…)` for `.x`) and its type carries the declared
-type (`Int` for `@any : Int`); `check_instantiate` unifies the argument slot with the
-declared field slot, which is how a type-valued declaration (`{.x (compute.Buf …)}`) becomes a
-type check. Building `v`'s field slot as `[fresh, declared value]` fails as
-`expected Int, found Type` at the `BufParam` declarations (`examples/convolution2d.lichen:51`),
-because that position is the declared *type*, not the declared value. The repair therefore
-has to split the declared field into its requirement and the instance's value cell in this
-representation — the next measurement is which slot a type-valued field's requirement belongs
-in.
+**Implemented as the SPEC's two walks.** `instantiate_requirement_value_with` takes `fresh`:
+the instance entry (`check_instantiate`, the set/table instance) passes `true`, so a
+frozen-typed value in a field position is copied; `check_unify_expr`'s requirement
+instantiation passes `false`, so an argument's requirement is the value itself and a frozen
+one is referenced. The flag is the SPEC's own distinction — an instance's value is fresh, a
+requirement handed over is not — and not a condition on the value's contents.
+
+Measured: `convolution2d.lichen` checks and prints its declared values; language **289**
+(+69), highlevel **136**, compute **283** / 1 ignored, lowlevel **167** / 1 ignored,
+compute-gpu **94**.
+
+A version that rebuilt each field slot as `[fresh, declared value]` instead was measured and
+rejected: it lost the value requirement (`S{.f 1}` against `struct{.f Type, .t Type}` no
+longer failed), because in this representation a type-valued field states its type in the
+value position and the slot-to-slot unify is what checks it.
 
 ## What the diagnostic is now
 
