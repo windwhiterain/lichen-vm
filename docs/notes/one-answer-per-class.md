@@ -132,6 +132,15 @@ instead is the next piece. The copy in `check_unify_expr` is also what carried t
 template's clone (origin 185 in the measured class) into the instance's class, i.e. the
 collision's source on the annotation path.
 
+The examples survey confirms the strict version is a different failure set, not a smaller one:
+dev reads **33 clean / 8 panicked / 7 drifted** (`convolution2d` and `filter` drift, `generate`
+panics), the strict branch reads **32 clean / 9 panicked / 7 drifted** (`convolution2d` and
+`filter` now panic, `generate` and `struct_recursion` drift). `gemv.lichen` runs and answers
+`[14.0, 32.0, 50.0, 68.0]` on both; the loss is in what the launch's argument and the declared
+template each carry, not in every kernel. So the read-path change is a prerequisite for
+removing the copies, not a follow-up: with the copies gone the collide disappears, but the
+value a launch reads has no declaration-side carrier.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
