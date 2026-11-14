@@ -427,6 +427,19 @@ So the strict question is now textual: either the SPEC needs a rule by which the
 the cloned parameter's `@any` (the Apply section's `a = p_clone` direction working through the
 Any rule), or the checker's per-use instantiation is the intended realization and the SPEC's
 Any/Function text should say so. That is the maintainer's call.
+
+**The maintainer's pointer: the clone turns `Any` into undecided.** SPEC §Undecided/`Any`: "Clone
+an node with `Any` value produce an undecide node with `None` value if its class's scope is equal
+to the apply function scope." So the argument does not need to merge into an `Any` parameter: the
+*cloned* parameter's value is `None` (undecided), and `a = p_clone` then merges by the undecided
+rule. The implementation already has that branch in both clone walks (`node_apply` and
+`static_node_apply` clone a wildcard to a fresh empty node). The prerequisite is that the
+parameter's value is `Any` at the clone -- the SPEC sugar must put the annotation on the **type**
+and leave the value `Any`; the implementation's `'k = K` writes the declared type into the value
+instead, so the annotation's merge is already in the same class. My end-of-function sugar alone
+did not unlock it for that reason. Next: make `'k = K` annotate the type (the type-denotation
+representation) and keep the value `Any`; the clone's Any-to-None then lets the argument merge.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
