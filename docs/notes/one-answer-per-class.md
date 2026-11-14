@@ -322,6 +322,18 @@ definition-pass calls), so the cloned body and its launch never run. Forcing the
 statement's term (`ANN-EVAL`) evaluates it to a value but still no `PLRUN`: the call op behind
 the annotation is not what the deep pass forces. That is the next probe.
 
+**Measured: the launch call's apply runs and the static apply is entered; the clone does not
+launch.** With the root
+apply ids printed (`ROOTAPPLY`) and the deep pass traced, the launch call (`e=524`, apply
+`30076`) *is* evaluated: `APPLYOP node=NodeId(30076)` and its callee is
+`Some(Function(Static(ModuleKey(0), 20)))` -- the wrapper body with four foreign operators.
+`SAPPLY-ENTER function=Static(20) node=30076` prints, so `static_function_apply` runs and clones
+the body. Yet `PLRUN eval` is zero: the cloned body's native op never runs. The static walk
+judges the native op's class to be outside the applying scope and **references** the template
+op (whose parameter cells are open) instead of cloning it, so the clone evaluates to an open
+body. Whether the node is a fresh clone or the template's ref is the next probe, and the scope
+rule that answers it is SPEC §Clone's "if its class is in the applying function's scope".
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
