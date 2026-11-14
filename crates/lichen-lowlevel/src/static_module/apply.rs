@@ -572,7 +572,21 @@ impl<P: Program> Module<P> {
             Some(LowValue::Any)
         );
         if wildcard {
-            return self.add_node(ctx.target, None, None);
+            // SPEC §Clone: an `Any` node clones to an **undecided** node. Its operation
+            // is the computation that re-runs, so it is kept and its operand walked.
+            let clone = self.add_node(ctx.target, None, None);
+            self.nodes[clone].origin = Some(ctx.origin);
+            ctx.remap.insert(local, clone);
+            if let Some(operation) = ctx.module.nodes[local.index].operation {
+                let operand = operation
+                    .operand
+                    .map(|operand| self.static_node_apply(operand, ctx));
+                self.nodes[clone].operation = Some(Operation {
+                    operator: operation.operator,
+                    operand,
+                });
+            }
+            return clone;
         }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.

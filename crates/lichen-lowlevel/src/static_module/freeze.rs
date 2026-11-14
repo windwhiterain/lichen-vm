@@ -133,7 +133,16 @@ impl<P: Program> StaticModule<P> {
 
                 // The class's low type, not this member's own — a member's slot may be empty.
                 low_shape: module.class_low_type(id).cloned(),
-                operation: if mode == FreezeMode::ReadOnly && node.value.is_some() {
+                // SPEC §Undecided/`Any`: a wildcard is **never decided**, so its operation
+                // is kept: the clone re-runs it against the walked operand. Only a decided,
+                // non-wildcard answer lets ReadOnly drop the operand it would have to hold.
+                operation: if mode == FreezeMode::ReadOnly
+                    && node.value.is_some()
+                    && !node
+                        .value
+                        .and_then(|value| value.as_enum())
+                        .is_some_and(|value| matches!(value, LowValue::Any))
+                {
                     None
                 } else {
                     node.operation.map(|operation| StaticOperation {
