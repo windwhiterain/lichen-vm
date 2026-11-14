@@ -234,10 +234,22 @@ evaluations whose callee is an empty cell sit in the prelude functions' own bloc
 static-apply trace has no `ModuleKey(1)` application at all. So `static_function_apply` is
 never entered for the compute module: the wrapper body is never instantiated per call at run
 time, and the dev branch's launches are made at check time, with the checker's copies wiring
-each call into the single template op. Getting the launch to be the applied body (SPEC
-§Function) therefore means making the frozen compute module's run-time apply work —
-materialize the function value and clone the body per call — not a smaller edit in the
-checker.
+each call into the single template op.
+
+**Corrected: the traces above used a stale package cache.** The shipping cache
+(`~/.lichen/compilers/…/registry`) held a compute prelude compiled by an older binary;
+`check_native_call` never fired, so the prelude was not re-checked. With a fresh `LICHEN_HOME`
+the prelude **is** checked (`NATIVECALL op=plrun`, sixteen native calls; the `$plrun` op is
+built in the prelude's function 21), and the launch still does not run: no `PLRUN eval`, no
+module-1 static apply. So the stale cache does not explain the blocker, but it does mean the
+earlier "the prelude is not checked" readings were cache artefacts, not the architecture.
+
+**Corrected: the clone needs the function reference, not a materialized value.** The apply
+already carries the callee expression (operand 3) and resolves `Dynamic`/`Static` from it
+(`apply_callee_type`), so "materialize the function value" was the wrong requirement. The
+question is why the wrapper's application is not exercised at run time at all: the launch's
+op stays the prelude body's single template op, and the checker's copies are what fill its
+cells per call on dev.
 
 ## What the diagnostic is now
 
