@@ -424,6 +424,34 @@ where
             .map(AnyFunctionId::Dynamic)
     }
 
+    /// A curried **frozen** application: the inner call's frozen function names the next
+    /// stage through its return value ([`Module::static_function_return_function`]).
+    pub(super) fn static_curried_callee(&self, function: ExprId) -> Option<AnyFunctionId> {
+        let ExprKind::Apply {
+            function: inner, ..
+        } = self.ir[function].kind
+        else {
+            return None;
+        };
+        let callee_expr = self.state[inner].term?;
+        let inner_function = self
+            .module
+            .function_apply_function(callee_expr)
+            .or_else(|| self.static_curried_callee(inner))
+            .or_else(|| {
+                self.module
+                    .expr_value_half(callee_expr)
+                    .and_then(|half| self.module.static_function_of_callee(half))
+                    .map(AnyFunctionId::Static)
+            })?;
+        let AnyFunctionId::Static(inner_function) = inner_function else {
+            return None;
+        };
+        self.module
+            .static_function_return_function(inner_function)
+            .map(AnyFunctionId::Static)
+    }
+
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         // The call's expected type may decide a placeholder callee, so the
@@ -452,7 +480,16 @@ where
                     .and_then(|half| self.module.static_function_of_callee(half))
                     .map(AnyFunctionId::Static)
             })
-            .or_else(|| self.curried_callee(function));
+            // The name's own value is the binding the import materialized: it states the
+            // frozen function even when the term's value half is a fresh leaf.
+            .or_else(|| {
+                let function_value = self.value_of(function);
+                self.module
+                    .static_function_of_callee(function_value)
+                    .map(AnyFunctionId::Static)
+            })
+            .or_else(|| self.curried_callee(function))
+            .or_else(|| self.static_curried_callee(function));
         // The callee's **parameter expr** states its requirement: the same read as
         // its type slot (`docs/notes/attributes.md`).
         let parameter_expr = match callee {
