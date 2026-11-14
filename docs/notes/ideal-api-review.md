@@ -170,3 +170,27 @@ f := {.'a=A, .'b=B, .w': Type} -> ...
 So the red tests' first blocker is the rebase regression on the struct-signature call path,
 and form 6's own two spellings (`String`, the anonymous signature) are additional
 conformance findings.
+
+### Why form 3 answers none: the parameter image holds the declared type
+
+Measured with a probe in the dynamic apply's parameter check (`function.rs`'s
+`instantiate`, then removed):
+
+```text
+DYN-PCHECK function=FunctionId(1) image=NodeId(83) image_value=Some(Array 0x…390)
+            argument_value=Some(Array 0x…110) errors=0
+```
+
+- The image is the **shared** template node (83) for both calls — the parameter is
+  *referenced*, not cloned.
+- Its value is the **declared type's array** (`Div`'s value), and the argument's array merges
+  into it without error: the first-write rule leaves the declared value in place.
+- The body's `x.dividend` then reads the *declared type's* field — `@any` — so the answer is
+  `none`.
+
+The argument never fills the parameter because `'x = Div` decided the formal's value: the
+unify at its definition merges the formal's value cell with `Div`'s value (the type value), so
+the class is summarized at the root and §Clone (and the reworded "outermost member" rule)
+reference it. The deleted requirement machinery answered this by *copying* the declared type
+per use; without it, the call-time path needs the formal's **value** to stay undecided so the
+clone is fresh and the argument fills it. `'x = Div` currently does not leave it undecided.
