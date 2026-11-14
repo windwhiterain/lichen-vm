@@ -488,6 +488,13 @@ where
                     .static_function_of_callee(function_value)
                     .map(AnyFunctionId::Static)
             })
+            // A field read of an imported package: the read's own chain names the frozen
+            // function, so it is resolved structurally before it is evaluated.
+            .or_else(|| {
+                self.module
+                    .static_function_of_callee(callee_expr)
+                    .map(AnyFunctionId::Static)
+            })
             .or_else(|| self.curried_callee(function))
             .or_else(|| self.static_curried_callee(function));
         // The callee's **parameter expr** states its requirement: the same read as
@@ -590,7 +597,25 @@ where
             self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
         }
         // **One apply per call**: this node's check pass states the signature and its
-        // run computes the value.
+        // run computes the value. A frozen callee's value is a fact, so the operand
+        // names the same function the check resolved even before its read is evaluated.
+        let function_value = match callee {
+            Some(AnyFunctionId::Static(function))
+                if self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(function_value))
+                    .is_none() =>
+            {
+                self.alloc_node(
+                    self.current_block,
+                    None,
+                    Some(P::Value::from(LowValue::Function(AnyFunctionId::Static(
+                        function,
+                    )))),
+                )
+            }
+            _ => function_value,
+        };
         let operands = self.array_node(
             self.current_block,
             &[function_value, value_argument_expr, c, callee_expr],
