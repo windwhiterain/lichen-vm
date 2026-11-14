@@ -646,10 +646,23 @@ fn the_retired_angle_type_prefix_is_a_parse_error() {
 }
 
 #[test]
-fn the_retired_template_match_spelling_is_a_parse_error() {
-    // `=` is the only template match; `<:` lexes as `<` then `:`.
-    let err = parse_err("a <: b");
-    assert_eq!(err.span, Some((1, 4)));
+fn the_subtype_sugar_desugars_to_a_unify_of_an_apply() {
+    // `a <: b` is `a = b _` (`docs/language-spec.md` §Syntax sugar).
+    let Expr::Unify {
+        actual, expected, ..
+    } = parse_ok("a <: b")
+    else {
+        panic!("expected a unify")
+    };
+    assert!(matches!(*actual, Expr::Name(n, _, _) if n == "a"));
+    let Expr::Apply {
+        function, argument, ..
+    } = *expected
+    else {
+        panic!("expected an apply")
+    };
+    assert!(matches!(*function, Expr::Name(n, _, _) if n == "b"));
+    assert!(matches!(*argument, Expr::Placeholder(_)));
 }
 
 #[test]

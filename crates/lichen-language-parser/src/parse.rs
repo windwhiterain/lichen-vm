@@ -752,17 +752,30 @@ fn expression<'a, Er: GrammarError<'a>>(
             )
             .boxed();
 
-        // `=` is left-associative, between comparisons and annotations.
+        // `=`/`<:`: left-associative, between comparisons and annotations.
+        // `<:` is the sugar `a = b _` (SPEC §Syntax sugar).
         let unify = table_find
             .clone()
             .foldl(
-                token(TokenKind::Equals)
+                choice((token(TokenKind::Equals), token(TokenKind::Subtype)))
                     .then(operand(tokens, table_find.clone()))
                     .repeated(),
-                |lhs, (_, rhs)| Expr::Unify {
-                    span: lhs.span(),
-                    actual: Box::new(lhs),
-                    expected: Box::new(rhs),
+                |lhs, (op, rhs)| {
+                    let expected = if op.kind == TokenKind::Subtype {
+                        let span = rhs.span();
+                        Expr::Apply {
+                            function: Box::new(rhs),
+                            argument: Box::new(Expr::Placeholder(op.span)),
+                            span,
+                        }
+                    } else {
+                        rhs
+                    };
+                    Expr::Unify {
+                        span: lhs.span(),
+                        actual: Box::new(lhs),
+                        expected: Box::new(expected),
+                    }
                 },
             )
             .boxed();
