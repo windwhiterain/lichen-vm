@@ -251,6 +251,24 @@ question is why the wrapper's application is not exercised at run time at all: t
 op stays the prelude body's single template op, and the checker's copies are what fill its
 cells per call on dev.
 
+**The package cache is shared across branches: measure with a per-branch `LICHEN_HOME`.**
+`~/.lichen/compilers/<slot key>/registry` is one cache for every binary and branch, so a run
+from one branch leaves a prelude the next run loads without re-checking. Measured: with the
+shipping cache the strict branch prints no `NATIVECALL op=plrun`, i.e. it runs a prelude
+compiled by an older binary; with a fresh `LICHEN_HOME` the prelude is re-checked. Every
+measurement in this note, and the examples survey, must therefore be taken with a fresh or
+per-branch `LICHEN_HOME` (`target/lichen-home-<branch>`); a CLI run and a suite (in-memory
+store) are otherwise measuring different preludes.
+
+**Baseline with fresh caches (CLI, `run examples/convolution2d.lichen`).** Dev (the checker's
+copies) fails `expected ?, found ?` at `102:79` — the collide. Strict (no copies) checks and
+prints `(raw none, raw none)` with **no `PLRUN eval`**. With `DBG_PL` the running launch node
+is printed (`module.current_operator_node()`): on dev the launch runs at **five distinct op
+nodes** (33k–45k), not the prelude's one template op — so the apply clone does produce a
+per-call launch when the copies are present. On strict, the compute calls' Apply nodes
+(`CHECKAPP … apply=NodeId(1198…)` and its siblings) are **never evaluated** at all: they appear
+only in the check-time line.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
