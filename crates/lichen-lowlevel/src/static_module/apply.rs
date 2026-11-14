@@ -624,7 +624,7 @@ impl<P: Program> Module<P> {
         if let Some(shape) = template_shape {
             self.seed_class_low_type(clone, shape);
         }
-        if undecided && inside {
+        if (undecided || is_parameter_value) && inside {
             // A capture cloned for the enclosing call takes that call's tag, never the closure's.
             let owner = if is_parameter_value || ctx.rule.inside(&ctx.module, local, ctx.source) {
                 ctx.tag
@@ -633,7 +633,7 @@ impl<P: Program> Module<P> {
             };
             self.set_node_owner(clone, owner);
         }
-        if undecided {
+        if undecided || is_parameter_value {
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
@@ -645,9 +645,11 @@ impl<P: Program> Module<P> {
             // The carry rule: the deep pass makes an answer a fact every call shares.
             let carried = operation.is_none() || evaluated_deep.is_some();
             // The mapping runs only for a value that is kept: a dropped answer
-            // must not clone a closure into the target block.
+            // must not clone a closure into the target block. The applied formal's
+            // value is never carried: SPEC §Clone detaches it, so the call's argument
+            // is the clone's value.
             let value = ctx.module.read(local);
-            let mapped = if carried {
+            let mapped = if carried && !is_parameter_value {
                 value.map(|value| self.static_remap_value(value, ctx))
             } else {
                 None
