@@ -153,6 +153,14 @@ be compiled from them: the compile must happen at the launch with the applied ar
 independent of the declaration's open cells. That is the next piece, and it is larger than the
 instance construction itself.
 
+**Follow-up probe on the strict branch.** The parallel gate is not what stays open:
+`function_materialized` passes (the parameter's type is a decided array, `layout: 1`), and
+`compile_parallel_fragment` answers `Ok` for all five parallels (the refusal arm never
+prints), so a `ParKernel` is produced. Yet `PLRUN` still never prints: the **`ParLaunch` op
+never runs**, so the launch's operand — the `convolve`/`replicate` binding — is undecided when
+the launch is evaluated. The next probe is that operand at the launch's evaluation, not the
+fragment compile.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
