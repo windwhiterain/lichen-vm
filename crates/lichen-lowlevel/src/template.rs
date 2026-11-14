@@ -404,7 +404,7 @@ impl<P: Program> Module<P> {
 
     /// The frozen cells a frozen cell's own value names.
     fn template_static_children(&self, sref: StaticNodeId) -> Vec<StaticNodeId> {
-        let Some(value) = self.static_read(sref) else {
+        let Some(value) = self.node_value(AnyNodeId::Static(sref)) else {
             return Vec::new();
         };
         let children = match value.as_enum() {
@@ -742,7 +742,7 @@ impl<P: Program> Module<P> {
                 )
             }),
         });
-        let value = self.static_read(sref);
+        let value = self.node_value(AnyNodeId::Static(sref));
         let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
         let carried = match operation {
             None => !wildcard,

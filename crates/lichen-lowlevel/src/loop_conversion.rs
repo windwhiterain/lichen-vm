@@ -320,7 +320,7 @@ impl<'a, P: Program> LoopGraph<'a, P> {
             AnyNodeId::Dynamic(node) => self.module.usize_value(node),
             AnyNodeId::Static(sref) => match self
                 .module
-                .static_read(sref)
+                .node_value(AnyNodeId::Static(sref))
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
             {
                 Some(LowValue::USize(value)) => Some(value),
@@ -802,7 +802,7 @@ impl<P: Program> Module<P> {
         match item {
             AnyNodeId::Dynamic(node) => self.usize_value(node),
             AnyNodeId::Static(sref) => match self
-                .static_read(sref)
+                .node_value(AnyNodeId::Static(sref))
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
             {
                 Some(LowValue::USize(n)) => Some(n),

@@ -2734,19 +2734,6 @@ where
             standing_struct_value(module, standing_structs, held).map(|value| value.unwrap_or(held))
         })
         .transpose()?;
-    // **A read that names a frozen value is that reference**: the walk descends it.
-    let held = held.map(|value| {
-        value
-            .dynamic()
-            .and_then(|node| {
-                module
-                    .frozen_reads
-                    .get(&node)
-                    .or_else(|| module.frozen_reads.get(&module.class_root(node)))
-                    .copied()
-            })
-            .unwrap_or(value)
-    });
     if let Some(held) = held
         && is_struct_value(module, held)
     {
@@ -5822,14 +5809,6 @@ where
         // A primed field's walk reaches the formal: names and
         // positions continue in the struct value it stands for.
         let value = standing_struct_value(module, standing_structs, value)?.unwrap_or(value);
-        // **A deferred read names its frozen value**: the walk follows the reference.
-        let frozen = value.dynamic().and_then(|node| {
-            module
-                .frozen_reads
-                .get(&node)
-                .or_else(|| module.frozen_reads.get(&module.class_root(node)))
-        });
-        let value = frozen.copied().unwrap_or(value);
         // A struct's constant step is physical (`name_table[name] + 2`); a tuple's is not.
         let on_struct = is_struct_value(module, value);
         let at = match step {
@@ -6866,14 +6845,6 @@ where
             .and_then(|node| field_source_of(module, node))
         {
             payload = AnyNodeId::Dynamic(source);
-            continue;
-        }
-        // A deferred read stands for the frozen node it named (`frozen_reads`).
-        if let Some(frozen) = payload
-            .dynamic()
-            .and_then(|node| module.frozen_reads.get(&node).copied())
-        {
-            payload = frozen;
             continue;
         }
         buffer = AnyNodeId::Dynamic(

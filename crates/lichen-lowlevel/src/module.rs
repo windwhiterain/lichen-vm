@@ -72,7 +72,6 @@ impl<P: Program> Module<P> {
             value_reads: HashMap::new(),
             field_sources: HashMap::new(),
             struct_identity_items: HashSet::new(),
-            frozen_reads: HashMap::new(),
             parameter_values: HashMap::new(),
             constructor_bindings: HashMap::new(),
             applied_parameters: HashMap::new(),

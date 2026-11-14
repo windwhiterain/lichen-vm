@@ -195,7 +195,7 @@ fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
                 Some(AnyNodeId::Static(reference)) => format!(
                     "the frozen node holds {}",
                     module
-                        .static_read(reference)
+                        .node_value(AnyNodeId::Static(reference))
                         .map(|value| format!("{value:?}"))
                         .unwrap_or_else(|| "<nothing readable>".to_string())
                 ),

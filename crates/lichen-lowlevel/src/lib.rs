@@ -1106,14 +1106,6 @@ pub struct Module<P: Program> {
     /// declaration's, so a per-call copy would give one type two identities
     /// (`docs/notes/value-templates.md`).
     pub struct_identity_items: HashSet<NodeId>,
-    /// The frozen value each deferred read stands for.
-    ///
-    /// # Invariant
-    /// The checker records a read it leaves undecided (so a call can resolve it) with the
-    /// frozen node it named; a read-only walk — the kernel's — follows that node. The value
-    /// is a **reference**, never a copy: static and dynamic reads share one interface.
-    pub frozen_reads: HashMap<NodeId, AnyNodeId>,
-    /// Each function's parameter **value cell** — the root a body's read chain starts at.
     pub parameter_values: HashMap<FunctionId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
     pub constructor_bindings: HashMap<AnyFunctionId, AnyFunctionId>,

@@ -333,7 +333,7 @@ impl<P: Program> Module<P> {
         match item {
             // A frozen element: its value is read through the reference.
             AnyNodeId::Static(function) => match self
-                .static_read(function)
+                .node_value(AnyNodeId::Static(function))
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
             {
                 Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
@@ -376,7 +376,7 @@ impl<P: Program> Module<P> {
             return None;
         }
         match target {
-            AnyNodeId::Static(sref) => match self.static_read(sref)?.as_enum()? {
+            AnyNodeId::Static(sref) => match self.node_value(AnyNodeId::Static(sref))?.as_enum()? {
                 LowValue::Array(array) => Some(unsafe { array.items() }),
                 _ => None,
             },
@@ -474,7 +474,7 @@ impl<P: Program> Module<P> {
         match node {
             AnyNodeId::Dynamic(node) => unsafe { self.array_items(node) },
             AnyNodeId::Static(sref) => {
-                let value = self.static_read(sref)?;
+                let value = self.node_value(AnyNodeId::Static(sref))?;
                 let LowValue::Array(array) = value.as_enum()? else {
                     return None;
                 };

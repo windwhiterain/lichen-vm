@@ -1006,6 +1006,6 @@ fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
 pub(crate) fn node_value<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<P::Value> {
     match id {
         AnyNodeId::Dynamic(_) => module.node_value(id),
-        AnyNodeId::Static(sref) => module.static_read(sref),
+        AnyNodeId::Static(sref) => module.node_value(AnyNodeId::Static(sref)),
     }
 }

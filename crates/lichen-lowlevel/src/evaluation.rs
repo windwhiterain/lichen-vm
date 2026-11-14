@@ -74,7 +74,7 @@ impl<P: Program> Module<P> {
         // A static ref is a decided leaf: read its solved value; nothing is evaluated or marked.
         match node {
             Dyn(node) => self.evaluate_node_body(node, referer),
-            AnyNodeId::Static(sref) => self.static_read(sref),
+            AnyNodeId::Static(sref) => self.node_value(AnyNodeId::Static(sref)),
         }
     }
 
@@ -290,7 +290,9 @@ impl<P: Program> Module<P> {
                                                 }
                                                 // A static element is immutable: no class to join, and its value caches here like any
                                                 // other.
-                                                AnyNodeId::Static(sref) => self.static_read(sref),
+                                                AnyNodeId::Static(sref) => {
+                                                    self.node_value(AnyNodeId::Static(sref))
+                                                }
                                             }
                                         } else {
                                             self.eval_errors.push(EvalError::Index {
@@ -798,7 +800,7 @@ impl<P: Program> Module<P> {
                 self.evaluate_node(Dyn(element), Some(block))
             }
             // A static element is immutable: no class to join, and its value caches here.
-            Some(AnyNodeId::Static(sref)) => self.static_read(sref),
+            Some(AnyNodeId::Static(sref)) => self.node_value(AnyNodeId::Static(sref)),
             None => {
                 let (table, key) = self.table_get_operands(node);
                 self.eval_errors.push(EvalError::TableMiss { table, key });

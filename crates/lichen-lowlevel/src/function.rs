@@ -771,9 +771,9 @@ impl<P: Program> Module<P> {
         let forced = self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
-            AnyNodeId::Static(pattern) => {
-                self.static_read(pattern).and_then(|value| value.as_enum())
-            }
+            AnyNodeId::Static(pattern) => self
+                .node_value(AnyNodeId::Static(pattern))
+                .and_then(|value| value.as_enum()),
         };
         let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) =
             (pattern_value, forced.and_then(|value| value.as_enum()))

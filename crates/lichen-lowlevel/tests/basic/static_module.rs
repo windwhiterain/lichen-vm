@@ -821,7 +821,7 @@ fn static_function_compute_operator_skips_an_operand_less_operation() {
         "the operand-less Id is not one"
     );
     let items = raw_items(
-        imp.static_read(operand)
+        imp.node_value(AnyNodeId::Static(operand))
             .expect("the operator's frozen operand"),
     );
     assert_eq!(items.len(), 2, "the answer is the operator's own operand");

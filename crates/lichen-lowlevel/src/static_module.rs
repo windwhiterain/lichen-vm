@@ -205,11 +205,6 @@ impl<P: Program> Module<P> {
             .is_some_and(|function| function.parameter == function.r#return)
     }
 
-    /// A static node's solved value through [`Module::node_value`].
-    pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {
-        self.node_value(AnyNodeId::Static(sref))
-    }
-
     /// The compute operator a frozen function's body computes, or [`None`].
     ///
     /// # Invariant
@@ -428,7 +423,7 @@ impl<P: Program> Module<P> {
     /// The dynamic node behind `id`: a static ref becomes a fresh leaf in
     /// `block`, so `NodeId` machinery binds it.
     pub fn materialize_leaf(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
-        let value = self.static_read(sref);
+        let value = self.node_value(AnyNodeId::Static(sref));
         self.add_node(block, None, value)
     }
 
@@ -457,7 +452,7 @@ impl<P: Program> Module<P> {
             index: param_expr,
         };
         let param_type = match self
-            .static_read(param_expr_ref)
+            .node_value(AnyNodeId::Static(param_expr_ref))
             .and_then(|value| value.as_enum())
         {
             // SAFETY: `array` is a payload in a registered static module's arena, which
