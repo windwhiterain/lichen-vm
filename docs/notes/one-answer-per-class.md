@@ -592,10 +592,15 @@ guarded (`bc669628`); the launch still runs five times. The clone decision is ag
 one sentence, implemented as `Module::class_inside_scope`, whose code invariant reads: *"The
 verdict is a fact of the class, not of the node … A class summarized to the root is inside no
 function's scope."* Measured consequence for the collide: the declared `Buf` type's fields are
-undecided (`@any` = `Any`, never decided) but their class's summary is the root, so §Clone's
-"otherwise reference it" makes them shared, and both `CIn` instances' arguments merge into them.
-That is the rule's output, not a special case; changing it would reword an invariant in
-`scope.rs` and needs the maintainer's word.
+undecided (`@any` = `Any`, never decided) but their class's summary is the root, so §Clone's "otherwise reference it" makes them shared, and both `CIn` instances' arguments merge into them. That is the rule's output, not a special case; changing it would reword an invariant in `scope.rs` and needs the maintainer's word.
+
+**The maintainer's reworded Clone rule, implemented and measured.** *"Undecided node, if the outer
+most scope among its class members is or inside the applying function's scope, must be clone,
+otherwise reference it."* `class_inside_scope` (`c73ed549`) now finds the outermost member's place
+and asks whether the applying scope is that place or inside it. Measured: the launch still runs
+five times; `convolution2d` still hits the CIn collide, because the declared `Buf` type's class
+has a member at the root — the outermost place there is — so the type is still referenced and both
+instances merge into it.
 
 ## What the diagnostic is now
 
