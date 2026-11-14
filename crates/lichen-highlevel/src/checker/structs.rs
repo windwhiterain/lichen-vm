@@ -273,46 +273,6 @@ where
             }
         };
         let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
-        // **The read's type resolves at check time**, walking the annotation's type
-        // literal — no deferral, no copy.
-        let container_type = self.read_types.get(&container_value).copied().or_else(|| {
-            // The chain's root is the owning function's parameter value cell.
-            self.module
-                .parameter_values
-                .iter()
-                .find(|(_, value)| **value == container_value)
-                .and_then(|(function, _)| self.module.parameter_annotations.get(function).copied())
-                .map(AnyNodeId::Dynamic)
-        });
-        if let Some(container_type) = container_type
-            && let Some(field) = self.declared_field_value(container_type, name)
-        {
-            if let AnyNodeId::Static(_) = field {
-                self.module.frozen_reads.insert(value_node, field);
-            }
-            self.read_types.insert(value_node, field);
-        }
-        if !concrete && !self.is_loop_state(container) {
-            // Deferred to the call, which states the field's type from the argument.
-            if let (Some(&(function, _)), Some(root)) =
-                (self.function_stack.last(), self.formal_root(container))
-            {
-                let read = super::DeferredFieldRead {
-                    container_ty,
-                    name,
-                    ty: ty_node,
-                    read_loc: self.loc(e, 0),
-                    container_loc: self.loc(container, 1),
-                    direct: root == container,
-                    container,
-                    expr: e,
-                };
-                self.deferred_field_reads
-                    .entry(function)
-                    .or_default()
-                    .push(read);
-            }
-        }
         // **The checker names the frozen value a read stands for**, and a read-only walk
         // follows the reference.
         let frozen = match constant {
@@ -930,10 +890,6 @@ where
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
-        // Each use copies the template's open slots; instances never share a
-        // required field node.
-        let template_value =
-            self.instantiate_requirement_value(template_value, AnyNodeId::Dynamic(template_ty), 0);
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(

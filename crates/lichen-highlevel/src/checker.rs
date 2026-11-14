@@ -129,32 +129,6 @@ fn sole_default(matches: &[bool]) -> Option<usize> {
     found.next().is_none().then_some(position)
 }
 
-/// A formal's field read whose container type is only known at the call.
-///
-/// # Invariant
-/// The definition-time check keeps the read's type as the body stated it; the
-/// application reconciles the field's declared type with it, so the spec's apply
-/// order decides the class (`docs/notes/per-application-body.md`).
-#[derive(Clone)]
-struct DeferredFieldRead {
-    /// The container's type cell, for the end-of-check refusal.
-    container_ty: NodeId,
-    /// The field's name.
-    name: &'static str,
-    /// The read's type, as the body's annotations and uses bound it.
-    ty: NodeId,
-    /// The read's own location.
-    read_loc: Loc,
-    /// The container's location, which the undecided-read refusal names.
-    container_loc: Loc,
-    /// Whether the container is the formal itself.
-    direct: bool,
-    /// The read's container expression: a nested read's chain is keyed by it.
-    container: ExprId,
-    /// The read's own expression, the key a nested read looks up.
-    expr: ExprId,
-}
-
 pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
@@ -224,27 +198,6 @@ where
     /// # Invariant
     /// The IR stays the frontend's: only this table carries the merged tail.
     merged_tails: HashMap<ExprId, Vec<P::Attr>>,
-    /// The formal field reads whose container type only the call decides.
-    ///
-    /// # Invariant
-    /// A formal-rooted read is reconciled at the call in chain order and removed;
-    /// one no call resolved is refused at the end, the undecided-read ruling
-    /// (`docs/notes/per-application-body.md`).
-    deferred_field_reads: HashMap<FunctionId, Vec<DeferredFieldRead>>,
-    /// Each field read's **declared type**, resolved at check time from the parameter
-    /// annotation's type literal.
-    ///
-    /// # Invariant
-    /// A read's type is the **field's value** in its container's type literal; a frozen
-    /// field is a reference (`frozen_reads`), never a copy.
-    read_types: HashMap<NodeId, AnyNodeId>,
-    /// The attributes a body requires of its own parameter, replayed at each apply.
-    ///
-    /// # Invariant
-    /// The requirement is consumed by the read that states it, so a caller's slot is
-    /// only compared with it where the apply supplies one
-    /// (`docs/notes/array-attribute-view.md`).
-    deferred_requirements: HashMap<FunctionId, Vec<(P::Attr, NodeId)>>,
     /// The attribute marker of an expr's `state.attr` slot, where one is known.
     ///
     /// # Invariant
@@ -699,9 +652,6 @@ where
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
-            deferred_requirements: HashMap::new(),
-            deferred_field_reads: HashMap::new(),
-            read_types: HashMap::new(),
             attribute_markers: HashMap::new(),
             body_claims: HashMap::new(),
             reference_claims: HashMap::new(),
@@ -773,8 +723,6 @@ where
         let root_ty = checker.state[root]
             .ty
             .expect("the root expression must have a type");
-        // A formal field read no call resolved keeps the undecided-read ruling.
-        checker.refuse_unresolved_reads();
         // Deep-evaluate every lambda's value node before the definition pass, so a
         // recursive reference stays in place.
         for &func_node in &checker.lambda_value_nodes {
@@ -1331,50 +1279,6 @@ where
         crate::shape::value_item(&self.module, field, crate::shape::EXPR_VALUE_SLOT)
     }
 
-    /// Resolve a kernel body's deferred reads against its declared parameter type.
-    ///
-    /// # Invariant
-    /// The read's declared type is the **field's value** in the parameter's type literal;
-    /// a frozen reference decides the type cell by reference, and a live one is unified.
-    pub fn resolve_kernel_reads(&mut self, body: NodeId) {
-        let Some(lichen_lowlevel::AnyFunctionId::Dynamic(function)) =
-            self.module.function_apply_function(body)
-        else {
-            return;
-        };
-        let Some(type_value) = self.module.parameter_annotations.get(&function).copied() else {
-            return;
-        };
-        let Some(reads) = self.deferred_field_reads.remove(&function) else {
-            return;
-        };
-        let mut resolved: std::collections::HashMap<ExprId, AnyNodeId> =
-            std::collections::HashMap::new();
-        for read in reads {
-            let container = if read.direct {
-                Some(AnyNodeId::Dynamic(type_value))
-            } else {
-                resolved.get(&read.container).copied()
-            };
-            let Some(container) = container else {
-                continue;
-            };
-            let Some(field) = self.declared_field_value(container, read.name) else {
-                continue;
-            };
-            match field {
-                AnyNodeId::Static(_) => {
-                    self.module.frozen_reads.insert(read.ty, field);
-                }
-                AnyNodeId::Dynamic(node) => {
-                    self.module
-                        .unify_ref(AnyNodeId::Dynamic(read.ty), AnyNodeId::Dynamic(node));
-                }
-            }
-            resolved.insert(read.expr, field);
-        }
-    }
-
     /// The field's declared type and value from a container's value.
     fn resolved_field(
         &mut self,
@@ -1390,24 +1294,6 @@ where
             Some(at + crate::shape::STRUCT_VALUE_FIELD_BASE),
         );
         Some((ty, value))
-    }
-
-    /// Refuse every formal read no call resolved: the undecided-read ruling.
-    pub(super) fn refuse_unresolved_reads(&mut self) {
-        let reads: Vec<DeferredFieldRead> = self
-            .deferred_field_reads
-            .drain()
-            .flat_map(|(_, reads)| reads)
-            .collect();
-        for read in reads {
-            self.record_guard(
-                read.container_ty,
-                read.container_ty,
-                read.container_loc,
-                DiagKind::UndecidedContainer,
-                Some("field read"),
-            );
-        }
     }
 
     /// A node owned by the current function — the checker's only node creation
@@ -2145,10 +2031,6 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    fn resolve_kernel_reads(&mut self, body: NodeId) {
-        Checker::resolve_kernel_reads(self, body)
-    }
-
     fn full_width_layout(&mut self) -> u32 {
         Checker::full_width_layout(self)
     }

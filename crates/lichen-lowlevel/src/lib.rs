@@ -1099,13 +1099,6 @@ pub struct Module<P: Program> {
     /// Keys and values are exact value nodes, never equality-class roots; this directed link
     /// records provenance without unifying the required and supplied fields.
     pub field_sources: HashMap<NodeId, NodeId>,
-    /// The nodes whose value is a **template's requirement**, not a thing's answer.
-    ///
-    /// # Invariant
-    /// A read of one stays lazy: the answer replaces the requirement, so a baked field
-    /// would read the declaration. The match's write sets the mark, a clone copies it,
-    /// and an answer clears it (`docs/notes/class-carries-the-call.md`).
-    pub requirement_nodes: HashSet<NodeId>,
     /// A struct value's **identity items**: its name table and its nominal id.
     ///
     /// # Invariant
@@ -1120,13 +1113,6 @@ pub struct Module<P: Program> {
     /// frozen node it named; a read-only walk — the kernel's — follows that node. The value
     /// is a **reference**, never a copy: static and dynamic reads share one interface.
     pub frozen_reads: HashMap<NodeId, AnyNodeId>,
-    /// The **value** of each function's parameter annotation — the declared type.
-    ///
-    /// # Invariant
-    /// A formal's type cell states the annotation's *type*; this map keeps the
-    /// annotation's *value*, which is the named type a kernel body's reads resolve
-    /// against (no argument exists at check time).
-    pub parameter_annotations: HashMap<FunctionId, NodeId>,
     /// Each function's parameter **value cell** — the root a body's read chain starts at.
     pub parameter_values: HashMap<FunctionId, NodeId>,
     /// A wildcard constructor's per-instantiation implementation.
@@ -1158,13 +1144,6 @@ pub struct Module<P: Program> {
     /// parameter check removes the list before retrying it: only these operations are re-run
     /// when a real argument binds, never another operation in the block.
     pub pending_projections: HashMap<NodeId, Vec<NodeId>>,
-    /// The template that constrains each cell, keyed by the cell's value node.
-    ///
-    /// # Invariant
-    /// A requirement is a **link**, never a write: the cell's class stays undecided, so a
-    /// later unification can still put the actual function there, and a callee with no
-    /// value of its own resolves through this record.
-    pub requirements: HashMap<NodeId, AnyFunctionId>,
     /// Each replay's recorded result expr, keyed by the replay node.
     ///
     /// # Invariant

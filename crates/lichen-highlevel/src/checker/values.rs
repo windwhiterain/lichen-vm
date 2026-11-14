@@ -47,24 +47,6 @@ where
             let ty_node = self.fresh_cell();
             return (element, element, ty_node);
         }
-        // A requirement's value stays lazy; its declared type is the read's.
-        if let Some(at) = constant
-            && self.module.requirement_nodes.contains(&container_value)
-            && let Some(field) =
-                shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)
-            && let Some(field) = field.dynamic()
-        {
-            let element = self.index_of(container_value, index);
-            let value_node = self.index_of(element, self.zero());
-            let ty_node = shape::value_item(
-                &self.module,
-                AnyNodeId::Dynamic(field),
-                shape::EXPR_TYPE_SLOT,
-            )
-            .and_then(|node| node.dynamic())
-            .unwrap_or_else(|| self.index_of(element, self.one()));
-            return (element, value_node, ty_node);
-        }
         if let Some(at) = constant
             && let Some(element) =
                 shape::value_item(&self.module, AnyNodeId::Dynamic(container_value), at)

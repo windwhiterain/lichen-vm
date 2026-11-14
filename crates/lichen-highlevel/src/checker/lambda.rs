@@ -544,15 +544,6 @@ where
             let fn_ty = self.function_template();
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
-        // **The body's own requirements are replayed here**, where the caller's slot
-        // is (`docs/notes/array-attribute-view.md`).
-        if let Some(AnyFunctionId::Dynamic(fid)) = callee
-            && let Some(required) = self.deferred_requirements.get(&fid).cloned()
-        {
-            for (marker, declared) in required {
-                self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
-            }
-        }
         // The apply's attribute equality: the signature expr's stated requirement
         // against the argument's provided slot.
         if let (Some(declared), Some(marker)) = (requirement, parameter_marker) {
@@ -615,37 +606,6 @@ where
                         None => false,
                     }
                 };
-                // The call decides the read: the argument's value states the field.
-                if let Some(AnyFunctionId::Dynamic(function)) = callee
-                    && let Some(reads) = self.deferred_field_reads.remove(&function)
-                {
-                    let argument_value = self.value_of(argument);
-                    let mut resolved: std::collections::HashMap<ExprId, (NodeId, NodeId)> =
-                        std::collections::HashMap::new();
-                    let mut remaining = Vec::new();
-                    for read in reads {
-                        let container_value = if read.direct {
-                            Some(argument_value)
-                        } else {
-                            resolved.get(&read.container).map(|&(_, value)| value)
-                        };
-                        let Some(container_value) = container_value else {
-                            remaining.push(read);
-                            continue;
-                        };
-                        if let Some((field_ty, field_value)) =
-                            self.resolved_field(container_value, read.name)
-                        {
-                            self.check_unify(field_ty, read.ty, read.read_loc, DiagKind::Guard);
-                            resolved.insert(read.expr, (field_ty, field_value));
-                        } else {
-                            remaining.push(read);
-                        }
-                    }
-                    if !remaining.is_empty() {
-                        self.deferred_field_reads.insert(function, remaining);
-                    }
-                }
                 // A Check failure settles its node: the shallow pass walks it again.
                 if report && !applied {
                     self.module

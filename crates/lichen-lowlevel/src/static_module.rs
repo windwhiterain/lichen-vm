@@ -56,9 +56,9 @@ impl<P: Program> StaticModuleCache<P> {
         self.module(host, sref.module).nodes[sref.index.index].undecided()
     }
 
-    /// [`StaticModule::read`] through the cache.
+    /// Read a static node through [`Module::node_value`].
     pub(crate) fn read(&mut self, host: &Module<P>, sref: StaticNodeId) -> Option<P::Value> {
-        self.module(host, sref.module).read(sref.index)
+        host.node_value(AnyNodeId::Static(sref))
     }
 }
 
@@ -205,10 +205,9 @@ impl<P: Program> Module<P> {
             .is_some_and(|function| function.parameter == function.r#return)
     }
 
-    /// Read a static node's solved value verbatim, or [`None`] for a residual
-    /// with no cached answer.
+    /// A static node's solved value through [`Module::node_value`].
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {
-        self.static_module(sref.module).read(sref.index)
+        self.node_value(AnyNodeId::Static(sref))
     }
 
     /// The compute operator a frozen function's body computes, or [`None`].

@@ -448,16 +448,6 @@ where
         if self.node_value(declared).is_none() {
             return;
         }
-        // **A parameter's requirement is replayed at the apply**: the cell is a
-        // hole (`docs/notes/array-attribute-view.md`).
-        if matches!(self.ir[argument].kind, ExprKind::Formal)
-            && let Some(function) = self.current_function()
-        {
-            self.deferred_requirements
-                .entry(function)
-                .or_default()
-                .push((*marker, declared));
-        }
         let found = self.provided_slot(argument, marker, ext);
         // **A failure the order admits leaves no error**: the apply would stop
         // at it (`docs/notes/array-attribute-view.md`).

@@ -703,10 +703,6 @@ impl<P: Program> Module<P> {
         {
             return Some(function);
         }
-        // A recorded requirement names the template the cell must satisfy ✓.
-        if let Some(function) = self.recorded_requirement(expr) {
-            return Some(function);
-        }
         // A cached artifact's `Unify`: its expected operand is the template ✓.
         let operation = self.node_operation(expr)?;
         if !matches!(
@@ -724,18 +720,6 @@ impl<P: Program> Module<P> {
         // SAFETY: the expected operand is a live node of this module.
         let items = unsafe { self.array_items_ref(expected) }?;
         self.function_value_function(items.first()?.node)
-    }
-
-    /// The template a recorded requirement names for this expr's cell.
-    fn recorded_requirement(&self, expr: NodeId) -> Option<AnyFunctionId> {
-        if let Some(&function) = self.requirements.get(&expr) {
-            return Some(function);
-        }
-        let value = self.expr_value_half(expr)?;
-        if let Some(&function) = self.requirements.get(&value) {
-            return Some(function);
-        }
-        self.requirements.get(&self.class_root(value)).copied()
     }
 
     /// Whether an expr's value half holds a decided value.
