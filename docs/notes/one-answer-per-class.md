@@ -161,6 +161,15 @@ never runs**, so the launch's operand — the `convolve`/`replicate` binding —
 the launch is evaluated. The next probe is that operand at the launch's evaluation, not the
 fragment compile.
 
+**Where the SPEC puts the specialization.** §Function: *"Polymorphism at every application:
+@clone function's expressions, unify the argument with the cloned parameter."* The
+per-application specialization is therefore the **apply's clone**, and the checker's
+check-time annotation copy is not it. The remaining work is at the apply: the cloned
+parameter — its annotation cells included — is what the argument unifies with, and the
+launch's cfg is that cloned parameter. The launch's operand stays undecided until the apply's
+clone covers it; that is the next implementation step, and it is the SPEC's sentence, not a
+new mechanism.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
