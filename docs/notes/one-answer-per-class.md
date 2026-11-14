@@ -480,6 +480,15 @@ argument?) and the re-home's remap of that capture. (The collide seen in one pro
 build artifact again: an incremental rebuild on the shared `target/`; the clean build says
 `raw none`.)
 
+**Measured: the parameter check does not fill the formal with the argument.** A `PCHECK2` probe
+after `apply_parameter_check` on `strict-clean`'s next checkpoint (`845085a0`, with the detach and
+the no-carry change) prints, for the wrapper functions: `function 6: image_value=Some(Array,
+layout 0)` (a frozen static array, not the caller's slot), `function 24: image_value=None`, while
+the argument is always the caller's slot (`Array, layout 1`). So the check is a type comparison,
+not the SPEC's `a = p_clone` merge: the formal's value never receives the argument, and the
+launch's kernel stays `Any`. The chain that must change is the parameter check itself (its value
+position), not the clone walk's carrying.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
