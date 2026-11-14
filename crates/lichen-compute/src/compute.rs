@@ -1199,29 +1199,19 @@ where
         module: &mut Module<P>,
     ) -> Option<P::Value> {
         {
-            if std::env::var("DBG_APPLY").is_ok() {
-                eprintln!(
-                    "RD-ENTRY operator={self:?} operand={operand:?} node={:?}",
-                    module.current_operator_node()
-                );
-            }
             let Some(node) = operand else {
                 return self.run(P::Value::from(LowValue::Error), block, module);
             };
             let value = module.evaluate_node_deep(node, Some(block));
             let value = value?;
-            // SAFETY: `node` is the operand the VM just evaluated, and no block is dropped
-            // in this walk.
-            for item in unsafe { module.array_items(node) }.unwrap_or_default() {
+            // The item nodes are copied out first: `element_value_node` may grow the
+            // module's arenas, and the slice `array_items` returns must not be read across
+            // that growth.
+            let items: Vec<lichen_lowlevel::ArrayItem> = unsafe { module.array_items(node) }
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
+            for item in items {
                 let element = module.element_value_node(item.node).unwrap_or(item.node);
-                if std::env::var("DBG_APPLY").is_ok() {
-                    eprintln!(
-                        "G3 op={:?} operand={node:?} item={:?} value={:?}",
-                        module.current_operator_node(),
-                        item.node,
-                        module.node_value(element)
-                    );
-                }
                 if module.node_value(element).is_none() {
                     return None;
                 }
@@ -9469,13 +9459,6 @@ where
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
-        if std::env::var("DBG_APPLY").is_ok() {
-            eprintln!(
-                "PLBUILD args={} values={:?}",
-                args.len(),
-                args.iter().map(|arg| arg.value).collect::<Vec<_>>()
-            );
-        }
         let native = &args[0];
         let a = &args[1];
         // The declared codomain rides as the third operand: the result's layout is
