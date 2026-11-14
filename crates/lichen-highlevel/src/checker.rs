@@ -206,6 +206,9 @@ where
     /// leaves: a parameter side may declare several, and they are one
     /// parameter expression, not several functions.
     current_parameters: Vec<Vec<ExprId>>,
+    /// Whether the checker is compiling a lambda's **parameter side**: a unify
+    /// there with a type expression (`'k = K`) is an annotation, not a value write.
+    parameter_side: bool,
     /// Placeholder callees for which constructor recovery succeeded.
     placeholder_constructors: std::collections::HashSet<ExprId>,
     /// The `@gc` expressions this build compiled.
@@ -695,6 +698,7 @@ where
             function_of: HashMap::new(),
             function_expr: HashMap::new(),
             current_parameters: Vec::new(),
+            parameter_side: false,
             placeholder_constructors: std::collections::HashSet::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],

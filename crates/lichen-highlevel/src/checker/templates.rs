@@ -366,13 +366,14 @@ where
             actual_term
         };
         // SPEC §Unify: `a = b` is `a <: b`. A formal unified with a **type** expression
-        // (`'k = K`) constrains the formal's type; its value stays the call's.
-        let universe = self.universe();
-        let expected_is_type = crate::shape::is_universe_any(
-            &mut self.module,
-            universe,
-            AnyNodeId::Dynamic(expected_ty),
-        );
+        // (`'k = K`) constrains the formal's type; its value stays the call's. The type
+        // expression is the one the IR compiles as a struct/type literal or a set/table
+        // type, and only a parameter side states it.
+        let expected_is_type = self.parameter_side
+            && matches!(
+                self.ir[expected].kind,
+                ExprKind::Struct { .. } | ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
+            );
         if direct
             && expected_is_type
             && let Some(expected_value) = self.module.expr_value_half(expected_term)
