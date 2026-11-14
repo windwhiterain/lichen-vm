@@ -194,3 +194,65 @@ the class is summarized at the root and §Clone (and the reworded "outermost mem
 reference it. The deleted requirement machinery answered this by *copying* the declared type
 per use; without it, the call-time path needs the formal's **value** to stay undecided so the
 clone is fresh and the argument fills it. `'x = Div` currently does not leave it undecided.
+
+## Review: the SPEC's Any removal and function-typed types
+
+### What the edit does
+
+- Deletes the `### Any` special-value semantics (the "always unify success / recurse into
+  arrays / only merge on the right side" rules) from the Subtype section.
+- Adds the sugar `a <: b` => `a = b _`, and switches every compound sugar (array element,
+  struct instance's destructuring, table key/value, set element) from `=` to `<:`.
+- Deletes the `## Subtype` section's `a = b` => `a <: b`.
+- Rewrites the Ideal API on **function-typed types**: `Div := _ -> {.dividend _: Int, …}`,
+  `div := 'x = Div _ -> …`, and nested `A := _ -> {…}; B := _ -> {.a A _, .'z: String}`.
+- Rewords §Clone to "the outer most scope among its class members", and adds "Clone more
+  nodes should make not change to the language behaviour" and "Cloned node lives in the
+  scope where the apply happens".
+
+### Inconsistencies inside the new text
+
+1. **`@any` survives in three places**: the `atom` line still lists `@any`; the `### Any`
+   section under Function still states the clone rule ("Clone an node with `Any` value
+   produce an undecide node with None value…") and the sugar `'x -> {…; @any = x;}`; and
+   §Function still says "auto unify `@any` to parameter in the end". If Any is gone, these
+   are the rule's own leftovers — the clone's `Any`→`None` conversion is what several
+   earlier readings depended on.
+2. **The reworded §Clone lost its else branch**: the sentence now ends at "must be clome;"
+   with no "otherwise reference it", so the reference case has no stated rule.
+3. Typos: "clome", "baviour", "fomulate", "instanciate".
+
+### Does the implementation accept the new forms? Measured
+
+- The new form 3 as written:
+
+  ```lichen
+  Div := _ -> {.dividend _: Int, .dividor _: Int}
+  div := 'x = Div _ -> x.dividend / x.dividor
+  div _{.dividend 6, .dividor 3}
+  ```
+
+  answers `error: the callee of an instantiation must be a struct type, found
+  TypeFunction` at `_{…}`: the implementation parses `_ -> {…}` as a **function type**, so
+  `Div _` is a `TypeFunction`, not a struct type.
+- The previous spelling (`Div := {.dividend @any: Int, …}`, `'x = Div`) parses but answers
+  `none` (the parameter image holds the declared type — the `DYN-PCHECK` measurement).
+- The implementation's own signature sugar from `ec52dc62` (`Par{.'n : Int, .'in}`, used by
+  `examples/sample.lichen`) is a **third spelling** that appears nowhere in the SPEC.
+
+### Questions the edit leaves open
+
+- **Is every type now a function?** `a <: b` = `a = b _` applies `b` to `_`; for a scalar
+  (`e <: Int`) that means `Int` is applied too. The SPEC does not say `Int`, `Float` and
+  `string` are functions (`_ -> Int`?), nor what `Div _` yields (`TypeFunction` per the
+  implementation).
+- **Form 1's `[_ -> _: Int, 3]` is ambiguous**: is the element type a function `_ -> _`
+  annotated `Int`, or a function over `_` returning `Int`? The old `[@any: Int, 3]` meant an
+  `Int` element.
+- **What replaces Any's guarantee?** The old section's "always unify success, never
+  decided" is what let a wildcard position stay open. `_` is an undecided *cell*, which
+  detaches on clone (§Clone) — but nothing in the new text states that a `_` **type**
+  position accepts any value.
+- **Nested instance syntax**: `B := _ -> {.a A _, .'z: String}` writes the field's value as
+  the application `A _`; the previous Nested draft wrote `{.a A}`. Both differ from the
+  implementation's `.'a`-prefixed field sugar.
