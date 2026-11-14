@@ -280,6 +280,20 @@ the wrapper body on the host side is the open question; the next probe is the ro
 `Dynamic(FunctionId(7))` identity and whether the native op is represented in the frozen module
 only.
 
+**Measured: the imported wrapper bindings are Functions, but the call's callee expr is an
+undecided field read.** The checker's `ExprKind::Static` (an imported export) materializes the
+frozen `[value, type]` expr; its first item for the compute module is a
+`LowValue::Function(Static(module 1, index N))` (measured: four used names bind
+`StaticFunctionId(1..4)`). Two resolution paths were added on the WIP branch
+(`spec/instance-v` `05fa1c42`): resolve the callee from the name's own value
+(`static_function_of_callee(value_of(function))`) and through a curated application's next stage
+(`static_function_return_function`, the frozen return expr's value). They make **30 module-1
+callees resolve inside the prelude**, but the program's five root `compute.plrun` calls still
+resolve to `None`: their callee expr's value half is a leaf with no value (an undecided field
+read of the imported binding), so neither `function_apply_function` nor
+`static_function_of_callee` finds the function. Resolving *that* field read is the next piece —
+and it is what makes the apply, and therefore the per-call clone, happen at run time.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
