@@ -576,9 +576,16 @@ template's `.native` cell: `blurred`'s `x.x` and `replicated`'s `edge.x`.
 
 The SPEC says `a = b` **is** `a <: b` — a check. `Checker::check_unify` uses
 `Module::try_unify`, which merges the two classes and only *then* reports an error; there is no
-non-committing subtype check in the lowlevel. That is the missing mechanism, and it is the same
-tension as every earlier round: the declared type is decided, so §Clone references it, so every
-use writes into it.
+non-committing subtype check in the lowlevel. That is **not** the mechanism -- the directive below withdraws the subtype reading; it is the same
+tension as every earlier round: the declared type is decided, so §Clone references it, so every use writes into it.
+
+**The maintainer's directive: `=` is unify; do not consider subtype.** *"不要管 subtype，你现在处理
+的东西 `=` 就是 unify."* So the collide is not to be answered by a non-committing check. The merge
+stays, and the only way the two instances stop meeting is that the **declared type is cloned per
+application** — the type is one of the function's expressions, which SPEC §Function clones at every
+application. The next step is therefore to give the parameter image's **type cell** its own clone
+per apply, so each call's merges write into its own type copy.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
