@@ -81,6 +81,19 @@ syntax: `'x = Div _` is an application, so the clone covers it by construction.
   are rebuilt, not loaded (no forward compatibility).
 - **M9 — SPEC typo:** form 5's `String` is the builtin `string`
   ([ideal-api-review](ideal-api-review.md) measured it unresolved).
+- **M10 — internal wildcard fills become origin-marked empty cells.** The
+  `loop_run.rs:222/256` attribute fills and the checker's shared default
+  (`checker.rs:1031`) are internal mechanisms, not source spellings; they retire
+  with the variant, not by a `_` rewrite (a `_` hole is open on both the
+  concreteness and closure axes, while these relied on Any being "decided
+  content"). The replacement keeps the distinction `indexing.rs:639-680` already
+  reads: an unstated attribute position is an **empty cell whose origin marks it
+  a wildcard fill**, so a computed hole (empty, no such origin) stays
+  distinguishable. This preserves the `indexing.rs:674` invariant's rule ("empty
+  alone is not wildcard") by moving the marker from value to origin — a
+  migration of the same rule, not a reword. The `evaluate_block` release test
+  (`evaluation.rs:1013`) and `class_answer_is_decided` (`function.rs:605`) must
+  be re-argued on emptiness, not silently re-keyed (recon §5 names the hazard).
 
 ## Work packages
 
