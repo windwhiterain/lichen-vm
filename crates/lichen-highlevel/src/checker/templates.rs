@@ -365,25 +365,20 @@ where
         } else {
             actual_term
         };
-        // SPEC §Unify: `a = b` is `a <: b`. A formal unified with a **type** expression
-        // (`'k = K`) constrains the formal's type; its value stays the call's. The type
-        // expression is the one the IR compiles as a struct/type literal or a set/table
-        // type, and only a parameter side states it.
+        // SPEC §Unify: `a = b` is `a <: b`. A parameter side's unify (`'k = K`) annotates
+        // the formal's **type** with the expression; the value stays the call's. Only a
+        // struct literal is read this way: a set/table type's value half is its table.
         let expected_is_type = self.parameter_side
-            && matches!(
-                self.ir[expected].kind,
-                ExprKind::Struct { .. } | ExprKind::TypeSet(_) | ExprKind::TypeTable(_)
-            );
-        if direct
-            && expected_is_type
-            && let Some(expected_value) = self.module.expr_value_half(expected_term)
-        {
-            self.check_unify(
-                actual_ty,
-                expected_value,
-                self.loc(actual, 0),
-                DiagKind::Annotation,
-            );
+            && matches!(self.ir[expected].kind, ExprKind::Struct { .. });
+        if direct && expected_is_type {
+            if let Some(expected_value) = self.module.expr_value_half(expected_term) {
+                self.check_unify(
+                    actual_ty,
+                    expected_value,
+                    self.loc(actual, 0),
+                    DiagKind::Annotation,
+                );
+            }
         } else {
             self.check_unify(
                 found,
