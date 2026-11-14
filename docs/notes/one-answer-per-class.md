@@ -217,6 +217,17 @@ The next piece is to make the body's statement nodes part of the clone: the read
 the body's field must clone the field's own operator when the template answer is open, not
 only its value.
 
+**Measured: the compute wrapper is not applied at run time at all.** The call `compute.plrun k a`
+resolves to a **frozen module** callee (`Static(StaticFunctionRef { module: ModuleKey(1), .. })`,
+seen in `check_app`), and its check-time signature apply runs; but the run-time
+`static_function_apply` trace contains only `ModuleKey(0)` applies -- **none for module 1** -- so
+the wrapper's body (and its native call) is never instantiated per call. The launch the dev
+branch sees is the wrapper body's single template op (built while the wrapper was checked),
+whose parameter cells the checker's copies fill per call; the strict version leaves them the
+template's cells. Per SPEC §Function the launch must be the *applied* body -- one clone per
+call -- which means the compute wrapper's run-time apply path has to work, or the launch has to
+move to the call site.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
