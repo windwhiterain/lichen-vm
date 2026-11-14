@@ -673,10 +673,25 @@ impl<P: Program> Module<P> {
                     unreachable!("External expects an operand node")
                 };
                 let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    if std::env::var("DBG_APPLY").is_ok() {
+                        eprintln!(
+                            "EXT-ENTRY op={node:?} operands={operands:?} library={library:?} instance={instance:?}"
+                        );
+                    }
                     return self.ran_undecided(node);
                 };
                 // An entry cannot report "undecided": an open element keeps it so.
                 if let Some(LowValue::Array(array)) = operand.as_enum() {
+                    if std::env::var("DBG_APPLY").is_ok() {
+                        for item in unsafe { array.items() } {
+                            eprintln!(
+                                "EXT op={node:?} item={:?} shallow={} value={:?}",
+                                item.node,
+                                item.shallow,
+                                self.evaluate_node(item.node, Some(block))
+                            );
+                        }
+                    }
                     // SAFETY: `array` is a live operand payload; the entry keeps it so.
                     let open = unsafe { array.items() }.iter().any(|item| {
                         !item.shallow && self.evaluate_node(item.node, Some(block)).is_none()

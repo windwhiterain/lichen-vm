@@ -1199,6 +1199,12 @@ where
         module: &mut Module<P>,
     ) -> Option<P::Value> {
         {
+            if std::env::var("DBG_APPLY").is_ok() {
+                eprintln!(
+                    "RD-ENTRY operator={self:?} operand={operand:?} node={:?}",
+                    module.current_operator_node()
+                );
+            }
             let Some(node) = operand else {
                 return self.run(P::Value::from(LowValue::Error), block, module);
             };
@@ -1208,6 +1214,14 @@ where
             // in this walk.
             for item in unsafe { module.array_items(node) }.unwrap_or_default() {
                 let element = module.element_value_node(item.node).unwrap_or(item.node);
+                if std::env::var("DBG_APPLY").is_ok() {
+                    eprintln!(
+                        "G3 op={:?} operand={node:?} item={:?} value={:?}",
+                        module.current_operator_node(),
+                        item.node,
+                        module.node_value(element)
+                    );
+                }
                 if module.node_value(element).is_none() {
                     return None;
                 }
