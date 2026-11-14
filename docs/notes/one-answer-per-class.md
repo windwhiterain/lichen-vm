@@ -196,7 +196,17 @@ kernel item of the launch's operand has no node value there, even though the par
 class the binding's node is not in, or the gate reads a node that is not the one the parallel
 wrote. A version that stopped spending the run stamp on an open-operand attempt (a SPEC
 §Operation reading) was built and measured: the launch still does not run — the gate, not the
-stamp, is the blocker. That is the next probe.
+stamp, is the blocker.
+
+**Measured on the launch operand itself (strict branch): the kernel item is `Any` and the
+cfg is empty.** The gate trace names the launch's own operand nodes: the kernel item
+(`NodeId(250v1)`) holds `LowValue(Any)` (a wildcard passes the gate), and the cfg item
+(`NodeId(2454v1)`) has **no node value and no class value**. So the plrun's operands are
+still template/cell nodes, not the applied call's arguments: the `a` parameter and
+`k.native` inside `plrun`'s body have not resolved to the argument's cells under the strict
+version. The former copy's evaluation is what resolved them. Per SPEC §Function the apply's
+clone is what must put the argument in the cloned parameter's cells; that is the piece still
+missing, and it is larger than everything tried so far.
 
 ## What the diagnostic is now
 
