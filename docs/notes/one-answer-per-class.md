@@ -77,22 +77,20 @@ has to split the declared field into its requirement and the instance's value ce
 representation — the next measurement is which slot a type-valued field's requirement belongs
 in.
 
-## Landed: the struct instance uses the module's clone
+## The apply clone is not an instance rule (reverted)
 
-`check_instantiate` now instantiates its template with `Module::clone_template` — the lowlevel
-walk that implements SPEC §Clone (§`Undecided`/`Any` included): an open cell becomes this
-use's, a decided one is referenced. The checker's own `instantiate_requirement_value` is no
-longer on this path.
+`check_instantiate` was moved to `Module::clone_template` to make an instance's cells fresh.
+It fixed `convolution2d.lichen` and kept every suite green (language **289** + 69, highlevel
+**136**, compute **283** / 1 ignored, lowlevel **167** / 1 ignored, compute-gpu **94**), but
+it is **not the SPEC's rule**: clone exists only at a function application, so an instance
+must not use it. The change is reverted; the checker's `instantiate_requirement_value` stands
+on that path until the strict construction lands.
 
-Measured: `convolution2d.lichen` checks and prints its declared values; language **289**
-(+69), highlevel **136**, compute **283** / 1 ignored, lowlevel **167** / 1 ignored,
-compute-gpu **94**.
-
-The array instance (`indexing.rs`) and the annotation requirement (`check_unify_expr`) still
-call the checker's `instantiate_requirement*`. Moving them measured two failures, so they
-stay until those are understood: the array instance's dependent length stopped being checked
-(`('n -> {A := [@any : Int, n]; A[1, 2, 3]}) 5` no longer fails), and the annotation path broke
-the compute package load (`expected raw[?a, ?b], found 0` at `compute = import "compute.lichen"`).
+The strict version (WIP branch `spec/instance-v`, `f48883c4`, not merged) removes the copies
+at the struct instance, the array instance and the annotation: `convolution2d.lichen` then
+**checks** (the collide is gone) but its result is `(raw none, raw none)`, because the kernel
+body's field reads resolve through the declared type template, whose open cells the copy used
+to fill with the argument.
 
 ## The SPEC's constructions are three, not one
 
