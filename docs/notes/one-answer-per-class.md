@@ -376,6 +376,15 @@ checker does not type a type expression (`K`) with the universe node, so the tes
 expected side the way `type_denotation`/`universe_is_any` does rather than comparing
 `expected_ty` to the universe class.
 
+**Measured: the IR kind is not enough; the expected value can be a Table.** The next WIP
+(`spec/instance-v` `d6cf7479`) adds a `parameter_side` flag around the lambda parameter check and
+treats `Struct`/`TypeSet`/`TypeTable` expected expressions there as type annotations
+(`check_unify(actual_ty, expected_value)`). It **breaks the prelude**: `cannot load package
+compute.lichen: expected Struct, found Table` -- a type expression's value half is not always
+the type value (a `TypeTable` yields a `Table`), so the type-vs-value distinction needs a
+semantic predicate, not the IR kind. The formal-annotation branch is the right shape but the
+detection is still the open question.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
