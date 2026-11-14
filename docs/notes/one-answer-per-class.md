@@ -527,6 +527,17 @@ a **single** `None` item. Neither carries the bound kernel/cfg, so `self.run` is
 why the cloned operand's items do not map to the parameter image's value (the argument), i.e. the
 clone walk's operand remap against the remapped parameter cells.
 
+**Measured: the build passes three arguments; the items are lost later.** A `PLBUILD` probe in
+`ParLaunchOp::build` prints once, with `args=3` and the values `[250, 2454, 262]` — the kernel
+value, the cfg and the codomain. The frozen launch op's operand, however, reads **two** items
+(`[250, 2454]`), and the per-call clones one `None` item. So the build is not where the operands
+shrink; the loss is after it — the frozen array's third item and the clones' remap. The next
+probe is the array a frozen op keeps versus the three nodes the checker built.
+
+**Session worktree.** The session now works in its own worktree,
+`.worktrees/strict-fix` (branch `strict-clean`); the main checkout stays on `dev` with the
+maintainer's uncommitted spec edit untouched.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
