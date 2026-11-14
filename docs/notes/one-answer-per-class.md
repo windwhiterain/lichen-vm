@@ -188,6 +188,16 @@ So the repair is about **when** the first attempt happens — an attempt with un
 must not spend the one run (`for effeciancy, one operation only run once`, SPEC §Operation) —
 not about the instance construction.
 
+**The gate that actually stops the launch is in `run_deferred`.** The compute operator's
+`run_deferred` evaluates the operand deep, then walks every operand item and returns `None`
+when `module.node_value(item)` is empty — before `run` is entered. On the strict branch the
+kernel item of the launch's operand has no node value there, even though the parallel's own
+`run` printed its gate and produced a `ParKernel`: so either the kernel's value lands in a
+class the binding's node is not in, or the gate reads a node that is not the one the parallel
+wrote. A version that stopped spending the run stamp on an open-operand attempt (a SPEC
+§Operation reading) was built and measured: the launch still does not run — the gate, not the
+stamp, is the blocker. That is the next probe.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
