@@ -178,12 +178,15 @@ read path: `expected Struct, found @any` at `k.in.x`, because the kernel's read 
 declaration keeps the type value, the instance's `v` keeps the buffer, and the read's value
 comes from the launch's cfg.
 
-**The launch's op is never even attempted.** On the strict branch, the `ParLaunch` op node is
-built (the checker's `build` prints its id), and the evaluator's stamp trace lists every
-operation it skipped after one attempt — the launch op is in **neither** list: it is never
-evaluated. So the statement's deep evaluation does not force the annotated launch expression
-at all; the launch is not lazy-after-a-failed-attempt, it is unreached. The next probe is the
-deep pass over the `blurred` statement's term (the annotated expr), not the launch's operand.
+**The launch's op is attempted once, before its operand is decided.** On the strict branch the
+`ParLaunch` op node is built (the checker prints its id) and the deep pass **does** reach it
+(`DEEP op` prints for it), but the launch's run never prints: the op's one attempt happened
+while an operand was still undecided, so `evaluate_node_operation` recorded "ran undecided"
+(the run stamp), and the deep pass now returns that empty answer instead of retrying. The
+former copy's side-effect evaluation used to decide the operand before that first attempt.
+So the repair is about **when** the first attempt happens — an attempt with undecided operands
+must not spend the one run (`for effeciancy, one operation only run once`, SPEC §Operation) —
+not about the instance construction.
 
 ## What the diagnostic is now
 
