@@ -448,6 +448,15 @@ argument can fill it and the body's `k.native` sees the kernel. The implementati
 decide clone-versus-reference by the class scope and do not detach the formal's clone from the
 merged class. That is the next lead.
 
+**Withdrawn: every "annotation/type attribute" reading above.** The maintainer's verdict is
+plain: *"`=` is unify; where did the type hallucination come from?"* There is **no** type-attribute
+interpretation of `'k = K`: it is a unify, and the formal's class merges with `K` per §Unify.
+The paragraphs above that reason about an "annotation landing on the type" are my invention and
+are withdrawn; the code they describe is reverted. The only reading to keep is the SPEC's own:
+`=` is unify, and the clone rule (§Clone: an undecided node's clone detaches from its original
+class) is what can let the call's argument reach the body. The next work is in the clone walks
+(`node_apply` / `static_node_apply`), not in any type/annotation handling in the checker.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
