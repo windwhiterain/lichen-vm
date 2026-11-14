@@ -440,6 +440,14 @@ instead, so the annotation's merge is already in the same class. My end-of-funct
 did not unlock it for that reason. Next: make `'k = K` annotate the type (the type-denotation
 representation) and keep the value `Any`; the clone's Any-to-None then lets the argument merge.
 
+The maintainer's next correction: *"`=` is unify, no type anything"* — the type-denotation attempt
+is reverted (`35cebbb5` is the WIP tip again). Re-reading SPEC §Clone for the missing rule:
+*"Clone an undecided node will detached from its original class"* (line 331). That is the rule
+that would let the formal's clone leave the class it shares with K: the clone is detached, so the
+argument can fill it and the body's `k.native` sees the kernel. The implementation's clone walks
+decide clone-versus-reference by the class scope and do not detach the formal's clone from the
+merged class. That is the next lead.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
