@@ -457,6 +457,18 @@ are withdrawn; the code they describe is reverted. The only reading to keep is t
 class) is what can let the call's argument reach the body. The next work is in the clone walks
 (`node_apply` / `static_node_apply`), not in any type/annotation handling in the checker.
 
+**Measured: the formal-value detach alone does not launch, and the WIP branch was mixed.** The
+static walk now treats the applied formal's value cell as per-call (`287a4835`), never a shared
+outer instance; `convolution2d` still prints `(raw none, raw none)`. The reason is structural: the
+wrapper's body reads the *outer* function's capture `k` (the curried `'k = K -> 'a = ...` form),
+so the inner apply's formal-value handling never reaches the node that must carry the kernel;
+the capture path (`static_clone_function`/`open_captures`) is the one that matters.
+
+Also recorded: the WIP branch had accumulated **mixed** uncommitted states (a partial deletion of
+`frozen_reads`/`parameter_annotations` that no longer compiled), so some earlier "green" readings
+were stale artifacts. A clean reconstruction now lives on branch `strict-clean` (base `8ca8493b`),
+verified with a clean build: `(raw none, raw none)`.
+
 ## What the diagnostic is now
 
 `write_node_answer` still writes the operator's answer into the node's class; a class that
