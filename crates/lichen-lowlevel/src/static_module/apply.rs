@@ -470,12 +470,6 @@ impl<P: Program> Module<P> {
         source: StaticFunctionId,
         rule: &mut FrozenClassRule,
     ) -> NodeId {
-        if matches!(
-            module.read(local).and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
-            return self.add_node(block, None, None);
-        }
         if let Some(&clone) = remap.get(&local) {
             return clone;
         }
@@ -562,14 +556,17 @@ impl<P: Program> Module<P> {
     /// static recursion runs through here.
     #[stacksafe]
     fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
-        let wildcard = matches!(
-            ctx.module.read(local).and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        );
-        if wildcard {
-            return self.add_node(ctx.target, None, None);
-        }
         let node = &ctx.module.nodes[local.index];
+        // A frozen wildcard fill is the template's open requirement: every call gets a fresh cell.
+        if node.wildcard_fill {
+            // One cell per template per apply: a diamond shares it, bounding the walk.
+            if let Some(&clone) = ctx.remap.get(&local) {
+                return clone;
+            }
+            let fresh = self.add_node(ctx.target, None, None);
+            ctx.remap.insert(local, fresh);
+            return fresh;
+        }
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
         let (undecided, _, evaluated_deep, template_operation, template_shape) = (
             node.undecided(),
@@ -755,13 +752,7 @@ impl<P: Program> Module<P> {
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
-                            || ctx.module.nodes[sref.index.index].undecided()
-                            || matches!(
-                                ctx.module
-                                    .read(sref.index)
-                                    .and_then(|value| value.as_enum()),
-                                Some(LowValue::Any)
-                            )) =>
+                            || ctx.module.nodes[sref.index.index].undecided()) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))

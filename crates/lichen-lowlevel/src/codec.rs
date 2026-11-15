@@ -251,8 +251,6 @@ impl ValueCodec for LowValue {
             // Tag 7 is additive, and tag 3 keeps meaning the `None` unit.
             // The variant was named `Void` then; the tag is unchanged.
             LowValue::Error => w.u8(7),
-            // Tag 9 is additive; 4 stays reserved for the deleted marker.
-            LowValue::Any => w.u8(9),
             LowValue::Str(s) => {
                 w.u8(5);
                 w.u32(s.len() as u32);
@@ -298,7 +296,13 @@ impl ValueCodec for LowValue {
             }
             3 => LowValue::None,
             7 => LowValue::Error,
-            9 => LowValue::Any,
+            // Tag 9 is **reserved**: it named the deleted `Any` wildcard; such an artifact is refused by name.
+            9 => {
+                return Err(
+                    "artifact carries lowlevel value tag 9, the deleted `Any` wildcard: \n                     it was written by a version that still had that value"
+                        .into(),
+                );
+            }
             // Tag 4 is **reserved**: it named the deleted `Parameterized`
             // marker. Such an artifact is refused by name.
             4 => {

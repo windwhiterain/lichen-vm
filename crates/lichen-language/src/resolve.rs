@@ -59,6 +59,7 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         formals: Vec::new(),
         formal_bases: Vec::new(),
         body_formals: Vec::new(),
+        hole_parameters: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
     // The program is one scope, never popped, so every later statement (and the
@@ -119,6 +120,13 @@ struct Resolver {
     /// A primed body reference names only its innermost lambda's parameter;
     /// capturing an enclosing lambda's formal uses the plain name instead.
     body_formals: Vec<HashMap<String, BinderId>>,
+    /// Whether each lambda body's parameter is a hole, innermost last.
+    ///
+    /// # Invariant
+    /// A hole-parameter lambda declares one unnamed undecided parameter (SPEC
+    /// §Function); a prime in its body is an open position, resolved to a
+    /// placeholder, never a formal reference.
+    hole_parameters: Vec<bool>,
 }
 
 /// A block-wide binding whose value is being resolved right now.
@@ -391,7 +399,9 @@ impl Resolver {
                 // the enclosing ones in the body.
                 let frame: HashMap<String, BinderId> = formals.into_iter().collect();
                 let declared = !frame.is_empty();
+                let hole_parameter = matches!(&**parameter, Expr::Placeholder(_));
                 self.body_formals.push(frame.clone());
+                self.hole_parameters.push(hole_parameter);
                 if declared {
                     self.scopes.push(frame);
                 }
@@ -402,6 +412,7 @@ impl Resolver {
                 self.formal_bases = bases;
                 self.lambda_depth -= 1;
                 self.body_formals.pop();
+                self.hole_parameters.pop();
                 if declared {
                     self.scopes.pop();
                 }
@@ -417,6 +428,12 @@ impl Resolver {
                         .copied()
                     {
                         *binder = Some(id);
+                        return;
+                    }
+                    // A hole-parameter function's body primes are open positions the instantiation fills.
+                    if self.hole_parameters.last().copied().unwrap_or(false) {
+                        let span = *span;
+                        *e = Expr::Placeholder(span);
                         return;
                     }
                     // A prime outside a parameter side must name a formal the

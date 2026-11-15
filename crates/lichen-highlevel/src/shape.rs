@@ -685,12 +685,7 @@ pub fn prepare_template_low_types<P: Program>(
             continue;
         };
         // The wildcard states nothing, so it has no shape to seed.
-        if matches!(
-            module
-                .node_value(AnyNodeId::Dynamic(value))
-                .and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
+        if module.is_wildcard_fill(AnyNodeId::Dynamic(value)) {
             continue;
         }
         seeds.push((value, shape));

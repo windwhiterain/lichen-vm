@@ -399,7 +399,9 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// The stamped node is **not** `node` when the walk crossed an origin, and it is what a
     /// reader de-duplicates on: an expanded recurrence lowers the same anchor once per copy,
-    /// and those are one mark on one expression rather than one mark per copy.
+    /// one mark on one expression rather than one per copy.
+    /// A **self-origin ends the walk**: it is the wildcard-fill marker (M10), not a clone
+    /// edge, so the cell has no template to inherit a mark from.
     pub fn marks_at(&self, node: NodeId) -> Option<(NodeId, &[String])> {
         let mut current = node;
         while self.nodes.contains_key(current) {
@@ -407,8 +409,8 @@ impl<P: Program> Module<P> {
                 return Some((current, payloads));
             }
             match self.nodes[current].origin {
-                Some(origin) => current = origin,
-                None => return None,
+                Some(origin) if origin != current => current = origin,
+                _ => return None,
             }
         }
         None
@@ -450,6 +452,75 @@ impl<P: Program> Module<P> {
     /// its own block, so use [`Self::nodes`]' `get` rather than assuming liveness.
     pub fn node_origin(&self, node: NodeId) -> Option<NodeId> {
         self.nodes[node].origin
+    }
+
+    /// Mark an empty node as a **wildcard fill**, its origin naming itself
+    /// (`docs/notes/any-removal-migration.md` M10).
+    ///
+    /// # Invariant
+    /// Only an empty node is marked; a decided value is never a wildcard fill.
+    /// The self-origin is the marker a clone's origin chain reaches.
+    pub fn mark_wildcard_fill(&mut self, node: NodeId) {
+        if self.nodes[node].value.is_none() {
+            self.nodes[node].origin = Some(node);
+        }
+    }
+
+    /// Whether a node is a wildcard fill or a clone of one: its origin chain
+    /// reaches a self-origin cell.
+    ///
+    /// # Invariant
+    /// Empty alone is not wildcard: an ordinary undecided or computed cell has no
+    /// self-origin in its chain, so it still checks the whole expression.
+    pub fn is_wildcard_fill(&self, node: AnyNodeId) -> bool {
+        let AnyNodeId::Dynamic(node) = node else {
+            return false;
+        };
+        let mut current = Some(node);
+        for _ in 0..8 {
+            let Some(n) = current else {
+                return false;
+            };
+            let Some(cell) = self.nodes.get(n) else {
+                return false;
+            };
+            if cell.value.is_some() {
+                return false;
+            }
+            if cell.origin == Some(n) {
+                return true;
+            }
+            current = cell.origin;
+        }
+        false
+    }
+
+    /// Whether a **frozen** position states **nothing**: the `wildcard_fill` flag a freeze
+    /// persisted.
+    ///
+    /// # Invariant
+    /// Only a static id answers. A dynamic fill, or a clone of one, is a per-apply open cell
+    /// the argument fills, so a read of it may still decide and is never this; a frozen cell
+    /// is immutable, so its read never will.
+    pub fn frozen_fill(&self, node: AnyNodeId) -> bool {
+        match node {
+            AnyNodeId::Dynamic(_) => false,
+            AnyNodeId::Static(sref) => {
+                self.static_module(sref.module).nodes[sref.index.index].wildcard_fill
+            }
+        }
+    }
+
+    /// Whether a node is the **template** wildcard fill itself: empty, its origin
+    /// naming itself.
+    ///
+    /// # Invariant
+    /// Only the self-origin template is a non-merging requirement; the per-call
+    /// clone is an ordinary open cell the argument decides.
+    pub fn is_wildcard_template(&self, node: NodeId) -> bool {
+        self.nodes
+            .get(node)
+            .is_some_and(|cell| cell.value.is_none() && cell.origin == Some(node))
     }
 
     /// The operation `node` computes, or [`None`] for a node carrying a value.

@@ -109,6 +109,7 @@ where
                 w.u8(deep.undecided as u8);
             }
         }
+        w.u8(node.wildcard_fill as u8);
         write_low_shape_opt(&mut w, &node.low_shape);
     }
     w.u64(module.functions.len() as u64);
@@ -512,6 +513,7 @@ where
             }),
             _ => return Err("bad evaluated_deep option tag".into()),
         };
+        let wildcard_fill = r.u8()? != 0;
         let low_shape = read_low_shape_opt(&mut r)?;
         nodes.push(StaticNode {
             value,
@@ -521,6 +523,7 @@ where
             owner,
             runned,
             evaluated_deep,
+            wildcard_fill,
         });
     }
 

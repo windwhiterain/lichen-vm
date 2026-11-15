@@ -195,17 +195,33 @@ impl<P: Program> Module<P> {
         self.nodes.get(self.class_root(node))?.scope_summary.clone()
     }
 
-    /// Whether every member of the class `node` belongs to is inside `scope`.
+    /// Whether the **outermost** scope among the class `node`'s members is `scope` or
+    /// inside it.
     ///
     /// # Invariant
-    /// The verdict is a fact of the **class**, not of the node: every member
-    /// of one class reads the same answer, so a clone never splits a class. A
-    /// class summarized to the root is inside no function's scope.
+    /// The verdict is a fact of the **class**, not of the node: every member of one class
+    /// reads the same answer, so a clone never splits a class. The outermost member's
+    /// place decides: a class with a member at the root is inside no function's scope,
+    /// and classes with no outermost member (incomparable places) are outside too.
     pub fn class_inside_scope(&self, node: NodeId, scope: &Arc<Scope<FunctionId>>) -> bool {
-        let Some(summary) = self.class_scope_summary(node) else {
-            return false; // the root scope is inside no function's scope
-        };
-        scope.is_ancestor_or_self(&summary)
+        let root = self.class_root(node);
+        let mut places: Vec<Arc<Scope<FunctionId>>> = Vec::new();
+        let mut member = Some(root);
+        while let Some(current) = member {
+            member = self.nodes[current].equality.next();
+            match self.owner_scope(current) {
+                // The root is the outermost place there is.
+                None => return false,
+                Some(place) => places.push(place),
+            }
+        }
+        // The outermost member's place: an ancestor-or-self of every other place.
+        let outer = places.iter().find(|candidate| {
+            places
+                .iter()
+                .all(|other| candidate.is_ancestor_or_self(other))
+        });
+        outer.is_some_and(|outer| scope.is_ancestor_or_self(outer))
     }
 
     /// Recompute the class's summary from its members; the one writer of it.

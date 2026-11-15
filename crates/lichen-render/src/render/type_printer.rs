@@ -69,6 +69,9 @@ where
         }
         // A value-less node is an undecided cell: it renders as its class name.
         let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) else {
+            if self.module.is_wildcard_fill(AnyNodeId::Dynamic(node)) {
+                return "@any".to_string();
+            }
             return self.class_name(node);
         };
         self.path.insert(node);
@@ -126,8 +129,6 @@ where
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(fid) => self.function_spelling(fid),
                 LowValue::None | LowValue::Error => "none".to_string(),
-                // The wildcard's own spelling, as the source writes it.
-                LowValue::Any => "@any".to_string(),
             };
         }
         self.type_constant(&value)
@@ -161,7 +162,6 @@ where
                 LowValue::Table(_) => Some("Table".to_string()),
                 LowValue::Function(fid) => Some(self.function_spelling(fid)),
                 LowValue::None | LowValue::Error => Some("none".to_string()),
-                LowValue::Any => Some("@any".to_string()),
             };
         }
         self.type_constant(&value)
@@ -463,14 +463,7 @@ where
         if self.module.node_value(value).is_none() {
             return None;
         }
-        match self
-            .module
-            .node_value(value)
-            .and_then(|value| value.as_enum())
-        {
-            Some(LowValue::Any) => None,
-            _ => Some(value),
-        }
+        Some(value)
     }
 
     /// An element slot's type position, when it has one.
@@ -507,7 +500,6 @@ where
             Some(LowValue::Str(s)) => format!("\"{s}\""),
             // An empty value is a concrete value, never a class letter.
             Some(LowValue::None | LowValue::Error) => "none".to_string(),
-            Some(LowValue::Any) => "@any".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
             // SAFETY: `array` is a static payload read through `sref`, whose

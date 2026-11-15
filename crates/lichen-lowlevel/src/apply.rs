@@ -302,9 +302,6 @@ impl<P: Program> Module<P> {
             else {
                 continue;
             };
-            if matches!(value, LowValue::Any) {
-                continue;
-            }
             if let Some((_, previous)) = decided {
                 if previous != value {
                     self.defer_current_operation(root);
@@ -401,14 +398,6 @@ impl<P: Program> Module<P> {
         if let Some(&(parameter, image)) = self.clone_parameters.get(&applied) {
             self.record_clone_parameter(node, parameter, image);
         }
-        // The wildcard is not an answer to hand on: an apply that produced it is
-        // undecided, exactly as a read of it is.
-        if matches!(
-            result.and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
-            return None;
-        }
         match result.and_then(|value| value.as_enum()) {
             // SAFETY: `array` is `result`'s live payload; this covers the `items()` call.
             Some(LowValue::Array(array)) if unsafe { array.items() }.len() >= 2 => {
@@ -461,8 +450,8 @@ pub(super) fn clone_is_a_plain_cell<P: Program>(module: &Module<P>, clone: NodeI
 ///
 /// # Invariant
 /// One level deep by design: a structure whose own elements are decided is a fact
-/// a clone may answer with, however open its interior is. `Any` is undecided for this
-/// run policy even though the deep concreteness verdict accepts it.
+/// a clone may answer with, however open its interior is. An open element is undecided
+/// for this run policy.
 pub(super) fn answer_elements_are_undecided<P: Program>(
     value: P::Value,
     mut slot_value: impl FnMut(AnyNodeId) -> Option<P::Value>,
@@ -471,9 +460,9 @@ pub(super) fn answer_elements_are_undecided<P: Program>(
         return false;
     };
     // SAFETY: `array` is `value`'s payload, which the caller keeps reachable.
-    unsafe { array.items() }.iter().any(|item| {
-        slot_value(item.node).is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
-    })
+    unsafe { array.items() }
+        .iter()
+        .any(|item| slot_value(item.node).is_none())
 }
 
 /// Group one apply pass's clones by template representative, sorted; the caller reads runs.

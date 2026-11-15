@@ -64,14 +64,20 @@ where
         Some(crate::diagnostic::AssertSpelling::Refined)
     }
 
-    /// The refinement's enforcement: `predicate value`, whose result the assert
+    /// The refinement's enforcement: `predicate expr`, whose result the assert
     /// channel requires to be `1`.
     ///
     /// # Invariant
-    /// The slot is the predicate expression's `[value, type]` expr, so element 0
-    /// is the predicate's own value node — no re-wrapping, and the apply's
-    /// subject is the very function the user wrote.
-    fn constraint(&self, ctx: &mut dyn Ctx<P>, value_expr: NodeId, slot: NodeId) -> Option<NodeId> {
+    /// The subject is the **whole expr** — the full `[value, type]` term — never its
+    /// value slot; the predicate reads the half it needs (M11). The slot is the
+    /// predicate expression's own `[value, type]` expr, so element 0 is the predicate's
+    /// value node and the apply's subject is the function the user wrote.
+    fn constraint(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        subject_expr: NodeId,
+        slot: NodeId,
+    ) -> Option<NodeId> {
         let expr = ctx.node_value(slot)?;
         let Some(LowValue::Array(items)) = expr.as_enum() else {
             return None;
@@ -86,7 +92,7 @@ where
             AnyNodeId::Static(_) => return None,
         };
         let result = ctx.fresh();
-        let operands = ctx.array_node(&[predicate, value_expr, result]);
+        let operands = ctx.array_node(&[predicate, subject_expr, result]);
         let apply = ctx.op_node(P::Operator::from(LowOperator::Apply), Some(operands));
         // An apply node **is** its `[value, type]` expr: the value is element
         // 0, the expr is neither `1` nor *lazy*.

@@ -166,11 +166,6 @@ impl<P: Program> Module<P> {
             self.evaluate_class_first(node);
         }
         if let Some(value) = self.nodes[node].value {
-            // The wildcard is undecided to every reader but the unifier, so it is
-            // never a computed answer to hand on.
-            if matches!(value.as_enum(), Some(LowValue::Any)) {
-                return None;
-            }
             // A recorded failure is decided and cached: never re-run the operation to repeat it.
             if matches!(value.as_enum(), Some(LowValue::Error)) {
                 return Some(value);
@@ -180,12 +175,7 @@ impl<P: Program> Module<P> {
             if self.has_no_result_yet(node) && !self.nodes[node].visiting {
                 let guard = self.retain_node(node);
                 guard.run(|module, node| module.evaluate_node_operation(node));
-                // The run can write the wildcard into a slot — the operator's class may
-                // hold it — and it answers no reader either.
-                return match self.nodes[node].value.and_then(|value| value.as_enum()) {
-                    Some(LowValue::Any) => None,
-                    _ => self.nodes[node].value,
-                };
+                return self.nodes[node].value;
             }
             return Some(value);
         }
@@ -268,15 +258,7 @@ impl<P: Program> Module<P> {
                                                     {
                                                         let rep =
                                                             self.equality_representative(node);
-                                                        // The wildcard answers no reader: a read of it
-                                                        // is undecided, never the value `Any`.
-                                                        match self
-                                                            .node_value(Dyn(rep))
-                                                            .and_then(|value| value.as_enum())
-                                                        {
-                                                            Some(LowValue::Any) => None,
-                                                            _ => self.node_value(Dyn(rep)),
-                                                        }
+                                                        self.node_value(Dyn(rep))
                                                     } else {
                                                         let value = self.evaluate_node(
                                                             Dyn(element),
@@ -828,6 +810,67 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether `node` is a lazy `Index` read that lands on a **frozen** fill
+    /// (`Module::frozen_fill`).
+    ///
+    /// # Invariant
+    /// The read is classified by the **position it reads**, never by its own answer: a stated
+    /// value's read is not this, however undecided its element is, and only a constant
+    /// subscript names a position the walk can find. A cloned element has no value of its own,
+    /// so the position is the template's, reached through the origin chain
+    /// (`docs/notes/any-removal-migration.md` M10).
+    fn reads_a_frozen_fill(&self, node: NodeId) -> bool {
+        let Some(operation) = self.nodes[node].operation else {
+            return false;
+        };
+        if !matches!(operation.operator.as_enum(), Some(LowOperator::Index)) {
+            return false;
+        }
+        let Some(operand) = operation.operand else {
+            return false;
+        };
+        let Some(LowValue::Array(operands)) =
+            self.node_value(Dyn(operand)).and_then(|v| v.as_enum())
+        else {
+            return false;
+        };
+        // SAFETY: `operands` is the payload of a live node's value; its block is not dropped.
+        let operands = unsafe { operands.items() };
+        let (Some(element), Some(subscript)) = (operands.first(), operands.get(1)) else {
+            return false;
+        };
+        let Some(subscript) = self
+            .node_value(subscript.node)
+            .and_then(|value| value.as_enum())
+            .and_then(|value| match value {
+                LowValue::USize(n) => Some(n),
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        let mut current = element.node.dynamic();
+        for _ in 0..8 {
+            let Some(candidate) = current else {
+                return false;
+            };
+            let Some(cell) = self.nodes.get(candidate) else {
+                return false;
+            };
+            if let Some(LowValue::Array(items)) = cell.value.and_then(|value| value.as_enum()) {
+                // SAFETY: `items` is the payload of a live node's value; its block is not
+                // dropped.
+                return unsafe { items.items() }
+                    .get(subscript)
+                    .is_some_and(|item| self.frozen_fill(item.node));
+            }
+            // A self-origin is the fill marker, not a clone edge: there is no template
+            // left to ask.
+            current = cell.origin.filter(|origin| *origin != candidate);
+        }
+        false
+    }
+
     /// The deep walk's core; `cache` is the walk's one-entry static-module resolution cache.
     #[stacksafe]
     fn evaluate_node_deep_inner(
@@ -878,16 +921,14 @@ impl<P: Program> Module<P> {
             self.deep_depth -= 1;
             return Some(P::Value::from(LowValue::Error));
         }
-        let value = match self.nodes[node].value {
-            // A wildcard is decided content for the verdict: it must never make
-            // a structure unprovable.
-            Some(value) if matches!(value.as_enum(), Some(LowValue::Any)) => {
-                self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided: false });
-                self.deep_depth -= 1;
-                return Some(value);
-            }
-            _ => self.evaluate_node(Dyn(node), current),
-        };
+        // A wildcard fill is decided content for the verdict: it never makes a structure
+        // unprovable (M10).
+        if self.is_wildcard_template(node) {
+            self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided: false });
+            self.deep_depth -= 1;
+            return None;
+        }
+        let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.and_then(|value| value.as_enum()) {
             // The descent may reach `node` again through the array's own items, so mark it for the
             // duration.
@@ -963,6 +1004,20 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether an array position is one the deep verdict does not read.
+    ///
+    /// # Invariant
+    /// Two positions state nothing: the array's template slot, which is layout, and a
+    /// **read of a frozen position that states nothing**. Every other position is read, so a
+    /// stated value's read still makes its structure wait and a lane-varying index still
+    /// decides its own answer.
+    fn position_states_nothing(&self, template: bool, node: AnyNodeId) -> bool {
+        template
+            || node
+                .dynamic()
+                .is_some_and(|read| self.reads_a_frozen_fill(read))
+    }
+
     /// Whether `value` is undecided: `None`, or an array or table with a shallow or undecided
     /// position.
     ///
@@ -973,9 +1028,10 @@ impl<P: Program> Module<P> {
     /// [`Self::ref_is_undecided`].
     ///
     /// # Invariant
-    /// An array's **template** position holds the layout, not content, so its verdict is
-    /// not read: the element template of an array instance is `@any` more often than
-    /// not, and that must not leave the instance's own elements undecided.
+    /// An array's **template** position holds the layout, not content, so its verdict is not
+    /// read: an instance's element template is a hole more often than not, and that must not
+    /// leave the instance's own elements undecided. So is a **read of a frozen position that
+    /// states nothing**: nothing ever fills a frozen cell, so the read never decides.
     fn value_is_undecided(
         &self,
         cache: &mut StaticModuleCache<P>,
@@ -994,7 +1050,12 @@ impl<P: Program> Module<P> {
                 if unsafe { array.items() }.iter().any(|item| item.shallow)
                     || unsafe { array.items() }
                         .iter()
-                        .any(|item| !item.template && self.ref_is_undecided(cache, item.node))
+                        // Neither the template slot nor a read of a frozen fill is content
+                        // this verdict reads.
+                        .any(|item| {
+                            !self.position_states_nothing(item.template, item.node)
+                                && self.ref_is_undecided(cache, item.node)
+                        })
         ) || matches!(
             view,
             Some(LowValue::Table(table))
@@ -1021,9 +1082,7 @@ impl<P: Program> Module<P> {
         let block = self.nodes[root].block;
         self.blocks[block].scope_root = None;
         let value = self.evaluate_node(Dyn(root), None);
-        let decided = self.nodes[root]
-            .value
-            .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)));
+        let decided = self.nodes[root].value.is_some();
         if !decided {
             self.blocks[block].scope_root = Some(root);
             return value;

@@ -487,7 +487,6 @@ pub fn describe_low_value(value: &LowValue) -> String {
         LowValue::Function(_) => "a function".to_string(),
         LowValue::None => "the empty value".to_string(),
         LowValue::Error => "the value of a read that failed".to_string(),
-        LowValue::Any => "a value this run has not decided".to_string(),
     }
 }
 

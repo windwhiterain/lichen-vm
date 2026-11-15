@@ -1028,7 +1028,8 @@ where
         // The kind markers, one shared node each, in registry order.
         for_each_kind_marker!(define_install_markers[self, root]);
         // Default positions share this wildcard; source literals and function sugar are fresh.
-        self.any_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::Any)));
+        self.any_value = self.alloc_node(root, None, None);
+        self.module.mark_wildcard_fill(self.any_value);
         // `K = [Type, K]`: point its type slot at itself; the lowlevel deep
         // pass cuts the self-loop it reaches.
         let universe = self.alloc_node(root, None, None);
@@ -1135,11 +1136,9 @@ where
 
     /// A fresh wildcard value node for one source or default position.
     pub(super) fn any(&mut self) -> NodeId {
-        self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Any)),
-        )
+        let cell = self.alloc_node(self.current_block, None, None);
+        self.module.mark_wildcard_fill(cell);
+        cell
     }
 
     /// A constant `USize` node — a subscript or table key a rule states rather
@@ -1440,11 +1439,7 @@ where
         P::Attr::ORDER.iter().find_map(|&marker| {
             let node =
                 self.slot_attribute(AnyNodeId::Dynamic(slot), marker.order_index() as u32)?;
-            let stated = self
-                .module
-                .node_value(node)
-                .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
-                .is_none_or(|value| value != LowValue::Any);
+            let stated = !self.module.is_wildcard_fill(node);
             if !stated {
                 return None;
             }
@@ -1968,13 +1963,8 @@ where
             .filter_map(|(offset, canonical)| {
                 // The wildcard states nothing: it is the hole an expr carries for an
                 // attribute no one named.
-                let wildcard = items
-                    .get(EXPR_ATTR_BASE + offset)?
-                    .node
-                    .dynamic()
-                    .and_then(|node| self.module.node_value(AnyNodeId::Dynamic(node)))
-                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value));
-                if matches!(wildcard, Some(LowValue::Any)) {
+                let attr_node = items.get(EXPR_ATTR_BASE + offset)?.node;
+                if self.module.is_wildcard_fill(attr_node) {
                     return None;
                 }
                 let value = items.get(EXPR_ATTR_BASE + offset)?.node.dynamic()?;
@@ -2025,6 +2015,9 @@ where
 
     fn fresh(&mut self) -> NodeId {
         Checker::fresh_cell(self)
+    }
+    fn wildcard_fill(&mut self) -> NodeId {
+        self.any()
     }
 
     fn universe(&self) -> NodeId {

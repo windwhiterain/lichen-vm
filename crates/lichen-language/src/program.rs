@@ -703,7 +703,8 @@ mod sort_op_tests {
         let mut module = Module::<LangProgram>::new();
         let block: BlockId = module.add_block(None);
         let layout = module.register_attribute_layout(&[0, 1]);
-        let any = module.add_node(block, None, Some(LangValue::from(LowValue::Any)));
+        let any = module.add_node(block, None, None);
+        module.mark_wildcard_fill(any);
         let int_type = module.add_node(block, None, Some(LangValue::from(TypeValue::TypeInt)));
         let defaults = [any, any, any, any].map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)));
         let defaults = module.alloc_array(&defaults, block);

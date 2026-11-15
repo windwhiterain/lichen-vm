@@ -811,6 +811,30 @@ where
         }
     }
 
+    /// One field of a direct template's instance: a fresh value cell, type and attributes shared.
+    ///
+    /// # Invariant
+    /// A decided value half is a requirement and is kept as it is (SPEC §Struct's `v`).
+    fn fresh_instance_field(&mut self, field: NodeId) -> NodeId {
+        let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(field)) else {
+            return field;
+        };
+        let Some(value_node) = items.first().map(|item| item.node) else {
+            return field;
+        };
+        if !self.module.is_wildcard_fill(value_node) {
+            return field;
+        }
+        let block = self.current_block;
+        let fresh_value = self.fresh_cell();
+        let mut new_items = vec![fresh_value];
+        for item in items.iter().skip(1) {
+            new_items.push(self.module.as_dynamic(item.node, block));
+        }
+        let layout = self.full_width_layout();
+        self.array_node_with_layout(block, &new_items, layout)
+    }
+
     /// A struct instance `S{…}`: apply the constructor to `_`, then fill its fields.
     ///
     /// # Invariant
@@ -834,7 +858,7 @@ where
             self.check_expr(placeholder);
         }
         self.check_expr(value);
-        let (template_value, template_ty) = if constructor {
+        let (mut template_value, mut template_ty) = if constructor {
             (self.value_of(template), self.state[template].ty.unwrap())
         } else {
             match placeholder {
@@ -850,6 +874,44 @@ where
         };
         self.module.evaluate_node_deep(template_value, None);
         self.module.evaluate_node_deep(template_ty, None);
+        let mut applied_template = false;
+        // A function template is applied to a fresh hole before the gate; each use builds its own field cells.
+        if self.is_function_type(template_ty) {
+            applied_template = true;
+            let block = self.current_block;
+            let hole_value = self.fresh_cell();
+            let hole_type = self.fresh_cell();
+            let argument = self.slot_expr(block, hole_value, hole_type);
+            let result = self.fresh_cell();
+            let callee_expr = self.expr_of(template_value, template_ty);
+            let operands = self.array_node(block, &[template_value, argument, result, callee_expr]);
+            let apply = self.op_node(block, P::Operator::from(LowOperator::Apply), Some(operands));
+            self.module.apply_result_owners.insert(apply, apply);
+            self.module.evaluate_node_deep(apply, None);
+            // The apply answers the body's expr: the instance's template is
+            // the expr's value half, its layout the type half.
+            match (
+                shape::value_item(
+                    &self.module,
+                    AnyNodeId::Dynamic(apply),
+                    shape::EXPR_VALUE_SLOT,
+                ),
+                shape::value_item(
+                    &self.module,
+                    AnyNodeId::Dynamic(apply),
+                    shape::EXPR_TYPE_SLOT,
+                ),
+            ) {
+                (Some(value), Some(ty)) => {
+                    template_value = self.module.as_dynamic(value, self.current_block);
+                    template_ty = self.module.as_dynamic(ty, self.current_block);
+                }
+                _ => {
+                    template_value = apply;
+                    template_ty = result;
+                }
+            }
+        }
         if !self.type_is_concrete(template_ty) {
             // The check is determined here, not at the apply: refuse the undetermined.
             self.record_guard(
@@ -928,6 +990,15 @@ where
             .iter()
             .map(|item| self.module.as_dynamic(item.node, self.current_block))
             .collect();
+        // A direct template's fields are shared: the instance builds fresh value cells so one use never decides another.
+        let fields: Vec<NodeId> = if applied_template {
+            fields
+        } else {
+            fields
+                .iter()
+                .map(|&field| self.fresh_instance_field(field))
+                .collect()
+        };
         let table = self.struct_name_table(template_value);
         let (ordered, valid) = self.reorder_arguments(
             e,

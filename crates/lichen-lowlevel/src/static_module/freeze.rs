@@ -156,6 +156,7 @@ impl<P: Program> StaticModule<P> {
                 // is the stamp's zero test.
                 runned: node.runned,
                 evaluated_deep: node.evaluated_deep,
+                wildcard_fill: node.value.is_none() && node.origin == Some(id),
             });
         }
         let mut functions: Vec<StaticFunction> = Vec::with_capacity(function_ids.len());

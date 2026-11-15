@@ -381,27 +381,23 @@ impl<P: Program> Module<P> {
         self.write_node_value(node, value);
     }
 
-    /// Empty a slot that holds the **wildcard**, so a later unify may write it.
+    /// Clear a lone **wildcard fill**'s marker, so a later statement may decide it.
     ///
     /// # Invariant
-    /// Only a lone wildcard (`Any`) is cleared: it says the position never decides,
-    /// so emptying it is the one way a statement may give it a value. A shared one
-    /// is the default attribute array's, and clearing it empties every hole.
+    /// Only a lone wildcard fill is cleared: it says the position never decides,
+    /// so removing its marker is the one way a statement may give it a value. A
+    /// shared one is the default attribute array's, and clearing it clears every
+    /// hole that shares it.
     ///
     /// Answers whether the slot was cleared.
     pub fn clear_wildcard(&mut self, node: NodeId) -> bool {
         let alone = self.nodes[node].equality.parent().is_none()
             && self.nodes[node].equality.next().is_none();
-        let wildcard = matches!(
-            self.nodes[node]
-                .value
-                .and_then(|value| AsEnum::<LowValue>::as_enum(&value)),
-            Some(LowValue::Any)
-        );
+        let wildcard = self.nodes[node].value.is_none() && self.nodes[node].origin == Some(node);
         if !alone || !wildcard {
             return false;
         }
-        self.set_node_value(node, None);
+        self.nodes[node].origin = None;
         true
     }
 
@@ -480,7 +476,6 @@ impl<P: Program> Module<P> {
             match held {
                 None => return true,
                 Some(held) => match held.as_enum() {
-                    Some(LowValue::Any) => return true,
                     Some(LowValue::Array(_)) => {
                         if self.value_holds_open_cell(held, depth + 1) {
                             return true;
@@ -1119,11 +1114,12 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether a function's signature carries `Any` in its parameter value or return type.
+    /// Whether a function's signature is open in its parameter value or return type.
     ///
     /// # Invariant
-    /// `Any` recurses only into arrays: signature comparison stops before parameter/return
-    /// recursion. Constructor binding still runs, and Apply specializes with the actual argument.
+    /// An open signature cell is undecided: signature comparison stops before
+    /// parameter/return recursion. Constructor binding still runs, and Apply
+    /// specializes with the actual argument.
     fn function_has_wildcard(&self, function: AnyFunctionId) -> bool {
         let Some((parameter, return_type)) = self.function_cells(function) else {
             return false;
@@ -1133,12 +1129,7 @@ impl<P: Program> Module<P> {
         parameter_value
             .into_iter()
             .chain(std::iter::once(return_type))
-            .any(|node| {
-                matches!(
-                    self.node_value(node).and_then(|value| value.as_enum()),
-                    Some(LowValue::Any)
-                )
-            })
+            .any(|node| self.node_value(node).is_none())
     }
 
     /// Recursive core of [`Self::unify`]; `path` guards class exprs, `depth` the node-less ones.
@@ -1161,17 +1152,10 @@ impl<P: Program> Module<P> {
         let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
-        // Directional wildcard: only a left `Any` may join an undecided right class.
-        if is_wildcard(va) || is_wildcard(vb) {
-            if is_wildcard(va) && vb.is_none() {
-                match (a.node, b.node) {
-                    (Some(ra), Some(rb)) => {
-                        self.add_equality(ra, rb);
-                    }
-                    (None, Some(node)) => self.write_node_value(node, va),
-                    _ => {}
-                }
-            }
+        // A shared template wildcard is a non-merging requirement; a per-call clone is an open cell.
+        if a.node.is_some_and(|n| self.is_wildcard_template(n))
+            || b.node.is_some_and(|n| self.is_wildcard_template(n))
+        {
             return true;
         }
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
@@ -1238,15 +1222,13 @@ impl<P: Program> Module<P> {
                 true
             }
             // One side knows a value: the merged class holds it; there is nothing to descend into.
-            (Some(x), None) => {
+            (Some(_), None) => {
                 self.add_equality(ra, rb);
                 true
             }
-            // An `Any` on the right never decides an undecided left: `_ = @any` is `_`.
-            (None, Some(y)) => {
-                if !matches!(AsEnum::<LowValue>::as_enum(&y), Some(LowValue::Any)) {
-                    self.add_equality(ra, rb);
-                }
+            // A decided right decides an undecided left: the merge is the write.
+            (None, Some(_)) => {
+                self.add_equality(ra, rb);
                 true
             }
             // Both sides know a value: they must be the same; for an array the elements decide it.
@@ -1385,14 +1367,8 @@ impl<P: Program> Module<P> {
     /// live for the clone walk; a failure is not reported here, because the reader's own
     /// reconcile owns that conflict.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
-        // A wildcard target answers no reader, so there is no class to join.
-        let wildcard = self.nodes[target]
-            .value
-            .or_else(|| self.nodes[target].value);
-        if matches!(
-            wildcard.and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
+        // The shared template wildcard answers no reader; a per-call clone is the call's own cell.
+        if self.is_wildcard_template(target) {
             return;
         }
         let (_, errors) = self.try_unify(reader, target);
@@ -1443,11 +1419,6 @@ fn pick(left: Option<LowShape>, right: Option<LowShape>) -> Option<LowShape> {
         (Some(shape), None) | (None, Some(shape)) => Some(shape),
         (None, None) => None,
     }
-}
-
-/// Whether a side's class holds the wildcard `Any`.
-fn is_wildcard<V: AsEnum<LowValue>>(value: Option<V>) -> bool {
-    matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any))
 }
 
 /// The low type a concrete value's tag states, never reading the payload.

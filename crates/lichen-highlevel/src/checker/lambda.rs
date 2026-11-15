@@ -136,8 +136,7 @@ where
                 && self.module.functions[function].asserts.is_empty()
                 && self.module.class_value(cell).is_none()
             {
-                self.module
-                    .write_node_value(cell, Some(P::Value::from(LowValue::Any)));
+                self.module.mark_wildcard_fill(cell);
             }
         }
         self.current_parameters.pop();

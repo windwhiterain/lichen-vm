@@ -170,6 +170,8 @@ pub trait Ctx<P: Program> {
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
     /// A fresh undecided type cell.
     fn fresh(&mut self) -> NodeId;
+    /// A fresh wildcard fill: an undecided value cell marked as an unstated position (M10).
+    fn wildcard_fill(&mut self) -> NodeId;
     /// The canonical universe node `[Type, ↺]`, referenced rather than
     /// rebuilt: cloning it breaks unification.
     fn universe(&self) -> NodeId;
@@ -437,7 +439,7 @@ where
     P: Program,
 {
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
-        let value = ctx.value_node(P::Value::from(LowValue::Any));
+        let value = ctx.wildcard_fill();
         let ty = ctx.fresh();
         let expr = ctx.expr(value, ty);
         LiteralBuild { expr, value, ty }
@@ -1512,7 +1514,8 @@ pub(crate) fn placeholder_expr<P: Program>(
 where
     P::Value: ValueType,
 {
-    let any = module.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+    let any = module.add_node(block, None, None);
+    module.mark_wildcard_fill(any);
     let value = module.add_node(block, None, None);
     let ty = module.add_node(block, None, None);
     let mut items = vec![

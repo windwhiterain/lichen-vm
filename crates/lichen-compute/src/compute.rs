@@ -1510,7 +1510,7 @@ where
                         let mut value = node
                             .and_then(|node| module.node_value(node))
                             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
-                        if value.is_none_or(|value| matches!(value, LowValue::Any))
+                        if value.is_none()
                             && let Some(resolved) = node
                                 .and_then(|node| node.dynamic())
                                 .and_then(|node| module.parameter_projection(cfg_node, node, block))
@@ -4104,7 +4104,7 @@ where
     P::Value: AsEnum<LowValue>,
 {
     let value = module.node_value(node)?;
-    (!matches!(value.as_enum(), Some(LowValue::Any))).then_some(value)
+    Some(value)
 }
 
 /// The payload a `Buf` value carries — its `.native` slot.
@@ -4579,11 +4579,8 @@ where
         module.add_node(block, None, None),
     )));
     for _ in 0..attributes {
-        let any = module.add_node(
-            block,
-            None,
-            Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
-        );
+        let any = module.add_node(block, None, None);
+        module.mark_wildcard_fill(any);
         items.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
     }
     let handle = module.alloc_array(&items, block);
@@ -4620,11 +4617,8 @@ where
     let mut items = vec![ArrayItem::new(AnyNodeId::Dynamic(value))];
     items.push(ArrayItem::new(ty));
     for _ in 0..attributes {
-        let any = module.add_node(
-            block,
-            None,
-            Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
-        );
+        let any = module.add_node(block, None, None);
+        module.mark_wildcard_fill(any);
         items.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
     }
     let handle = module.alloc_array(&items, block);
@@ -6613,9 +6607,7 @@ where
     P::Value: AsEnum<LowValue>,
 {
     for _ in 0..8 {
-        let open = module
-            .node_value(node)
-            .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+        let open = module.node_value(node).is_none();
         if !open {
             break;
         }
@@ -6797,15 +6789,9 @@ where
     P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let buffer_open = module
-        .node_value(buffer)
-        .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+    let buffer_open = module.node_value(buffer).is_none();
     let payload_open = |module: &Module<P>, payload: Option<AnyNodeId>| {
-        payload.is_none_or(|payload| {
-            module
-                .node_value(payload)
-                .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
-        })
+        payload.is_none_or(|payload| module.node_value(payload).is_none())
     };
     let mut payload = buf_payload::<P>(module, buffer);
     // No payload: a per-use copy reaches the caller-supplied buffer by its edge.
@@ -6834,9 +6820,7 @@ where
     }
     let mut payload = payload?;
     for _ in 0..8 {
-        let open = module
-            .node_value(payload)
-            .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)));
+        let open = module.node_value(payload).is_none();
         if !open {
             return Some(payload);
         }
@@ -7493,19 +7477,18 @@ where
         // `k`-th argument.
         None => {
             let layout = module.full_width_layout().unwrap_or(0);
-            let wildcard = <P::Value as From<LowValue>>::from(LowValue::Any);
             let cells: Vec<ArrayItem> = (0..arity)
                 .map(|slot| {
                     let value =
                         <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
                     let value = module.add_node(block, None, Some(value));
-                    let r#type = module.add_node(block, None, Some(wildcard));
+                    let r#type = module.add_node(block, None, None);
+                    module.mark_wildcard_fill(r#type);
+                    let attr = module.add_node(block, None, None);
+                    module.mark_wildcard_fill(attr);
                     let items: Vec<ArrayItem> = std::iter::once(value)
                         .chain(std::iter::once(r#type))
-                        .chain(std::iter::repeat_n(
-                            module.add_node(block, None, Some(wildcard)),
-                            lichen_lowlevel::EXPR_ATTR_BASE,
-                        ))
+                        .chain(std::iter::repeat_n(attr, lichen_lowlevel::EXPR_ATTR_BASE))
                         .map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)))
                         .collect();
                     let handle = module.alloc_array(&items, block);
@@ -8141,17 +8124,15 @@ where
     } else {
         // **Every compound element is a complete slot**
         // (`docs/notes/compound-element-slots.md`).
-        let width = <P::Value as From<LowValue>>::from(LowValue::Any);
         let items: Vec<ArrayItem> = produced
             .iter()
             .map(|result| {
                 let (value, r#type) = result_node(module, result)?;
+                let attr = module.add_node(block, None, None);
+                module.mark_wildcard_fill(attr);
                 let slot: Vec<ArrayItem> = std::iter::once(value)
                     .chain(std::iter::once(r#type))
-                    .chain(std::iter::repeat_n(
-                        module.add_node(block, None, Some(width)),
-                        lichen_lowlevel::EXPR_ATTR_BASE,
-                    ))
+                    .chain(std::iter::repeat_n(attr, lichen_lowlevel::EXPR_ATTR_BASE))
                     .map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)))
                     .collect();
                 let handle = module.alloc_array(&slot, block);

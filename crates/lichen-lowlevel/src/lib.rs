@@ -83,14 +83,6 @@ pub enum LowValue {
     /// re-runs. It is not the [`Self::None`] unit value. Consumers **propagate** it
     /// rather than re-reporting the failure.
     Error,
-    /// **The wildcard**: it unifies with any value and constrains nothing.
-    ///
-    /// # Invariant
-    /// Unification is directional: a left `Any` joins an undecided right class; every other
-    /// wildcard comparison succeeds without merging or writing. Readers treat `Any` as
-    /// **undecided**; only the concreteness verdict takes it as decided, so a written type
-    /// remains reusable while an apply clone replaces `Any` with an open instance cell.
-    Any,
 }
 
 /// Value identity as the lowlevel decides it: field-wise like the derive, except a float.
@@ -110,7 +102,6 @@ impl PartialEq for LowValue {
             (LowValue::Function(a), LowValue::Function(b)) => a == b,
             (LowValue::None, LowValue::None) => true,
             (LowValue::Error, LowValue::Error) => true,
-            (LowValue::Any, LowValue::Any) => true,
             _ => false,
         }
     }
@@ -1033,6 +1024,8 @@ pub struct StaticNode<P: Program> {
     pub runned: bool,
     /// The source node's deep-pass verdict. See [`Node::evaluated_deep`].
     pub evaluated_deep: Option<EvaluatedDeep>,
+    /// Whether the source node was a wildcard fill, persisted so frozen open positions survive (M10).
+    pub wildcard_fill: bool,
 }
 
 impl<P: Program> StaticNode<P> {

@@ -1,10 +1,10 @@
 Num := set(set{Type})(Int, Float)
-in_num := 't -> t @in Num
-add := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) + operands(1) }
-sub := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) - operands(1) }
-mul := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) * operands(1) }
-div := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) / operands(1) }
-less := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) < operands(1) }
-greater := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) > operands(1) }
-less_or_equal := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) <= operands(1) }
-greater_or_equal := 'operands -> { let Pair := (@any ! in_num, @any ! in_num); operands = Pair; operands(0) >= operands(1) }
+in_num := 't -> { c := _; t : c; c @in Num }
+add := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) + operands(1) }
+sub := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) - operands(1) }
+mul := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) * operands(1) }
+div := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) / operands(1) }
+less := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) < operands(1) }
+greater := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) > operands(1) }
+less_or_equal := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) <= operands(1) }
+greater_or_equal := 'operands -> { let Pair := (_ ! in_num, _ ! in_num); operands = Pair; operands(0) >= operands(1) }

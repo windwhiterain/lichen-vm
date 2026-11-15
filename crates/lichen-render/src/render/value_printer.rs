@@ -99,10 +99,7 @@ where
         let Some(type_value) = self.module.node_value(ty) else {
             // An unknown type does not erase a decided value's own spelling; only an open
             // value is named by its class.
-            if matches!(
-                value.as_enum(),
-                Some(LowValue::Any | LowValue::None | LowValue::Error)
-            ) {
+            if matches!(value.as_enum(), Some(LowValue::None | LowValue::Error)) {
                 return match ty {
                     AnyNodeId::Dynamic(node) => self.printer.class_name(node),
                     AnyNodeId::Static(sref) => self.printer.static_class_name(sref),
@@ -271,9 +268,6 @@ where
     /// structural value typed by the universe is no type constant at all, and
     /// falls back to the raw layout.
     fn atomic(&mut self, value: P::Value) -> String {
-        if matches!(value.as_enum(), Some(LowValue::Any)) {
-            return "@any".to_string();
-        }
         match self.printer.type_constant(&value) {
             Some(spelling) => spelling,
             None if value.as_enum().is_some() => self.raw(value),
@@ -557,11 +551,15 @@ where
         if recurs {
             self.tpath.insert(ty);
         }
-        let value = self
-            .module
-            .node_value(id)
-            .unwrap_or_else(|| P::Value::from(LowValue::None));
-        let out = self.value_any(value, ty);
+        let out = if self.module.is_wildcard_fill(id) {
+            "@any".to_string()
+        } else {
+            let value = self
+                .module
+                .node_value(id)
+                .unwrap_or_else(|| P::Value::from(LowValue::None));
+            self.value_any(value, ty)
+        };
         if recurs {
             self.tpath.remove(ty);
         }
@@ -633,7 +631,6 @@ where
             Some(LowValue::Function(fid)) => Some(self.printer.function_spelling(fid)),
             Some(LowValue::Table(_)) => Some("Table".to_string()),
             Some(LowValue::None) | Some(LowValue::Error) => Some("none".to_string()),
-            Some(LowValue::Any) => Some("@any".to_string()),
             Some(LowValue::Array(_)) => None,
             None => Some(
                 self.printer

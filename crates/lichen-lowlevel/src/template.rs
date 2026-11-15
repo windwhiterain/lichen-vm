@@ -195,7 +195,7 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     /// A cell is **open** when its own content is not closed: it holds no value, it
-    /// holds the wildcard, it has an operator, or its content reaches an open cell.
+    /// has an operator, or its content reaches an open cell.
     /// A closed cell may be shared; an open one is cloned, so the instance's own
     /// cells are fresh where the template's are open. A **trace edge** — a cell a
     /// plugin value keeps alive — decides closure, but is not cloned.
@@ -234,7 +234,7 @@ impl<P: Program> Module<P> {
     /// Whether a cell's own content is **closed**.
     ///
     /// # Invariant
-    /// A closed cell holds a decided value that is not the wildcard, it has
+    /// A closed cell holds a decided value, it has
     /// no operator, and every cell its content reaches is closed too. A cycle
     /// among decided cells is closed: the reach runs over decided content
     /// only, so a cycle is a fact about the content, not a hole. A **marked**
@@ -282,19 +282,15 @@ impl<P: Program> Module<P> {
         children
     }
 
-    /// Whether a cell is open by its own account: it holds nothing, it holds the
-    /// wildcard, or it has an operator.
+    /// Whether a cell is open by its own account: it holds nothing or it has an
+    /// operator.
     fn template_cell_is_open(&self, node: NodeId) -> bool {
         let cell = &self.nodes[node];
         if cell.operation.is_some() {
             return true;
         }
-        let Some(value) = cell.value else {
-            return true;
-        };
-        // A value that is not structural is decided all the same; only the
-        // wildcard is decided and never carried.
-        matches!(value.as_enum(), Some(LowValue::Any))
+        // A present value is decided; only an empty cell or an operator is open.
+        cell.value.is_none()
     }
 
     /// The references a cell's own value names: an array's elements, a table's
@@ -360,7 +356,7 @@ impl<P: Program> Module<P> {
                 stack.push(child);
             }
         }
-        // The open frozen cells: no value, the wildcard, or an operator that re-runs.
+        // The open frozen cells: no value or an operator that re-runs.
         let mut open: HashSet<StaticNodeId> = HashSet::new();
         for &cell in &seen {
             if self.template_static_cell_is_open(cell) {
@@ -396,10 +392,7 @@ impl<P: Program> Module<P> {
         if cell.operation.is_some() {
             return true;
         }
-        let Some(value) = cell.value else {
-            return true;
-        };
-        matches!(value.as_enum(), Some(LowValue::Any))
+        cell.value.is_none()
     }
 
     /// The frozen cells a frozen cell's own value names.
@@ -534,15 +527,14 @@ impl<P: Program> Module<P> {
                 .operand
                 .map(|operand| self.template_clone(operand, ctx)),
         });
-        // The wildcard is decided but never carried: the instance's own cell replaces
-        // it, so the caller's value can fill it.
-        let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
+        // An open cell is never carried: the instance's own cell replaces it, so
+        // the caller's value can fill it.
         let carried = match &operation {
-            None => !wildcard,
+            None => true,
             Some(_) => {
                 // A computed answer travels only when the deep pass ran on it: a
                 // fact of the template, not of the last call.
-                self.nodes[source].evaluated_deep.is_some() && !wildcard
+                self.nodes[source].evaluated_deep.is_some()
             }
         };
         let mapped = if carried {
@@ -743,10 +735,9 @@ impl<P: Program> Module<P> {
             }),
         });
         let value = self.node_value(AnyNodeId::Static(sref));
-        let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
         let carried = match operation {
-            None => !wildcard,
-            Some(_) => evaluated_deep.is_some() && !wildcard,
+            None => true,
+            Some(_) => evaluated_deep.is_some(),
         };
         let mapped = if carried {
             value.map(|value| self.template_map_value(value, clone, ctx, true))

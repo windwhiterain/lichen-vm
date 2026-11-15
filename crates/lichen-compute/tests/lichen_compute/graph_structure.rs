@@ -212,7 +212,13 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
     // The operand array is [kernel, cfg, codomain], readable without evaluating
     // it — which keeps a build from dispatching.
     let operation = module.node_operation(dispatch).expect("a dispatch node");
-    let operands = items(&module, operation.operand.expect("operands"));
+    // A frozen open cell is a static ref (M1/M10): the items are read as refs.
+    let operands: Vec<AnyNodeId> =
+        unsafe { module.array_items(operation.operand.expect("operands")) }
+            .expect("an operand array")
+            .iter()
+            .map(|item| item.node)
+            .collect();
     assert_eq!(operands.len(), 3, "[kernel, cfg, codomain]");
 
     // A value-level read into the cfg gets **nowhere**: the slot is an
@@ -220,9 +226,12 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
 
     // `ParLaunch`'s `run` sees values there only because the VM
     // evaluated them; borrowing that step would run the dispatch.
+    let cfg = operands[1]
+        .dynamic()
+        .expect("the cfg is a live node of this build");
     assert!(
-        module.node_value(AnyNodeId::Dynamic(operands[1])).is_none()
-            || unsafe { module.array_items(operands[1]) }.is_none(),
+        module.node_value(AnyNodeId::Dynamic(cfg)).is_none()
+            || unsafe { module.array_items(cfg) }.is_none(),
         "the cfg slot is a node rather than a read array, so the count and the buffers \
          have to be reached through its operation instead of its payload"
     );

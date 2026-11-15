@@ -636,43 +636,15 @@ where
         .and_then(|node| node.dynamic())
     }
 
-    /// Whether a slot is `Any` or an empty clone whose origin reaches `Any`.
+    /// Whether a slot is a wildcard fill or an empty clone of one.
     fn wildcard_slot(&self, slot: AnyNodeId) -> bool {
-        if matches!(
-            self.module
-                .node_value(slot)
-                .and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
-            return true;
-        }
-        if self.module.node_value(slot).is_some() {
-            return false;
-        }
-        let mut current = slot
-            .dynamic()
-            .and_then(|node| self.module.node_origin(node));
-        for _ in 0..8 {
-            let Some(node) = current else {
-                return false;
-            };
-            if matches!(
-                self.module
-                    .node_value(AnyNodeId::Dynamic(node))
-                    .and_then(|value| value.as_enum()),
-                Some(LowValue::Any)
-            ) {
-                return true;
-            }
-            current = self.module.node_origin(node);
-        }
-        false
+        self.module.is_wildcard_fill(slot)
     }
 
     /// Whether an element requirement is a wildcard, including an empty clone of one.
     ///
     /// # Invariant
-    /// Empty alone is not wildcard: the node's origin must reach `Any`, so an ordinary
+    /// Empty alone is not wildcard: the node's origin must reach a wildcard fill, so an ordinary
     /// undecided or computed pin still checks the whole expression.
     fn wildcard_requirement(&self, requirement: NodeId) -> bool {
         let Some(slot) = shape::value_item(&self.module, AnyNodeId::Dynamic(requirement), 0) else {
@@ -681,8 +653,48 @@ where
         self.wildcard_slot(slot)
     }
 
+    /// A function element template is applied per element, so each element checks against its own instance.
+    fn applied_element_requirement(&mut self, requirement: NodeId) -> NodeId {
+        let Some(value_slot) = shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(requirement),
+            shape::EXPR_VALUE_SLOT,
+        ) else {
+            return requirement;
+        };
+        let value_slot = self.module.as_dynamic(value_slot, self.current_block);
+        self.module.evaluate_node_deep(value_slot, None);
+        let is_function = self
+            .module
+            .node_value(AnyNodeId::Dynamic(value_slot))
+            .and_then(|value| value.as_enum())
+            .is_some_and(|value| matches!(value, LowValue::Function(_)));
+        if !is_function {
+            return requirement;
+        }
+        let block = self.current_block;
+        let hole_value = self.fresh_cell();
+        let hole_type = self.fresh_cell();
+        let argument = self.slot_expr(block, hole_value, hole_type);
+        let result = self.fresh_cell();
+        let ty_slot = shape::value_item(
+            &self.module,
+            AnyNodeId::Dynamic(requirement),
+            shape::EXPR_TYPE_SLOT,
+        )
+        .map(|node| self.module.as_dynamic(node, block))
+        .unwrap_or_else(|| self.fresh_cell());
+        let callee_expr = self.expr_of(value_slot, ty_slot);
+        let operands = self.array_node(block, &[value_slot, argument, result, callee_expr]);
+        let apply = self.op_node(block, P::Operator::from(LowOperator::Apply), Some(operands));
+        self.module.apply_result_owners.insert(apply, apply);
+        self.module.evaluate_node_deep(apply, None);
+        apply
+    }
+
     /// Check one array element without merging a wildcard's expression root.
     fn check_array_element(&mut self, el: ExprId, element: NodeId, requirement: NodeId) {
+        let requirement = self.applied_element_requirement(requirement);
         let wildcard = self.wildcard_requirement(requirement);
         if !wildcard {
             self.check_unify(

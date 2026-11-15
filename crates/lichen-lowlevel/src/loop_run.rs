@@ -219,7 +219,8 @@ impl<P: Program> Module<P> {
         };
         let mut items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
         for _ in 0..attributes {
-            let any = self.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+            let any = self.add_node(block, None, None);
+            self.mark_wildcard_fill(any);
             items.push(ArrayItem::new(Dyn(any)));
         }
         match self.slot_layout() {
@@ -253,7 +254,8 @@ impl<P: Program> Module<P> {
             let mut slot = vec![ArrayItem::new(Dyn(value))];
             slot.push(ArrayItem::new(Dyn(self.add_node(block, None, None))));
             for _ in 0..attributes {
-                let any = self.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+                let any = self.add_node(block, None, None);
+                self.mark_wildcard_fill(any);
                 slot.push(ArrayItem::new(Dyn(any)));
             }
             let array = self.alloc_array(&slot, block);

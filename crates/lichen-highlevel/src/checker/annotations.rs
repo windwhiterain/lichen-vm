@@ -237,25 +237,15 @@ where
     /// uncarried position.
     fn stated_slot(&self, node: NodeId, canonical: u32) -> Option<NodeId> {
         let slot = self.carried_slot(node, canonical)?;
-        let value = self
-            .module
-            .node_value(AnyNodeId::Dynamic(slot))
-            .and_then(|value| {
-                lichen_utils::extend::AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value)
-            });
-        (!matches!(value, Some(lichen_lowlevel::LowValue::Any))).then_some(slot)
+        (!self.module.is_wildcard_fill(AnyNodeId::Dynamic(slot))).then_some(slot)
     }
 
     /// The slot `node` holds a **wildcard** at, or `None` when it states one.
     fn carried_wildcard(&self, node: NodeId, canonical: u32) -> Option<NodeId> {
         let slot = self.carried_slot(node, canonical)?;
-        let value = self
-            .module
-            .node_value(AnyNodeId::Dynamic(slot))
-            .and_then(|value| {
-                lichen_utils::extend::AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value)
-            });
-        matches!(value, Some(lichen_lowlevel::LowValue::Any)).then_some(slot)
+        self.module
+            .is_wildcard_fill(AnyNodeId::Dynamic(slot))
+            .then_some(slot)
     }
 
     /// Let the value a statement names take the attributes the statement's
@@ -263,7 +253,7 @@ where
     ///
     /// # Invariant
     /// Only a **wildcard** position is cleared: a slot the value already states is
-    /// its own. `Any` unifies with everything and merges with nothing, so a
+    /// its own. A wildcard fill states nothing, so a
     /// wildcard left in place says the position never decides, and a call site
     /// reads the argument instead of the callee's claim.
     pub(super) fn adopt_stated_attributes(&mut self, actual: NodeId, expected: NodeId) {

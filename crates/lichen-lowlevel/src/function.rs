@@ -319,15 +319,13 @@ impl<P: Program> Module<P> {
         self.record_applied_expr(node, applied);
         let parameter = instantiation.node_of(self.functions[function].parameter);
         self.applied_parameters.insert(node, parameter);
-        // A cloned `Any` codomain reads the template requirement without running the body.
+        // A cloned wildcard codomain reads the template requirement without running the body.
         let mut codomain = self.expr_type_item(applied);
         if codomain.is_none() {
             let template = self
                 .node_origin(applied)
                 .and_then(|origin| self.expr_type_item(origin));
-            if template.is_some_and(|node| {
-                self.node_value(node).and_then(|value| value.as_enum()) == Some(LowValue::Any)
-            }) {
+            if template.is_some_and(|node| self.is_wildcard_fill(node)) {
                 codomain = template;
             }
         }
@@ -443,12 +441,7 @@ impl<P: Program> Module<P> {
         if !self.nodes.contains_key(return_type) {
             return false;
         }
-        let open = |node| {
-            self.nodes[node].operation.is_none()
-                && self
-                    .class_value(node)
-                    .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
-        };
+        let open = |node| self.nodes[node].operation.is_none() && self.class_value(node).is_none();
         open(return_value)
             && open(return_type)
             && self.class_root(return_value) != self.class_root(parameter_value)
@@ -603,11 +596,10 @@ impl<P: Program> Module<P> {
     /// Whether a class has an answer that can suppress replay.
     ///
     /// # Invariant
-    /// `Any` is not an answer: it stays open and triggers replay only when an open instance
-    /// cell still needs the call's value; a fully bound instance creates no replay.
+    /// An open cell is not an answer: it stays open and triggers replay only when an open
+    /// instance cell still needs the call's value; a fully bound instance creates no replay.
     fn class_answer_is_decided(&self, node: NodeId) -> bool {
-        self.class_value(node)
-            .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)))
+        self.class_value(node).is_some()
     }
 
     /// Link a clone's open cells to a replay of the apply that made them.
@@ -836,6 +828,10 @@ impl<P: Program> Module<P> {
             if !self.nodes.contains_key(origin) {
                 break;
             }
+            // A wildcard fill names itself: it is its own template root.
+            if origin == root {
+                break;
+            }
             root = origin;
             hops += 1;
             if hops > 64 {
@@ -864,8 +860,8 @@ impl<P: Program> Module<P> {
                 source.origin,
             )
         };
-        let wildcard = matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any));
-        if wildcard {
+        // A wildcard fill is the template's open requirement: every call gets a fresh cell to fill.
+        if self.is_wildcard_fill(AnyNodeId::Dynamic(node)) {
             let fresh = self.add_node(ctx.target, None, None);
             self.nodes[fresh].origin = Some(node);
             return fresh;
@@ -896,7 +892,6 @@ impl<P: Program> Module<P> {
         let depends_on_parameter = ctx.in_parameter
             || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
-            || wildcard
             // SPEC §Clone: a decided node without the deep pass is cloned.
             || !proven_concrete
             || scoped
@@ -913,7 +908,7 @@ impl<P: Program> Module<P> {
                 || self.functions[ctx.anchor].nodes.contains(&node));
         // SPEC §Clone: a proven unowned node is canonical; an undecided one detaches.
         let canonical = proven_concrete && self.nodes[node].function.is_none();
-        if (!class_inside || canonical) && !replay_operation && !wildcard {
+        if (!class_inside || canonical) && !replay_operation {
             return node; // reference as-is
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.

@@ -334,9 +334,7 @@ impl<P: Program> Module<P> {
                 let wildcard = module
                     .nodes
                     .get(member.index)
-                    .and_then(|member| member.value.as_ref())
-                    .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(value))
-                    .is_some_and(|value| matches!(value, crate::LowValue::Any));
+                    .is_some_and(|member| member.value.is_none() && member.operation.is_none());
                 if !wildcard {
                     pending.push((member, position));
                 }
@@ -499,9 +497,7 @@ pub(crate) fn static_wildcard_constructor<P: Program>(
     let open = |node| match node {
         AnyNodeId::Static(sref) if sref.module == module.key => {
             let node = &module.nodes[sref.index.index];
-            node.value
-                .is_none_or(|value| matches!(value.as_enum(), Some(LowValue::Any)))
-                && node.operation.is_none()
+            node.value.is_none() && node.operation.is_none()
         }
         _ => false,
     };

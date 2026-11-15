@@ -34,7 +34,7 @@ Test-binary build adds (`test_build.log`): `lichen-compute` (test "lichen_comput
 
 ### Per-binary results, verbatim (cargo test --workspace --no-fail-fast -- --test-threads=8)
 
-```
+\`\`\`
 | ﻿Running tests\analyze.rs (target\debug\deps\analyze-8de466cae66cf7db.exe)  ||  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
 | Running unittests src\main.rs (target\debug\deps\lichen_compiler-0dffc077dd5019aa.exe)  ||  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
 | Running tests\pack_install.rs (target\debug\deps\pack_install-eb3677834bfc10e4.exe)  ||  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
@@ -97,9 +97,9 @@ Test-binary build adds (`test_build.log`): `lichen-compute` (test "lichen_comput
 | Doc-tests lichen_testkit  ||  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
 | Doc-tests lichen_tools  ||  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
 | Doc-tests lichen_utils  ||  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out |
-```
+\`\`\`
 
-Only six binaries are red at baseline: `tests\lichen_compute.rs` (135/148/1 ignored), `tests\compute_gpu.rs` (90/4), `tests\language.rs` (278/11), `tests\language_server.rs` (21/1), `tests\serve.rs` (10/1), `tests\tools.rs` (2/2). Everything else passes, including `tests\highlevel.rs` 136, `tests\basic\main.rs` (lowlevel) 167 with 1 ignored, language lib 69, parser lib 62, lex lib 22.
+Only six binaries are red at baseline: \`tests\lichen_compute.rs\` (135/148/1 ignored), \`tests\compute_gpu.rs\` (90/4), \`tests\language.rs\` (278/11), \`tests\language_server.rs\` (21/1), \`tests\serve.rs\` (10/1), \`tests\tools.rs\` (2/2). Everything else passes, including \`tests\highlevel.rs\` 136, \`tests\basic (lowlevel)\` 167 with 1 ignored, language lib 69, parser lib 62.
 
 ### Full failing test names per red binary
 

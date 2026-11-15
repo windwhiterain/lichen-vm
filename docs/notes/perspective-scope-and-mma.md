@@ -208,6 +208,11 @@ scope reading stays parked with the kernel-type merge, and no operator needs it.
   are whole-program level statements; the first needs no line from the package at all.
   Measured: removing `read`'s line alone leaves the lane-varying-index refusal red; with
   the combine reading it is green (`crates/lichen-compute/tests/lichen_compute/perspective_requirements.rs`).
+  The combine reads **values**, so the check lives or dies on the meet being computed at
+  all: after the Any removal the slot read through a frozen module constant's unstated
+  attribute position kept the whole meet undecided, and the demand merged silently on both
+  a uniform and a lane-varying index. The repair is the deep verdict's rule, not this
+  layer's ([any-removal-migration](any-removal-migration.md), rework 6).
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is

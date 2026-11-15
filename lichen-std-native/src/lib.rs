@@ -92,7 +92,6 @@ where
                 match value.as_enum() {
                     Some(LowValue::USize(n)) => values.push(n),
                     Some(LowValue::Error) => return Some(P::Value::from(LowValue::Error)),
-                    Some(LowValue::Any) => return None,
                     _ => {
                         module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                             "std.sort",
@@ -128,11 +127,8 @@ where
                     element_type.unwrap_or_else(|| module.add_node(block, None, None)),
                 )));
                 for _ in indices.iter() {
-                    let any = module.add_node(
-                        block,
-                        None,
-                        Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
-                    );
+                    let any = module.add_node(block, None, None);
+                    module.mark_wildcard_fill(any);
                     slot.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
                 }
                 let handle = module.alloc_array(&slot, block);

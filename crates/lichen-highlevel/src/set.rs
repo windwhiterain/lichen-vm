@@ -19,9 +19,10 @@ where
     // plain array is its own members.
     let members: &[lichen_lowlevel::ArrayItem] = if items.first().is_some_and(|item| item.template)
     {
-        let raw = items.get(1)?.node.dynamic()?;
-        // SAFETY: the raw set is a live node of the same module.
-        unsafe { array_items(module, AnyNodeId::Dynamic(raw)) }?
+        // The raw set may be a frozen ref: read it via `array_items`, never `.dynamic()`.
+        let raw = items.get(1)?.node;
+        // SAFETY: the raw set is reachable from `value`'s payload, alive for the read.
+        unsafe { array_items(module, raw) }?
     } else {
         items
     };

@@ -177,7 +177,7 @@ where
                             Some(AnyNodeId::Dynamic(node)) => {
                                 let value = module.node_value(AnyNodeId::Dynamic(node));
                                 if item.template && value.is_none() {
-                                    P::Value::from(LowValue::Any)
+                                    P::Value::from(LowValue::None)
                                 } else {
                                     value.expect("an element slot has a value")
                                 }
@@ -186,7 +186,7 @@ where
                             Some(node @ AnyNodeId::Static(_)) => {
                                 let value = module.node_value(node);
                                 if item.template && value.is_none() {
-                                    P::Value::from(LowValue::Any)
+                                    P::Value::from(LowValue::None)
                                 } else {
                                     value.expect("a frozen element slot has a value")
                                 }
