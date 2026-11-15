@@ -811,25 +811,34 @@ where
         }
     }
 
-    /// One field of a direct template's instance: a fresh value cell, type and attributes shared.
+    /// One field of a direct template's instance.
     ///
     /// # Invariant
-    /// A decided value half is a requirement and is kept as it is (SPEC §Struct's `v`).
+    /// A decided half is a requirement kept as it is; an undecided cell — the value half or
+    /// the type half alike — is this use's own fresh cell, so one instance never decides
+    /// another (SPEC §Struct's `v := @raw[name_table, nominal_id, @raw None, …]`).
     fn fresh_instance_field(&mut self, field: NodeId) -> NodeId {
         let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(field)) else {
             return field;
         };
-        let Some(value_node) = items.first().map(|item| item.node) else {
-            return field;
-        };
-        if !self.module.is_wildcard_fill(value_node) {
+        if items.is_empty() {
             return field;
         }
         let block = self.current_block;
-        let fresh_value = self.fresh_cell();
-        let mut new_items = vec![fresh_value];
-        for item in items.iter().skip(1) {
-            new_items.push(self.module.as_dynamic(item.node, block));
+        let mut new_items = Vec::with_capacity(items.len());
+        let mut freshened = false;
+        for (position, item) in items.iter().enumerate() {
+            let cell = self.module.as_dynamic(item.node, block);
+            // The first two positions are the field's value and type; the rest are attributes.
+            if position < shape::EXPR_ATTR_BASE && self.module.class_value(cell).is_none() {
+                new_items.push(self.fresh_cell());
+                freshened = true;
+            } else {
+                new_items.push(cell);
+            }
+        }
+        if !freshened {
+            return field;
         }
         let layout = self.full_width_layout();
         self.array_node_with_layout(block, &new_items, layout)
