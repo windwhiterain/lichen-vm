@@ -723,8 +723,11 @@ impl<P: Program> Module<P> {
     }
 
     /// An operation that **ran** but could not decide: the slot stays empty, the run stamp is set.
+    /// # Invariant
+    /// An attempt with undecided operands is **not** a run: the operation stays unresolved, so
+    /// its node is not decided and a clone may be made of it (`docs/language-spec.md` Undecided).
     fn ran_undecided(&mut self, node: NodeId) -> Option<P::Value> {
-        self.stamp_node_ran(node);
+        let _ = node;
         None
     }
 
@@ -893,6 +896,22 @@ impl<P: Program> Module<P> {
         false
     }
 
+    /// Whether any member of a node's class has an unresolved operation.
+    ///
+    /// # Invariant
+    /// The verdict is a fact of the class: one unresolved member keeps every member undecided,
+    /// so the clone walk clones the node instead of referencing it (`docs/language-spec.md` Clone).
+    fn class_has_unresolved_operation(&self, node: NodeId) -> bool {
+        let mut member = Some(node);
+        while let Some(current) = member {
+            if self.has_no_result_yet(current) {
+                return true;
+            }
+            member = self.nodes[current].meta().next();
+        }
+        false
+    }
+
     /// The deep walk's core; `cache` is the walk's one-entry static-module resolution cache.
     #[stacksafe]
     fn evaluate_node_deep_inner(
@@ -997,8 +1016,12 @@ impl<P: Program> Module<P> {
             }
             _ => false,
         };
-        // An array is undecided while a position is undecided or sits behind a shallow mark.
-        let undecided = operand_undecided || self.value_is_undecided(cache, value);
+        // Decided: value decided, operation resolved, and the verdict is the class's.
+        let class_unresolved = self.class_has_unresolved_operation(node);
+        let undecided = operand_undecided
+            || self.has_no_result_yet(node)
+            || class_unresolved
+            || self.value_is_undecided(cache, value);
         self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided });
         // The real verdict supersedes the cycle-cut assumption.
         self.nodes[node].assumed_concrete = false;

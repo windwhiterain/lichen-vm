@@ -258,6 +258,8 @@ Subtype via post unify error suppression.
 
 Undecide is a state of lowlevel node that has no value.
 
+A node is **decided** only when both its value is decided **and** its operation is resolved. An attempt that runs while an operand is undecided produces no answer and is therefore not a run: the operation stays unresolved, so a node holding a requirement written by unify is not decided, and the clone walk clones it rather than referencing it.
+
 Placeholder `_` is an undecided expression that its attribute array node is undecided.
 
 ```sytax
@@ -303,6 +305,8 @@ Clone an undecided node will detached from its original class for let-polymorphs
 Cloned node lives in the scope where the apply happens.
 
 Auto create a side apply for inner function apply, the original apply's body unify a side apply's body, the side apply will not be able to evaluate util the next time be cloned by the outer function's apply, so that if the outer function applying clone made the innner applying function specialized, the specialized side apply's body can unify the unspecialized oringinal apply's body.
+
+The deep-decided verdict recurses not only into the value's structure but into **all the node's class members**: a node is deep-decided only when every member's value is decided and every member's operation is resolved, so one unresolved member keeps the whole class not-deep-decided and Clone's "clone into a decided node" test fails for it.
 
 A clone clears the evaluated flag of the operations it copies, so a cloned operation is evaluated again — exactly as a side apply is re-evaluated when the outer function's apply clones it. Its operands may be decided at the clone that were open at the original, and an operation whose one attempt was spent while they were open would otherwise answer from a stale run. The original keeps its own run; only clones are re-opened.
 
