@@ -282,10 +282,7 @@ where
             "this value is not a function — it cannot be applied".to_string()
         }
         DiagKind::RuntimeNamedFieldTarget => {
-            let found = d
-                .value_a
-                .and_then(|value| printer.diagnostic_value(value))
-                .unwrap_or_else(|| "a value".to_string());
+            let found = d.field.as_deref().unwrap_or("a value");
             format!("expected Struct, found {found}")
         }
         DiagKind::ImportExport => {

@@ -467,7 +467,7 @@ impl<P: Program> Module<P> {
             EvalError::IndexTarget { target } => self.ref_is_live(*target),
             EvalError::IndexSubscript { subscript } => self.ref_is_live(*subscript),
             EvalError::ApplyTarget { function } => self.ref_is_live(*function),
-            EvalError::TableTarget { target } => self.ref_is_live(*target),
+            EvalError::TableTarget { target, .. } => self.ref_is_live(*target),
         });
         failures
             .2

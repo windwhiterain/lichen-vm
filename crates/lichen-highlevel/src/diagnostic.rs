@@ -513,7 +513,7 @@ where
                 EvalError::ApplyTarget { function } => {
                     (5, None, None, None, self.node_loc(*function))
                 }
-                EvalError::TableTarget { target } => (8, Some(*target), None, None, None),
+                EvalError::TableTarget { target, .. } => (8, Some(*target), None, None, None),
             };
             if seen.contains(&key) {
                 continue;
@@ -598,10 +598,10 @@ where
                 )),
                 // A `.name` read on a value that is no struct: the value itself
                 // is the fact, so the report names its kind.
-                EvalError::TableTarget { target } => {
+                EvalError::TableTarget { target, found } => {
                     let mut diag =
                         Diag::factual(DiagKind::RuntimeNamedFieldTarget, self.node_loc(*target));
-                    diag.value_a = self.module.node_value(*target);
+                    diag.field = Some((*found).to_string());
                     out.push(diag);
                 }
             }

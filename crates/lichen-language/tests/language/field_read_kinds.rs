@@ -173,15 +173,14 @@ fn a_named_read_of_an_array_is_refused() {
 
 // --- the deferred `.a`: no read until the container's type is decided ------
 
-/// A deferred container is refused at the read itself, so nothing is evaluated
-/// behind it.
+/// A deferred container is refused where the call decides it: §Function keeps the
+/// read live, and §Struct's `s.value.name_table` needs a struct, so the refusal
+/// names the kind the read found. Nothing is evaluated behind it.
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
-    assert_eq!(
-        undecided_read("f := 'x -> x.a\nA := [@any, 2]\nf A[10, 20]", "field read",),
-        Some((1, 6)),
-        "the caret is the container, not the read"
-    );
+    let (message, kind) = refused("f := 'x -> x.a\nA := [@any, 2]\nf A[10, 20]");
+    assert_eq!(kind, DiagKind::RuntimeNamedFieldTarget);
+    assert_eq!(message, "expected Struct, found Array");
 }
 
 /// A decided container registers no condition at all, so nothing the decided
@@ -189,9 +188,7 @@ fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
 #[test]
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
-        output(
-            "S := {.a @any : Int, .b @any : string}\nf := ('x = S) -> x.a\nf (S{.a 1, .b \"h\"})"
-        ),
+        output("s := _ -> {.f _: Int, .t _: Type}\nf := 'a = (s _) -> a.f\nf (s{.f 1, .t Int})"),
         "1: Int"
     );
     // A block's type is decided where it stands; its struct type is nominal
@@ -202,15 +199,18 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
     );
 }
 
-/// A deferred tuple and a deferred atomic type are the same refusal: neither
-/// has a read.
+/// A deferred tuple is refused by the kind it found; a deferred scalar container
+/// has no `s.value` to index for its name table, so the element read is refused
+/// instead. Both are refusals at the read, never a panic.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
-    for source in ["f := 'x -> x.a\nf (1, 2)", "f := 'x -> x.a\nf 5"] {
-        assert_eq!(
-            undecided_read(source, "field read"),
-            Some((1, 6)),
-            "{source:?} names the container the read would have used"
-        );
-    }
+    let (message, kind) = refused("f := 'x -> x.a\nf (1, 2)");
+    assert_eq!(kind, DiagKind::RuntimeNamedFieldTarget);
+    assert_eq!(message, "expected Struct, found Array");
+    let (message, kind) = refused("f := 'x -> x.a\nf 5");
+    assert_eq!(kind, DiagKind::RuntimeIndexTarget);
+    assert_eq!(
+        message,
+        "this value is not a container — it has no element to read"
+    );
 }
