@@ -842,6 +842,12 @@ impl<P: Program> Module<P> {
         root
     }
 
+    /// The clone walk: every node the applying scope reaches, cloned or referenced.
+    ///
+    /// # Invariant
+    /// A clone is a fresh instance: the run stamp of an operation it copies is cleared, so the
+    /// clone evaluates again (`docs/language-spec.md` Clone). Only clones are re-opened; the
+    /// template keeps its own one attempt.
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
@@ -958,10 +964,8 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        // Only a proved answer is a run: an undecided value is a seed.
-        let carried_answer = evaluated_deep.is_some_and(|deep| !deep.undecided)
-            && mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
-        self.stamp_node_ran_if(clone, carried_answer);
+        // A clone is a fresh instance: its operations re-evaluate (SPEC §Clone).
+        self.stamp_node_ran_if(clone, false);
         self.nodes[clone].operation = operation;
         if self.nodes[clone]
             .operation

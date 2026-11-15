@@ -638,13 +638,8 @@ impl<P: Program> Module<P> {
                 None
             };
             self.write_node_value(clone, mapped);
-            // The claim follows `mapped`, not `carried`: an answer whose own
-            // elements are open must not claim the run.
-            let claimed = !undecided
-                && mapped.is_some_and(|value| {
-                    !self.static_answer_elements_are_undecided(value, &ctx.module)
-                });
-            self.stamp_node_ran_if(clone, claimed);
+            // A clone is a fresh instance: its operations re-evaluate (SPEC §Clone).
+            self.stamp_node_ran_if(clone, false);
             self.nodes[clone].operation = operation;
         } else {
             // Baked: the value in place, no payload copy; item refs re-point at
@@ -654,11 +649,7 @@ impl<P: Program> Module<P> {
                 .read(local)
                 .map(|value| self.static_remap_value(value, ctx));
             self.write_node_value(clone, mapped);
-            let claimed = !undecided
-                && mapped.is_some_and(|value| {
-                    !self.static_answer_elements_are_undecided(value, &ctx.module)
-                });
-            self.stamp_node_ran_if(clone, claimed);
+            self.stamp_node_ran_if(clone, false);
         }
         if template_operation.as_ref().is_some_and(|operation| {
             matches!(

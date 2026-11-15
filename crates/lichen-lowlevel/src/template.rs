@@ -543,17 +543,8 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        // The claim follows the mapped answer, not the carry: an answer whose own
-        // elements are open does not claim the run.
-        let claimed = self.nodes[source]
-            .evaluated_deep
-            .is_some_and(|deep| !deep.undecided)
-            && mapped.is_some_and(|value| {
-                !crate::apply::answer_elements_are_undecided::<P>(value, |node| {
-                    self.node_value(node)
-                })
-            });
-        self.stamp_node_ran_if(clone, claimed);
+        // A clone is a fresh instance: its operations re-evaluate (SPEC §Clone).
+        self.stamp_node_ran_if(clone, false);
         self.nodes[clone].operation = operation;
         clone
     }
@@ -745,13 +736,7 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        let claimed = evaluated_deep.is_some_and(|deep| !deep.undecided)
-            && mapped.is_some_and(|value| {
-                !crate::apply::answer_elements_are_undecided::<P>(value, |node| {
-                    self.node_value(node)
-                })
-            });
-        self.stamp_node_ran_if(clone, claimed);
+        self.stamp_node_ran_if(clone, false);
         self.nodes[clone].operation = operation;
         clone
     }

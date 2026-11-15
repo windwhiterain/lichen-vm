@@ -304,6 +304,8 @@ Cloned node lives in the scope where the apply happens.
 
 Auto create a side apply for inner function apply, the original apply's body unify a side apply's body, the side apply will not be able to evaluate util the next time be cloned by the outer function's apply, so that if the outer function applying clone made the innner applying function specialized, the specialized side apply's body can unify the unspecialized oringinal apply's body.
 
+A clone clears the evaluated flag of the operations it copies, so a cloned operation is evaluated again — exactly as a side apply is re-evaluated when the outer function's apply clones it. Its operands may be decided at the clone that were open at the original, and an operation whose one attempt was spent while they were open would otherwise answer from a stale run. The original keeps its own run; only clones are re-opened.
+
 ## Preprocessor block
 
 A lichen source file has at most one single preprocessor `---...---` block.
