@@ -94,16 +94,17 @@ syntax: `'x = Div _` is an application, so the clone covers it by construction.
   migration of the same rule, not a reword. The `evaluate_block` release test
   (`evaluation.rs:1013`) and `class_answer_is_decided` (`function.rs:605`) must
   be re-argued on emptiness, not silently re-keyed (recon §5 names the hazard).
-- **M11 — refinement applies to the value; type refinement goes on the type
-  expr (maintainer verdict, 2026-11-15).** A refinement attribute asks the
-  **value attribute of the same expr** to satisfy the condition. To refine a
-  type, place the refinement attribute on the **type's expr** (the type
-  position, as the contract test `x : (_ ! in_num)` does). The refinement
-  mechanism is correct as-is; the core prelude's eight arithmetic operators
-  must move `! in_num` from the value position to the type position to
-  constrain the operand's class to `Num`. This resolves the rework-3 fork: the
-  value-position `(@any ! in_num, …)` was a prelude misuse, not a mechanism
-  defect.
+- **M11 — the refinement predicate's input is the WHOLE EXPR (maintainer
+  verdict, 2026-11-15; corrected same day).** A refinement attribute feeds the
+  **whole expr** (the full `[value, type]` term) to its predicate, which must
+  return 1 — **not just the value slot**. First stated as "the value attribute";
+  the maintainer corrected: "refinement 不是要求把 value slot 输入满足返回 1，而是
+  整个 expr 输入返回 1". So `Refinement::constraint` (`refinement.rs:88`) must
+  pass the **whole expr** to `Apply(predicate, …)`, not `value_expr` /
+  `Index(expr, 0)`. The prelude's `in_num` predicate reads what it needs from the
+  whole expr (the type slot) to constrain the operand's class to `Num`. To refine
+  a type, place the refinement attribute on the **type's expr** (the type
+  position, as the contract test `x : (_ ! in_num)` does).
 
 ## Work packages
 
