@@ -1575,6 +1575,12 @@ where
     }
 
     /// An expr carrying the element slot's attributes at their canonical positions.
+    ///
+    /// # Invariant
+    /// The lowering keeps an expression one expression: the value node and its type node are
+    /// the two slots of this one `[value, type, ...]` expr, and the type is recorded against
+    /// the value, so an answer written into the value node is never detached from the type
+    /// it must satisfy (`docs/language-spec.md` Lowlevel).
     fn element_expr(&mut self, value: NodeId, ty: NodeId, element: NodeId) -> NodeId {
         let mut items = vec![value, ty];
         for index in 0..P::Attr::ORDER.len() {
@@ -1605,6 +1611,11 @@ where
             items.push(slot);
         }
         let layout = self.full_width_layout();
+        // The type is stated against the value, exactly as an element slot states it.
+        if value != ty {
+            self.module
+                .record_element_type(value, AnyNodeId::Dynamic(ty));
+        }
         self.array_node_with_layout(self.current_block, &items, layout)
     }
 

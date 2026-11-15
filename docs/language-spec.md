@@ -96,6 +96,8 @@ An operation can have an operand node.
 Nodes inside same class must share same value, class is merged by unify.
 An value can be Type or an array of nodes.
 
+An operation is the lowlevel's implementation of a highlevel concept, so the lowlevel write is value-level: `after running an operation, unify the value to the class's value` (Merge). Keeping an expression consistent is therefore the **lowering's** duty, not the operation's: the highlevel lowers an expression as one `[value, type, ...]` expr, records the type against its value node, and writes every answer into that same expr's value node, so the value-level write never sees a value detached from the type attribute that must hold for it.
+
 ## Unify
 Unify is a lowlevel recursive action that unify two node will merge into one node if those satisfied:
 - recursive into nodes both side refers and apply the same rule.
@@ -106,8 +108,6 @@ or else produce an unify error.
 nodes are merged into one class by unify. evaluating node will trigger operations in all nodes in its class run. 
 
 after running an operation, unify the value to the class's value.
-
-Writing a value into a class is a unify: after the operation's answer is unified to the class's value, the answer's own type attribute is unified with the class's type attribute, and a mismatch is a unify error naming both types. An expression therefore never holds a value whose type is not its type attribute, however late the value is decided.
 
 for memory locality, the first value writing to a class will propagate to all member nodes.
 
