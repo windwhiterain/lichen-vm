@@ -173,9 +173,7 @@ fn a_named_read_of_an_array_is_refused() {
 
 // --- the deferred `.a`: no read until the container's type is decided ------
 
-/// A deferred container is refused where the call decides it: §Function keeps the
-/// read live, and §Struct's `s.value.name_table` needs a struct, so the refusal
-/// names the kind the read found. Nothing is evaluated behind it.
+/// A deferred container is refused where the call decides it, naming the kind it found.
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
     let (message, kind) = refused("f := 'x -> x.a\nA := [@any, 2]\nf A[10, 20]");
@@ -199,9 +197,7 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
     );
 }
 
-/// A deferred tuple is refused by the kind it found; a deferred scalar container
-/// has no `s.value` to index for its name table, so the element read is refused
-/// instead. Both are refusals at the read, never a panic.
+/// A deferred non-struct is refused at the read: by kind, or at its missing element.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
     let (message, kind) = refused("f := 'x -> x.a\nf (1, 2)");

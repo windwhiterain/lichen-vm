@@ -65,7 +65,6 @@ pub enum EvalError {
     /// a panic.
     ApplyTarget { function: AnyNodeId },
     /// A [`LowOperator::TableGet`] whose target is not a table: a recorded failure.
-    /// `found` names the kind the target had, the only fact that survives to the report.
     TableTarget {
         target: AnyNodeId,
         found: &'static str,
@@ -448,8 +447,7 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::TableMiss { table, key });
                                 Some(P::Value::from(LowValue::Error))
                             }
-                            // A target that is no table is a read of a non-struct: recorded, never
-                            // an internal error. The kind is the only fact that survives to the report.
+                            // A read of a non-struct: recorded, never an internal error.
                             other => {
                                 let found = match other {
                                     Some(LowValue::Array(_)) => "Array",
