@@ -1234,17 +1234,18 @@ fn a_named_struct_field_read_resolves_to_the_positional_index() {
 /// A class question is asked of a *cell*, which cannot see through an
 /// unevaluated `Index`, so both the named form (a struct) and the positional
 /// form (a tuple) resolve the field's type out of the container type's own
-/// field list.
+/// field list. A struct type is a function, so it is applied where it annotates;
+/// a tuple type is the inline literal domain.
 #[test]
 fn a_field_reads_class_is_decided_where_the_container_type_is() {
     let named = evaluate(
-        "A := {.n @any : Int, .alpha @any : Float}\n\
-         f := ('x = A) -> x.alpha + x.alpha\n\
+        "A := _ -> {.n _: Int, .alpha _: Float}\n\
+         f := 'x = (A _) -> x.alpha + x.alpha\n\
          f (A{.n 1, .alpha 0.5})",
     );
     assert_eq!(named, LangValue::LowValue(LowValue::Float(1.0)));
     let positional = evaluate(
-        "f := ('x = (@any : Int, @any : Float)) -> x(1) + x(1)\n\
+        "f := 'x = (_ : Int, _ : Float) -> x(1) + x(1)\n\
          f (1, 0.5)",
     );
     assert_eq!(positional, LangValue::LowValue(LowValue::Float(1.0)));
@@ -1442,8 +1443,7 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
 fn a_struct_instance_reads_its_fields_by_name() {
     // A named read over an instance reads the wrapped tuple's elements,
     // each typed by the corresponding field type.
-    let (module, root) =
-        run("s := {.f @any : Int, .t @any : Type}; a := s{.f 1, .t Int}; (a.f, a.t)");
+    let (module, root) = run("s := _ -> {.f _: Int, .t _: Type}; a := s{.f 1, .t Int}; (a.f, a.t)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1453,14 +1453,13 @@ fn a_struct_instance_reads_its_fields_by_name() {
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
-    // A named read through a parameter: the written type decides the
+    // A named read through a parameter: the applied type decides the
     // container, so the field reads against the field list.
 
     // The argument is parenthesized: `f s(1, Int)` would parse as
     // `(f s)(1, Int)`.
-    let (module, root) = run(
-        "s := {.f @any : Int, .t @any : Type}; f := ('a = s) -> a.f; f (s{.f 1, .t Int}) : Int",
-    );
+    let (module, root) =
+        run("s := _ -> {.f _: Int, .t _: Type}; f := 'a = (s _) -> a.f; f (s{.f 1, .t Int}) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 1);
 }

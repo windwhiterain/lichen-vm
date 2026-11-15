@@ -1,9 +1,10 @@
 //! A template's open cells belong to the instance; its decided cells are shared.
 //!
 //! # Invariant
-//! Every template use copies the template's open cells — the value slot and an
-//! undecided type cell alike — while a decided field type stays shared, so a
-//! decided annotation still constrains every instance.
+//! A template's decided half is a requirement every instance shares, while an
+//! undecided cell — the value slot and an undecided type cell alike — is the
+//! use's own fresh cell (SPEC §Struct's `v`), so one instance never decides
+//! another.
 
 use lichen_highlevel::diagnostic::DiagKind;
 
@@ -76,4 +77,28 @@ fn an_annotated_field_still_constrains_every_instance() {
     let (message, kind) = refused("D := {.a @any : Int}\nD{.a 1.5}");
     assert_eq!(kind, DiagKind::Annotation);
     assert_eq!(message, "expected Int, found Float");
+}
+
+/// A **nested** type: a struct type whose field's type is another applied struct
+/// type. The inner instance answers its own fields, and a signature over both
+/// (Ideal API form 5) admits the nested instance.
+#[test]
+fn a_nested_instance_reads_through_the_outer_field() {
+    let inner = "A := _ -> {.'x: Int, .'y: Float}\n\
+                 B := _ -> {.a A _, .'z: string}\n";
+    assert_eq!(
+        output(&format!(
+            "{inner}b := B{{.a (A{{.x 1, .y 2.0}}), .z \"s\"}}\nb.a.x"
+        )),
+        "1: Int",
+        "the nested instance's field reads through the outer field"
+    );
+    assert_eq!(
+        output(&format!(
+            "{inner}f := {{.a A _, .b B _, .'w: Type}} -> w\n\
+             f _{{.a (A{{.x 1, .y 2.0}}), .b (B{{.a (A{{.x 1, .y 2.0}}), .z \"s\"}}), .w Int}}"
+        )),
+        "Int: Type",
+        "the nested signature admits an inline nested instance"
+    );
 }

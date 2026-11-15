@@ -22,14 +22,15 @@ fn refused(source: &str) -> (String, DiagKind) {
     (first.message.clone(), kind)
 }
 
-/// A **named** struct template: its fields are the requirements, and
-/// `x.type`/`x.length` read the parameter's own fields.
+/// A **named** struct type: its fields are the requirements, and `x.type`/`x.length`
+/// read the parameter's own fields. A struct type is a function, so an annotation
+/// uses it applied (`Param _`), and the instance is that application's value.
 #[test]
 fn a_named_type_function_parameter_and_its_field_reads() {
     assert_eq!(
         output(
-            "Param := {.type @any, .length @any}\n\
-             buf := ('x = Param) -> (x.type, x.length)\n\
+            "Param := _ -> {.type _, .length _}\n\
+             buf := 'x = (Param _) -> (x.type, x.length)\n\
              buf (Param{.type Float, .length 192})"
         ),
         "(Float, 192): Tuple",
@@ -43,9 +44,9 @@ fn a_named_type_function_parameter_and_its_field_reads() {
 fn an_instantiation_whose_callee_is_inferred() {
     assert_eq!(
         output(
-            "Param := {.type @any, .length @any}\n\
-             BufT  := ('x = Param) -> {.type x.type, .length x.length}\n\
-             buf   := ('x = Param) -> x\n\
+            "Param := _ -> {.type _, .length _}\n\
+             BufT  := 'x = (Param _) -> {.type x.type, .length x.length}\n\
+             buf   := 'x = (Param _) -> x\n\
              e     := buf _{.type Float, .length 192}\n\
              e"
         ),
