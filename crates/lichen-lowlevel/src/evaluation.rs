@@ -64,6 +64,10 @@ pub enum EvalError {
     /// A [`LowOperator::Apply`] whose **target** cannot be applied — a recorded failure, never
     /// a panic.
     ApplyTarget { function: AnyNodeId },
+    /// A [`LowOperator::TableGet`] whose target is not a table — a recorded failure, never an
+    /// internal error. A `.name` read is refused by the checker wherever the container's kind
+    /// is decided; this arm records the read that reached the operator with the wrong kind.
+    TableTarget { target: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -442,7 +446,13 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::TableMiss { table, key });
                                 Some(P::Value::from(LowValue::Error))
                             }
-                            _ => unreachable!("TableGet target must be a table"),
+                            // A target that is no table is a read of a non-struct: recorded, never
+                            // an internal error.
+                            _ => {
+                                self.eval_errors
+                                    .push(EvalError::TableTarget { target: table });
+                                Some(P::Value::from(LowValue::Error))
+                            }
                         }
                     }
                     _ => unreachable!("TableGet operand must be an array of [table, key]"),

@@ -107,6 +107,8 @@ nodes are merged into one class by unify. evaluating node will trigger operation
 
 after running an operation, unify the value to the class's value.
 
+Writing a value into a class is a unify: after the operation's answer is unified to the class's value, the answer's own type attribute is unified with the class's type attribute, and a mismatch is a unify error naming both types. An expression therefore never holds a value whose type is not its type attribute, however late the value is decided.
+
 for memory locality, the first value writing to a class will propagate to all member nodes.
 
 ## Operation

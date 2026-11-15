@@ -120,6 +120,10 @@ pub enum DiagKind {
     /// Distinct from [`Self::Guard`], which reports a *type* the checker refused
     /// to apply and therefore names that type.
     RuntimeApplyTarget,
+    /// A `.name` read whose container is **not a struct** — the read reached the
+    /// operator with the wrong kind, and the report names the kind it found.
+    /// Distinct from [`Self::UndecidedContainer`], which reports a type not yet decided.
+    RuntimeNamedFieldTarget,
     /// A `$name(args…)` call whose `name` is not in this module's registry.
     NativeOpUnresolved,
     /// A `$name(args…)` call whose builder returned an inadoptable term; see
@@ -511,6 +515,7 @@ where
                 EvalError::ApplyTarget { function } => {
                     (5, None, None, None, self.node_loc(*function))
                 }
+                EvalError::TableTarget { target } => (8, Some(*target), None, None, None),
             };
             if seen.contains(&key) {
                 continue;
@@ -593,6 +598,14 @@ where
                     DiagKind::RuntimeApplyTarget,
                     self.node_loc(*function),
                 )),
+                // A `.name` read on a value that is no struct: the value itself
+                // is the fact, so the report names its kind.
+                EvalError::TableTarget { target } => {
+                    let mut diag =
+                        Diag::factual(DiagKind::RuntimeNamedFieldTarget, self.node_loc(*target));
+                    diag.value_a = self.module.node_value(*target);
+                    out.push(diag);
+                }
             }
         }
         out
