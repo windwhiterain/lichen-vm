@@ -64,9 +64,7 @@ pub enum EvalError {
     /// A [`LowOperator::Apply`] whose **target** cannot be applied — a recorded failure, never
     /// a panic.
     ApplyTarget { function: AnyNodeId },
-    /// A [`LowOperator::TableGet`] whose target is not a table — a recorded failure, never an
-    /// internal error. A `.name` read is refused by the checker wherever the container's kind
-    /// is decided; this arm records the read that reached the operator with the wrong kind.
+    /// A [`LowOperator::TableGet`] whose target is not a table: a recorded failure.
     TableTarget { target: AnyNodeId },
 }
 

@@ -10,9 +10,7 @@ use lichen_lowlevel::LowValue;
 /// has to carry it to the member the join adds.
 #[test]
 fn a_merge_carries_the_decided_type_to_a_member_added_after_the_commit() {
-    // The written type makes the read checkable; the body's write is the
-    // commit the apply's join follows. A tuple type is the inline literal
-    // domain: its elements are the requirements the argument fills.
+    // A tuple type is the inline literal domain: its elements are the requirements.
     let (module, value, root_ty) = common::evaluate(
         "T := (_ : Int, _ : Int)\nf := 'x = T -> {\n  a := x(0) + x(0)\n  p := x = T\n  a\n}\nf (10, 20)",
     );

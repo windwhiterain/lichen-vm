@@ -120,9 +120,7 @@ pub enum DiagKind {
     /// Distinct from [`Self::Guard`], which reports a *type* the checker refused
     /// to apply and therefore names that type.
     RuntimeApplyTarget,
-    /// A `.name` read whose container is **not a struct** — the read reached the
-    /// operator with the wrong kind, and the report names the kind it found.
-    /// Distinct from [`Self::UndecidedContainer`], which reports a type not yet decided.
+    /// A `.name` read whose container is not a struct: the report names the kind found.
     RuntimeNamedFieldTarget,
     /// A `$name(args…)` call whose `name` is not in this module's registry.
     NativeOpUnresolved,

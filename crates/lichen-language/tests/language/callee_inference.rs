@@ -22,9 +22,7 @@ fn refused(source: &str) -> (String, DiagKind) {
     (first.message.clone(), kind)
 }
 
-/// A **named** struct type: its fields are the requirements, and `x.type`/`x.length`
-/// read the parameter's own fields. A struct type is a function, so an annotation
-/// uses it applied (`Param _`), and the instance is that application's value.
+/// A struct type is a function, so an annotation uses it applied (`Param _`).
 #[test]
 fn a_named_type_function_parameter_and_its_field_reads() {
     assert_eq!(

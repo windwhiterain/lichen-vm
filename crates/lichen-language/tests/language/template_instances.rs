@@ -79,9 +79,7 @@ fn an_annotated_field_still_constrains_every_instance() {
     assert_eq!(message, "expected Int, found Float");
 }
 
-/// A **nested** type: a struct type whose field's type is another applied struct
-/// type. The inner instance answers its own fields, and a signature over both
-/// (Ideal API form 5) admits the nested instance.
+/// A struct type whose field's type is another applied struct type.
 #[test]
 fn a_nested_instance_reads_through_the_outer_field() {
     let inner = "A := _ -> {.'x: Int, .'y: Float}\n\
