@@ -39,6 +39,14 @@
    lambdas elsewhere in `examples/`/`lichen-std/` change semantics and the
    migration recon must census them.
 
+   **Surface decision (maintainer, 2026-11-16): (a) defer.** The current surface
+   has no unprimed binder — the prime *is* the binder (parser `Formal` vs `Name`,
+   recon §2.4) — so the monomorphic form is inexpressible today. The migration
+   keeps the flag mechanism general (the tri-state already carries `false`) and
+   slice 2 swaps selection only; with every binder primed `true` this is
+   behaviour-preserving. Introducing a monomorphic surface (an unprimed binder or
+   a new sigil) is a separate, later decision.
+
 ## 2. What it replaces
 
 - **Selection** — the undecided test plus the class-wide scope verdict
