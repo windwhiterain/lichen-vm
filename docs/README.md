@@ -68,6 +68,7 @@ authority, and this table only names the state.
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | current |
 | [A call's clones belong to the enclosing template](notes/apply-clone-ownership.md) | `lichen-lowlevel` (`function`/`static_module`) | current |
 | [The polymorphic flag: clone selection by reachability from `'`](notes/polymorphic-flag.md) | `lichen-lowlevel` (`function`/`template`/`evaluation`/`static_module`), `lichen-language-lex` (`Prime`) | decided (code not yet migrated) |
+| [The polymorphic flag: recon measurements, census and site map](notes/polymorphic-flag-recon.md) | `lichen-lowlevel` (`evaluation`/`function`/`scope`/`template`/`static_module`), `lichen-highlevel` (`checker/lambda`), `lichen-language` (`persist`), `lichen-language-lex` (`Prime`) | current (baseline for the open migration) |
 | [Normalization is a function's birth, not an application](notes/function-normalization.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`static_module`) | current |
 | [The un-annotated recursive fold's type stays open](notes/recursive-fold-typing.md) | `lichen-language` (compile), `lichen-highlevel` (`checker`), `lichen-lowlevel` (`loop_run`, `function`) | current |
 | [One test harness: write IR by name, ask the module about it by name](notes/test-harness.md) | `lichen-testkit`, `lichen-highlevel` (tests) | current |
