@@ -65,6 +65,9 @@ where
             // The formal's value position is unconstrained: the call supplies it.
             let value_cell = self.fresh_cell();
             let type_cell = self.fresh_cell();
+            // SPEC §Polymorphic sugar row: primed binder cells are born polymorphic (all formals are primed).
+            self.module.mark_polymorphic(value_cell);
+            self.module.mark_polymorphic(type_cell);
             // The formal *is* the expr `[value, type]`, its cells in scope so the
             // clone yields fresh ones per call.
             let slot = self.slot_expr(return_block, value_cell, type_cell);

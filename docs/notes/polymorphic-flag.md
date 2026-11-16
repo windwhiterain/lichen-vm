@@ -114,6 +114,10 @@ infinite-stream budget test above, and the Any-migration's acceptance probes
 ([any-removal-migration](any-removal-migration.md)). The unprimed-lambda census
 (ruling 3) is part of the recon.
 
+Slice 1 (expand) landed behaviour-preserving — the flag is computed and asserted,
+selection unchanged. Its implementation record and slice-2 handoff are
+[polymorphic-flag-slice1](polymorphic-flag-slice1.md).
+
 ## 5. Superseded decisions
 
 - **M5** of [any-removal-migration](any-removal-migration.md) ("the clone rule

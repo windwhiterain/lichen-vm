@@ -422,6 +422,9 @@ impl<P: Program> Module<P> {
         }
         for node in nodes {
             if self.nodes.get(node).is_some_and(|node| node.block == block) {
+                if self.nodes[node].polymorphic.is_none() {
+                    self.polymorphic_unflagged -= 1;
+                }
                 self.nodes.remove(node);
             }
         }

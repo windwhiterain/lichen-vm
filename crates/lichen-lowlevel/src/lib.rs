@@ -34,6 +34,7 @@ pub mod loop_conversion;
 mod loop_run;
 mod low_type;
 mod module;
+mod polymorphic;
 mod registry;
 pub mod resolve;
 pub mod scope;
@@ -1002,6 +1003,14 @@ pub struct Node<P: Program> {
     /// [`Self::evaluated_deep`] yet. Set at the cut, cleared where the real verdict is
     /// written and where a late operand edge invalidates one.
     assumed_concrete: bool,
+    /// Whether this node is polymorphic (SPEC §Polymorphic). Read via [`Module::node_polymorphic`].
+    ///
+    /// # Invariant
+    /// Tri-state. `None` means propagation has not reached the node, never "monomorphic".
+    /// The flag is `Some` on every node a clone walk reads: propagation runs over the
+    /// recursion set before clone, and a clone inherits its source's flag. Selection does
+    /// not read it yet (`docs/notes/polymorphic-flag.md`).
+    polymorphic: Option<bool>,
     /// Disjoint-set metadata for node equality classes; the union-find is the only writer.
     equality: disjoint::Meta<NodeId>,
 }
@@ -1024,6 +1033,9 @@ pub struct StaticNode<P: Program> {
     pub runned: bool,
     /// The source node's deep-pass verdict. See [`Node::evaluated_deep`].
     pub evaluated_deep: Option<EvaluatedDeep>,
+    /// The source node's polymorphic flag, frozen so a materialized clone inherits it.
+    /// See [`Node::polymorphic`].
+    pub polymorphic: Option<bool>,
     /// Whether the source node was a wildcard fill, persisted so frozen open positions survive (M10).
     pub wildcard_fill: bool,
 }
@@ -1156,6 +1168,11 @@ pub struct Module<P: Program> {
     /// It is the record of why the last walk stopped, so a second walk knows it ran against
     /// an already abandoned graph.
     pub budget_exhausted: Option<BudgetExhausted>,
+    /// How many nodes still owe a polymorphic verdict (`None`); propagation skips at zero.
+    ///
+    /// # Invariant
+    /// A clone inherits a `Some` flag at birth, so an expansion adds no debt.
+    pub polymorphic_unflagged: usize,
     /// Whether the type side's parameter check keeps its errors (a `Check` build).
     ///
     /// # Invariant

@@ -109,6 +109,13 @@ where
                 w.u8(deep.undecided as u8);
             }
         }
+        match node.polymorphic {
+            None => w.u8(0),
+            Some(poly) => {
+                w.u8(1);
+                w.u8(poly as u8);
+            }
+        }
         w.u8(node.wildcard_fill as u8);
         write_low_shape_opt(&mut w, &node.low_shape);
     }
@@ -513,6 +520,11 @@ where
             }),
             _ => return Err("bad evaluated_deep option tag".into()),
         };
+        let polymorphic = match r.u8()? {
+            0 => None,
+            1 => Some(r.u8()? != 0),
+            _ => return Err("bad polymorphic option tag".into()),
+        };
         let wildcard_fill = r.u8()? != 0;
         let low_shape = read_low_shape_opt(&mut r)?;
         nodes.push(StaticNode {
@@ -523,6 +535,7 @@ where
             owner,
             runned,
             evaluated_deep,
+            polymorphic,
             wildcard_fill,
         });
     }

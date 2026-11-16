@@ -154,6 +154,8 @@ impl<P: Program> Module<P> {
         if !self.nodes.contains_key(root) {
             return None;
         }
+        // The flag propagates before the walk reads it (ruling 1).
+        self.propagate_polymorphic();
         // The template's own scope: the function that wrote the root cell.
         let scope = self.nodes[root]
             .function
@@ -487,11 +489,19 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// One template cell has one instance cell: the map is written before the walk
     /// descends, so a diamond names one cell and a cycle names the instance's own.
+    /// # Invariant
+    /// The flag is `Some` on every node this walk reads: `clone_template` propagates it
+    /// over the template's recursion set before the walk, and a clone inherits its
+    /// source's flag (ruling 1, `docs/notes/polymorphic-flag.md`).
     #[stacksafe]
     fn template_clone(&mut self, source: NodeId, ctx: &mut TemplateCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&source) {
             return clone;
         }
+        debug_assert!(
+            self.nodes[source].polymorphic.is_some(),
+            "template walk read node {source:?} whose polymorphic flag propagation never reached"
+        );
         // The caller marked this cell: it is the caller's own, and its content too.
         if ctx.boundary.shares(source) {
             ctx.shared.insert(source);
@@ -516,6 +526,8 @@ impl<P: Program> Module<P> {
         let clone = self.add_node(ctx.target, None, None);
         ctx.remap.insert(source, clone);
         self.nodes[clone].origin = Some(source);
+        let flag = self.nodes[source].polymorphic;
+        self.write_polymorphic(clone, flag);
         self.nodes[clone].low_shape = self.class_low_shape(source);
         if let Some(owner) = ctx.owner {
             self.register_in_function(owner, clone);

@@ -479,6 +479,9 @@ impl<P: Program> Module<P> {
         node: NodeId,
         check: ParameterCheck,
     ) -> Option<Instantiation> {
+        // The flag propagates before the clone walk reads it (SPEC §Polymorphic;
+        // `docs/notes/polymorphic-flag.md`, ruling 1).
+        self.propagate_polymorphic();
         let (r#return, parameter, assert_count) = {
             let function = &self.functions[function];
             (
@@ -678,6 +681,8 @@ impl<P: Program> Module<P> {
         let tag = self.nodes[node].function;
         self.set_node_owner(operand, tag);
         self.set_node_owner(replay, tag);
+        self.write_polymorphic(operand, Some(false));
+        self.write_polymorphic(replay, Some(false));
         // The run stamp is whether the operator runs; this scope has not run it.
         self.stamp_node_ran_if(replay, true);
         // The correspondence: one instantiation of the same template, whose cells stand for
@@ -842,11 +847,20 @@ impl<P: Program> Module<P> {
         root
     }
 
+    /// # Invariant
+    /// Deep evaluate precedes clone: the polymorphic flag is `Some` on every node this
+    /// walk reads. Propagation runs at the instantiation entry over the template's
+    /// recursion set, and a clone inherits its source's flag. A `None` here is a
+    /// propagation coverage gap, not a licence to compute reachability on demand.
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
+        debug_assert!(
+            self.nodes[node].polymorphic.is_some(),
+            "clone walk read node {node:?} whose polymorphic flag propagation never reached"
+        );
         // One read of the node's own facts: this walk asks for them several times, and each
         // ask is a slot-table lookup.
         let (value, operation, evaluated_deep, function, block, origin) = {
@@ -864,6 +878,8 @@ impl<P: Program> Module<P> {
         if self.is_wildcard_fill(AnyNodeId::Dynamic(node)) {
             let fresh = self.add_node(ctx.target, None, None);
             self.nodes[fresh].origin = Some(node);
+            let flag = self.nodes[node].polymorphic;
+            self.write_polymorphic(fresh, flag);
             return fresh;
         }
         // Only the parts whose value could differ per call get fresh clones — see
@@ -915,6 +931,9 @@ impl<P: Program> Module<P> {
         let scope = block;
         let target = self.clone_target(scope, ctx);
         let clone = self.add_node(target, None, None);
+        // A clone inherits its source's `Some` flag (ruling 1), so a later walk reads it stamped.
+        let flag = self.nodes[node].polymorphic;
+        self.write_polymorphic(clone, flag);
         // A scope ends at its root, so the clone ends the image it landed in:
         // each instantiation collects its own.
         if self.blocks[scope].scope_root == Some(node) {

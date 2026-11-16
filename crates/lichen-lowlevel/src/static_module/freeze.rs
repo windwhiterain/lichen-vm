@@ -120,6 +120,8 @@ impl<P: Program> StaticModule<P> {
         for (index, &id) in function_ids.iter().enumerate() {
             function_map.insert(id, StaticFunctionId(index));
         }
+        // The polymorphic flag is frozen state: a materialized clone inherits a `Some` flag (ruling 1).
+        let polymorphic_flags = module.compute_polymorphic(node_ids);
         let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_ids.len());
         let mut values: Vec<Option<P::Value>> = Vec::with_capacity(node_ids.len());
         for &id in node_ids {
@@ -156,6 +158,7 @@ impl<P: Program> StaticModule<P> {
                 // is the stamp's zero test.
                 runned: node.runned,
                 evaluated_deep: node.evaluated_deep,
+                polymorphic: Some(polymorphic_flags[&id]),
                 wildcard_fill: node.value.is_none() && node.origin == Some(id),
             });
         }

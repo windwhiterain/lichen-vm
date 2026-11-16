@@ -555,8 +555,16 @@ impl<P: Program> Module<P> {
     /// Clone one static node into the dynamic world; `#[stacksafe]` because
     /// static recursion runs through here.
     #[stacksafe]
+    /// # Invariant
+    /// The frozen flag is `Some` on every node this walk reads: the freeze propagates it
+    /// over the frozen set, and a materialized clone inherits it (ruling 1,
+    /// `docs/notes/polymorphic-flag.md`).
     fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
         let node = &ctx.module.nodes[local.index];
+        debug_assert!(
+            node.polymorphic.is_some(),
+            "static clone read frozen node {local:?} whose polymorphic flag the freeze never carried"
+        );
         // A frozen wildcard fill is the template's open requirement: every call gets a fresh cell.
         if node.wildcard_fill {
             // One cell per template per apply: a diamond shares it, bounding the walk.
@@ -565,6 +573,8 @@ impl<P: Program> Module<P> {
             }
             let fresh = self.add_node(ctx.target, None, None);
             ctx.remap.insert(local, fresh);
+            let flag = node.polymorphic;
+            self.write_polymorphic(fresh, flag);
             return fresh;
         }
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
@@ -575,6 +585,7 @@ impl<P: Program> Module<P> {
             node.operation,
             node.low_shape.clone(),
         );
+        let template_polymorphic = node.polymorphic;
         // The class decides: outside the source is shared; a nested re-home also accepts the enclosing scope.
         let inside = !undecided
             || ctx.rule.inside(&ctx.module, local, ctx.source)
@@ -600,6 +611,7 @@ impl<P: Program> Module<P> {
         // The clone's origin is the caller-side apply; a template's own nodes
         // are not this module's, so it is never the origin.
         self.nodes[clone].origin = Some(ctx.origin);
+        self.write_polymorphic(clone, template_polymorphic);
         ctx.remap.insert(local, clone);
         if undecided && !inside {
             // The canonical outer instance of this frozen cell.

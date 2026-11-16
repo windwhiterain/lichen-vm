@@ -108,6 +108,7 @@ impl<P: Program> Module<P> {
             deep_depth: 0,
             value_templates: HashSet::new(),
             budget_exhausted: None,
+            polymorphic_unflagged: 0,
             report_type_side_failures: false,
             // The empty layout is entry 0 from the first moment, so a plain value array's
             // id always resolves.
@@ -350,8 +351,10 @@ impl<P: Program> Module<P> {
             visiting: false,
             evaluated_deep: None,
             assumed_concrete: false,
+            polymorphic: None,
             equality: disjoint::Meta::default(),
         });
+        self.polymorphic_unflagged += 1;
         disjoint::make_set(&mut self.nodes, node);
         self.blocks[block].nodes.push(node);
         // A lone class's summary is the node's place, which its block states.
@@ -562,6 +565,30 @@ impl<P: Program> Module<P> {
     /// Panics if `node` is not in [`Self::nodes`].
     pub fn node_evaluated_deep(&self, node: NodeId) -> Option<EvaluatedDeep> {
         self.nodes[node].evaluated_deep
+    }
+
+    /// The node's polymorphic flag (SPEC §Polymorphic). Panics if `node` is not in [`Self::nodes`].
+    pub fn node_polymorphic(&self, node: NodeId) -> Option<bool> {
+        self.nodes[node].polymorphic
+    }
+
+    /// Mark a node polymorphic at creation: the `'` binder's cells (SPEC §Polymorphic sugar row).
+    ///
+    /// # Invariant
+    /// Idempotent; propagation spreads the mark through the recursion set.
+    pub fn mark_polymorphic(&mut self, node: NodeId) {
+        self.write_polymorphic(node, Some(true));
+    }
+
+    /// Write a node's polymorphic flag, keeping [`Self::polymorphic_unflagged`] current.
+    ///
+    /// # Invariant
+    /// A `None` node becoming `Some` is one fewer node propagation still owes a verdict.
+    pub(crate) fn write_polymorphic(&mut self, node: NodeId, flag: Option<bool>) {
+        if flag.is_some() && self.nodes[node].polymorphic.is_none() {
+            self.polymorphic_unflagged -= 1;
+        }
+        self.nodes[node].polymorphic = flag;
     }
 
     /// The disjoint-set metadata of `node`'s equality class. Panics if `node` is
