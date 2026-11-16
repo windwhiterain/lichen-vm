@@ -68,6 +68,10 @@ syntax: `'x = Div _` is an application, so the clone covers it by construction.
   ([value-templates](value-templates.md), commit `14285cd8`, 112 → 67) is the
   reason the rule is read in the cloning direction: `strict-clean`'s `5fcc181a`
   implements the outermost-member verdict and is the starting point.
+  **Superseded 2026-11-16:** the SPEC's clone selection is now the polymorphic
+  flag ([polymorphic-flag](polymorphic-flag.md)); the outermost-member verdict
+  is the pre-refactor rule, and `5fcc181a` is the starting point the migration
+  replaces, not the target.
 - **M6 — the auto `@any = x` sugar is deleted.** An unannotated parameter part
   stays undecided; nothing guarantees it "never decides" — per-application
   freshness replaces that guarantee.

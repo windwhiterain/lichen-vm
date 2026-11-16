@@ -45,7 +45,7 @@ sugar:
 `a <: b ` => `a = b _`  
 condition := `if <expr'1> then <expr'2> else <expr'3>` => `(<expr'3>, <expr'2>)(<expr'1>)
 bin_operation := `<expr'1> <bin_operator> <expr'2>` => `<bin_operator> (<expr'1>, <expr'2>)`
-` ...a... -> ...b...` => `Function{a := _; b:= _; @parameter ...a...; @body ...b...}`
+` ...'a... -> ...'b...` => `Function{@polymorphic a := _; @polymorphic b:= _; @parameter ...a...; @body ...b...}`
 `{...; return <expr>; ...; <stmt>}` => `{...; <expr>}`
 `{...; a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1, .b expr'2}}`
 `{...; pub a := expr'1; ...; b := expr'2; ...; <stmt>}` => `{...; {.a expr'1}}` 
@@ -103,16 +103,34 @@ Unify is a lowlevel recursive action that unify two node will merge into one nod
 or else produce an unify error. 
 
 ## Merge
-nodes are merged into one class by unify. evaluating node will trigger operations in all nodes in its class run. 
+Nodes are merged into one class by unify. if any member of a class is evaluated, all members's operation should have runned. 
 
-after running an operation, unify the value to the class's value.
-
-for memory locality, the first value writing to a class will propagate to all member nodes.
+For memory locality, the first value writing to a class will propagate to all member nodes.
 
 ## Operation
-for effeciancy, one operation only run once.
+An operation is resolved if the operand is accepted by the operator and runned, may produce a new value or a unify (`Index`).
 
-## Attribute
+After an operation produce a value, unify the value with the node's class's representative.  
+
+For effeciancy, one operation only run once, gated by runned flag.
+
+## Recursion
+A node can be recurse into:
+- Operands of its ooeration.
+- Nodes its value references.
+- Members in its class.
+
+## Deep evaluate
+
+Recursively evaluate node.
+
+## Highlevel
+
+Highlevel compiles to lowlevel, value/type consistancy is guaranteed by certain compiling rule:
+- Creation: born consistant.
+- Transformation: consistancy keeping. 
+
+## Expression/Attribute
 
 An expression is a raw array of attributes, value attribute is a lowlevel value, other attribute is an expression recursively, attributes is extentable.
 
@@ -254,18 +272,14 @@ Subtype via post unify error suppression.
 
 ## Undecided
 
-Undecide is a state of lowlevel node that has no value.
+Undecided value is None, node with no value has undecided value.
+
+Undecided node is node has undecided value.
 
 Placeholder `_` is an undecided expression that its attribute array node is undecided.
 
 ```sytax
 `_` := `@raw None`
-```
-
-Nodes inside same class can be classified by tag.
-
-```sytax
-`{x := _; (x, x, _)}` := `@raw['a, 'a, 'b]`
 ```
 
 ## Function
@@ -285,22 +299,24 @@ Polymorphism at every application: @clone function's expressions, unify the argu
 > `p @raw-> body`: lowlevel function.
 > `@clone f`: see section `### Clone`.   
 
+## Polymorphic
+
+A node is polymorphic if it:
+- Is create with polymorphic enabled. e.g. `'a` markds `a` polymorphic.
+- Has polymorphic node in its recursion set.
+
+- For efficiancy, polymorphic flag propagate via deep evaluate.
+
 ### Clone
-Clone is a recursive clone within certain scope, triggered by function apply.
+Clone is a action that recursively clone a node, triggered by function apply.
 
-Undecided node, if the outer most scope among its class members is or inside the applying function's scope, must be clone. 
+Polymorphic nodes winthin the applying funcion's scope must be clone. 
 
-Clone more nodes should make not change to the language behaviour.
+Clone more nodes should make no change to the language behaviour.
 
-For efficency:
-- Clone recursive into a decided node if it the "deep_decided" flag which set during deep evaluate is false.
-- Reference node outside the applying function's scope
-
-Clone an undecided node will detached from its original class for let-polymorphsim.
+Cloned polymorphic nodes should be detached from it from its class, while placed in new class that has the same tolopogy.
 
 Cloned node lives in the scope where the apply happens.
-
-Auto create a side apply for inner function apply, the original apply's body unify a side apply's body, the side apply will not be able to evaluate util the next time be cloned by the outer function's apply, so that if the outer function applying clone made the innner applying function specialized, the specialized side apply's body can unify the unspecialized oringinal apply's body.
 
 ## Preprocessor block
 

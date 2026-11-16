@@ -5,6 +5,12 @@
 > them on every call. A clone carries the template's answer only when that answer
 > is a template fact, and only when its own elements are decided.
 >
+> **The selection rule (§4's class-wide scope verdict) is superseded at the SPEC
+> level** by the polymorphic flag ([polymorphic-flag](polymorphic-flag.md),
+> maintainer refactor 2026-11-16; the code is not yet migrated and still
+> implements the verdict this note describes). The owner stamping (§1) and the
+> carry rules (§2) are untouched by the refactor and remain current.
+>
 > This note supersedes the clone-walk reading of
 > [`block-vs-lambda-struct-field-inference.md`](block-vs-lambda-struct-field-inference.md),
 > which looked for the cause of the same disappearance in the checker's field-list
