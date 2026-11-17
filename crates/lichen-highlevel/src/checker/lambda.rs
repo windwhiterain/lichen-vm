@@ -615,6 +615,33 @@ where
                         None => false,
                     }
                 };
+                // The call decides each deferred read: a field it supplies is resolved.
+                if let Some(AnyFunctionId::Dynamic(function)) = callee
+                    && let Some(reads) = self.deferred_field_reads.remove(&function)
+                {
+                    let argument_value = self.value_of(argument);
+                    let mut resolved: std::collections::HashMap<ExprId, NodeId> =
+                        std::collections::HashMap::new();
+                    let mut remaining = Vec::new();
+                    for read in reads {
+                        let container_value = if read.direct {
+                            Some(argument_value)
+                        } else {
+                            resolved.get(&read.container).copied()
+                        };
+                        let field = container_value
+                            .and_then(|value| self.deferred_field_value(value, read.name));
+                        match field {
+                            Some(field_value) => {
+                                resolved.insert(read.expr, field_value);
+                            }
+                            None => remaining.push(read),
+                        }
+                    }
+                    if !remaining.is_empty() {
+                        self.deferred_field_reads.insert(function, remaining);
+                    }
+                }
                 // A Check failure settles its node: the shallow pass walks it again.
                 if report && !applied {
                     self.module

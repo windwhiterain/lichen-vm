@@ -129,6 +129,27 @@ fn sole_default(matches: &[bool]) -> Option<usize> {
     found.next().is_none().then_some(position)
 }
 
+/// A formal's field read whose container type is only known at the call.
+///
+/// # Invariant
+/// The read is deferred to the application: a call that supplies the field
+/// resolves it, and a call that cannot leaves it to the end-of-check refusal
+/// (`docs/notes/per-application-body.md`).
+struct DeferredFieldRead {
+    /// The container's type cell, for the end-of-check refusal.
+    container_ty: NodeId,
+    /// The field's name.
+    name: &'static str,
+    /// The container's location, which the undecided-read refusal names.
+    container_loc: Loc,
+    /// Whether the container is the formal itself.
+    direct: bool,
+    /// The read's container expression: a nested read's chain is keyed by it.
+    container: ExprId,
+    /// The read's own expression, the key a nested read looks up.
+    expr: ExprId,
+}
+
 pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
@@ -271,6 +292,13 @@ where
     /// Set by a read's check before it builds a node no expression slot owns, so
     /// [`Self::name_node`] and the read's slot nodes are attributed to that read.
     read_site: Option<Loc>,
+    /// The formal field reads whose container type only the call decides.
+    ///
+    /// # Invariant
+    /// A read a call supplied the field for is dropped; one no call resolved is
+    /// refused at the end, the undecided-read ruling
+    /// (`docs/notes/per-application-body.md`).
+    deferred_field_reads: HashMap<FunctionId, Vec<DeferredFieldRead>>,
     /// The user-facing assert condition nodes: the explicit `assert` expressions.
     ///
     /// # Invariant
@@ -666,6 +694,7 @@ where
             node_edges: HashMap::new(),
             array_subscripts: HashMap::new(),
             read_site: None,
+            deferred_field_reads: HashMap::new(),
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
 
@@ -723,6 +752,8 @@ where
         let root_ty = checker.state[root]
             .ty
             .expect("the root expression must have a type");
+        // A formal field read no call resolved keeps the undecided-read ruling.
+        checker.refuse_unresolved_reads();
         // Deep-evaluate every lambda's value node before the definition pass, so a
         // recursive reference stays in place.
         for &func_node in &checker.lambda_value_nodes {
@@ -1253,6 +1284,28 @@ where
             }
             ExprKind::Index { array, .. } => self.formal_root(array),
             _ => None,
+        }
+    }
+
+    /// Refuse every formal field read no call resolved: the undecided-read ruling.
+    ///
+    /// # Invariant
+    /// The refusal names the container's own place, so the caret is the container
+    /// and never the read (`docs/notes/undecided-reads.md`).
+    pub(super) fn refuse_unresolved_reads(&mut self) {
+        let reads: Vec<DeferredFieldRead> = self
+            .deferred_field_reads
+            .drain()
+            .flat_map(|(_, reads)| reads)
+            .collect();
+        for read in reads {
+            self.record_guard(
+                read.container_ty,
+                read.container_ty,
+                read.container_loc,
+                DiagKind::UndecidedContainer,
+                Some("field read"),
+            );
         }
     }
 

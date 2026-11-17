@@ -273,6 +273,25 @@ where
             }
         };
         let (element, value_node, ty_node) = self.value_slot_read(container_value, index, constant);
+        // A formal-rooted read on an undecided container waits for the call.
+        if !concrete
+            && !self.is_loop_state(container)
+            && let (Some(&(function, _)), Some(root)) =
+                (self.function_stack.last(), self.formal_root(container))
+        {
+            let read = super::DeferredFieldRead {
+                container_ty,
+                name,
+                container_loc: self.loc(container, 1),
+                direct: root == container,
+                container,
+                expr: e,
+            };
+            self.deferred_field_reads
+                .entry(function)
+                .or_default()
+                .push(read);
+        }
         let expr = self.element_expr(value_node, ty_node, element);
         self.state[e].term = Some(expr);
         self.state[e].val = Some(value_node);
@@ -283,6 +302,25 @@ where
             self.attribute_markers.insert(e, marker);
         }
         expr
+    }
+
+    /// The value of `name`'s field in a container's **value**, if it has one.
+    ///
+    /// # Invariant
+    /// The field is found through the value's own name table, so a container that
+    /// is not a struct supplies none and the read it was to decide stays deferred
+    /// (`docs/notes/undecided-reads.md`).
+    pub(super) fn deferred_field_value(
+        &mut self,
+        container_value: NodeId,
+        name: &'static str,
+    ) -> Option<NodeId> {
+        let table = self.struct_name_table(container_value)?;
+        let position = self.module.name_table_index(table, name)?;
+        let at = position + shape::STRUCT_VALUE_FIELD_BASE;
+        let index = self.usize_node(at);
+        let (_element, value, _ty) = self.value_slot_read(container_value, index, Some(at));
+        Some(value)
     }
 
     /// The name table a struct value holds at its first slot.
@@ -825,28 +863,43 @@ where
         }
     }
 
-    /// One field of a direct template's instance: a fresh value cell, type and attributes shared.
+    /// One field of a template's instance: open slots per use, decided ones shared.
     ///
     /// # Invariant
-    /// A decided value half is a requirement and is kept as it is (SPEC §Struct's `v`).
+    /// A field's open value cell and open type cell are fresh per use, so one instance
+    /// never decides another's; a decided slot stays the shared requirement it states
+    /// (SPEC §Struct's `v`).
     fn fresh_instance_field(&mut self, field: NodeId) -> NodeId {
         let Some(items) = shape::value_items(&self.module, AnyNodeId::Dynamic(field)) else {
             return field;
         };
-        let Some(value_node) = items.first().map(|item| item.node) else {
-            return field;
-        };
-        if !self.module.is_wildcard_fill(value_node) {
-            return field;
-        }
+        let nodes: Vec<AnyNodeId> = items.iter().map(|item| item.node).collect();
         let block = self.current_block;
-        let fresh_value = self.fresh_cell();
-        let mut new_items = vec![fresh_value];
-        for item in items.iter().skip(1) {
-            new_items.push(self.module.as_dynamic(item.node, block));
+        let mut changed = false;
+        let mut new_items = Vec::with_capacity(nodes.len());
+        for (index, node) in nodes.iter().enumerate() {
+            // The attributes follow the declaration; a content slot that states
+            // nothing yet is this use's.
+            let open = matches!(index, shape::EXPR_VALUE_SLOT | shape::EXPR_TYPE_SLOT)
+                && node.dynamic().is_some_and(|node| self.slot_is_open(node));
+            if open {
+                changed = true;
+                new_items.push(self.fresh_cell());
+            } else {
+                new_items.push(self.module.as_dynamic(*node, block));
+            }
+        }
+        if !changed {
+            return field;
         }
         let layout = self.full_width_layout();
         self.array_node_with_layout(block, &new_items, layout)
+    }
+
+    /// Whether a cell states nothing yet: no value and no operation that computes one.
+    fn slot_is_open(&self, node: NodeId) -> bool {
+        self.module.node_value(AnyNodeId::Dynamic(node)).is_none()
+            && self.module.node_operation(node).is_none()
     }
 
     /// A struct instance `S{…}`: apply the constructor to `_`, then fill its fields.
