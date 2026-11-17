@@ -845,6 +845,7 @@ impl<P: Program> Module<P> {
             self.nodes[fresh].origin = Some(node);
             let flag = self.nodes[node].polymorphic;
             self.write_polymorphic(fresh, flag);
+            self.nodes[fresh].polymorphic_scope = self.nodes[node].polymorphic_scope.clone();
             return fresh;
         }
         // The clone computes the same thing, so the source's class low type seeds it.
@@ -857,7 +858,7 @@ impl<P: Program> Module<P> {
         let per_call = ctx.in_parameter
             || node == ctx.parameter
             || Some(node) == ctx.parameter_slot
-            || (self.nodes[node].polymorphic == Some(true) && self.node_inside_scope(node, ctx))
+            || (self.node_polymorphic_over_scope(node, ctx) && self.node_inside_scope(node, ctx))
             // An apply's output cell freshens per call so the codomain bind writes per call (SPEC §Clone).
             || (self.is_apply_output(node) && self.node_inside_scope(node, ctx))
             || replay_operation;
@@ -871,6 +872,7 @@ impl<P: Program> Module<P> {
         // A clone inherits its source's `Some` flag (ruling 1), so a later walk reads it stamped.
         let flag = self.nodes[node].polymorphic;
         self.write_polymorphic(clone, flag);
+        self.nodes[clone].polymorphic_scope = self.nodes[node].polymorphic_scope.clone();
         // A scope ends at its root, so the clone ends the image it landed in:
         // each instantiation collects its own.
         if self.blocks[scope].scope_root == Some(node) {
@@ -1202,6 +1204,17 @@ impl<P: Program> Module<P> {
                 && self
                     .function_scope(ctx.anchor)
                     .is_some_and(|anchor| anchor.is_ancestor_or_self(&place)))
+    }
+
+    /// Whether any reached mark scope is the applying scope or an ancestor of it (SPEC §Clone).
+    fn node_polymorphic_over_scope(&self, node: NodeId, ctx: &ApplyCtx<'_>) -> bool {
+        let Some(applying) = ctx.scope_root.as_ref() else {
+            return false;
+        };
+        self.nodes[node]
+            .polymorphic_scope
+            .iter()
+            .any(|mark| mark.is_ancestor_or_self(applying))
     }
 
     /// Whether `function`'s scope is under `anchor`'s — the lexical membership test.

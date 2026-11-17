@@ -273,13 +273,19 @@ impl<P: Program> Module<P> {
     /// scope; class-wide uniformity is the flag's propagation, not a class verdict.
     /// A template with no scope of its own clones every polymorphic cell.
     fn template_class_is_cloned(&mut self, source: NodeId, ctx: &mut TemplateCtx<'_>) -> bool {
-        if self.nodes[source].polymorphic != Some(true) {
+        if self.nodes[source].polymorphic_scope.is_empty() {
             return false;
         }
         match ctx.scope.clone() {
-            Some(scope) => self
-                .owner_scope(source)
-                .is_some_and(|place| scope.is_ancestor_or_self(&place)),
+            Some(scope) => {
+                self.nodes[source]
+                    .polymorphic_scope
+                    .iter()
+                    .any(|mark| mark.is_ancestor_or_self(&scope))
+                    && self
+                        .owner_scope(source)
+                        .is_some_and(|place| scope.is_ancestor_or_self(&place))
+            }
             None => true,
         }
     }
@@ -328,6 +334,7 @@ impl<P: Program> Module<P> {
         self.nodes[clone].origin = Some(source);
         let flag = self.nodes[source].polymorphic;
         self.write_polymorphic(clone, flag);
+        self.nodes[clone].polymorphic_scope = self.nodes[source].polymorphic_scope.clone();
         self.nodes[clone].low_shape = self.class_low_shape(source);
         if let Some(owner) = ctx.owner {
             self.register_in_function(owner, clone);

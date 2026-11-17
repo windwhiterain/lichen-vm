@@ -5,20 +5,23 @@
 //! deep-evaluation hang (`docs/notes/code-audit.md` D18, `docs/notes/polymorphic-flag.md` §3).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use crate::{AnyFunctionId, LowValue, Module, NodeId, Program};
+use crate::{AnyFunctionId, FunctionId, LowValue, Module, NodeId, Program, Scope};
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// The polymorphic flag of every node reachable from `roots` over the recursion set, read-only.
+    /// The maximal mark scopes of every node reachable from `roots` over the recursion set, read-only.
     ///
     /// # Invariant
-    /// The set is operation operands, value references (array items — shallow included —
-    /// table entries, a closure's whole template) and class members. A node is polymorphic
-    /// when created marked or when any node it recurses into is; otherwise `false`. Boolean
-    /// only: never evaluates a member (D18). An explicit worklist bounded by
-    /// `evaluate_depth_limit` terminates on a cyclic or lazy graph.
-    pub(crate) fn compute_polymorphic(&self, roots: &[NodeId]) -> HashMap<NodeId, bool> {
+    /// The set is operation operands, value references (array items, table entries, a nested
+    /// closure's template) and class members. A node's verdict is the antichain of maximal mark
+    /// scopes it reaches, empty when none. Never evaluates a member (D18). A worklist bounded
+    /// by `evaluate_depth_limit` terminates on a cyclic or lazy graph.
+    pub(crate) fn compute_polymorphic(
+        &self,
+        roots: &[NodeId],
+    ) -> HashMap<NodeId, Vec<Arc<Scope<FunctionId>>>> {
         // Reverse edges: `referrers[v]` holds every `u` recursing into `v`; a true flag flows back to them.
         let mut seen: HashSet<NodeId> = HashSet::new();
         let mut referrers: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
@@ -90,38 +93,53 @@ impl<P: Program> Module<P> {
                 stack.push((child, depth + 1));
             }
         }
-        // Seeds: written flags plus every function's parameter (ruling 3a: every binder is primed).
+        // Seeds: written marks plus every function's parameter; each carries its mark scope.
         let parameters: HashSet<NodeId> = self
             .functions
             .values()
             .map(|function| function.parameter)
             .collect();
-        let mut flags: HashMap<NodeId, bool> = seen
-            .iter()
-            .map(|&node| {
-                (
-                    node,
-                    self.nodes[node].polymorphic == Some(true) || parameters.contains(&node),
-                )
-            })
-            .collect();
-        let mut work: Vec<NodeId> = flags
-            .iter()
-            .filter(|(_, poly)| **poly)
-            .map(|(node, _)| *node)
-            .collect();
-        // Monotone upgrade: a node upgrades at most once, so the worklist terminates.
+        let mut chains: HashMap<NodeId, Vec<Arc<Scope<FunctionId>>>> =
+            seen.iter().map(|&node| (node, Vec::new())).collect();
+        let mut work: Vec<NodeId> = Vec::new();
+        for &node in &seen {
+            let seed = self.nodes[node].polymorphic == Some(true) || parameters.contains(&node);
+            if seed && let Some(scope) = self.owner_scope(node) {
+                antichain_insert(chains.get_mut(&node).expect("a seen node"), scope);
+                work.push(node);
+            }
+            // A nested function value is a per-call closure over its defining (parent) function.
+            if let Some(LowValue::Function(AnyFunctionId::Dynamic(function))) =
+                self.nodes[node].value.and_then(|value| value.as_enum())
+                && let Some(parent) = self.functions.get(function).and_then(|f| f.parent)
+                && let Some(scope) = self.function_scope(parent)
+            {
+                antichain_insert(chains.get_mut(&node).expect("a seen node"), scope);
+                work.push(node);
+            }
+        }
+        // A node's antichain unions the marks it reaches, flowing to referrers; the set only grows.
         while let Some(node) = work.pop() {
+            let incoming = chains[&node].clone();
+            if incoming.is_empty() {
+                continue;
+            }
             if let Some(referrers) = referrers.get(&node) {
                 for &referrer in referrers {
-                    if !flags[&referrer] {
-                        flags.insert(referrer, true);
+                    let Some(chain) = chains.get_mut(&referrer) else {
+                        continue;
+                    };
+                    let mut changed = false;
+                    for scope in &incoming {
+                        changed |= antichain_insert(chain, scope.clone());
+                    }
+                    if changed {
                         work.push(referrer);
                     }
                 }
             }
         }
-        flags
+        chains
     }
 
     /// Write the propagated flag over the whole module, upgrading only; skips in O(1) when none is owed.
@@ -136,12 +154,27 @@ impl<P: Program> Module<P> {
             return;
         }
         let roots: Vec<NodeId> = self.nodes.keys().collect();
-        let flags = self.compute_polymorphic(&roots);
-        for (node, poly) in flags {
+        let chains = self.compute_polymorphic(&roots);
+        for (node, chain) in chains {
+            let poly = !chain.is_empty();
             if self.nodes[node].polymorphic != Some(true) {
                 self.write_polymorphic(node, Some(poly));
             }
+            self.nodes[node].polymorphic_scope = chain;
         }
         self.polymorphic_dirty = false;
     }
+}
+
+/// Insert into a maximal-scope antichain: a present ancestor subsumes the newcomer; else it subsumes descendants.
+fn antichain_insert(
+    chain: &mut Vec<Arc<Scope<FunctionId>>>,
+    scope: Arc<Scope<FunctionId>>,
+) -> bool {
+    if chain.iter().any(|a| a.is_ancestor_or_self(&scope)) {
+        return false;
+    }
+    chain.retain(|d| !scope.is_ancestor_or_self(d));
+    chain.push(scope);
+    true
 }

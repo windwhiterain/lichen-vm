@@ -354,6 +354,7 @@ impl<P: Program> Module<P> {
             evaluated_deep: None,
             assumed_concrete: false,
             polymorphic: None,
+            polymorphic_scope: Vec::new(),
             equality: disjoint::Meta::default(),
         });
         self.polymorphic_unflagged += 1;

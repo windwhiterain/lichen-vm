@@ -131,8 +131,14 @@ record, the upgrade mechanism's measurement, and the one open ratification are
 [polymorphic-flag-slice2](polymorphic-flag-slice2.md).
 
 The struct-template freshness continuation (open struct-field cells marked at creation;
-`any3`/`any6` fixed, `ideal4`/`any4` open) is
+`any3`/`any6` fixed) is
 [polymorphic-flag-struct-freshness](polymorphic-flag-struct-freshness.md).
+
+The SPEC was then refined to **scope-relative** polymorphism (committed `8c730ac6`): a node
+is polymorphic *over a function scope*, and a clone spans children-scope / ancestor-scope.
+Slice 3 aligns the selection to it via the **mark-scope antichain**; its record, the two
+measurements that forced the shape, the perf canary, and the apply-output workaround
+reassessment are [polymorphic-flag-slice3](polymorphic-flag-slice3.md).
 
 ## 5. Superseded decisions
 

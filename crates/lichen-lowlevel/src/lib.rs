@@ -1011,6 +1011,8 @@ pub struct Node<P: Program> {
     /// recursion set before clone, and a clone inherits its source's flag. Selection does
     /// not read it yet (`docs/notes/polymorphic-flag.md`).
     polymorphic: Option<bool>,
+    /// The maximal mark scopes this node is polymorphic over (antichain; SPEC §Polymorphic), empty when none.
+    polymorphic_scope: Vec<Arc<Scope<FunctionId>>>,
     /// Disjoint-set metadata for node equality classes; the union-find is the only writer.
     equality: disjoint::Meta<NodeId>,
 }
