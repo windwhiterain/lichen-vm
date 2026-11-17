@@ -734,10 +734,11 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// An item is cloned when the walk already made one or its static node is undecided;
-    /// concrete items stay inline absolute refs. Only a ref keyed by `ctx.module` may be
-    /// cloned: local indices are per-module, so a dependency's ref — concrete by
-    /// construction — stays in place, resolved through the registry.
+    /// An item is cloned when the walk already made one, its static node is undecided, or
+    /// it is a wildcard fill (an open requirement fresh per apply); concrete items stay
+    /// inline absolute refs. Only a ref keyed by `ctx.module` may be cloned: local indices
+    /// are per-module, so a dependency's ref — concrete by construction — stays in place,
+    /// resolved through the registry.
     fn static_remap_value(&mut self, value: P::Value, ctx: &mut StaticApplyCtx<P>) -> P::Value {
         // A same-module closure with open captures is re-homed: only this call's
         // clones rebind its captured cells.
@@ -764,7 +765,8 @@ impl<P: Program> Module<P> {
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
-                            || ctx.module.nodes[sref.index.index].undecided()) =>
+                            || ctx.module.nodes[sref.index.index].undecided()
+                            || ctx.module.nodes[sref.index.index].wildcard_fill) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))

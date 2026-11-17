@@ -778,3 +778,94 @@ The nested form (probe 5) is unchanged by this work: the spelling used here,
 `f _{.a (A){…}, .b (B){…}, .w Int}`, is refused with the struct-vs-type-function mismatch
 both before and after, which is the [ideal-api-review](ideal-api-review.md) nested-instance
 gap, not this rule.
+
+## Rework 7 — the frozen nested-apply carry: a decided wildcard fill still freshens per apply
+
+> Status: **the last baseline gap is closed; language external is 289/0.** Compute moves
+> *beyond* dev by pure improvement (135/148 → 215/68, 0 regressions); the maintainer
+> accepted the wider surface. Commit `a7623b22` (`feature/frozen-carry`), on the revert
+> `39694706` of the WIP replay `4f0bda69`.
+
+### The gap
+
+`language::frozen_function_type::a_function_template_in_a_frozen_module_is_a_function`
+was the one red of the external suite (288/1): the struct-field sub-case ("a struct field
+carries the output template") and the two after it never ran. The two-line repro isolates
+it — `g := 'z -> z` / `wrap := 'f -> g (f 1)`, applied to `'y : Int -> y + y`: inline
+answers `2: Int`, the same program with `g`/`wrap` in an imported (frozen) module answered
+`none: Int`. Any nesting of the inner apply across a call boundary lost the value frozen;
+a direct body apply (`'f -> f 1`) answered `2: Int` both ways.
+
+### The root cause (traced)
+
+The nested apply **computes** its value even frozen — the trace shows `2` written
+(`propagate_class_value`, rep 617) — but it never reaches the answer. The dynamic trace
+spreads that `2` down the return-expr's value-half chain (`fill_class_holes`, reps 813 and
+740); the frozen trace never fills a class with `2`.
+
+The severance is at the parameter/argument unify. `g`'s parameter value-half is a frozen
+**wildcard fill** that rework 6's frozen-fill deep verdict reads **decided**
+(`evaluated_deep = Some{undecided:false}`) — the contamination side of the M10 duality:
+`wrap`'s body checked `g` during the freeze. `static_remap_value`
+(`crates/lichen-lowlevel/src/static_module/apply.rs`) cloned an array item only when the
+walk had already made a clone or the item's static node was `undecided()`. A *decided*
+wildcard-fill value-half therefore stayed a `Static` ref: `expr_value_half` answered
+`None`, the parameter check compared the two sides **by value** instead of merging their
+value-half classes, and the argument's computed `2` stayed in a class the return-expr
+answer chain never joins.
+
+So the clone *criterion* was not the divergence — the polymorphic-inside cells were
+already undecided, hence already residual. The active gap was the **value-half class
+wiring**: a fill that reads decided is still an open requirement that must freshen per
+apply, exactly as the dynamic `in_parameter` freshening does.
+
+### The fix
+
+`static_remap_value` also clones a same-module item whose static node is a
+`wildcard_fill`, even when the frozen verdict reads it decided; `static_node_apply`
+already mints a fresh open cell for a wildcard fill, so the item joins the per-apply
+generation and the argument unifies into it. The rule lives at the code site — the
+`# Invariant` on `static_remap_value` — and this note is its rationale. It mirrors the
+dynamic `in_parameter` freshening and the SPEC §Clone over-cloning ruling ("Clone more
+nodes should make not change to the language behaviour"). One file, +7/−5.
+
+### Five rejected alternatives (each measured)
+
+| candidate | reading |
+|---|---|
+| static `link_replay` (WIP `4f0bda69`) | red herring — the working dynamic inline never consumes a replay for this repro; reverted (`39694706`) |
+| `apply_output` freshening | inert — the frozen module's `apply_output_cells` is 0 at freeze; disabling the dynamic clause keeps inline `2: Int` |
+| polymorphic-criterion mirror (`Some(true) && rule.inside`) | inert — 146/146 polymorphic-inside cells already undecided/residual |
+| `parameter_slot` fresh-empty re-mint | inert |
+| drop the plain-cell residual carry | breaks **both** sides to `?a: ?a` — the expr-structure Array value must be carried |
+
+### The compute surface, and the scope decision
+
+Rework 6 left compute at dev parity ("failing set identical to dev's 148"). This fix moves
+it: **135/148 → 215/68**, and the failing-set diff is **0 regressions, 80 pure
+improvements** — the fix's 68 are a strict subset of the baseline's 148. The root cause (a
+shared decided wildcard-fill value-half) is widespread, so the repair is broader than
+"targeted, not every static apply"; a narrower fix touching only the language test likely
+does not exist. Under "parity = no regressions" it passes; under "match dev exactly" it
+diverges by improving. The maintainer **accepted** the wider surface (`a7623b22`); this
+rework supersedes rework 6's "at dev parity" status.
+
+### Oracles (verbatim, accepted tip `a7623b22`)
+
+```text
+language external: test result: ok. 289 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.36s
+                   frozen_function_type::a_function_template_in_a_frozen_module_is_a_function ... ok
+                   (only that test flipped — ideal1-5 / any3,4,6,7 / the 22 §27 primed forms unmoved)
+lichen_compute:    test result: FAILED. 215 passed; 68 failed; 1 ignored; 0 measured; 0 filtered out; finished in 563.28s
+                   (baseline 39694706: 135 passed; 148 failed; 1 ignored — 0 regressions, 80 improvements, fix set ⊂ baseline)
+compute_gpu:       test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.73s
+highlevel:         test result: ok. 136 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.06s
+lowlevel basic:    test result: ok. 167 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.22s
+language lib:      test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+```
+
+Repro through `lichen-compiler` (the language front end is the faithful runner):
+`n2-inline.lichen` → `2: Int`, `n2-import.lichen` → `2: Int` (was `none: Int`). The
+infinite-stream budget canary `deep_evaluating_an_infinite_stream_records_the_deep_budget`
+`ok` in `0.05s`; examples git-unchanged; `comments-check --config comments-test.toml .
+--max-violations 0` clean; `cargo fmt --all -- --check` clean.
