@@ -130,10 +130,16 @@ impl<P: Program> Module<P> {
         let poly_a = self.nodes[root_a].polymorphic;
         let poly_b = self.nodes[root_b].polymorphic;
         let representative = disjoint::union(&mut self.nodes, root_a, root_b);
-        // An upgrading union re-propagates the flag false->true before the next clone reads it (contract §3).
+        // An upgrading union spreads false->true from the merged class before the next clone reads it (contract §3).
         if (poly_a == Some(true)) != (poly_b == Some(true)) {
-            self.polymorphic_dirty = true;
-            self.propagate_polymorphic();
+            let poly_root = if poly_a == Some(true) { root_a } else { root_b };
+            let seed_scopes = self.nodes[poly_root].polymorphic_scope.clone();
+            if seed_scopes.is_empty() {
+                self.polymorphic_dirty = true;
+                self.propagate_polymorphic();
+            } else {
+                self.upgrade_polymorphic_class(representative, seed_scopes);
+            }
         }
         // The merged class's scope summary is the nearest common ancestor of the
         // two classes' summaries.

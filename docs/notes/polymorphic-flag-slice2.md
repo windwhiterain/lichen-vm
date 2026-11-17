@@ -117,8 +117,9 @@ clone per level) are kept.
   `318fa358`. The struct-template freshness it left open is taken up in
   [polymorphic-flag-struct-freshness](polymorphic-flag-struct-freshness.md): open struct-field
   cells are marked at creation (`any3`/`any6` fixed); `ideal4`/`any4` remain open.
-- **Perf:** synchronous global propagation per upgrading union costs ~5× on the language
-  suite (1.9s vs 0.34s baseline). Correct but not optimized; an incremental upgrade (reverse
-  edges from the seed) would avoid the full recompute. Slice 3 candidate.
+- **Perf: resolved** by the incremental reverse-edge class upgrade
+  ([upgrade-perf](upgrade-perf.md)): an upgrading union spreads from the merged class along
+  reverse edges instead of a whole-module recompute (language suite 9.13s → 3.53s). Caching
+  the reverse edges was ruled out (correctness risk).
 - The five remaining language failures are pre-existing Any-migration gaps, out of scope for
   the flag migration (the contract's gate is "no new failures", met).
