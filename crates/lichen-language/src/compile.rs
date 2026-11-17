@@ -542,7 +542,12 @@ impl Compiler {
                 function_id
             }
             // `'x` is `{ x = _; x }`: the unify's value is the shared formal.
-            Expr::Formal { span, binder, .. } => {
+            Expr::Formal {
+                span,
+                binder,
+                primed,
+                ..
+            } => {
                 let Some(binder) = *binder else {
                     // A refused formal lowers to the same inert `ErrorBlock` an
                     // unresolved name does.
@@ -558,6 +563,9 @@ impl Compiler {
                         formal
                     }
                 };
+                if !*primed {
+                    self.ir.monomorphic_formals.insert(formal);
+                }
                 // `x = _`: the formal unified with a fresh placeholder, and the
                 // formal itself as the expression's value.
                 let placeholder = self.alloc(ExprKind::Placeholder, span);

@@ -65,9 +65,11 @@ where
             // The formal's value position is unconstrained: the call supplies it.
             let value_cell = self.fresh_cell();
             let type_cell = self.fresh_cell();
-            // SPEC §Polymorphic sugar row: primed binder cells are born polymorphic (all formals are primed).
-            self.module.mark_polymorphic(value_cell);
-            self.module.mark_polymorphic(type_cell);
+            // SPEC §Polymorphic: primed binder cells are born polymorphic; unprimed stay monomorphic.
+            if !self.ir.monomorphic_formals.contains(formal) {
+                self.module.mark_polymorphic(value_cell);
+                self.module.mark_polymorphic(type_cell);
+            }
             // The formal *is* the expr `[value, type]`, its cells in scope so the
             // clone yields fresh ones per call.
             let slot = self.slot_expr(return_block, value_cell, type_cell);
@@ -120,6 +122,9 @@ where
         self.state[e].term = Some(expr);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(ty_cell);
+        let any_primed = formals
+            .iter()
+            .any(|f| !self.ir.monomorphic_formals.contains(f));
         self.current_parameters.push(formals);
 
         let ret = self.check_expr(r#return);
@@ -134,6 +139,7 @@ where
                 .as_ref()
                 .is_some_and(|scope| self.module.class_inside_scope(cell, scope));
             if inside
+                && any_primed
                 && identity_return
                 && domain == ret
                 && self.module.functions[function].asserts.is_empty()

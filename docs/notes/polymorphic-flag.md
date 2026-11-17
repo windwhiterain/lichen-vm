@@ -47,6 +47,10 @@
    behaviour-preserving. Introducing a monomorphic surface (an unprimed binder or
    a new sigil) is a separate, later decision.
 
+   **Update (Task 3):** the unprimed-binder surface is now implemented — see
+   [monomorphic-surface](monomorphic-surface.md) (the free-name rule, the empty census,
+   and the monomorphic-identity edge — reading (b) confirmed).
+
 ## 2. What it replaces
 
 - **Selection** — the undecided test plus the class-wide scope verdict

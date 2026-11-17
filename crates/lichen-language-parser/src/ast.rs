@@ -150,6 +150,8 @@ pub enum Expr {
         span: Span,
         /// The formal's own `BinderId`; unset by the parser.
         binder: Option<BinderId>,
+        /// Primed `'x` is polymorphic; an unprimed binder is monomorphic (SPEC §Polymorphic).
+        primed: bool,
     },
     /// `f x` — application; a glued `(` is a read, not an argument (see
     /// [`Expr::FieldRead`]).

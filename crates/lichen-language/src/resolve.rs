@@ -365,6 +365,30 @@ impl Resolver {
     fn resolve_expr(&mut self, e: &mut Expr) {
         match e {
             Expr::Name(name, span, binder) => {
+                // A free unprimed name in a parameter side is a monomorphic binder (SPEC §Polymorphic).
+                if self.formal_bases.last().is_some() && self.lookup(name).is_none() {
+                    let base = self.formal_bases.last().copied().unwrap_or(0);
+                    let existing = self.formals[base..]
+                        .iter()
+                        .find(|(declared, _)| declared == name)
+                        .map(|(_, id)| *id);
+                    let id = match existing {
+                        Some(id) => id,
+                        None => {
+                            let id = self.next_binder;
+                            self.next_binder += 1;
+                            self.formals.push((name.clone(), id));
+                            id
+                        }
+                    };
+                    *e = Expr::Formal {
+                        name: name.clone(),
+                        span: *span,
+                        binder: Some(id),
+                        primed: false,
+                    };
+                    return;
+                }
                 *binder = match self.lookup(name) {
                     Some(id) => Some(id),
                     None => {
@@ -419,7 +443,9 @@ impl Resolver {
             }
             // `'x` — a formal reference: the hole the argument fills, and the
             // name the lambda binds in its body.
-            Expr::Formal { name, span, binder } => {
+            Expr::Formal {
+                name, span, binder, ..
+            } => {
                 let Some(base) = self.formal_bases.last().copied() else {
                     if let Some(id) = self
                         .body_formals

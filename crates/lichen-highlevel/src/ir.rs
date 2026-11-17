@@ -368,6 +368,8 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// A side table, not a kind: the checker marks these cells polymorphic at creation
     /// (SPEC §Polymorphic). A plain `_` wildcard is not a primed binding.
     pub primed: HashSet<ExprId>,
+    /// The unprimed (monomorphic) formal exprs; a primed binder is polymorphic (SPEC §Polymorphic).
+    pub monomorphic_formals: HashSet<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -814,6 +816,7 @@ impl<A: AttrSpec, L> IR<A, L> {
             claims: HashMap::new(),
             claim_refusals: Vec::new(),
             primed: HashSet::new(),
+            monomorphic_formals: HashSet::new(),
         }
     }
 

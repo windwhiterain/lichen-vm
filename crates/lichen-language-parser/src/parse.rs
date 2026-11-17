@@ -1124,6 +1124,7 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
                         name: n,
                         span: prime.span,
                         binder: None,
+                        primed: true,
                     }
                 })
                 .or(name().map(|(n, span)| Expr::Name(n, span, None))),
@@ -1202,6 +1203,7 @@ fn primed_field_value(name: &str, span: Span, tail: Option<Expr>) -> Option<Expr
         name: name.to_string(),
         span,
         binder: None,
+        primed: true,
     };
     match tail {
         None => Some(formal),
