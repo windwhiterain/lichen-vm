@@ -312,7 +312,7 @@ Clone is a action that recursively clone a node, triggered by function apply.
 
 Nodes must be clone if satisfied all following situation:
 - Inside the applying function's scope or children-scope.
-- Polymorphic over the applying function's scope or ancestor-scope.
+- Only polymorphic over the applying function's scope and ancestor-scopes.
 
 Clone more nodes should make no change to the language behaviour.
 
