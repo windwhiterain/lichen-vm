@@ -42,8 +42,10 @@ pub enum EvalError {
         index_value: usize,
         length: usize,
     },
-    /// A [`LowOperator::TableGet`] miss: an unhashable key or an empty target.  An
-    /// **undecided** key answers undecided.
+    /// A [`LowOperator::TableGet`] miss: an unhashable key, an empty target, or a non-table target.
+    ///
+    /// # Invariant
+    /// An **undecided** key answers undecided.
     TableMiss { table: AnyNodeId, key: AnyNodeId },
     /// A table build dropped an entry whose key could not be forced concrete.
     TableKeyUndecided { key: AnyNodeId },
@@ -442,7 +444,12 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::TableMiss { table, key });
                                 Some(P::Value::from(LowValue::Error))
                             }
-                            _ => unreachable!("TableGet target must be a table"),
+                            // A target that is not a table is a fact about the value: recorded,
+                            // never a panic.
+                            _ => {
+                                self.eval_errors.push(EvalError::TableMiss { table, key });
+                                Some(P::Value::from(LowValue::Error))
+                            }
                         }
                     }
                     _ => unreachable!("TableGet operand must be an array of [table, key]"),
