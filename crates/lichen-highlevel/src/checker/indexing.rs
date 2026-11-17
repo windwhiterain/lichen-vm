@@ -688,6 +688,7 @@ where
         let operands = self.array_node(block, &[value_slot, argument, result, callee_expr]);
         let apply = self.op_node(block, P::Operator::from(LowOperator::Apply), Some(operands));
         self.module.apply_result_owners.insert(apply, apply);
+        self.module.mark_apply_output(result);
         self.module.evaluate_node_deep(apply, None);
         apply
     }

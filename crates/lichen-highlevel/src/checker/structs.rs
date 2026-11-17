@@ -372,6 +372,20 @@ where
             vals.push(self.state[el].term.expect("a field is compiled"));
         }
         let (value, ty_node) = self.struct_value_node(e, &vals, &field_names);
+        // A struct template with an open field is per-call: its field cells are marked at creation (SPEC §Polymorphic).
+        for (&el, &val) in elements.iter().zip(vals.iter()) {
+            if matches!(
+                self.ir[el].kind,
+                ExprKind::Formal | ExprKind::Placeholder | ExprKind::Annotation { .. }
+            ) {
+                if let Some(value_half) = self.module.expr_value_half(val) {
+                    self.module.mark_polymorphic(value_half);
+                }
+                if let Some(type_half) = self.module.expr_type_half(val) {
+                    self.module.mark_polymorphic(type_half);
+                }
+            }
+        }
         self.require_struct_field_names(&field_names, &elements, value);
         let expr = self.expr_of(value, ty_node);
         self.state[e].term = Some(expr);
@@ -887,6 +901,7 @@ where
             let operands = self.array_node(block, &[template_value, argument, result, callee_expr]);
             let apply = self.op_node(block, P::Operator::from(LowOperator::Apply), Some(operands));
             self.module.apply_result_owners.insert(apply, apply);
+            self.module.mark_apply_output(result);
             self.module.evaluate_node_deep(apply, None);
             // The apply answers the body's expr: the instance's template is
             // the expr's value half, its layout the type half.

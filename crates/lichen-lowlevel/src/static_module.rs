@@ -73,21 +73,6 @@ impl<P: Program> StaticModuleCache<P> {
 /// function whose body the pass instantiates, nested closures included — so a
 /// cell the source does not own is shared whole.
 pub(crate) struct FrozenClassRule {
-    /// The verdict of each class this pass judged, keyed by the source
-    /// function and the class's representative.
-    ///
-    /// # Invariant
-    ///
-    /// One entry per class per source scope, so every member of one class
-    /// reads one answer and the hot path is one map read.
-    verdicts: HashMap<(StaticFunctionId, LocalNodeId), bool>,
-    /// The class representative of each cell the walk reached.
-    ///
-    /// # Invariant
-    ///
-    /// The artifact's union-find has no path compression, so the
-    /// representative is found once per cell and read afterwards.
-    representatives: HashMap<LocalNodeId, LocalNodeId>,
     /// The canonical outer instance of each shared cell, keyed by the frozen
     /// cell it stands for.
     ///
@@ -105,34 +90,17 @@ impl FrozenClassRule {
     /// A rule with nothing judged yet.
     pub(crate) fn new() -> Self {
         Self {
-            verdicts: HashMap::new(),
-            representatives: HashMap::new(),
             outer: HashMap::new(),
         }
     }
 
-    /// The class representative of a frozen cell.
-    pub(crate) fn representative<P: Program>(
-        &mut self,
-        module: &StaticModule<P>,
-        local: LocalNodeId,
-    ) -> LocalNodeId {
-        if let Some(&representative) = self.representatives.get(&local) {
-            return representative;
-        }
-        let representative = static_find(&module.nodes, local);
-        self.representatives.insert(local, representative);
-        representative
-    }
-
-    /// Whether the frozen cell's class lies inside the **source** function's scope.
+    /// Whether the frozen cell is polymorphic and inside the source scope (SPEC §Clone, per-node).
     ///
     /// # Invariant
     ///
-    /// The verdict is a fact of the class, so every member of one class reads
-    /// the same answer: a clone never splits a class, and a class that
-    /// reaches outside the source scope is shared whole. A source with no
-    /// scope of its own shares every class, because nothing is inside it.
+    /// The verdict reads the cell's own frozen flag and place, not a class summary:
+    /// class-wide uniformity is the flag's propagation. A source with no scope of its
+    /// own shares every cell, because nothing is inside it.
     pub(crate) fn inside<P: Program>(
         &mut self,
         module: &StaticModule<P>,
@@ -142,13 +110,13 @@ impl FrozenClassRule {
         let Some(scope) = module.static_function_scope(source) else {
             return false; // no scope: nothing is inside it
         };
-        let representative = self.representative(module, local);
-        if let Some(&verdict) = self.verdicts.get(&(source, representative)) {
-            return verdict;
+        if module.nodes[local.index].polymorphic != Some(true) {
+            return false;
         }
-        let verdict = module.static_class_inside_scope(representative, &scope);
-        self.verdicts.insert((source, representative), verdict);
-        verdict
+        let Some(place) = module.static_owner_scope(local, &module.scopes) else {
+            return false;
+        };
+        scope.is_ancestor_or_self(&place)
     }
 
     /// The canonical outer instance of a shared cell, when the pass has one.
@@ -888,7 +856,7 @@ impl<P: Program> StaticModule<P> {
     /// artifact, or one whose owner has no scope of its own names the virtual
     /// root: it is outside every scope, so the class that holds it is
     /// external.
-    fn static_owner_scope(
+    pub(crate) fn static_owner_scope(
         &self,
         node: LocalNodeId,
         scopes: &[Option<Arc<Scope<StaticFunctionId>>>],

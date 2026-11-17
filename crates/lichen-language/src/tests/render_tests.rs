@@ -183,7 +183,7 @@ fn a_function_value_prints_its_signature() {
 
 /// `source` with the standard library's `type_of` bound ahead of it.
 fn with_type_of(source: &str) -> String {
-    output(&format!("type_of := 'x -> {{t := _; x: t; t}}\n{source}"))
+    output(&format!("type_of := 'x -> {{'t := _; x: t; t}}\n{source}"))
 }
 
 #[test]

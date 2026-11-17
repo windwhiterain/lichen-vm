@@ -171,7 +171,7 @@ impl<P: Program> Module<P> {
     /// function its block is homed in; and a block that homes no function is the
     /// root. `None` is therefore the root scope — a real place every node and
     /// every summary can name — not an absence.
-    fn owner_scope(&self, node: NodeId) -> Option<Arc<Scope<FunctionId>>> {
+    pub(crate) fn owner_scope(&self, node: NodeId) -> Option<Arc<Scope<FunctionId>>> {
         if let Some(owner) = self.nodes[node].function
             && let Some(scope) = self.function_scope(owner)
         {

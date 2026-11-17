@@ -566,6 +566,7 @@ where
             Some(operands),
         );
         self.module.apply_result_owners.insert(apply, apply);
+        self.module.mark_apply_output(c);
         self.call_applies.insert(e, apply);
         // The call's type application at check; a function under check is skipped.
         if callable {

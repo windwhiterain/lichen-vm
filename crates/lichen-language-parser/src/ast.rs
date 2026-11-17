@@ -337,6 +337,8 @@ pub struct Binding {
     /// `@loop` — the recursion **may become a loop**; its absence is the unroll
     /// (`docs/notes/loop-conversion.md` §1.1).
     pub looping: bool,
+    /// `'name := …` — a per-call binding: its cell is marked at creation (SPEC §Polymorphic); `_` is not this mark.
+    pub primed: bool,
 }
 
 /// One field of a struct value or a struct instance: a `.name` and the

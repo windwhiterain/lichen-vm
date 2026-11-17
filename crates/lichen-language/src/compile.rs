@@ -386,6 +386,11 @@ impl Compiler {
                     expr: id,
                 });
             }
+            if let Stmt::Binding(binding) = stmt
+                && binding.primed
+            {
+                self.ir.primed.insert(id);
+            }
             out.push(id);
         }
         out
@@ -910,6 +915,7 @@ impl Compiler {
                     restrictive: !f.field,
                     cached: f.cached,
                     looping: f.looping,
+                    primed: false,
                 }),
                 None => Stmt::Expr(f.value.clone()),
             })

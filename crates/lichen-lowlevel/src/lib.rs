@@ -1173,6 +1173,15 @@ pub struct Module<P: Program> {
     /// # Invariant
     /// A clone inherits a `Some` flag at birth, so an expansion adds no debt.
     pub polymorphic_unflagged: usize,
+    /// A creation mark or an upgrading class union owes a re-propagation of `false -> true`.
+    ///
+    /// # Invariant
+    /// Totality (the unflagged count) is not value correctness: once selection reads the
+    /// flag, a mark or union that makes a class polymorphic must re-propagate before the
+    /// next clone reads it (`docs/notes/polymorphic-flag.md` §3, merge-staleness).
+    pub polymorphic_dirty: bool,
+    /// Each apply's output cell (operand slot 2): an apply clone freshens it per call (SPEC §Clone).
+    pub apply_output_cells: HashSet<NodeId>,
     /// Whether the type side's parameter check keeps its errors (a `Check` build).
     ///
     /// # Invariant

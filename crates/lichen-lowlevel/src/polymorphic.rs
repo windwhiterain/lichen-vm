@@ -60,9 +60,11 @@ impl<P: Program> Module<P> {
                             }
                         }
                     }
-                    // A closure's value references its whole template scope.
+                    // A nested function value is a per-call closure; a top-level one is an identity (§9).
                     Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                        if let Some(function) = self.functions.get(function) {
+                        if let Some(function) = self.functions.get(function)
+                            && function.parent.is_some()
+                        {
                             children.push(function.parameter);
                             children.push(function.r#return);
                             children.push(function.return_type);
@@ -71,14 +73,6 @@ impl<P: Program> Module<P> {
                         }
                     }
                     _ => {}
-                }
-            }
-            // A capture closes over its owning function's template, which the clone walk may read.
-            if let Some(owner) = cell.function {
-                if let Some(function) = self.functions.get(owner) {
-                    children.push(function.parameter);
-                    children.push(function.r#return);
-                    children.extend(function.nodes.iter().copied());
                 }
             }
             // A class is one unit: route members through the representative, expanded once.
@@ -96,10 +90,20 @@ impl<P: Program> Module<P> {
                 stack.push((child, depth + 1));
             }
         }
-        // The fixpoint over the reached set, seeded by the flags already written.
+        // Seeds: written flags plus every function's parameter (ruling 3a: every binder is primed).
+        let parameters: HashSet<NodeId> = self
+            .functions
+            .values()
+            .map(|function| function.parameter)
+            .collect();
         let mut flags: HashMap<NodeId, bool> = seen
             .iter()
-            .map(|&node| (node, self.nodes[node].polymorphic == Some(true)))
+            .map(|&node| {
+                (
+                    node,
+                    self.nodes[node].polymorphic == Some(true) || parameters.contains(&node),
+                )
+            })
             .collect();
         let mut work: Vec<NodeId> = flags
             .iter()
@@ -128,7 +132,7 @@ impl<P: Program> Module<P> {
     /// `Some` flag at birth, so an expansion adds no debt (`docs/notes/polymorphic-flag.md`,
     /// ruling 1).
     pub(crate) fn propagate_polymorphic(&mut self) {
-        if self.polymorphic_unflagged == 0 {
+        if self.polymorphic_unflagged == 0 && !self.polymorphic_dirty {
             return;
         }
         let roots: Vec<NodeId> = self.nodes.keys().collect();
@@ -138,5 +142,6 @@ impl<P: Program> Module<P> {
                 self.write_polymorphic(node, Some(poly));
             }
         }
+        self.polymorphic_dirty = false;
     }
 }

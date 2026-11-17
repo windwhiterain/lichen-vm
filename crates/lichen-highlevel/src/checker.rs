@@ -1856,6 +1856,11 @@ where
                 }
                 let layout = self.full_width_layout();
                 let expr = self.array_node_with_layout(block, &items, layout);
+                // A primed binding (`'t := _`) is per-call: its hole cells are marked at creation (SPEC §Polymorphic).
+                if self.ir.primed.contains(&e) {
+                    self.module.mark_polymorphic(val);
+                    self.module.mark_polymorphic(ty_cell);
+                }
                 self.state[e].term = Some(expr);
                 self.state[e].val = Some(val);
                 self.state[e].ty = Some(ty_cell);

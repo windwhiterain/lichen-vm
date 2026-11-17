@@ -68,10 +68,10 @@ fn recursive_function_applies_itself_lazily() {
     ));
 }
 #[test]
-fn undefined_recursive_function_clones_a_function_per_level() {
+fn undefined_recursive_function_references_itself_in_place() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // With `evaluated_deep` still `None`, the clone rule copies the function per level.
+    // Selection is the flag, not decidedness: a top-level function value is referenced in place (§9).
     let (f_node, f_id) = recursive_function(&mut m);
     assert_eq!(m.node_evaluated_deep(f_node), None);
 
@@ -86,10 +86,10 @@ fn undefined_recursive_function_clones_a_function_per_level() {
 
     let ops = m.node_operation(c1).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
-    let cloned = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
-    assert_ne!(cloned, f_id);
-    assert_eq!(m.functions[cloned].block, root);
-    assert_eq!(m.functions[cloned].nodes.len(), 5);
+    let referenced = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
+    assert_eq!(referenced, f_id);
+    assert_eq!(m.functions[referenced].block, m.node_block(f_node));
+    assert_eq!(m.functions[referenced].nodes.len(), 5);
 
     let level1 = m.evaluate_node(AnyNodeId::Dynamic(c1), None).unwrap();
     let ids1 = array_ids(level1);
@@ -99,9 +99,9 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     assert_ne!(c2, c1);
     let ops = m.node_operation(c2).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
-    let cloned2 = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
-    assert_ne!(cloned2, cloned);
-    assert_eq!(m.functions.len(), 3); // the original plus one clone per level
+    let referenced2 = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
+    assert_eq!(referenced2, f_id);
+    assert_eq!(m.functions.len(), 1); // the identity is shared; the stream mints no function clone
 }
 #[test]
 fn mutually_recursive_functions_call_each_other() {

@@ -82,16 +82,12 @@ struct ApplyCtx<'a> {
     /// body this walk instantiates.
     ///
     /// # Invariant
-    /// The scope names the function the walk instantiates, so a class is cloned
-    /// only when **every** member of it lies inside that scope. See
-    /// `docs/notes/apply-clone-ownership.md` §4.
+    /// The scope names the function the walk instantiates: a polymorphic node clones only
+    /// when its own place lies inside that scope (SPEC §Clone, per-node). Class-wide
+    /// uniformity is the polymorphic flag's propagation, not a scope summary
+    /// (`docs/notes/polymorphic-flag.md` §2).
     scope_root: Option<Arc<Scope<FunctionId>>>,
-    /// The scope verdict of each class this walk has judged.
-    ///
-    /// # Invariant
-    /// One entry per class judged, so every member of one class reads one answer
-    /// and a clone never splits a class.
-    scope_verdicts: HashMap<NodeId, bool>,
+
     /// The branch stack top: the id a freshly cloned closure hangs under
     /// ([`Function::parent`]).
     ///
@@ -510,7 +506,6 @@ impl<P: Program> Module<P> {
             // instantiates is that function's.
             anchor: function,
             scope_root: self.function_scope(function),
-            scope_verdicts: HashMap::new(),
             branch_top: function,
             closure_scope: None,
             applied: function,
@@ -817,36 +812,6 @@ impl<P: Program> Module<P> {
         image
     }
 
-    /// The template root a clone instantiates: the top of its origin chain.
-    ///
-    /// # Invariant
-    /// The chain stops at a released origin: the origin edge is not a keep-alive
-    /// edge, so the collector may take the node it names, and the last live node
-    /// of the chain is the template root then. A live node's own block outlives
-    /// it, so the root's block is a live block.
-    fn template_root(&self, node: NodeId, origin: Option<NodeId>) -> NodeId {
-        let mut root = node;
-        let mut next = origin;
-        let mut hops = 0;
-        while let Some(origin) = next {
-            // The chain stops where the collector took the node.
-            if !self.nodes.contains_key(origin) {
-                break;
-            }
-            // A wildcard fill names itself: it is its own template root.
-            if origin == root {
-                break;
-            }
-            root = origin;
-            hops += 1;
-            if hops > 64 {
-                break;
-            }
-            next = self.nodes[root].origin;
-        }
-        root
-    }
-
     /// # Invariant
     /// Deep evaluate precedes clone: the polymorphic flag is `Some` on every node this
     /// walk reads. Propagation runs at the instantiation entry over the template's
@@ -857,13 +822,14 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
+        self.propagate_polymorphic();
         debug_assert!(
             self.nodes[node].polymorphic.is_some(),
             "clone walk read node {node:?} whose polymorphic flag propagation never reached"
         );
         // One read of the node's own facts: this walk asks for them several times, and each
         // ask is a slot-table lookup.
-        let (value, operation, evaluated_deep, function, block, origin) = {
+        let (value, operation, evaluated_deep, function, block) = {
             let source = &self.nodes[node];
             (
                 source.value,
@@ -871,7 +837,6 @@ impl<P: Program> Module<P> {
                 source.evaluated_deep,
                 source.function,
                 source.block,
-                source.origin,
             )
         };
         // A wildcard fill is the template's open requirement: every call gets a fresh cell to fill.
@@ -882,49 +847,21 @@ impl<P: Program> Module<P> {
             self.write_polymorphic(fresh, flag);
             return fresh;
         }
-        // Only the parts whose value could differ per call get fresh clones — see
-        // `docs/notes/apply-clone-ownership.md`.
-
         // The clone computes the same thing, so the source's class low type seeds it.
         let low_shape = self.class_low_shape(node);
-        // The template root a clone instantiates, whose block may still be a scope.
-        let template_root = self.template_root(node, origin);
-        // Only a template's own fact is proven; a computed value is that call's.
-        let template_decided = template_root == node
-            || (self.nodes[template_root].value.is_some()
-                && self.nodes[template_root]
-                    .evaluated_deep
-                    .is_some_and(|deep| !deep.undecided));
-        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided)
-            && operation.is_none()
-            && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
-            && template_decided;
-        // A scope's content is this call's; a clone of a scope's node is scoped too.
-        let scoped = self.blocks[block].parent.is_some()
-            || self.blocks[self.nodes[template_root].block]
-                .parent
-                .is_some();
-        // Judged against the call's anchor, so one call gives a node one answer.
-        let depends_on_parameter = ctx.in_parameter
-            || node == ctx.parameter
-            || Some(node) == ctx.parameter_slot
-            // SPEC §Clone: a decided node without the deep pass is cloned.
-            || !proven_concrete
-            || scoped
-            || self.value_holds_foreign_function(value, ctx.anchor);
-        if !depends_on_parameter {
-            return node;
-        }
-        // Classes decide ordinary clones. Replay may rebuild an owned operation so its
-        // operands reset with the run stamp.
-        let class_inside = self.node_class_inside_scope(node, ctx);
+        // SPEC §Clone: a node clones iff polymorphic and in the applying scope; carriage is separate (§2).
         let replay_operation = self.replaying
             && operation.is_some()
             && (self.function_descends_from(function, ctx.anchor)
                 || self.functions[ctx.anchor].nodes.contains(&node));
-        // SPEC §Clone: a proven unowned node is canonical; an undecided one detaches.
-        let canonical = proven_concrete && self.nodes[node].function.is_none();
-        if (!class_inside || canonical) && !replay_operation {
+        let per_call = ctx.in_parameter
+            || node == ctx.parameter
+            || Some(node) == ctx.parameter_slot
+            || (self.nodes[node].polymorphic == Some(true) && self.node_inside_scope(node, ctx))
+            // An apply's output cell freshens per call so the codomain bind writes per call (SPEC §Clone).
+            || (self.is_apply_output(node) && self.node_inside_scope(node, ctx))
+            || replay_operation;
+        if !per_call {
             return node; // reference as-is
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
@@ -1162,7 +1099,6 @@ impl<P: Program> Module<P> {
                     anchor: ctx.anchor,
                     // The closure's own scope: a capture is outside it.
                     scope_root: self.function_scope(function),
-                    scope_verdicts: HashMap::new(),
                     branch_top: fresh,
                     closure_scope: Some(&scope),
                     applied: function,
@@ -1247,30 +1183,25 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether the class `node` belongs to lies inside the walk's scope.
+    /// Whether `node`'s own place lies within the walk's scope (SPEC §Clone, per-node).
     ///
     /// # Invariant
-    /// The verdict is a fact of the class: every member of one class reads the
-    /// same answer, so a clone never splits a class and a class reaching outside
-    /// the scope is referenced whole.  A class inside the **applied function's**
-    /// scope is cloned too: a closure minted there captures it into the enclosing
-    /// call's remap, and the body reads that one image.
-    fn node_class_inside_scope(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> bool {
+    /// The verdict is the node's own placement, not its class's: class-wide uniformity
+    /// is the polymorphic flag's propagation. A minted closure's captures are also judged
+    /// against the anchor, so a capture cloned through the closure's edges lands in the
+    /// enclosing call.
+    fn node_inside_scope(&self, node: NodeId, ctx: &ApplyCtx<'_>) -> bool {
         let Some(scope) = ctx.scope_root.clone() else {
-            return false; // no scope: nothing is inside it
+            return false;
         };
-        let representative = self.class_root(node);
-        if let Some(&verdict) = ctx.scope_verdicts.get(&representative) {
-            return verdict;
-        }
-        // A minted closure's captures are this call's body: clone them in the anchor.
-        let verdict = self.class_inside_scope(node, &scope)
+        let Some(place) = self.owner_scope(node) else {
+            return false;
+        };
+        scope.is_ancestor_or_self(&place)
             || (ctx.closure_scope.is_some()
                 && self
                     .function_scope(ctx.anchor)
-                    .is_some_and(|anchor| self.class_inside_scope(node, &anchor)));
-        ctx.scope_verdicts.insert(representative, verdict);
-        verdict
+                    .is_some_and(|anchor| anchor.is_ancestor_or_self(&place)))
     }
 
     /// Whether `function`'s scope is under `anchor`'s — the lexical membership test.

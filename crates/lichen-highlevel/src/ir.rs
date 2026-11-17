@@ -362,6 +362,12 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// A refusal is reported, never silently dropped: a claim that cannot be read is a
     /// mistake at the declaration, and the report names it.
     pub claim_refusals: Vec<(ExprId, ClaimRefusal)>,
+    /// The binding exprs declared per-call with a leading `'` (`'t := …`).
+    ///
+    /// # Invariant
+    /// A side table, not a kind: the checker marks these cells polymorphic at creation
+    /// (SPEC §Polymorphic). A plain `_` wildcard is not a primed binding.
+    pub primed: HashSet<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -807,6 +813,7 @@ impl<A: AttrSpec, L> IR<A, L> {
             marks: HashMap::new(),
             claims: HashMap::new(),
             claim_refusals: Vec::new(),
+            primed: HashSet::new(),
         }
     }
 

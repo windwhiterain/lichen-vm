@@ -456,6 +456,10 @@ fn binding<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
 ) -> impl Parser<'a, In<'a>, Binding, Ex<'a, Er>> + Clone {
+    let pname = token(TokenKind::Prime)
+        .or_not()
+        .then(name())
+        .map(|(prime, n)| (n, prime.is_some()));
     let head = token(TokenKind::KwLoop)
         .ignored()
         .or_not()
@@ -465,16 +469,20 @@ fn binding<'a, Er: GrammarError<'a>>(
                 .or_not()
                 .then(choice((
                     token(TokenKind::KwLet)
-                        .ignore_then(name())
+                        .ignore_then(pname.clone())
                         .then_ignore(token(TokenKind::ColonEquals))
-                        .map(|n| (n, true)),
-                    name()
+                        .map(|(n, primed)| (n, true, primed)),
+                    pname
                         .then_ignore(token(TokenKind::ColonEquals))
-                        .map(|n| (n, false)),
+                        .map(|(n, primed)| (n, false, primed)),
                 )))
-                .map(|(cached, (n, restrictive))| (n, restrictive, cached.is_some())),
+                .map(|(cached, (n, restrictive, primed))| {
+                    (n, restrictive, cached.is_some(), primed)
+                }),
         )
-        .map(|(looping, (n, restrictive, cached))| (n, restrictive, cached, looping.is_some()));
+        .map(|(looping, (n, restrictive, cached, primed))| {
+            (n, restrictive, cached, looping.is_some(), primed)
+        });
     // A broken value skips to the next separator or the input's end (never Eof)
     // and substitutes an error node.
     let value = expr.recover_with(via_parser(
@@ -485,7 +493,7 @@ fn binding<'a, Er: GrammarError<'a>>(
             .map_with(move |_, me| err_node(tokens, me.span())),
     ));
     head.then(value).map(
-        |(((name, span), restrictive, cached, looping), value)| Binding {
+        |(((name, span), restrictive, cached, looping, primed), value)| Binding {
             name,
             span,
             binder: None,
@@ -493,6 +501,7 @@ fn binding<'a, Er: GrammarError<'a>>(
             restrictive,
             cached,
             looping,
+            primed,
         },
     )
 }

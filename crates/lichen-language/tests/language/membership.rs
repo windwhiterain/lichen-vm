@@ -7,7 +7,7 @@ use lichen_language::compile;
 use lichen_language::program::LangValue;
 
 /// `type_of` from the standard library, bound ahead of every probed program.
-const TYPE_OF: &str = "type_of := 'x -> {t := _; x: t; t}\n";
+const TYPE_OF: &str = "type_of := 'x -> {'t := _; x: t; t}\n";
 
 fn evaluate(source: &str) -> LangValue {
     let report = compile(source);

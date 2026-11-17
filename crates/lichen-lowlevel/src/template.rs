@@ -1,8 +1,8 @@
 //! The template instantiation: the walk that clones a template's value graph.
 //!
 //! # Invariant
-//! The walk is the apply's own clone walk with two decisions replaced:
-//! membership is the class's scope, and freshness is the cell's own closure.
+//! The walk is the apply's own clone walk: a cell clones iff it is polymorphic and
+//! its own place lies inside the template's scope (SPEC §Clone, per-node).
 //! See `docs/notes/template-instantiation.md`.
 
 use std::collections::{HashMap, HashSet};
@@ -11,9 +11,8 @@ use std::sync::Arc;
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LocalNodeId,
-    LowValue, Module, NodeId, Operation, Program, Scope, StaticFunctionRef, StaticNodeId,
-    TableItem, ValueExt,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LowValue,
+    Module, NodeId, Operation, Program, Scope, StaticNodeId, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -101,12 +100,7 @@ struct TemplateCtx<'a> {
     /// The scope names the function the template was written in, so a class
     /// whose members reach outside it is shared whole rather than cloned.
     scope: Option<Arc<Scope<FunctionId>>>,
-    /// The class verdicts this walk has judged, keyed by the class's root.
-    ///
-    /// # Invariant
-    /// One entry per class judged, so every member of one class is cloned or
-    /// shared alike and a class is never split by the instance.
-    verdicts: HashMap<NodeId, bool>,
+
     /// The boundary the caller marked.
     boundary: &'a TemplateBoundary,
     /// The template cell → the instance's cell.
@@ -115,20 +109,7 @@ struct TemplateCtx<'a> {
     shared: HashSet<NodeId>,
     /// The frozen cell → the instance's cell.
     static_remap: HashMap<StaticNodeId, NodeId>,
-    /// The frozen cell → its class representative.
-    ///
-    /// # Invariant
-    /// The immutable union-find is read once per frozen cell per pass; every
-    /// later verdict uses the cached representative.
-    static_representatives: HashMap<StaticNodeId, LocalNodeId>,
-    /// Frozen class verdicts, keyed by source function and representative.
-    ///
-    /// # Invariant
-    /// Every member of one frozen class reads the same verdict in one source
-    /// scope; a different module or source scope has a different entry.
-    static_verdicts: HashMap<(StaticFunctionRef, LocalNodeId), bool>,
-    /// Whether a template cell's own content is closed.
-    closed: HashMap<NodeId, bool>,
+
     /// Whether a frozen cell's own content is closed.
     static_closed: HashMap<StaticNodeId, bool>,
     /// Whether a budget stopped the walk.
@@ -164,20 +145,16 @@ impl<P: Program> Module<P> {
             target,
             owner,
             scope,
-            verdicts: HashMap::new(),
+
             boundary,
             remap: HashMap::new(),
             shared: HashSet::new(),
             static_remap: HashMap::new(),
-            static_representatives: HashMap::new(),
-            static_verdicts: HashMap::new(),
-            closed: HashMap::new(),
+
             static_closed: HashMap::new(),
             exhausted: false,
         };
-        // The closure map comes first: a cell's shareability is a property of its
-        // own content, not of the walk's order.
-        self.template_closure_map(root, &mut ctx);
+
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(root) + 1;
         let clone = self.template_clone(root, &mut ctx);
@@ -191,147 +168,6 @@ impl<P: Program> Module<P> {
             remap: ctx.remap,
             shared: ctx.shared,
         })
-    }
-
-    /// Whether each template cell of `root`'s graph holds closed content.
-    ///
-    /// # Invariant
-    /// A cell is **open** when its own content is not closed: it holds no value, it
-    /// has an operator, or its content reaches an open cell.
-    /// A closed cell may be shared; an open one is cloned, so the instance's own
-    /// cells are fresh where the template's are open. A **trace edge** — a cell a
-    /// plugin value keeps alive — decides closure, but is not cloned.
-    fn template_closure_map(&mut self, root: NodeId, ctx: &mut TemplateCtx<'_>) {
-        // A **payload edge** names a cell the value holds; the walk clones it.
-        let mut seen: HashSet<NodeId> = HashSet::new();
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            if !seen.insert(node) {
-                continue;
-            }
-            for child in self.template_payload_children(node) {
-                if let Dyn(child) = child {
-                    stack.push(child);
-                }
-            }
-            for child in self.template_traced_children(node) {
-                stack.push(child);
-            } // The operator's operand is a cell of the template, with no parent
-            // edge: an operator's input is not the cell's content.
-            if let Some(operation) = self.nodes[node].operation
-                && let Some(operand) = operation.operand
-            {
-                stack.push(operand);
-            }
-        }
-        // The verdict per cell: the same proof the apply's walk uses, so a
-        // closed cell is closed for both.
-        let mut memo: HashMap<NodeId, Option<bool>> = HashMap::new();
-        for node in seen {
-            let closed = self.template_content_is_closed(node, Some(ctx.boundary), &mut memo);
-            ctx.closed.insert(node, closed);
-        }
-    }
-
-    /// Whether a cell's own content is **closed**.
-    ///
-    /// # Invariant
-    /// A closed cell holds a decided value, it has
-    /// no operator, and every cell its content reaches is closed too. A cycle
-    /// among decided cells is closed: the reach runs over decided content
-    /// only, so a cycle is a fact about the content, not a hole. A **marked**
-    /// cell is the caller's own: the reach stops there.
-    pub(crate) fn template_content_is_closed(
-        &mut self,
-        node: NodeId,
-        boundary: Option<&TemplateBoundary>,
-        memo: &mut HashMap<NodeId, Option<bool>>,
-    ) -> bool {
-        match memo.get(&node) {
-            Some(Some(closed)) => return *closed,
-            // A cell on the current reach: a cycle among decided cells.
-            Some(None) => return true,
-            None => {}
-        }
-        memo.insert(node, None);
-        let mut closed = !self.template_cell_is_open(node);
-        let marked = boundary.is_some_and(|boundary| boundary.shares(node));
-        if closed && !marked {
-            for child in self.template_content_children(node) {
-                if !self.template_content_is_closed(child, boundary, memo) {
-                    closed = false;
-                    break;
-                }
-            }
-        }
-        memo.insert(node, Some(closed));
-        closed
-    }
-
-    /// The cells a cell's own content reaches: the ones its value names.
-    fn template_content_children(&self, node: NodeId) -> Vec<NodeId> {
-        let mut children: Vec<NodeId> = self
-            .template_payload_children(node)
-            .into_iter()
-            .filter_map(|child| match child {
-                Dyn(child) => Some(child),
-                // A frozen cell is read in its own module; it is not a cell of
-                // this one, so it cannot decide this cell's closure.
-                AnyNodeId::Static(_) => None,
-            })
-            .collect();
-        children.extend(self.template_traced_children(node));
-        children
-    }
-
-    /// Whether a cell is open by its own account: it holds nothing or it has an
-    /// operator.
-    fn template_cell_is_open(&self, node: NodeId) -> bool {
-        let cell = &self.nodes[node];
-        if cell.operation.is_some() {
-            return true;
-        }
-        // A present value is decided; only an empty cell or an operator is open.
-        cell.value.is_none()
-    }
-
-    /// The references a cell's own value names: an array's elements, a table's
-    /// entries.
-    fn template_payload_children(&self, node: NodeId) -> Vec<AnyNodeId> {
-        let Some(value) = self.nodes[node].value else {
-            return Vec::new();
-        };
-        match value.as_enum() {
-            Some(LowValue::Array(array)) => {
-                // SAFETY: `array` is the payload of a live cell of this module, so
-                // its home block has not been dropped.
-                unsafe { array.items() }
-                    .iter()
-                    .map(|item| item.node)
-                    .collect()
-            }
-            Some(LowValue::Table(table)) => {
-                // SAFETY: as above — `table` is a live cell's payload.
-                let mut children = Vec::new();
-                for item in unsafe { table.items() } {
-                    children.push(item.key);
-                    children.push(item.value);
-                }
-                children
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// The cells a cell's own value keeps alive: the edges the GC follows that the
-    /// graph does not name.
-    fn template_traced_children(&self, node: NodeId) -> Vec<NodeId> {
-        let Some(value) = self.nodes[node].value else {
-            return Vec::new();
-        };
-        let mut traced = Vec::new();
-        value.traced(&*self, &mut traced);
-        traced
     }
 
     /// Whether a frozen cell is closed: it holds a decided value whose own content
@@ -430,58 +266,22 @@ impl<P: Program> Module<P> {
             .collect()
     }
 
-    /// Whether the class of `source` is cloned by this walk.
+    /// Whether `source` is cloned by this walk (SPEC §Clone, per-node).
     ///
     /// # Invariant
-    /// The verdict is a fact of the class: every member of one class is cloned
-    /// or shared alike, so the instance never splits a class. A class is cloned
-    /// when it lies inside the walk's scope **and** it needs a fresh cell — one
-    /// of its members is open. The root's own class is cloned whatever it
-    /// holds: an instantiation is an instance.
+    /// A cell clones iff it is polymorphic and its own place lies inside the walk's
+    /// scope; class-wide uniformity is the flag's propagation, not a class verdict.
+    /// A template with no scope of its own clones every polymorphic cell.
     fn template_class_is_cloned(&mut self, source: NodeId, ctx: &mut TemplateCtx<'_>) -> bool {
-        let representative = disjoint::find(&mut self.nodes, source);
-        if let Some(&verdict) = ctx.verdicts.get(&representative) {
-            return verdict;
-        }
-        let verdict = self.template_class_verdict(representative, ctx);
-        ctx.verdicts.insert(representative, verdict);
-        verdict
-    }
-
-    /// The verdict of one class: cloned, or shared as a whole.
-    fn template_class_verdict(
-        &mut self,
-        representative: NodeId,
-        ctx: &mut TemplateCtx<'_>,
-    ) -> bool {
-        // The scope axis: every member of the class must lie inside the scope,
-        // or the class is shared whole.
-        if let Some(scope) = ctx.scope.clone()
-            && !self.class_inside_scope(representative, &scope)
-        {
+        if self.nodes[source].polymorphic != Some(true) {
             return false;
         }
-        // The freshness axis: the class needs a fresh cell when one of its
-        // members is open.
-        self.template_class_needs_freshness(representative, ctx)
-    }
-
-    /// Whether one member of the class is open, so the class needs a fresh cell.
-    fn template_class_needs_freshness(
-        &self,
-        representative: NodeId,
-        ctx: &TemplateCtx<'_>,
-    ) -> bool {
-        let mut member = Some(representative);
-        while let Some(current) = member {
-            member = self.nodes[current].equality.next();
-            // A cell the walk never reached is not one of the class's open
-            // cells: the walk does not instance it.
-            if !ctx.closed.get(&current).copied().unwrap_or(true) {
-                return true;
-            }
+        match ctx.scope.clone() {
+            Some(scope) => self
+                .owner_scope(source)
+                .is_some_and(|place| scope.is_ancestor_or_self(&place)),
+            None => true,
         }
-        false
     }
 
     /// The instance's cell for the template's `source`.
@@ -648,20 +448,13 @@ impl<P: Program> Module<P> {
         let Some(source_scope) = module.static_function_scope(origin.index) else {
             return false;
         };
-        let representative = if let Some(&representative) = ctx.static_representatives.get(&sref) {
-            representative
-        } else {
-            let representative = crate::static_module::static_find(&module.nodes, sref.index);
-            ctx.static_representatives.insert(sref, representative);
-            representative
-        };
-        let key = (origin, representative);
-        if let Some(&verdict) = ctx.static_verdicts.get(&key) {
-            return verdict;
+        if module.nodes[sref.index.index].polymorphic != Some(true) {
+            return false;
         }
-        let verdict = module.static_class_inside_scope(representative, &source_scope);
-        ctx.static_verdicts.insert(key, verdict);
-        verdict
+        let Some(place) = module.static_owner_scope(sref.index, &module.scopes) else {
+            return false;
+        };
+        source_scope.is_ancestor_or_self(&place)
     }
 
     /// The instance's cell for one payload reference.

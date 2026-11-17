@@ -126,6 +126,14 @@ Slice 1 (expand) landed behaviour-preserving — the flag is computed and assert
 selection unchanged. Its implementation record and slice-2 handoff are
 [polymorphic-flag-slice1](polymorphic-flag-slice1.md).
 
+Slice 2 (selection swap) landed — clone selection reads the flag at every walk. Its
+record, the upgrade mechanism's measurement, and the one open ratification are
+[polymorphic-flag-slice2](polymorphic-flag-slice2.md).
+
+The struct-template freshness continuation (open struct-field cells marked at creation;
+`any3`/`any6` fixed, `ideal4`/`any4` open) is
+[polymorphic-flag-struct-freshness](polymorphic-flag-struct-freshness.md).
+
 ## 5. Superseded decisions
 
 - **M5** of [any-removal-migration](any-removal-migration.md) ("the clone rule

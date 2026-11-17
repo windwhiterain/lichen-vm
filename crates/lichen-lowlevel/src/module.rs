@@ -109,6 +109,8 @@ impl<P: Program> Module<P> {
             value_templates: HashSet::new(),
             budget_exhausted: None,
             polymorphic_unflagged: 0,
+            polymorphic_dirty: false,
+            apply_output_cells: HashSet::new(),
             report_type_side_failures: false,
             // The empty layout is entry 0 from the first moment, so a plain value array's
             // id always resolves.
@@ -578,6 +580,17 @@ impl<P: Program> Module<P> {
     /// Idempotent; propagation spreads the mark through the recursion set.
     pub fn mark_polymorphic(&mut self, node: NodeId) {
         self.write_polymorphic(node, Some(true));
+        self.polymorphic_dirty = true;
+    }
+
+    /// Record an apply's output cell (operand slot 2): the clone walk freshens it per call.
+    pub fn mark_apply_output(&mut self, node: NodeId) {
+        self.apply_output_cells.insert(node);
+    }
+
+    /// Whether `node` is an apply's output cell, which an apply clone freshens per call.
+    pub fn is_apply_output(&self, node: NodeId) -> bool {
+        self.apply_output_cells.contains(&node)
     }
 
     /// Write a node's polymorphic flag, keeping [`Self::polymorphic_unflagged`] current.
