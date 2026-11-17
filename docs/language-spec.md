@@ -301,16 +301,18 @@ Polymorphism at every application: @clone function's expressions, unify the argu
 
 ## Polymorphic
 
-A node is polymorphic if it:
-- Is create with polymorphic enabled. e.g. `'a` markds `a` polymorphic.
-- Has polymorphic node in its recursion set.
+A node is polymorphic over a function if it:
+- Is create with polymorphic enabled in that function scope. e.g. `'a` markds `a` polymorphic.
+- Has at least one polymorphic node over that function in its recursion set.
 
 - For efficiancy, polymorphic flag propagate via deep evaluate.
 
 ### Clone
 Clone is a action that recursively clone a node, triggered by function apply.
 
-Polymorphic nodes winthin the applying funcion's scope must be clone. 
+Nodes must be clone if satisfied all following situation:
+- Inside the applying function's scope or children-scope.
+- Polymorphic over the applying function's scope or ancestor-scope.
 
 Clone more nodes should make no change to the language behaviour.
 
