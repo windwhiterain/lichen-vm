@@ -242,3 +242,60 @@ deliberate SPEC deviation.
 failing callee is a `Jit` operation or a binding; `compile_order_class` alone; whether the slowdown
 also changes run order; whether a debug build's `equality.rs:357-365` assertion catches a U1 class
 state (the suite runs the test profile).
+
+## 10. M1 measured: the classification fix is inert, and the defect is §Clone's detach
+
+The maintainer ruled **"fix or SPEC proposal"** — pursue the fix, and bring a SPEC proposal only
+if the fix cannot honour the SPEC; never a silent deviation. M1 is the decisive measurement
+(impl, `.worktrees/unified-interface/.scratch-core/M1-measurement.md`, logs `m1-*.txt`; temporary
+env-gated instruments, never committed, tree restored to `8590ea76` and recompiling clean).
+
+**Q1 — the 2-3 line classification fix is INERT, measured not inferred.** At `compute/body.rs:1913`
+the callee (node 405) is an **Index operation node** — the value-half read `Index(k0_expr, 0)` of
+the binding `k0` — neither a `Jit` operation nor a plain binding. Under U1:
+`kid=None pending=false vof=Some(368) slot=None classval=None`; under A1, same instruments:
+`kid=Some(185383013334871206) pending=true vof=Some(954) slot=Some(Array) classval=Some(Array)`.
+`pending_kernel` is **already false** under U1, so `kernel_id_of || pending_kernel` is still false
+and the recorded inline-callee refusal still fires. The classification-consistency fix is worth
+having on its own merits, but it does not unblock the bind.
+
+**Q2 — neither hypothesized mechanism fires for the Kernel.** Counts over the U1 repro: all value
+writes 5180, write-once skips 31, `fill_class_holes` 615, `propagate_class_value` 69; **Kernel**
+writes 1, Kernel skips 0, Kernel fills/props 0. The Kernel is written once to the result **clone**
+node 1057 (`origin=368`, its own singleton class); the callee reads node **368** (the Apply node,
+holding nothing), and 368 and 1057 are **not unified**. The divergence is in `value_of_node`
+(`compute.rs:5872`): for `Index(target, 0)`, A1 takes the `array_items(target)` branch (the target
+holds the concrete `[value, type]` expr, peeling to the kernel-bearing value slot 954); U1 falls
+through to `node_operation(target).is_some()` and returns the empty Apply node 368, because the
+Index target **lost its concrete expr Array**. So the bind displaces the frozen jit apply's
+**result expr structure / value-half** from the caller's binding — the same family as rework 7's
+frozen wildcard-fill value-half, not a Kernel overwrite.
+
+**The refinement M1 leaves open**: the 31 write-once skips were counted in total, not by value
+kind, so whether the **expr Array's** write is among them is unmeasured. That is A3's first
+instrument: count Array writes and skips separately at the bind.
+
+**Q3 — `compile_order_class` is a genuine regression, not the recorded noise.** Alone on U1 it
+fails at the first assertion (`control.len() == 2`, one Float kernel compiled); the recorded
+process-global noise (`open-issues.md:359-360`) **passes** alone, and the test passed on A1. It
+reads the compiled kernel-fragment count — a sibling consequence of the same displacement.
+
+**The two non-classification failures read checker output, not classification**:
+`an_output_position_that_is_not_a_buffer_is_refused` gets the codomain-position diagnostic twice
+(`expected Struct, found Int` ×2 where 1 is asserted), and
+`the_product_is_warp_uniform_not_wider` finds the warp-uniformity refusal **fails to fire** (the
+program checks when it must be refused). Both are correctness consequences of the bind.
+
+**The route conclusion: fix, and the fix is A3 — a SPEC proposal is not indicated.** The SPEC's
+unify works on the dynamic path (language stayed `289/0` under U1); what breaks is the frozen
+materialization. §Clone's own sentence is the criterion the frozen walk misses: *"Cloned
+polymorphic nodes should be detached from it from its class, while placed in new class that has
+the same tolopogy"* (`language-spec.md:311-319`). A per-call clone must be **detached into a fresh
+class with the same topology** before the argument unifies with it; the frozen walk's image is not
+detached that way, so under unify the template's expr structure and the argument's value collide
+in one class and write-once keeps only one. The fix is therefore the unified walk's per-call
+freshening and detachment — A3 — not a change to §Function or §Merge.
+
+**Perf is secondary.** Bounding the O(members) walks is necessary for the unify to be affordable
+but **not sufficient** to make it work: even with perfectly bounded walks the classification stays
+inert until the value-half wiring is restored. Correctness is the primary blocker.
