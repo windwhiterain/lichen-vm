@@ -140,7 +140,14 @@ impl<P: Program> StaticModule<P> {
                 } else {
                     node.operation.map(|operation| StaticOperation {
                         operator: operation.operator,
-                        operand: operation.operand.map(|operand| node_map[&operand]),
+                        operand: operation.operand.map(|operand| match operand {
+                            AnyNodeId::Dynamic(node) => node_map[&node],
+                            // A static operand is a cross-module ref the local-node format cannot
+                            // name; no A1 writer produces one. Naming one needs a format decision.
+                            AnyNodeId::Static(_) => unreachable!(
+                                "freeze: a static operand cannot be frozen to a LocalNodeId (artifact format unchanged)"
+                            ),
+                        }),
                     })
                 },
                 equality: disjoint::Meta::new(
@@ -587,7 +594,10 @@ fn closure<P: Program>(
         if (mode == FreezeMode::Portable || entry.value.is_none())
             && let Some(operand) = entry.operation.and_then(|operation| operation.operand)
         {
-            work.push(operand);
+            // A frozen operand ref is already frozen in its home module; nothing to add here.
+            if let AnyNodeId::Dynamic(node) = operand {
+                work.push(node);
+            }
         }
         if let Some(supplied) = module.field_sources.get(&node) {
             work.push(*supplied);

@@ -342,9 +342,11 @@ impl<P: Program> Module<P> {
         // The operator travels with the instance; its operand is the instance's own.
         let operation = operation.map(|operation| Operation {
             operator: operation.operator,
-            operand: operation
-                .operand
-                .map(|operand| self.template_clone(operand, ctx)),
+            operand: operation.operand.map(|operand| match operand {
+                AnyNodeId::Dynamic(node) => AnyNodeId::Dynamic(self.template_clone(node, ctx)),
+                // A frozen operand ref is referenced in place, never materialized.
+                AnyNodeId::Static(sref) => AnyNodeId::Static(sref),
+            }),
         });
         // An open cell is never carried: the instance's own cell replaces it, so
         // the caller's value can fill it.
@@ -536,14 +538,14 @@ impl<P: Program> Module<P> {
         let operation = operation.map(|operation| Operation {
             operator: operation.operator,
             operand: operation.operand.map(|operand| {
-                self.template_materialize_static(
+                AnyNodeId::Dynamic(self.template_materialize_static(
                     StaticNodeId {
                         module: sref.module,
                         index: operand,
                     },
                     clone,
                     ctx,
-                )
+                ))
             }),
         });
         let value = self.node_value(AnyNodeId::Static(sref));

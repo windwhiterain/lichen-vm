@@ -316,7 +316,7 @@ macro_rules! lang_compose_vocabulary {
             /// The deferred form dispatches to the leaf too.
             fn run_deferred(
                 &self,
-                operand: Option<::lichen_lowlevel::NodeId>,
+                operand: Option<::lichen_lowlevel::AnyNodeId>,
                 block: ::lichen_lowlevel::BlockId,
                 module: &mut ::lichen_lowlevel::Module<LangProgram>,
             ) -> Option<<LangProgram as ::lichen_lowlevel::Program>::Value> {

@@ -387,7 +387,7 @@ impl<P: Program> Module<P> {
         match id {
             Dyn(node) => {
                 let operation = self.nodes.get(node)?.operation?;
-                Some(operation.operand.map(Dyn))
+                Some(operation.operand)
             }
             AnyNodeId::Static(sref) => {
                 let module = self.static_module(sref.module);

@@ -192,7 +192,7 @@ impl<'a, P: Program> LoopGraph<'a, P> {
             AnyNodeId::Dynamic(node) => self.module.node_operation(node).map(|operation| {
                 (
                     operation.operator,
-                    operation.operand.map(AnyNodeId::Dynamic),
+                    operation.operand,
                 )
             }),
             AnyNodeId::Static(sref) => {

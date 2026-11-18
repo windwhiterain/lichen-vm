@@ -214,7 +214,7 @@ impl<P: Program> Module<P> {
                 };
                 // An undecided operand chain means the index can't be resolved
                 // yet — stay lazy so the definition pass can flag the node.
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 match operand.as_enum() {
@@ -323,7 +323,7 @@ impl<P: Program> Module<P> {
                 };
                 // An undecided target — the body's own parameter during the
                 // definition pass — stays lazy instead of panicking.
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 match operand.as_enum() {
@@ -393,7 +393,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableGet expects an operand array node")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 match operand.as_enum() {
@@ -459,7 +459,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableMerge expects an operand array of [table, table]")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 let Some(LowValue::Array(array)) = operand.as_enum() else {
@@ -517,7 +517,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableWithout expects an operand array of [table, key]")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 let Some(LowValue::Array(array)) = operand.as_enum() else {
@@ -560,7 +560,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableCount expects an operand array of [table]")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 let Some(LowValue::Array(array)) = operand.as_enum() else {
@@ -581,7 +581,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableKey expects an operand array of [table, index]")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 let Some(LowValue::Array(array)) = operand.as_enum() else {
@@ -620,7 +620,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("Unify expects an operand array of [actual, expected]")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 let Some(LowValue::Array(items)) = operand.as_enum() else {
@@ -661,7 +661,7 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("External expects an operand node")
                 };
-                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                let Some(operand) = self.evaluate_node(operands, Some(block)) else {
                     return self.ran_undecided(node);
                 };
                 // An entry cannot report "undecided": an open element keeps it so.
@@ -805,7 +805,7 @@ impl<P: Program> Module<P> {
             .and_then(|op| op.operand)
             .expect("a TableGet node reached the miss path carries its operand");
         match self
-            .node_value(Dyn(operand))
+            .node_value(operand)
             .and_then(|value| value.as_enum())
         {
             Some(LowValue::Array(array)) => {
@@ -837,7 +837,7 @@ impl<P: Program> Module<P> {
             return false;
         };
         let Some(LowValue::Array(operands)) =
-            self.node_value(Dyn(operand)).and_then(|v| v.as_enum())
+            self.node_value(operand).and_then(|v| v.as_enum())
         else {
             return false;
         };
@@ -974,8 +974,8 @@ impl<P: Program> Module<P> {
             {
                 match operation.operand {
                     Some(operand) => {
-                        self.evaluate_node_deep_inner(Dyn(operand), current, cache);
-                        self.ref_is_undecided(cache, Dyn(operand))
+                        self.evaluate_node_deep_inner(operand, current, cache);
+                        self.ref_is_undecided(cache, operand)
                     }
                     None => false,
                 }

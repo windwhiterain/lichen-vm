@@ -63,7 +63,12 @@ impl<P: Program> Module<P> {
                 self.operand_expr(operand, "operator")
             }
             // A program's own operator: its operand array, whole.
-            _ => Ok(vec![operand]),
+            _ => match operand {
+                AnyNodeId::Dynamic(node) => Ok(vec![node]),
+                AnyNodeId::Static(_) => Err(
+                    "a program operator's operand is a static reference into a frozen module, which has no node in this graph".into(),
+                ),
+            },
         }
     }
 
@@ -76,15 +81,15 @@ impl<P: Program> Module<P> {
     /// `[function, argument, result_cell, callee_type]` has to be readable whole
     /// for a caller that wants its later ones, and the two readings cannot
     /// disagree about what the array holds.
-    pub fn operand_items(&self, operand: NodeId) -> Result<&'static [ArrayItem], String> {
-        // SAFETY: `operand` is a live node of `self`; nothing here releases it.
-        unsafe { self.array_items(operand) }.ok_or_else(|| "operand is not an array value".into())
+    pub fn operand_items(&self, operand: AnyNodeId) -> Result<&'static [ArrayItem], String> {
+        // SAFETY: `operand` is a live node of `self`, or a frozen ref whose module outlives it.
+        unsafe { self.array_items_ref(operand) }.ok_or_else(|| "operand is not an array value".into())
     }
 
     /// The `[left, right]` of a two-element operand array, all of this module's.
-    pub fn operand_expr(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
-        // SAFETY: `operand` is a live node of `self`; nothing here releases it.
-        let items = unsafe { self.array_items(operand) }
+    pub fn operand_expr(&self, operand: AnyNodeId, what: &str) -> Result<Vec<NodeId>, String> {
+        // SAFETY: `operand` is a live node of `self`, or a frozen ref whose module outlives it.
+        let items = unsafe { self.array_items_ref(operand) }
             .ok_or_else(|| format!("{what} operand is not an array value"))?;
         if items.len() < 2 {
             return Err(format!(

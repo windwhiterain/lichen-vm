@@ -668,7 +668,7 @@ impl<P: Program> Module<P> {
             block,
             Some(Operation {
                 operator: P::Operator::from(crate::LowOperator::Apply),
-                operand: Some(operand),
+                operand: Some(AnyNodeId::Dynamic(operand)),
             }),
             None,
         );
@@ -894,9 +894,11 @@ impl<P: Program> Module<P> {
         // The run stamp is whether the operator runs; `evaluated_deep` is the other axis
         // (`apply-clone-ownership.md`).
         let operation = operation.map(|operation| Operation {
-            operand: operation
-                .operand
-                .map(|operand| self.node_apply(operand, ctx)),
+            operand: operation.operand.map(|operand| match operand {
+                AnyNodeId::Dynamic(node) => AnyNodeId::Dynamic(self.node_apply(node, ctx)),
+                // A frozen operand ref is referenced in place, never materialized.
+                AnyNodeId::Static(sref) => AnyNodeId::Static(sref),
+            }),
             ..operation
         });
         // The deep pass makes an answer a fact every call shares; `runned` is another axis.

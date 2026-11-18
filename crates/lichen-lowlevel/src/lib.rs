@@ -511,15 +511,15 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     /// docs/notes/compiler-plugin.md.
     fn run_deferred(
         &self,
-        operand: Option<NodeId>,
+        operand: Option<AnyNodeId>,
         block: BlockId,
         module: &mut Module<P>,
     ) -> Option<P::Value> {
         let value = match operand {
             Some(node) => {
-                let value = module.evaluate_node_deep(node, Some(block));
+                let value = module.evaluate_node_deep_ref(node, Some(block));
                 // An absent node or unset `evaluated_deep` means concreteness unknown, never concrete.
-                let undecided = module.node_is_undecided(node);
+                let undecided = module.node_is_undecided_ref(node);
                 if undecided {
                     return None;
                 }
@@ -573,7 +573,7 @@ impl<P: Program> OperatorExt<P> for LowOperator {
 #[derive(Debug, Clone, Copy)]
 pub struct Operation<P: Program> {
     pub operator: P::Operator,
-    pub operand: Option<NodeId>,
+    pub operand: Option<AnyNodeId>,
 }
 
 #[derive(Debug, Clone, Copy)]

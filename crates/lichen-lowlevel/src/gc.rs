@@ -181,7 +181,10 @@ impl<P: Program> Module<P> {
         if self.has_no_result_yet(node)
             && let Some(operand) = operation.and_then(|operation| operation.operand)
         {
-            self.garbage_collect_node(operand, source, target);
+            // A frozen operand ref is kept alive by its registry Arc, not the slot table.
+            if let AnyNodeId::Dynamic(node) = operand {
+                self.garbage_collect_node(node, source, target);
+            }
         }
         if let Some(supplied) = self.field_sources.get(&node).copied() {
             self.garbage_collect_node(supplied, source, target);

@@ -165,7 +165,7 @@ impl<P: Program> Module<P> {
         };
         // SAFETY: the operand is read out of `self.nodes` on this borrow, so
         // its arena stays alive while `items` is walked.
-        let Some(items) = (unsafe { self.array_items(operand) }) else {
+        let Some(items) = (unsafe { self.array_items_ref(operand) }) else {
             return Vec::new();
         };
         items

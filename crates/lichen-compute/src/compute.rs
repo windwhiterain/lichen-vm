@@ -1194,7 +1194,7 @@ where
     /// (`docs/notes/compound-element-slots.md`).
     fn run_deferred(
         &self,
-        operand: Option<NodeId>,
+        operand: Option<AnyNodeId>,
         block: BlockId,
         module: &mut Module<P>,
     ) -> Option<P::Value> {
@@ -1202,11 +1202,11 @@ where
             let Some(node) = operand else {
                 return self.run(P::Value::from(LowValue::Error), block, module);
             };
-            let value = module.evaluate_node_deep(node, Some(block));
+            let value = module.evaluate_node_deep_ref(node, Some(block));
             let value = value?;
             // SAFETY: `node` is the operand the VM just evaluated, and no block is dropped
             // in this walk.
-            for item in unsafe { module.array_items(node) }.unwrap_or_default() {
+            for item in unsafe { module.array_items_ref(node) }.unwrap_or_default() {
                 let element = module.element_value_node(item.node).unwrap_or(item.node);
                 if module.node_value(element).is_none() {
                     return None;
@@ -1216,8 +1216,8 @@ where
         }
         let value = match operand {
             Some(node) => {
-                let value = module.evaluate_node_deep(node, Some(block));
-                if module.node_is_undecided(node) {
+                let value = module.evaluate_node_deep_ref(node, Some(block));
+                if module.node_is_undecided_ref(node) {
                     return None;
                 }
                 value?

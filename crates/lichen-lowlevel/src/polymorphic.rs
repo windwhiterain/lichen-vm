@@ -115,7 +115,10 @@ impl<P: Program> Module<P> {
             let cell = &self.nodes[node];
             if let Some(operation) = cell.operation {
                 if let Some(operand) = operation.operand {
-                    children.push(operand);
+                    // A frozen operand's flag is persisted; propagation walks dynamic nodes only.
+                    if let Some(node) = operand.dynamic() {
+                        children.push(node);
+                    }
                 }
             }
             if let Some(value) = cell.value {

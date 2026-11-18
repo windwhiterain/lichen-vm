@@ -745,6 +745,18 @@ impl<P: Program> Module<P> {
             .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.undecided))
     }
 
+    /// [`Self::node_is_undecided`] over a ref: a frozen node's solved flag, read
+    /// where it lives through the registry (the static arm of the same verdict).
+    pub fn node_is_undecided_ref(&self, node: AnyNodeId) -> bool {
+        match node {
+            AnyNodeId::Dynamic(node) => self.node_is_undecided(node),
+            AnyNodeId::Static(sref) => self
+                .static_module(sref.module)
+                .nodes[sref.index.index]
+                .undecided(),
+        }
+    }
+
     /// Re-open every operator under `block` that ran and could not decide.
     ///
     /// # Invariant
