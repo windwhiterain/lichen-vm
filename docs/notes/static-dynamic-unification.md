@@ -376,3 +376,59 @@ the value present in time, the target-identity delta (954 vs 368), **what the SP
 an apply's result is available** (§Operation/§Merge/§Function/§Clone — if it is silent, that is the
 SPEC-proposal candidate), the checker/compute stage boundary under contract rule 5, and the honest
 fix surfaces with sizes. The route remains "fix or SPEC proposal", never a silent deviation.
+
+## 13. The ordering mapped: the frozen check path does not run what it checks
+
+recon's read-only map (`.scratch-core/A3-ordering.md`) names the writer, the reader and the stage
+boundary, and redirects the fix.
+
+**The asymmetry.** Dynamic `function_apply` (`function.rs:199-270`) instantiates, **evaluates the
+body** (`:259`) and **wires the result** (`:267`) during the checker's own signature pass, so the
+Apply node holds its expr Array before any later reader looks. The frozen non-reporting path
+`materialize_static_return_apply` (`static_module/apply.rs:230-289`) materializes, applies the
+return's type side, records the claim, binds and records `applied_exprs` — and **never** calls
+`evaluate_node(applied)` or `wire_apply_result`. Its sibling `static_function_apply` does both
+(`:94`, `:104`) but is reached only from the evaluation Apply arm (`evaluation.rs:350-351`). The
+writer is `wire_apply_result` (`apply.rs:390-430`, Array arm `:403-408`: write the result into the
+Apply node, then unify it with the applied expr). **The copy bind was the stand-in for that missing
+evaluation step**; the unify ruling removed the stand-in and exposed the gap. This is the same
+thesis as §1, one level deeper: the frozen path does not do what the dynamic path does.
+
+**Two corrections to the earlier record.** (1) The bind neither creates nor destroys the Apply
+node's Array: step 1's log shows `param_val` and `applied_val` both `Array layout 1` *before* the
+bind, so the copy's eagerness is not established as why A1 worked at that node. (2) M1's
+"954 under A1 vs 368 under U1" is a **cross-run** comparison and node ids are not stable across
+runs, so it is not an identity claim. `value_of_node` (`compute.rs:5872-5901`) has **two exits for
+one node** — `:5893` peels to the value slot when an Array is present, `:5897` returns the operator
+node when it is not — so both readings can be one node at two moments.
+
+**The SPEC is silent on the ordering.** §Operation (`language-spec.md:111-115`) says an operation
+is resolved when it has runned and that a produced value is unified with the class representative;
+§Merge (`:106-108`) is a *forcing* rule (evaluating any member runs the class's operations). Neither
+says when an application's result becomes **observable to a reader**, and §Clone constrains which
+nodes clone, not when a result is readable. The book is absent from this checkout. **The exact gap**:
+§Function/§Operation never relate *checking* an application to *its result being observable*. A
+sentence would be needed in one of two directions — "an application's result is observable from the
+moment the application is checked", or "a reader that needs an application's result must force the
+application" — and that choice is the same choice as fix surfaces (i) vs (iii).
+
+**The stage contract.** Compute reads purely, so contract rule 5 is not violated by compute; but the
+jit compiles its body **before** the applies inside it are evaluated, so the read is timed against
+an incomplete write set *within one pass*. The lowlevel's own rule is run-then-read
+(`function.rs:259` then `:267`; `static_module/apply.rs:94` then `:104`). Three read tiers exist —
+raw `node_value`, the `value_of_node`/`kernel_id_of` peel, and the forcing
+`evaluate_node`/`evaluate_node_deep_ref` — and the lowering uses the weakest.
+
+**Fix surfaces** (recon §7): (i) compute forces the callee's value before classifying, ~2-5 lines ×
+3 sites (`body.rs:1913`, `:1757-1759`, `:1926-1928`), a check-stage *policy* change, inert if the
+cause is structural; (ii) the frozen tail evaluates and wires like the dynamic path, ~5-10 lines,
+**symmetry** but it changes the invariant at `apply.rs:8-14` ("an apply is not a normalization …
+the callee's own cells are not settled") and may double-run bodies; (iii) a checker stage-ordering
+fix, the largest blast radius, needing an Invariant change and likely a SPEC sentence; (iv) the
+selection exit — **orthogonal to the ordering**, able to change only which node the callee's value
+half names, so not to be assumed as the fix.
+
+**Next**: the discriminator run (impl, temporary instruments, one run per side, ids compared only
+within a run) decides cause 1 (read timing) from cause 2 (structural misnaming via
+`expr_value_half`'s own state dependency, `resolve.rs:412-414`), and prints the checker pass at both
+the read and the write. Step 2 stays held until it lands.
