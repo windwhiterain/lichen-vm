@@ -432,3 +432,44 @@ half names, so not to be assumed as the fix.
 within a run) decides cause 1 (read timing) from cause 2 (structural misnaming via
 `expr_value_half`'s own state dependency, `resolve.rs:412-414`), and prints the checker pass at both
 the read and the write. Step 2 stays held until it lands.
+
+## 14. D1 decided it: the bind changes WHEN the jit runs (cause 1, pass ordering)
+
+impl's discriminator (`.worktrees/unified-interface/.scratch-core/D1-discriminator.md`, logs
+`d1-u1.txt` FAILED exit 101 / `d1-a1.txt` ok; one run per tree, ids compared only within a run;
+six files instrumented and restored, residue 0, tree at `6200c92c`, workspace check exit 0).
+
+- **Naming is identical in both trees**: the callee `Index` 405 targets node 368, the bind's Apply
+  node, and reads slot 0; `target_eq_apply=false` (the apply being lowered is 471, k1's jit),
+  `target_eq_applied=false`. `expr_value_half(368)` at BUILD is `None` in **both** trees, and A1
+  works despite it — so the structural cause (cause 2) **falls**, and with it any claim that the
+  selection exit repairs this defect.
+- **The decisive delta is the pass**: U1's lowering read is in **CHECK** (`d1-u1:777`),
+  `kernel_id_of=None`, and 368's Array is written **later**, still in check (`:789`) —
+  read-before-write, refusal `stage:Check` (`:826`). A1's lowering read is in **DEF-STMT**
+  (`d1-a1:803`), `kernel_id_of=Some`, and 368's Array was written **earlier** in **def-fn**
+  (`:776`) — read-after-write. **A1 has only one lowering read: under the copy bind the jit does
+  not lower during check at all.**
+- **Mechanism**: `apply_parameter_check` → `evaluate_pattern_argument` →
+  `evaluate_node(argument)` (`function.rs:756`, "one force answers both reads") **forces evaluation
+  during check**, so k1's jit compiles before the sibling frozen apply 368 has produced its Array.
+  `copy_parameter_slots` → `copy_slot` only writes/propagates a class value and never evaluates, so
+  the jit stayed lazy until def-stmt, after 368 ran in def-fn. At read time `value_of_node` takes
+  `:5897` (fallback, no Array) under U1 and `:5893` (peel) under A1 — one function, two exits,
+  decided by Array presence.
+
+**So the defect is a latent ordering dependency in the kernel lowering**: it reads a sibling
+apply's result without anything guaranteeing that apply has run, and the copy's laziness happened
+to satisfy it. The unify's forcing (which SPEC §Merge:106 itself sanctions) exposes it.
+
+**The permission story for (ii) is better than first read.** The `# Invariant` on
+`static_function_apply` (`static_module/apply.rs:9-12`) already sanctions *"the callee's body is
+cloned into the caller and the third sanctioned unify runs (the parameter check and the return
+wiring); no new callee is minted and the callee's own cells are not settled"* — and that function
+**already** evaluates (`:94`) and wires (`:104`) under it. Option (ii) extends the same sanctioned
+action to the sibling non-reporting path, evaluating the **clone in the caller**, not the callee's
+own cells; and SPEC §Operation:115 ("one operation only run once, gated by runned flag") is what
+prevents a double run. So (ii) may be a MIGRATION of that sentence to the shared site rather than a
+rule change — the maintainer decides which reading holds. Option (i) would make compute trigger
+evaluation, straining contract rule 5 (compute only reads); (ii) keeps compute purely reading and
+repairs the language layer's asymmetry, which is the unification thesis itself.
