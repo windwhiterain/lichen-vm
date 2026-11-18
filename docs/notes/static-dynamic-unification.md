@@ -607,3 +607,86 @@ combination that could address the second face is **the selection exit (A3 step 
 unify bind**: the three are class-merging consequences, and the frozen walk's over-broad remap
 (§11) is what decides which clones share a class — so narrowing it is directly relevant to them,
 even though it is orthogonal to the ordering cause. That is the architectural goal anyway.
+
+## 18. Stage 1b landed at value positions; the widening is skipped, and a guard is owed
+
+> Status: **1b-i landed (`bc7d7008`), gate green with compute's failing names identical
+> to A2. The 1b-ii widening is SKIPPED by ruling. One guard is owed to 1c.**
+
+### What landed, and what it is worth
+
+`static_node_apply_ref` carries a **decided-only reference-in-place exit at value
+positions**. A remap hit keeps one image; an undecided or wildcard cell always mints,
+because a frozen cell is immutable and an open cell must clone to be fillable; otherwise
+the shared `clone_per_call` decides, with the frozen erased flag as its polymorphic term.
+The mint proof is a **`Copy` parameter**, never context state, so no early return can leak
+a proof into a sibling subtree; a re-homed closure passes the forced proof, so its
+structural cells mint and its `Function` fields stay `NodeId`.
+
+Measured across the 289 language tests: **58 exits against 21843 mints**. The win is small,
+and the reason is a **correction to this note's own diagnosis**: `static_remap_value`
+already leaves a decided concrete item as a `Static` ref (`node => node`), the ref walk is
+reached mostly for open cells, and every decided *structural* cell is already per-call.
+So for decided cells there is little over-cloning left to remove, and undecided cells must
+clone. The "the frozen walk clones everything" framing is weaker than earlier sections
+claimed; the 58 value-position exits are the whole of this slice's win.
+
+### The operand half was falsified by compute, not by reading
+
+Opening the exit at operand positions too (`dc38b6dc`) read **green** on language 289/0,
+lowlevel 167/0/1, highlevel 136/0 and compute-gpu 94/0 — and the full compute sweep then
+answered `FAILED. 210 passed; 73 failed; 1 ignored`, five regressions and no improvements,
+every one the same panic at `freeze.rs:147`, *a static operand cannot be frozen to a
+`LocalNodeId`*: `zz_frozen_body_probe::probe_a_kernel_body_from_a_frozen_package` and four
+`zz_tensor_probe` tests. The language suite never reaches it. **A language-only gate reads
+green while compute panics**, which is why the operand exit waits for the tagged encoding.
+Keeping the operand minting costs one cell (58 exits instead of 59).
+
+### Why the widening is skipped
+
+Three reasons, each sufficient: the structural exit is **inert** where it would be added
+(0 of 145 decided cells on language, 0 of 1169 in the compute jit subset, provenance
+overlap 0); it is **coupled to the tagged encoding**, because
+`lichen-language/src/persist/container.rs` serializes both provenance maps by local index
+and `AnyNodeId` has no `.index`, so it cannot gate green on its own; and it would buy a
+widened API signature for `tests/language/link_arity.rs`, which reads an `applied_exprs`
+value and passes it to `node_function(NodeId)` and **cannot be edited**. A commit that
+cannot gate green is not a staging boundary, and effort whose measured effect is zero is
+not a slice.
+
+### REQUIRED GUARD, owed whenever a `Static` can reach the provenance maps
+
+The frozen artifact carries **two** provenance maps, `StaticModule::apply_result_owners`
+and `StaticModule::field_sources`, both `HashMap<LocalNodeId, LocalNodeId>`. There is no
+frozen `applied_exprs` and no frozen `applied_claims`; those are dynamic-only, so no drop
+question arises for them.
+
+`freeze.rs` filters both through `node_map` (`HashMap<NodeId, LocalNodeId>`), so once the
+dynamic maps widen, a `Static` key or value **drops silently**. That is not merely an
+incomplete artifact. Five frozen readers clone the target and insert the edge into the
+dynamic map — `static_module/apply.rs` at the `field_sources` read, the two signature-walk
+`apply_result_owners` reads, and the two in `static_node_apply` — so a dropped entry means
+the clone never receives the edge, and `applied_constructor` (`equality.rs`, which tries
+the direct entry, then the class root, then a map scan) finds it in none of the three;
+compute's `body.rs` and `compute.rs` readers take their `else`/`?`/`.or_else` paths.
+
+Worse, a **local-keyed entry holding a cross-module value is misread**: the frozen walk
+does `.get(&local)` and treats the value as a `LocalNodeId` of its own module, so another
+module's index reads as a local cell. **An artifact that lies is worse than one that is
+incomplete.** The rule is therefore a **loud refusal at freeze, naming the map, the node
+and the target module**, and the same refusal at the persist site — never a drop. The
+existing `filter_map` may keep dropping a *dynamic* key or value outside the frozen node
+set (pre-existing, and the frozen set is a subset by construction); a *static* key or value
+is the new case and must refuse.
+
+The hazard is stated at the filter site in `freeze.rs`; this section carries the argument
+and the consumer census. **Unreachable today**: no `Static` enters these maps, because
+structural positions still mint and every insert is dynamic. The guard lands with the
+tagged encoding.
+
+### 1c is deferred, not cancelled
+
+The tagged operand encoding, `StaticOperation::operand` widening, the format bump 33 → 34,
+the `referenced_keys` operation edge (it walks values only today, so a `Static` operand
+would be **silently evicted**), and these refusals are one slice. Its trigger is a decision
+that the operand exit is wanted, or any path where a `Static` operand reaches freeze.

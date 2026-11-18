@@ -298,6 +298,7 @@ impl<P: Program> StaticModule<P> {
             key,
             nodes,
             functions,
+            // A Static key or value reads as a local cell downstream: these two maps must refuse it, never drop it.
             apply_result_owners: module
                 .apply_result_owners
                 .iter()
