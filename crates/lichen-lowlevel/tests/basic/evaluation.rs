@@ -195,7 +195,7 @@ fn cyclic_operations_panic_instead_of_looping() {
         a,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(b),
+            operand: Some(AnyNodeId::Dynamic(b)),
         },
     );
     m.evaluate_node_deep(b, None);

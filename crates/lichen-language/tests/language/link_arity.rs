@@ -114,7 +114,7 @@ unsafe extern "C" fn probe_entry(
                     "    entry: item {k}: shallow={} node={:?} reads_expr={expr:?} owner={:?} read={:?}",
                     item.shallow,
                     item.node,
-                    expr.and_then(|expr| module.node_function(expr)),
+                    expr.and_then(|expr| module.node_function(expr.dynamic()?)),
                     read
                 );
                 if let Some(lichen_lowlevel::LowValue::USize(n)) = low {
@@ -444,7 +444,7 @@ fn frozen_readings() {
             .and_then(|operand| {
                 build
                     .module
-                    .node_value(lichen_lowlevel::AnyNodeId::Dynamic(operand))
+                    .node_value(operand)
             })
             .and_then(|value| {
                 AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value).and_then(|low| match low {

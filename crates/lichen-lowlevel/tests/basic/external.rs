@@ -56,7 +56,7 @@ fn probe_external_operator() {
                     library: 7,
                     instance: 0,
                 }),
-                operand: Some(operand),
+                operand: Some(AnyNodeId::Dynamic(operand)),
             }),
             None,
         )

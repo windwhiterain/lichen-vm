@@ -59,7 +59,7 @@ fn violations(module: &Module<LangProgram>) -> Vec<(NodeId, BlockId, NodeId, Blo
         }
         if let Some(operand) = module.node_operation(node).and_then(|entry| entry.operand) {
             // SAFETY: the operand array of a live node, released only with its block.
-            for item in unsafe { module.array_items(operand) }.unwrap_or(&[]) {
+            for item in unsafe { module.array_items_ref(operand) }.unwrap_or(&[]) {
                 note(node, item.node);
             }
         }

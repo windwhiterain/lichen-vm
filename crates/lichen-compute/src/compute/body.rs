@@ -1321,6 +1321,11 @@ where
 
         // The compute plugin's own operators.
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
+            // A compute operator's operand array is lowered as a dynamic node; a frozen
+            // operand array names a read-only graph this kernel body cannot lower.
+            let operand = operand.dynamic().ok_or_else(|| {
+                "compute kernel body: a static operand array cannot be lowered into a kernel (the frozen graph is read-only)".to_string()
+            })?;
             return self.compute_operator(node, compute_op, operand);
         }
         Err(format!(
@@ -1725,7 +1730,7 @@ where
         found
     }
 
-    fn apply_argument(&self, operand: NodeId) -> Option<(NodeId, NodeId)> {
+    fn apply_argument(&self, operand: AnyNodeId) -> Option<(NodeId, NodeId)> {
         let argument = self
             .module
             .operand_items(operand)
@@ -1741,7 +1746,7 @@ where
         &mut self,
         node: NodeId,
         callee: NodeId,
-        operand: NodeId,
+        operand: AnyNodeId,
     ) -> Result<Option<ValueId>, String> {
         let type_slot = self
             .module
@@ -1818,7 +1823,7 @@ where
     /// wrote is emitted instead; a callee that is a kernel value is a cross-kernel
     /// call, and a marked recursion whose shape converts is the loop nest. A plain
     /// lichen-function call is refused by name.
-    fn apply(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
+    fn apply(&mut self, node: NodeId, operand: AnyNodeId) -> Result<ValueId, String> {
         let Some(operands) = self.module.operand_items(operand).ok() else {
             return Err("Apply operand is missing".into());
         };
@@ -2590,7 +2595,7 @@ where
 
     fn conversion(
         &mut self,
-        operand: NodeId,
+        operand: AnyNodeId,
         from: ScalarClass,
         to: ScalarClass,
         name: &'static str,
@@ -2653,7 +2658,7 @@ where
     fn transcendental(
         &mut self,
         ty_op: TypeOperator,
-        operand: NodeId,
+        operand: AnyNodeId,
         class: ScalarClass,
     ) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;

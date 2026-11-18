@@ -70,7 +70,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -89,7 +89,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
     let clone_ret = candidates
         .into_iter()
         .find(|&id| {
-            let operand = m.node_operation(id).unwrap().operand.unwrap();
+            let operand = m.node_operation(id).unwrap().operand.unwrap().dynamic().unwrap();
             m.equality_representative(operand) == m.equality_representative(arg)
         })
         .expect("the call clone of ret");

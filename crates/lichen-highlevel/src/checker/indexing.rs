@@ -768,7 +768,7 @@ where
             None => return None,
         };
         let operand = operation.operand?;
-        let items = shape::value_items(&self.module, AnyNodeId::Dynamic(operand))?;
+        let items = shape::value_items(&self.module, operand)?;
         if items.len() < 2 {
             return None;
         }

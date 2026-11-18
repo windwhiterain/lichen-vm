@@ -171,7 +171,7 @@ where
         // SAFETY: a payload of a value of this module; a stale node answers `None`.
         let items = unsafe {
             self.module
-                .array_items_of(AnyNodeId::Dynamic(operation.operand?))
+                .array_items_of(operation.operand?)
         }?;
         let container = items
             .first()

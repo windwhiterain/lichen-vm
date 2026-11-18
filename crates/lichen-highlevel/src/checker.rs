@@ -1554,7 +1554,7 @@ where
         operator: P::Operator,
         operand: Option<NodeId>,
     ) -> NodeId {
-        self.alloc_node(block, Some(Operation { operator, operand }), None)
+        self.alloc_node(block, Some(Operation { operator, operand: operand.map(AnyNodeId::Dynamic) }), None)
     }
 
     /// An expr node `[value, type]` built around two already-compiled nodes.

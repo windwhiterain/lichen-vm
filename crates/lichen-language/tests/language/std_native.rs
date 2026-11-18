@@ -73,7 +73,7 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
     // Mirror the composition's deferred dispatch to each leaf.
     fn run_deferred(
         &self,
-        operand: Option<NodeId>,
+        operand: Option<lichen_lowlevel::AnyNodeId>,
         block: lichen_lowlevel::BlockId,
         module: &mut lichen_lowlevel::Module<HostProgram>,
     ) -> Option<LangValue> {

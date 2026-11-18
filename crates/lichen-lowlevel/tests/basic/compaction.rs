@@ -281,7 +281,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
         ret_f,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(param_f),
+            operand: Some(AnyNodeId::Dynamic(param_f)),
         },
     );
     let (func_node, f) = wrap_function(&mut m, grandchild, ret_f, param_f);
@@ -404,7 +404,7 @@ fn call_clones_are_compacted_with_the_calling_block() {
             ret,
             Operation {
                 operator: TestOperator::Add,
-                operand: Some(operands),
+                operand: Some(AnyNodeId::Dynamic(operands)),
             },
         );
     });

@@ -113,7 +113,7 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
             ret,
             Operation {
                 operator: TestOperator::LowOperator(LowOperator::Index),
-                operand: Some(operands),
+                operand: Some(AnyNodeId::Dynamic(operands)),
             },
         );
     });

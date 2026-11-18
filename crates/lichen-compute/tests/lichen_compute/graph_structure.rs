@@ -46,10 +46,10 @@ fn dyn_node(id: AnyNodeId) -> NodeId {
 }
 
 /// The node ids of an array node's items.
-fn items(module: &Module<LangProgram>, node: NodeId) -> Vec<NodeId> {
+fn items(module: &Module<LangProgram>, node: AnyNodeId) -> Vec<NodeId> {
     // SAFETY: `node` is a live node of `module`, whose blocks are all alive —
     // nothing has been dropped.
-    unsafe { module.array_items(node) }
+    unsafe { module.array_items_ref(node) }
         .expect("an array node")
         .iter()
         .map(|item| dyn_node(item.node))
@@ -214,7 +214,7 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
     let operation = module.node_operation(dispatch).expect("a dispatch node");
     // A frozen open cell is a static ref (M1/M10): the items are read as refs.
     let operands: Vec<AnyNodeId> =
-        unsafe { module.array_items(operation.operand.expect("operands")) }
+        unsafe { module.array_items_ref(operation.operand.expect("operands")) }
             .expect("an operand array")
             .iter()
             .map(|item| item.node)
@@ -329,7 +329,7 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
     // The argument reaches the dispatch through an `Index`; following
     // it is the whole lookup, the walk `value_of_node` does.
     let cfg = through_index(&module, operands[1]);
-    let cfg_items = items(&module, cfg);
+    let cfg_items = items(&module, cfg.into());
     assert_eq!(
         cfg_items.len(),
         2,

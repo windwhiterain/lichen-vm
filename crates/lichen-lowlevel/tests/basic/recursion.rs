@@ -36,7 +36,7 @@ fn recursive_function_applies_itself_lazily() {
         })
     ));
     let ops = m.node_operation(c1).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -48,7 +48,7 @@ fn recursive_function_applies_itself_lazily() {
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.node_operation(c2).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -85,7 +85,7 @@ fn undefined_recursive_function_references_itself_in_place() {
     let c1 = ids[1];
 
     let ops = m.node_operation(c1).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     let referenced = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_eq!(referenced, f_id);
     assert_eq!(m.functions[referenced].block, m.node_block(f_node));
@@ -98,7 +98,7 @@ fn undefined_recursive_function_references_itself_in_place() {
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.node_operation(c2).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     let referenced2 = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_eq!(referenced2, f_id);
     assert_eq!(m.functions.len(), 1); // the identity is shared; the stream mints no function clone
@@ -119,7 +119,7 @@ fn mutually_recursive_functions_call_each_other() {
     assert_eq!(m.equality_representative(ids[0]), rep_five);
     let g_app = ids[1];
     let ops = m.node_operation(g_app).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     assert_eq!(operand_ids[0], g_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -131,7 +131,7 @@ fn mutually_recursive_functions_call_each_other() {
     let f_app = ids[1];
     assert_ne!(f_app, g_app);
     let ops = m.node_operation(f_app).unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let operand_ids = array_ids(m.node_value(ops).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
     assert_eq!(m.functions.len(), 2); // cross-references stay in place

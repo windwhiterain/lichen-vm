@@ -355,7 +355,7 @@ fn op_node(
     operator: TestOperator,
     operand: Option<NodeId>,
 ) -> NodeId {
-    m.add_node(block, Some(Operation { operator, operand }), None)
+    m.add_node(block, Some(Operation { operator, operand: operand.map(AnyNodeId::Dynamic) }), None)
 }
 
 /// The node ids inside `value` if it's an array (test arrays are dynamic).

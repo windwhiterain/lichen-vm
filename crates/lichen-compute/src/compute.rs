@@ -6556,7 +6556,7 @@ where
 /// not a question about which module it is in.
 fn operand_expr<P>(
     module: &Module<P>,
-    operand: Option<NodeId>,
+    operand: Option<AnyNodeId>,
 ) -> Result<(AnyNodeId, AnyNodeId), String>
 where
     P: Program,
@@ -6573,14 +6573,14 @@ where
     Ok((items[0].node, items[1].node))
 }
 
-fn operand_items<P>(module: &Module<P>, node: NodeId) -> Result<&'static [ArrayItem], String>
+fn operand_items<P>(module: &Module<P>, node: AnyNodeId) -> Result<&'static [ArrayItem], String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // SAFETY: `node` is a live node of `module`.
-    unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
+    // SAFETY: `node` is a live node of `module`, or a frozen ref whose module outlives it.
+    unsafe { module.array_items_ref(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
 /// The actual value recorded for a parameter-field projection.
@@ -7528,7 +7528,7 @@ where
         block,
         Some(Operation {
             operator: <P::Operator as From<LowOperator>>::from(LowOperator::Apply),
-            operand: Some(operand),
+            operand: Some(AnyNodeId::Dynamic(operand)),
         }),
         None,
     );

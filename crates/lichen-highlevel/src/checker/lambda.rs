@@ -259,7 +259,7 @@ where
             let operand = operation.operand;
             let called = match operand {
                 // SAFETY: `operand` is a live node of this module.
-                Some(operand) => unsafe { self.module.array_items(operand) }
+                Some(operand) => unsafe { self.module.array_items_ref(operand) }
                     .and_then(|items| items.get(1).map(|item| item.node))
                     .and_then(|node| node.dynamic()),
                 None => None,
@@ -288,7 +288,7 @@ where
             let operand = field_operation.operand;
             let position = operand.and_then(|operand| {
                 // SAFETY: `operand` is a live node of this module.
-                unsafe { self.module.array_items(operand) }
+                unsafe { self.module.array_items_ref(operand) }
                     .and_then(|items| items.get(1).map(|item| item.node))
                     .and_then(|node| node.dynamic())
             });
@@ -307,7 +307,7 @@ where
         }
         let operand = operation.operand?;
         // SAFETY: `operand` is a live node of this module.
-        let items = unsafe { self.module.array_items(operand) }?;
+        let items = unsafe { self.module.array_items_ref(operand) }?;
         let container = items.first()?.node.dynamic()?;
         // The clone's index container is the parameter: bound, or still an
         // undecided clone of it.

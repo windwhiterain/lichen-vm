@@ -55,7 +55,7 @@ fn index_node(
         block,
         Some(Operation {
             operator: HighProgramOperator::LowOperator(LowOperator::Index),
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         }),
         None,
     )
@@ -68,7 +68,7 @@ fn apply_node(m: &mut Module<ProgramImpl>, block: BlockId, func: NodeId, arg: No
         block,
         Some(Operation {
             operator: HighProgramOperator::LowOperator(LowOperator::Apply),
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         }),
         None,
     )
@@ -101,7 +101,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
         root,
         Some(Operation {
             operator: HighProgramOperator::LowOperator(LowOperator::Index),
-            operand: Some(codomain_operands),
+            operand: Some(AnyNodeId::Dynamic(codomain_operands)),
         }),
         None,
     );

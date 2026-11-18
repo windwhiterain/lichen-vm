@@ -11,7 +11,7 @@ fn function_call_operator_clones_body_and_maps_parameter() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -31,7 +31,7 @@ fn function_call_operator_clones_body_and_maps_parameter() {
     // marker and its return node still references it.
     let body = m.node_block(ret);
     assert!(m.blocks.contains_key(body));
-    assert_eq!(m.node_operation(ret).unwrap().operand, Some(param));
+    assert_eq!(m.node_operation(ret).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
     assert!(
         m.node_value(AnyNodeId::Dynamic(param)).is_none(),
         "the parameter stays an empty slot"
@@ -113,7 +113,7 @@ fn function_call_operator_preserves_undecided_operand_chain() {
         ret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(mid),
+            operand: Some(AnyNodeId::Dynamic(mid)),
         },
     );
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
@@ -131,7 +131,7 @@ fn function_call_operator_preserves_undecided_operand_chain() {
 
     // The body is untouched.
     assert!(m.blocks.contains_key(m.node_block(ret)));
-    assert_eq!(m.node_operation(mid).unwrap().operand, Some(param));
+    assert_eq!(m.node_operation(mid).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
 }
 #[test]
 fn function_call_operator_recomputes_stale_definition_markers() {
@@ -142,7 +142,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -166,7 +166,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
 
     // The clone pass leaves the body's parameter an empty cell.
-    assert_eq!(m.node_operation(ret).unwrap().operand, Some(param));
+    assert_eq!(m.node_operation(ret).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
     assert!(m.node_value(AnyNodeId::Dynamic(param)).is_none());
 }
 #[test]
@@ -180,7 +180,7 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(seven),
+                operand: Some(AnyNodeId::Dynamic(seven)),
             },
         );
     });
@@ -212,7 +212,7 @@ fn function_in_local_block_survives_compaction() {
         ret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(param),
+            operand: Some(AnyNodeId::Dynamic(param)),
         },
     );
     let (func_node, _) = wrap_function(&mut m, child, ret, param);
@@ -257,7 +257,7 @@ fn function_scope_is_dropped_with_its_block() {
         ret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(param),
+            operand: Some(AnyNodeId::Dynamic(param)),
         },
     );
     let (func_node, func) = wrap_function(&mut m, child, ret, param);
@@ -290,7 +290,7 @@ fn nested_function_is_called_by_the_outer_body() {
         gret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(gparam),
+            operand: Some(AnyNodeId::Dynamic(gparam)),
         },
     );
     let (g_node, g_id) = wrap_function(&mut m, g, gret, gparam);
@@ -302,7 +302,7 @@ fn nested_function_is_called_by_the_outer_body() {
         ret,
         Operation {
             operator: TestOperator::LowOperator(LowOperator::Apply),
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         },
     );
     let (f_node, f_id) = wrap_function(&mut m, f, ret, param);
@@ -332,7 +332,7 @@ fn outer_call_returns_a_nested_function_value() {
         gret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(gparam),
+            operand: Some(AnyNodeId::Dynamic(gparam)),
         },
     );
     let (g_node, g_id) = wrap_function(&mut m, g, gret, gparam);
@@ -342,7 +342,7 @@ fn outer_call_returns_a_nested_function_value() {
         ret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(g_node),
+            operand: Some(AnyNodeId::Dynamic(g_node)),
         },
     );
     let param = m.add_node(f, None, None);
@@ -390,7 +390,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
         gret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(param),
+            operand: Some(AnyNodeId::Dynamic(param)),
         },
     );
     let ret = m.add_node(f, None, None);
@@ -398,7 +398,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
         ret,
         Operation {
             operator: TestOperator::Id,
-            operand: Some(g_node),
+            operand: Some(AnyNodeId::Dynamic(g_node)),
         },
     );
     let (func_node, f_id) = wrap_function(&mut m, f, ret, param);
@@ -430,7 +430,7 @@ fn higher_order_function_passes_a_function_argument_through() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -442,7 +442,7 @@ fn higher_order_function_passes_a_function_argument_through() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -471,7 +471,7 @@ fn higher_order_function_calls_its_function_argument() {
         ret,
         Operation {
             operator: TestOperator::LowOperator(LowOperator::Apply),
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         },
     );
     let (apply_node, _) = wrap_function(&mut m, body, ret, param);
@@ -483,7 +483,7 @@ fn higher_order_function_calls_its_function_argument() {
             ret,
             Operation {
                 operator: TestOperator::Id,
-                operand: Some(param),
+                operand: Some(AnyNodeId::Dynamic(param)),
             },
         );
     });
@@ -506,7 +506,7 @@ fn function_can_index_into_undecided_array() {
         ret,
         Operation {
             operator: TestOperator::LowOperator(LowOperator::Index),
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         },
     );
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
@@ -543,7 +543,7 @@ fn manually_partially_evaluated_function_applies_correctly() {
         ret,
         Operation {
             operator: TestOperator::Add,
-            operand: Some(ret_ops),
+            operand: Some(AnyNodeId::Dynamic(ret_ops)),
         },
     );
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
@@ -610,7 +610,7 @@ fn unevaluated_function_applies_correctly() {
             ret,
             Operation {
                 operator: TestOperator::Add,
-                operand: Some(operands),
+                operand: Some(AnyNodeId::Dynamic(operands)),
             },
         );
     });
@@ -642,7 +642,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
         ret,
         Operation {
             operator: TestOperator::Add,
-            operand: Some(operands),
+            operand: Some(AnyNodeId::Dynamic(operands)),
         },
     );
     let (g_node, g_id) = wrap_function(&mut m, child, ret, param);

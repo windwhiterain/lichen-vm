@@ -151,14 +151,14 @@ where
     /// Evaluate even with open `@any` type cells; elements decide laziness.
     fn run_deferred(
         &self,
-        operand: Option<NodeId>,
+        operand: Option<AnyNodeId>,
         block: BlockId,
         module: &mut Module<P>,
     ) -> Option<P::Value> {
         let value = match operand {
             Some(node) => {
-                module.evaluate_node_deep(node, Some(block));
-                module.node_value(AnyNodeId::Dynamic(node))?
+                module.evaluate_node_deep_ref(node, Some(block));
+                module.node_value(node)?
             }
             None => P::Value::from(LowValue::Error),
         };

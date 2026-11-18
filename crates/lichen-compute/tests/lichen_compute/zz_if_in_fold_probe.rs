@@ -89,6 +89,9 @@ fn operand_fate(module: &Module<LangProgram>, node: NodeId) -> String {
     match operand {
         None => format!("{node:?} has no operand at all"),
         Some(operand) => {
+            let Some(operand) = operand.dynamic() else {
+                return format!("{node:?} -> operand is a static ref into a frozen module");
+            };
             let present = module.nodes.contains_key(operand);
             let holds = unsafe { module.array_items(operand) }
                 .map(|items| {
