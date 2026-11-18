@@ -189,12 +189,10 @@ impl<'a, P: Program> LoopGraph<'a, P> {
     /// The node's operation and its operand node, in the node's own graph.
     fn node_operation(&self, node: AnyNodeId) -> Option<(P::Operator, Option<AnyNodeId>)> {
         match node {
-            AnyNodeId::Dynamic(node) => self.module.node_operation(node).map(|operation| {
-                (
-                    operation.operator,
-                    operation.operand,
-                )
-            }),
+            AnyNodeId::Dynamic(node) => self
+                .module
+                .node_operation(node)
+                .map(|operation| (operation.operator, operation.operand)),
             AnyNodeId::Static(sref) => {
                 let frozen = self.module.static_module(sref.module);
                 frozen.static_operation(sref.index).map(|operation| {

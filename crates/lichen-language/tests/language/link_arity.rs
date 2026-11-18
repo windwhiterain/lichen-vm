@@ -441,11 +441,7 @@ fn frozen_readings() {
             .module
             .node_operation(apply)
             .and_then(|operation| operation.operand)
-            .and_then(|operand| {
-                build
-                    .module
-                    .node_value(operand)
-            })
+            .and_then(|operand| build.module.node_value(operand))
             .and_then(|value| {
                 AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value).and_then(|low| match low {
                     lichen_lowlevel::LowValue::Array(array) => {

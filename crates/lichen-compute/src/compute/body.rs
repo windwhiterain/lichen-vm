@@ -1321,8 +1321,8 @@ where
 
         // The compute plugin's own operators.
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
-            // A compute operator's operand array is lowered as a dynamic node; a frozen
-            // operand array names a read-only graph this kernel body cannot lower.
+            // A compute operator lowers a dynamic operand array, never a frozen ref:
+            // the frozen graph is read-only.
             let operand = operand.dynamic().ok_or_else(|| {
                 "compute kernel body: a static operand array cannot be lowered into a kernel (the frozen graph is read-only)".to_string()
             })?;

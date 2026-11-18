@@ -804,10 +804,7 @@ impl<P: Program> Module<P> {
             .operation
             .and_then(|op| op.operand)
             .expect("a TableGet node reached the miss path carries its operand");
-        match self
-            .node_value(operand)
-            .and_then(|value| value.as_enum())
-        {
+        match self.node_value(operand).and_then(|value| value.as_enum()) {
             Some(LowValue::Array(array)) => {
                 // SAFETY: `array` is a live node's payload; its block is not dropped.
                 let items = unsafe { array.items() };
@@ -836,8 +833,7 @@ impl<P: Program> Module<P> {
         let Some(operand) = operation.operand else {
             return false;
         };
-        let Some(LowValue::Array(operands)) =
-            self.node_value(operand).and_then(|v| v.as_enum())
+        let Some(LowValue::Array(operands)) = self.node_value(operand).and_then(|v| v.as_enum())
         else {
             return false;
         };

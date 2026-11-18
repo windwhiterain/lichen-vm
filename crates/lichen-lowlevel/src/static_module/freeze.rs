@@ -142,8 +142,8 @@ impl<P: Program> StaticModule<P> {
                         operator: operation.operator,
                         operand: operation.operand.map(|operand| match operand {
                             AnyNodeId::Dynamic(node) => node_map[&node],
-                            // A static operand is a cross-module ref the local-node format cannot
-                            // name; no A1 writer produces one. Naming one needs a format decision.
+                            // A static operand cannot freeze to a local node: the format names
+                            // no cross-module ref. No A1 writer produces one.
                             AnyNodeId::Static(_) => unreachable!(
                                 "freeze: a static operand cannot be frozen to a LocalNodeId (artifact format unchanged)"
                             ),

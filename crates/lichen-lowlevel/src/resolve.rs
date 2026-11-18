@@ -83,7 +83,8 @@ impl<P: Program> Module<P> {
     /// disagree about what the array holds.
     pub fn operand_items(&self, operand: AnyNodeId) -> Result<&'static [ArrayItem], String> {
         // SAFETY: `operand` is a live node of `self`, or a frozen ref whose module outlives it.
-        unsafe { self.array_items_ref(operand) }.ok_or_else(|| "operand is not an array value".into())
+        unsafe { self.array_items_ref(operand) }
+            .ok_or_else(|| "operand is not an array value".into())
     }
 
     /// The `[left, right]` of a two-element operand array, all of this module's.

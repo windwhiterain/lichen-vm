@@ -495,7 +495,12 @@ impl<P: Program> Module<P> {
         let operation = module.nodes[local.index].operation;
         let Some(value) = module.read(local) else {
             if let Some(operation) = operation {
-                let operand = operation.operand.map(|operand| AnyNodeId::Dynamic(self.clone_static_signature_node(module, operand, block, remap, source, rule)));
+                let operand =
+                    operation.operand.map(|operand| {
+                        AnyNodeId::Dynamic(self.clone_static_signature_node(
+                            module, operand, block, remap, source, rule,
+                        ))
+                    });
                 self.nodes[clone].operation = Some(Operation {
                     operator: operation.operator,
                     operand,
@@ -534,7 +539,11 @@ impl<P: Program> Module<P> {
             _ => value,
         };
         if let Some(operation) = operation {
-            let operand = operation.operand.map(|operand| AnyNodeId::Dynamic(self.clone_static_signature_node(module, operand, block, remap, source, rule)));
+            let operand = operation.operand.map(|operand| {
+                AnyNodeId::Dynamic(
+                    self.clone_static_signature_node(module, operand, block, remap, source, rule),
+                )
+            });
             self.nodes[clone].operation = Some(Operation {
                 operator: operation.operator,
                 operand,

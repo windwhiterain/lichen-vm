@@ -31,7 +31,10 @@ fn function_call_operator_clones_body_and_maps_parameter() {
     // marker and its return node still references it.
     let body = m.node_block(ret);
     assert!(m.blocks.contains_key(body));
-    assert_eq!(m.node_operation(ret).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
+    assert_eq!(
+        m.node_operation(ret).unwrap().operand,
+        Some(AnyNodeId::Dynamic(param))
+    );
     assert!(
         m.node_value(AnyNodeId::Dynamic(param)).is_none(),
         "the parameter stays an empty slot"
@@ -131,7 +134,10 @@ fn function_call_operator_preserves_undecided_operand_chain() {
 
     // The body is untouched.
     assert!(m.blocks.contains_key(m.node_block(ret)));
-    assert_eq!(m.node_operation(mid).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
+    assert_eq!(
+        m.node_operation(mid).unwrap().operand,
+        Some(AnyNodeId::Dynamic(param))
+    );
 }
 #[test]
 fn function_call_operator_recomputes_stale_definition_markers() {
@@ -166,7 +172,10 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
 
     // The clone pass leaves the body's parameter an empty cell.
-    assert_eq!(m.node_operation(ret).unwrap().operand, Some(AnyNodeId::Dynamic(param)));
+    assert_eq!(
+        m.node_operation(ret).unwrap().operand,
+        Some(AnyNodeId::Dynamic(param))
+    );
     assert!(m.node_value(AnyNodeId::Dynamic(param)).is_none());
 }
 #[test]

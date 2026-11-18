@@ -651,8 +651,7 @@ where
         // node of `module`; nothing here releases it.
 
         // Nothing in this crate calls `Module::drop_block`.
-        let items =
-            unsafe { crate::shape::array_items(&self.module, operand) }?;
+        let items = unsafe { crate::shape::array_items(&self.module, operand) }?;
         match items.first()?.node {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
