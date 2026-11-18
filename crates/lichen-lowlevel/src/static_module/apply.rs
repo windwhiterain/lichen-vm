@@ -657,10 +657,11 @@ impl<P: Program> Module<P> {
             self.write_node_value(clone, mapped);
             // The claim follows `mapped`, not `carried`: an answer whose own
             // elements are open must not claim the run.
-            let claimed = !undecided
-                && mapped.is_some_and(|value| {
-                    !self.static_answer_elements_are_undecided(value, &ctx.module)
-                });
+            let claimed = crate::apply::answer_claims_run::<P>(evaluated_deep, mapped, |value| {
+                crate::apply::answer_elements_are_undecided::<P>(value, |node| {
+                    self.node_value_in_module(node, Some(ctx.module.as_ref()))
+                })
+            });
             self.stamp_node_ran_if(clone, claimed);
             self.nodes[clone].operation = operation;
         } else {
@@ -671,10 +672,11 @@ impl<P: Program> Module<P> {
                 .read(local)
                 .map(|value| self.static_remap_value(value, ctx));
             self.write_node_value(clone, mapped);
-            let claimed = !undecided
-                && mapped.is_some_and(|value| {
-                    !self.static_answer_elements_are_undecided(value, &ctx.module)
-                });
+            let claimed = crate::apply::answer_claims_run::<P>(evaluated_deep, mapped, |value| {
+                crate::apply::answer_elements_are_undecided::<P>(value, |node| {
+                    self.node_value_in_module(node, Some(ctx.module.as_ref()))
+                })
+            });
             self.stamp_node_ran_if(clone, claimed);
         }
         if template_operation.as_ref().is_some_and(|operation| {
@@ -713,26 +715,6 @@ impl<P: Program> Module<P> {
             }
         }
         clone
-    }
-    /// Are the elements of the answer a frozen template just handed this call still open?
-    ///
-    /// # Invariant
-    ///
-    /// Each item is read where its own slot lives: a fresh clone through
-    /// [`Module::node_value`], a same-module frozen ref through `StaticNode::value`,
-    /// and a dependency's ref through the registry, as `node_value`'s static arm does.
-    fn static_answer_elements_are_undecided(
-        &self,
-        value: P::Value,
-        module: &StaticModule<P>,
-    ) -> bool {
-        crate::apply::answer_elements_are_undecided::<P>(value, |node| match node {
-            node @ Dyn(_) => self.node_value(node),
-            AnyNodeId::Static(sref) if sref.module == module.key => {
-                module.nodes[sref.index.index].value
-            }
-            node @ AnyNodeId::Static(_) => self.node_value(node),
-        })
     }
 
     /// Re-point the items of a value at per-call clones.

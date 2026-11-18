@@ -351,11 +351,33 @@ impl<P: Program> Module<P> {
     /// position a fresh class, so one value would read as several
     /// (`docs/notes/kernel-parameter-class.md`).
     pub fn node_value(&self, id: AnyNodeId) -> Option<P::Value> {
+        self.node_value_in_module(id, None)
+    }
+
+    /// The raw value behind `id` against an optional held frozen source — no evaluation.
+    ///
+    /// # Invariant
+    /// A static ref is read **in its own module**, directly, exactly as a dynamic node
+    /// is: no reader copies it into a dynamic node first. A copy would give each frozen
+    /// position a fresh class, so one value would read as several
+    /// (`docs/notes/kernel-parameter-class.md`).
+    ///
+    /// # Invariant
+    /// Each item is read where its own slot lives: a fresh clone through the dynamic
+    /// arm, a same-module frozen ref through the `Arc` the walk holds (`source`), and a
+    /// dependency's ref through the registry. The held source is read directly, never
+    /// re-resolved: eviction refuses while refs are live, so it is the robust read.
+    pub fn node_value_in_module(
+        &self,
+        id: AnyNodeId,
+        source: Option<&StaticModule<P>>,
+    ) -> Option<P::Value> {
         match id {
             Dyn(node) => self.nodes.get(node).and_then(|node| node.value),
-            AnyNodeId::Static(sref) => {
-                self.static_module(sref.module).nodes[sref.index.index].value
-            }
+            AnyNodeId::Static(sref) => match source {
+                Some(module) if module.key == sref.module => module.nodes[sref.index.index].value,
+                _ => self.static_module(sref.module).nodes[sref.index.index].value,
+            },
         }
     }
 

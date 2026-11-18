@@ -919,8 +919,10 @@ impl<P: Program> Module<P> {
         };
         self.write_node_value(clone, mapped);
         // Only a proved answer is a run: an undecided value is a seed.
-        let carried_answer = evaluated_deep.is_some_and(|deep| !deep.undecided)
-            && mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
+        let carried_answer =
+            crate::apply::answer_claims_run::<P>(evaluated_deep, mapped, |value| {
+                self.answer_elements_are_undecided(value)
+            });
         self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
         if self.nodes[clone]

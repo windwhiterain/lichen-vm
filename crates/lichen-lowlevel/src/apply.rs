@@ -465,7 +465,23 @@ pub(super) fn answer_elements_are_undecided<P: Program>(
         .any(|item| slot_value(item.node).is_none())
 }
 
+/// Whether a mapped answer claims the run stamp — the one clone claim rule.
+///
+/// # Invariant
+/// Only a proved deep answer whose own elements are decided claims the run: an
+/// undecided value is a seed, and an answer with an open element is undecided for
+/// this run policy. `!undecided` is `evaluated_deep.is_some_and(|e| !e.undecided)`.
+pub(super) fn answer_claims_run<P: Program>(
+    evaluated_deep: Option<crate::EvaluatedDeep>,
+    mapped: Option<P::Value>,
+    elements_open: impl FnOnce(P::Value) -> bool,
+) -> bool {
+    evaluated_deep.is_some_and(|deep| !deep.undecided)
+        && mapped.is_some_and(|value| !elements_open(value))
+}
+
 /// Group one apply pass's clones by template representative, sorted; the caller reads runs.
+
 ///
 /// # Invariant
 /// The sort is stable, so a group's clones keep the walk's insertion order — the
