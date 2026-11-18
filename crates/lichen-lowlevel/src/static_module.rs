@@ -381,6 +381,69 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// The clone walk's shared read view of one node, dynamic or frozen, read once.
+    ///
+    /// # Invariant
+    /// A node is read in its own graph: a dynamic node from the host slot table, a
+    /// frozen ref from the held `source` when its key matches (never re-resolved, as
+    /// [`Self::node_value_in_module`]), else the registry. No frozen position is copied
+    /// into a dynamic node. `module_key` is `None` for the host, `Some(key)` for a frozen
+    /// ref — the "which module am I reading" parameter (F3).
+    pub(crate) fn clone_read(
+        &self,
+        id: AnyNodeId,
+        source: Option<&StaticModule<P>>,
+    ) -> CloneRead<P> {
+        match id {
+            Dyn(node) => {
+                let n = &self.nodes[node];
+                CloneRead {
+                    value: n.value,
+                    operation: n.operation,
+                    evaluated_deep: n.evaluated_deep,
+                    undecided: n.evaluated_deep.is_none_or(|e| e.undecided),
+                    polymorphic: n.polymorphic,
+                    wildcard_fill: self.is_wildcard_fill(id),
+                    runned: n.runned,
+                    function: n.function,
+                    block: Some(n.block),
+                    module_key: None,
+                }
+            }
+            AnyNodeId::Static(sref) => {
+                let held;
+                let module = match source {
+                    Some(m) if m.key == sref.module => m,
+                    _ => {
+                        held = self.static_module(sref.module);
+                        &held
+                    }
+                };
+                let n = &module.nodes[sref.index.index];
+                CloneRead {
+                    value: n.value,
+                    operation: n.operation.map(|op| Operation {
+                        operator: op.operator,
+                        operand: op.operand.map(|index| {
+                            AnyNodeId::Static(StaticNodeId {
+                                module: sref.module,
+                                index,
+                            })
+                        }),
+                    }),
+                    evaluated_deep: n.evaluated_deep,
+                    undecided: n.undecided(),
+                    polymorphic: n.polymorphic,
+                    wildcard_fill: n.wildcard_fill,
+                    runned: n.runned,
+                    function: None,
+                    block: None,
+                    module_key: Some(sref.module),
+                }
+            }
+        }
+    }
+
     /// Whether `id` is a static node whose artifact was frozen `ReadOnly`.
     ///
     /// # Invariant
@@ -1027,4 +1090,25 @@ impl<P: Program> StaticModule<P> {
         collect_array_referenced_keys(self.default_attributes.map(AnyHandle::Static), &mut keys);
         keys
     }
+}
+
+/// One node's clone-walk read facts, captured once by [`Module::clone_read`] as a `Copy` snapshot.
+///
+/// # Invariant
+/// `operation`'s operand is the node's own raw ref (a `Dynamic` id for a host node, a
+/// `Static` ref for a frozen one); the walk maps it to its image. `function`/`block`
+/// are the host node's owner place and block (`None` for a frozen ref, which has
+/// neither); `module_key` is the frozen ref's key (F3), `None` for the host.
+#[allow(dead_code)] // runned/module_key are the view's A3-facing facts (F3); A2 captures them, A3 reads them.
+pub(crate) struct CloneRead<P: Program> {
+    pub value: Option<P::Value>,
+    pub operation: Option<Operation<P>>,
+    pub evaluated_deep: Option<crate::EvaluatedDeep>,
+    pub undecided: bool,
+    pub polymorphic: Option<bool>,
+    pub wildcard_fill: bool,
+    pub runned: bool,
+    pub function: Option<FunctionId>,
+    pub block: Option<BlockId>,
+    pub module_key: Option<ModuleKey>,
 }

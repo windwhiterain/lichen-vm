@@ -823,27 +823,24 @@ impl<P: Program> Module<P> {
             return clone;
         }
         self.propagate_polymorphic();
+        // The shared read view of the node's facts (dynamic host, no frozen source): one match per node.
+        let read = self.clone_read(AnyNodeId::Dynamic(node), None);
         debug_assert!(
-            self.nodes[node].polymorphic.is_some(),
+            read.polymorphic.is_some(),
             "clone walk read node {node:?} whose polymorphic flag propagation never reached"
         );
-        // One read of the node's own facts: this walk asks for them several times, and each
-        // ask is a slot-table lookup.
-        let (value, operation, evaluated_deep, function, block) = {
-            let source = &self.nodes[node];
-            (
-                source.value,
-                source.operation,
-                source.evaluated_deep,
-                source.function,
-                source.block,
-            )
-        };
+        let (value, operation, evaluated_deep, function, block) = (
+            read.value,
+            read.operation,
+            read.evaluated_deep,
+            read.function,
+            read.block.unwrap(),
+        );
         // A wildcard fill is the template's open requirement: every call gets a fresh cell to fill.
-        if self.is_wildcard_fill(AnyNodeId::Dynamic(node)) {
+        if read.wildcard_fill {
             let fresh = self.add_node(ctx.target, None, None);
             self.nodes[fresh].origin = Some(node);
-            let flag = self.nodes[node].polymorphic;
+            let flag = read.polymorphic;
             self.write_polymorphic(fresh, flag);
             self.nodes[fresh].polymorphic_scope = self.nodes[node].polymorphic_scope.clone();
             return fresh;
@@ -870,7 +867,7 @@ impl<P: Program> Module<P> {
         let target = self.clone_target(scope, ctx);
         let clone = self.add_node(target, None, None);
         // A clone inherits its source's `Some` flag (ruling 1), so a later walk reads it stamped.
-        let flag = self.nodes[node].polymorphic;
+        let flag = read.polymorphic;
         self.write_polymorphic(clone, flag);
         self.nodes[clone].polymorphic_scope = self.nodes[node].polymorphic_scope.clone();
         // A scope ends at its root, so the clone ends the image it landed in:
@@ -945,7 +942,7 @@ impl<P: Program> Module<P> {
         if let Some(source) = self.field_sources.get(&node).copied() {
             let source = self.node_apply(source, ctx);
             self.field_sources.insert(clone, source);
-            if let Some(operation) = self.nodes[node].operation
+            if let Some(operation) = read.operation
                 && matches!(
                     AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
                     Some(crate::LowOperator::Index)

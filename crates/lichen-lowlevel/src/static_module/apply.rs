@@ -565,32 +565,36 @@ impl<P: Program> Module<P> {
     /// over the frozen set, and a materialized clone inherits it (ruling 1,
     /// `docs/notes/polymorphic-flag.md`).
     fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
-        let node = &ctx.module.nodes[local.index];
+        // The shared read view of the frozen node's facts, through the Arc the walk holds as source.
+        let read = self.clone_read(
+            AnyNodeId::Static(StaticNodeId {
+                module: ctx.module.key,
+                index: local,
+            }),
+            Some(ctx.module.as_ref()),
+        );
         debug_assert!(
-            node.polymorphic.is_some(),
+            read.polymorphic.is_some(),
             "static clone read frozen node {local:?} whose polymorphic flag the freeze never carried"
         );
         // A frozen wildcard fill is the template's open requirement: every call gets a fresh cell.
-        if node.wildcard_fill {
+        if read.wildcard_fill {
             // One cell per template per apply: a diamond shares it, bounding the walk.
             if let Some(&clone) = ctx.remap.get(&local) {
                 return clone;
             }
             let fresh = self.add_node(ctx.target, None, None);
             ctx.remap.insert(local, fresh);
-            let flag = node.polymorphic;
+            let flag = read.polymorphic;
             self.write_polymorphic(fresh, flag);
             return fresh;
         }
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
-        let (undecided, _, evaluated_deep, template_operation, template_shape) = (
-            node.undecided(),
-            node.runned,
-            node.evaluated_deep,
-            node.operation,
-            node.low_shape.clone(),
-        );
-        let template_polymorphic = node.polymorphic;
+        let undecided = read.undecided;
+        let evaluated_deep = read.evaluated_deep;
+        let template_operation = read.operation;
+        let template_shape = ctx.module.nodes[local.index].low_shape.clone();
+        let template_polymorphic = read.polymorphic;
         // The class decides: outside the source is shared; a nested re-home also accepts the enclosing scope.
         let inside = !undecided
             || ctx.rule.inside(&ctx.module, local, ctx.source)
@@ -640,9 +644,12 @@ impl<P: Program> Module<P> {
             // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
                 operator: operation.operator,
-                operand: operation
-                    .operand
-                    .map(|operand| AnyNodeId::Dynamic(self.static_node_apply(operand, ctx))),
+                operand: operation.operand.map(|operand| {
+                    let AnyNodeId::Static(sref) = operand else {
+                        unreachable!("a frozen operand ref is static by construction")
+                    };
+                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
+                }),
             });
             // The carry rule: the deep pass makes an answer a fact every call shares.
             let carried = operation.is_none() || evaluated_deep.is_some();
@@ -700,9 +707,11 @@ impl<P: Program> Module<P> {
                     AsEnum::<crate::LowOperator>::as_enum(&operation.operator),
                     Some(crate::LowOperator::Index)
                 )
-                && let Some(operand) = operation.operand
-                && let Some(LowValue::Array(operands)) =
-                    ctx.module.read(operand).and_then(|value| value.as_enum())
+                && let Some(AnyNodeId::Static(operand)) = operation.operand
+                && let Some(LowValue::Array(operands)) = ctx
+                    .module
+                    .read(operand.index)
+                    .and_then(|value| value.as_enum())
             {
                 let operands = unsafe { operands.items() };
                 if self.read_position(operands[1].node) == Some(0)
