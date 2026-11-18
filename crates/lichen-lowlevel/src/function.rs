@@ -852,13 +852,14 @@ impl<P: Program> Module<P> {
             && operation.is_some()
             && (self.function_descends_from(function, ctx.anchor)
                 || self.functions[ctx.anchor].nodes.contains(&node));
-        let per_call = ctx.in_parameter
-            || node == ctx.parameter
-            || Some(node) == ctx.parameter_slot
-            || (self.node_polymorphic_over_scope(node, ctx) && self.node_inside_scope(node, ctx))
+        let per_call = crate::apply::clone_per_call(
+            ctx.in_parameter || node == ctx.parameter || Some(node) == ctx.parameter_slot,
+            self.node_polymorphic_over_scope(node, ctx),
+            self.node_inside_scope(node, ctx),
             // An apply's output cell freshens per call so the codomain bind writes per call (SPEC §Clone).
-            || (self.is_apply_output(node) && self.node_inside_scope(node, ctx))
-            || replay_operation;
+            self.is_apply_output(node) && self.node_inside_scope(node, ctx),
+            replay_operation,
+        );
         if !per_call {
             return node; // reference as-is
         }

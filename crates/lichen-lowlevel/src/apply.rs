@@ -431,6 +431,22 @@ impl<P: Program> Module<P> {
     }
 }
 
+/// The per-call decision both clone walks share (SPEC §Clone).
+///
+/// # Invariant
+/// One body, two fact-gatherers: each side resolves its own facts and hands them in.
+/// `polymorphic_over` is the dynamic mark-antichain test or the frozen erased bool (a
+/// superset until the antichain persists at format 34); `inside` is the node's own place.
+pub(crate) fn clone_per_call(
+    parameter_term: bool,
+    polymorphic_over: bool,
+    inside: bool,
+    apply_output_term: bool,
+    replay_term: bool,
+) -> bool {
+    parameter_term || (polymorphic_over && inside) || apply_output_term || replay_term
+}
+
 /// Whether `clone` is a **plain cell**: no operator of its own and no answer.
 ///
 /// # Invariant
