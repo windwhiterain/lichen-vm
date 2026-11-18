@@ -291,11 +291,47 @@ unify works on the dynamic path (language stayed `289/0` under U1); what breaks 
 materialization. §Clone's own sentence is the criterion the frozen walk misses: *"Cloned
 polymorphic nodes should be detached from it from its class, while placed in new class that has
 the same tolopogy"* (`language-spec.md:311-319`). A per-call clone must be **detached into a fresh
-class with the same topology** before the argument unifies with it; the frozen walk's image is not
-detached that way, so under unify the template's expr structure and the argument's value collide
+class with the same topology** before the argument unifies with it; the frozen walk's image is over-broad: the detach/regroup machinery is SHARED
+(`regroup_clones`/`unify_clone_groups`, `apply.rs:473-505`, both walks call it), but the frozen
+walk inserts EVERY walked node into the remap while the dynamic walk inserts only per-call clones
+(after `!per_call -> return node`), so under unify the template's expr structure and the argument's value collide
 in one class and write-once keeps only one. The fix is therefore the unified walk's per-call
 freshening and detachment — A3 — not a change to §Function or §Merge.
 
 **Perf is secondary.** Bounding the O(members) walks is necessary for the unify to be affordable
 but **not sufficient** to make it work: even with perfectly bounded walks the classification stays
 inert until the value-half wiring is restored. Correctness is the primary blocker.
+
+## 11. A2 landed — the shared read view, one openness reader, one claim rule
+
+Dev `0ae75181` (commits `8d1f5658`, `c79cd2c8`, `0ae75181`; 5 files, +263/−78), ff-merged in the
+owning checkout. Behaviour-preserving: no `per_call`, `rule.inside`, `copy_parameter_slots`,
+`value_holds_foreign_function`, `polymorphic_over_scope` or `ARTIFACT_FORMAT_VERSION` line moved,
+and the bind site is untouched.
+
+- **One read view over `AnyNodeId`** (`static_module.rs`, +183): value, operation, owner place,
+  flag, `wildcard_fill`, `runned`, and `module_key` — F3, the "which module am I reading"
+  parameter — plus `clone_class_root`/`clone_class_members` for A3's unified decision. A frozen
+  ref is read through the **`Arc` the walk holds**, never re-resolved through the registry:
+  eviction refuses while refs are live, so the held source is the robust read.
+- **One openness reader**: the fast path moved INTO `node_value_in_module`, and
+  `static_answer_elements_are_undecided` is gone; both walks now use
+  `crate::apply::answer_elements_are_undecided` with that one reader. The retired reader's
+  invariant migrated with it (each item read where its own slot lives), and `node_value`'s "no
+  reader copies it into a dynamic node first" survives verbatim.
+- **One claim rule**: `answer_claims_run` (`apply.rs`), since `!undecided` and
+  `evaluated_deep.is_some_and(|e| !e.undecided)` are the same predicate.
+
+**Gate, merged tip, parent-run**: comments-check exit 0, `cargo fmt --all -- --check` exit 0,
+`cargo check --workspace --tests` exit 0 with zero `Compiling` lines naming another worktree;
+lowlevel `167/0/1` (0.21s), highlevel `136/0` (11.51s), language lib `69/0`, language external
+`289/0` (**3.41s**), compute-gpu `94/0` (1.70s). Compute verified **by name**: `diff fail-a1.txt
+fail-a2.txt` **empty** (68 = 68), `215 passed; 68 failed; 1 ignored` in 554.47s against the
+baseline 575.67s; `compile_order_class` alone `1 passed`. **Perf neutral**: two isolated language
+runs both 3.42s (the 5.78s in the contended round was the parent building on the main target at
+the same time, not the view).
+
+**One more divergence recorded for A3**: the dynamic wildcard-fill mint does NOT enter the remap
+(`function.rs:843-849`, fresh per encounter) while the frozen one DOES (`apply.rs:569-578`, one
+cell per template per apply, a diamond shares it). The two sides differ on diamond sharing of a
+fill; measure before changing either.
