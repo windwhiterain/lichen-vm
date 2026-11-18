@@ -444,6 +444,81 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// The representative of `id`'s equality class, in the node's own graph — the view's class access.
+    ///
+    /// # Invariant
+    /// The class is read in the node's own graph: a dynamic node through the host's
+    /// union-find, a frozen ref through the held `source` (else the registry), never
+    /// copied across graphs. A3's unified clone decision reads the class through this.
+    #[allow(dead_code)] // the view's A3-facing class access; A2 exposes it, A3 reads it.
+    pub(crate) fn clone_class_root(
+        &self,
+        id: AnyNodeId,
+        source: Option<&StaticModule<P>>,
+    ) -> AnyNodeId {
+        match id {
+            Dyn(node) => AnyNodeId::Dynamic(self.class_root(node)),
+            AnyNodeId::Static(sref) => {
+                let held;
+                let module = match source {
+                    Some(m) if m.key == sref.module => m,
+                    _ => {
+                        held = self.static_module(sref.module);
+                        &held
+                    }
+                };
+                AnyNodeId::Static(StaticNodeId {
+                    module: sref.module,
+                    index: module.static_class_root(sref.index),
+                })
+            }
+        }
+    }
+
+    /// The cells of `id`'s equality class, including its representative, in the node's own graph.
+    ///
+    /// # Invariant
+    /// As [`Self::clone_class_root`]: the class is walked in its own graph, the frozen side
+    /// through the held `source`. The list is the one a value write replicates over.
+    #[allow(dead_code)] // the view's A3-facing class access; A2 exposes it, A3 reads it.
+    pub(crate) fn clone_class_members(
+        &self,
+        id: AnyNodeId,
+        source: Option<&StaticModule<P>>,
+    ) -> Vec<AnyNodeId> {
+        match id {
+            Dyn(node) => {
+                let root = self.class_root(node);
+                let mut members = vec![AnyNodeId::Dynamic(root)];
+                let mut current = root;
+                while let Some(next) = self.nodes[current].equality.next() {
+                    members.push(AnyNodeId::Dynamic(next));
+                    current = next;
+                }
+                members
+            }
+            AnyNodeId::Static(sref) => {
+                let held;
+                let module = match source {
+                    Some(m) if m.key == sref.module => m,
+                    _ => {
+                        held = self.static_module(sref.module);
+                        &held
+                    }
+                };
+                static_class_members(module, sref.index)
+                    .into_iter()
+                    .map(|index| {
+                        AnyNodeId::Static(StaticNodeId {
+                            module: sref.module,
+                            index,
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
     /// Whether `id` is a static node whose artifact was frozen `ReadOnly`.
     ///
     /// # Invariant
