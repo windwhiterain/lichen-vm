@@ -144,6 +144,11 @@ Slice 3 aligns the selection to it via the **mark-scope antichain**; its record,
 measurements that forced the shape, the perf canary, and the apply-output workaround
 reassessment are [polymorphic-flag-slice3](polymorphic-flag-slice3.md).
 
+The unification of the frozen mirror with the dynamic walk — one clone interface, no
+materialization — is [static-dynamic-unification](static-dynamic-unification.md): the diagnosis
+that the frozen patches are symptoms of one missing reference-in-place exit, and the rulings
+that follow it.
+
 ## 5. Superseded decisions
 
 - **M5** of [any-removal-migration](any-removal-migration.md) ("the clone rule

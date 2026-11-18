@@ -17,6 +17,9 @@
 6. 写新测试需用户许可；改 Invariant 需用户许可。
 7. 每小步提交（即使红），不 `git stash`。
 
+规则 1/2 的落地（static/dynamic 一条 clone 接口、不物化）见
+[static-dynamic-unification](static-dynamic-unification.md)。
+
 ## 仓库状态
 
 - 工作树：`C:\resource\lichen-vm`；分支 `dev`。

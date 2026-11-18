@@ -869,3 +869,11 @@ Repro through `lichen-compiler` (the language front end is the faithful runner):
 infinite-stream budget canary `deep_evaluating_an_infinite_stream_records_the_deep_budget`
 `ok` in `0.05s`; examples git-unchanged; `comments-check --config comments-test.toml .
 --max-violations 0` clean; `cargo fmt --all -- --check` clean.
+
+## The unification that follows
+
+Reworks 1-7 patched the frozen apply's divergences one case at a time. The diagnosis that they
+are symptoms of one difference — the frozen clone walk has no reference-in-place exit, so it
+materializes the whole graph — and the maintainer's rulings that follow (shape A, the `unify`
+parameter bind, the approved format bump) are
+[static-dynamic-unification](static-dynamic-unification.md).
