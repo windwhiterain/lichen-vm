@@ -473,3 +473,45 @@ prevents a double run. So (ii) may be a MIGRATION of that sentence to the shared
 rule change — the maintainer decides which reading holds. Option (i) would make compute trigger
 evaluation, straining contract rule 5 (compute only reads); (ii) keeps compute purely reading and
 repairs the language layer's asymmetry, which is the unification thesis itself.
+
+## 15. E1 closed (ii): the kernel value is a compute-lowering product
+
+impl measured both (ii) variants as uncommitted edits on the U1 bind over the A2 tree, with
+env-gated instruments, then restored all nine touched files (residue 0, tree `6200c92c`, workspace
+check exit 0). Record: `.worktrees/unified-interface/.scratch-core/E1-efficacy.md`, logs
+`e1-{a,b}-*.txt`. **Verdict: neither variant works; (ii) is inert for this defect and 0 of the 12
+regressions move toward passing.**
+
+**The decisive reading.** Both variants DO make the Index target's expr Array present at the
+check-stage lowering read — the `:5893` peel exit fires (A: `target368 has_array=true
+evh=Some(399)`; B: `target378 evh=Some(415)`) — **but `kernel_id_of` stays `None` and the refusal
+still fires**. The value-half (399/415) is the **fresh empty hole**, not the kernel, and the
+`ComputeValue::Kernel` value (A:1055 / B:1231) first appears in the trace **after** the refusal. So
+the kernel value is a **compute-lowering product available only at a later stage**, not a lowlevel
+`evaluate_node` product at check. Forcing the frozen tail to evaluate and wire writes the expr
+**structure** faithfully and still cannot produce the value the classifier reads. The §13 node-shape
+subtlety is confirmed and extends to variant B: even the body-result clone
+(`static_node_apply(r#return)`) evaluates to an Array whose value-half is empty at check.
+**The MIGRATE-vs-REWRITE choice for (ii)'s invariant is therefore moot for this defect.**
+
+**Side effects, measured**: `compile_order_class` alone gets **worse** under A (zero kernels, left
+0 right 2) and stays at one under B; `an_output_position_that_is_not_a_buffer_is_refused` keeps two
+diagnostics (the wire's unify records Struct-vs-Int twice at check — the parked duplicate-diagnostic
+family); `the_product_is_warp_uniform_not_wider` is disturbed differently rather than fixed (A: "not
+64-lane uniform"; B: a wrong-shape diagnostic). **No double run** was observed (the bind node's
+operation runs once in check and is stamped there; no def re-run) — with the caveat that inert
+variants would not expose the wire-writes-without-stamping risk. **Laziness canaries survive**:
+lowlevel `167 passed; 0 failed; 1 ignored` under both. Errors added on the jit repro: eval 0, unify 0;
+the exception is `an_output_position` (unify 2, check_failed true), so an efficacious (ii) would have
+needed the error-discard widening.
+
+**The defect, reframed.** Compute compiles k1's jit **before** k0's, although k1's body depends on
+k0's kernel identity. Under the copy bind the jit stayed lazy until def-stmt, by which time k0 had
+lowered in def-fn — compilation happened to run in **dependency order**. The unify's check-stage
+forcing (`evaluate_pattern_argument` → `evaluate_node`) breaks that accidental order. This is a
+**compute-internal ordering dependency**, not a language-layer wiring gap, which is why no amount of
+symmetry in the frozen tail repairs it.
+
+**Route**: (i) — dependency-ordered kernel compilation, the jit lowering forcing the kernel
+production it reads before classifying — or (iii) a SPEC proposal fixing the observability stage.
+(ii) is closed. A read-only change-map for (i) is being prepared while the maintainer rules.
