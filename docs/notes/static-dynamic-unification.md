@@ -554,3 +554,56 @@ runs program-wide, with a check-None / def-Kernel double evaluation that must be
 (`ran_undecided` stamps on None, value-None keeps `has_no_result_yet` true). The suite is the
 evidence that check does not need kernel identities: A1 passed every `jit_cross_kernel_*` with the
 jit lowering at def. A measure-first run of (v) is authorized; the permanent fix awaits the ruling.
+
+## 17. V1: the 12 regressions have TWO independent causes, and the ~2× is the unify's own
+
+impl measured (v) as uncommitted edits and restored the tree (`6200c92c`, residue 0, workspace check
+exit 0). Record: `.worktrees/unified-interface/.scratch-core/V1-defer-efficacy.md`, logs `v1-*.txt`,
+`fail-v1.txt` (71).
+
+**The signal search, measured.** `report_type_side_failures` is a BUILD-level flag (Check vs
+Evaluate build), and the language pipeline and the compute tests both run a single `Mode::Evaluate`
+build, so it is false at the premature and the good lowering alike — it does **not** distinguish
+check-stage from def-stage. `deep_depth` does: U1's premature k1 lowering is `deep=0 phase=check`
+(the bind's shallow `evaluate_node`), A1's good lowering is `deep=4 phase=def-stmt`
+(`evaluate_node_deep`). So the existing signal is `deep_depth`, needing a read-only accessor.
+
+**The stamping discovery — the simple gate is broken.** A None operator result **stamps
+`runned=true`** (`evaluation.rs:698-702`), and `evaluate_node_body` then returns None at the
+run-stamp gate (`:197`) **without re-running**, even though `has_no_result_yet` is true. So the
+premise that a value-None node naturally re-runs at def is **refuted by measurement**: with only the
+`deep==0` gate, k1 is deferred and stamped at check, k0 compiles at def, and k1 never compiles —
+FAILED. No checker-side reopen exists between check and def (`reopen_stalled`/`reset_run_stamps`
+live in the compute graph/loop machinery, `compute.rs:7538`/`:7793`). **(v) therefore needs TWO
+changes**: the gate plus a new call to the existing `reopen_stalled(root_block)` before the def
+pass. With both, k0 and k1 compile at def-stmt and `jit_cross_kernel_call` is `ok. 1 passed`.
+
+**The decisive gate.** Compute `212 passed; 71 failed; 1 ignored` in **1092.52s**; the failing-name
+diff vs `fail-a2.txt` (68) is **exactly the three non-ordering tests**, the 68 baseline untouched.
+Against U1's 80, (v) fixes **9 of 12** — every ordering `jit_cross_kernel_*` — and leaves
+`compile_order_class`, `an_output_position_that_is_not_a_buffer_is_refused` and
+`the_product_is_warp_uniform_not_wider` failing **identically to U1**. Every other suite is green and
+perf-neutral (language external `289/0` 3.37s, lib `69/0`, lowlevel `167/0/1`, highlevel `136/0`
+10.95s, compute-gpu `94/0` 1.72s). Nothing at check needs a kernel identity: the nine pass with the
+jit None at check.
+
+**THE TWO-CAUSE SPLIT.** U1's 12 regressions are (1) **jit timing, 9** — the bind forces the jit's
+evaluation at check before the sibling kernels exist, so `kernel_id_of` is None; fixed by deferring
+the jit (v) or forcing the sibling (i). And (2) **the unify bind's class-merging / diagnostic face,
+3** — class contamination in `compile_order_class`, the duplicate diagnostic in
+`an_output_position`, the missing warp-uniformity refusal in `the_product`. These are **not** jit
+timing: they fail identically with and without the gate, so **neither (i) nor (v) addresses them**.
+
+**The ~2× is the unify's own cost, not the fix's.** U1 with no gate at all was already **1286.88s**
+against A2's 554.47s; (v) is 1092.52s and (i)-A 1167.09s — both *faster* than U1 alone (they also
+remove nine failing tests' extra work, so the comparison is not perfectly controlled, but the order
+is clear). The dominant axis is the class growth §9 measured: merged classes make every O(members)
+walk bigger. So bounding those walks is a **prerequisite for the ruling being affordable at all**,
+not an optional extra, and the broad `reopen_stalled` is not the main cost.
+
+**Where that leaves the fix.** Neither candidate alone restores `215/68`. A complete fix needs the
+jit-timing face, the class-merging/diagnostic face, and the walk bounding. The one untested
+combination that could address the second face is **the selection exit (A3 step 2) together with the
+unify bind**: the three are class-merging consequences, and the frozen walk's over-broad remap
+(§11) is what decides which clones share a class — so narrowing it is directly relevant to them,
+even though it is orthogonal to the ordering cause. That is the architectural goal anyway.
