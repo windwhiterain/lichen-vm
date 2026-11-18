@@ -1,7 +1,8 @@
 # Static and dynamic: one clone interface, no materialization
 
 > Status: **in progress.** A1 landed on dev (`8590ea76`); U1 (the parameter-bind unification)
-> is in flight; A2-A4 are planned. The contract is the maintainer's own list in
+> was measured RED on compute and is parked on `u1-parked` (`f19eae58`); A2-A4 are planned,
+> the unify folded into A3. The contract is the maintainer's own list in
 > [general-contract-handoff](general-contract-handoff.md) §用户裁定 rules 1-7 — **no
 > materialization**, **one interface for dynamic and static, treated equally**, normalize before
 > freeze, no cross-module `FunctionId` bridges, writes in the checker only, new tests and
@@ -98,7 +99,7 @@ and tests, never for a per-call path.
   Static operand **in place** (`function.rs:897`, `template.rs:345`) — A3's groundwork, laid
   behaviour-preservingly because no writer emits one yet. `freeze.rs:143`'s `unreachable!()` is
   the A3 bump site: A3 replaces it with the tagged encoding, not a panic left behind.
-- **U1 — in flight**: the one bind. `apply.rs:287` calls `apply_parameter_check` with the sibling
+- **U1 — measured RED on compute, parked** (`u1-parked`, `f19eae58`; see §9): the one bind. `apply.rs:287` calls `apply_parameter_check` with the sibling
   path's error-discard (`:160-173`); `copy_parameter_slots` and `copy_slot` are deleted (one
   caller each); the ruling-retired invariant is named in the commit message with
   `language-spec.md:291`. No bump, no operand change, no other Invariant touched.
@@ -174,3 +175,70 @@ default: the parser's struct-field prime only abbreviates the field's own value
 flag on the field — `RecordField` has no `primed` field — and the synthesized `Binding` exists
 only so a named field resolves in the LSP's own scope walk. AGENTS.md's Verify rule now names
 `cargo check --workspace --tests` explicitly, with this measurement.
+
+## 9. U1 measured: the bind cannot change before the walks unify
+
+U1 applied the ruling alone — `apply.rs:287` calls `apply_parameter_check` with the sibling's
+error-discard, `copy_parameter_slots`/`copy_slot` deleted, the retired invariant named in the
+commit message with `language-spec.md:291`. One file, +12/−54. **Not merged**; parked on
+`u1-parked` (`f19eae58`), the working branch reset to the gated A1 tip `8590ea76`.
+
+**Gate**: language external `289 passed; 0 failed` (`template_instances` unmoved),
+`frozen_function_type` ok, lowlevel `167/0/1`, highlevel `136/0`, language lib `69/0`,
+compute-gpu `94/0`, workspace check / comments-check / fmt exit 0; compute
+`203 passed; 80 failed; 1 ignored` in **1286.88s** against the baseline `215/68/1` in 575.67s —
+**12 regressions, 0 improvements**, classified by name, 69 over-60s warnings.
+
+**The mechanism, corrected.** "Compute classifies callees by class topology" is wrong as stated:
+**no callee predicate reads a class root**. `static_callee` (`compute/body.rs:1621-1640`),
+`dynamic_callee` (`:1649-1673`), `is_static_function` (`compute.rs:8180-8192`) and `kernel_id_of`
+(`compute.rs:5925-5958`) all read **values**. The bind changes *where a value lands*, through two
+rules already in the tree: **write-once** (`lib.rs:936-940`, `equality.rs:357-365` — a value
+enters a class once, only a class holding nothing is written, both `debug_assert!`ed) and
+**§Merge propagation** (`language-spec.md:108`, `propagate_class_value` `equality.rs:512-521`,
+`fill_class_holes` `:160-171`). After the merge `node_value(callee)` stops answering
+`ComputeValue::Kernel(kid)`, `kernel_id_of` answers `None` at `body.rs:1913`, and the fallthrough
+refusal at `:1940-1944` fires on a callee that *is* a kernel value.
+
+**The direct fact exists and is already used one file over.** `pending_kernel`
+(`compute.rs:5968-5995`) reads the callee's **operation** (`ComputeOperator::Jit`), which the bind
+does not rewrite, and the JIT's own predicate already composes the two (`compute.rs:1187`:
+`kernel_id_of(..).is_some() || pending_kernel(..)`); the lowering uses `kernel_id_of` alone. The
+minimal consistency fix is 2-3 lines. Two caveats: `pending_kernel` is a **superset** by its own
+invariant (`:5964-5967`), so it can keep a non-kernel callee on the cross-kernel path and fail
+later at `body.rs:2723` with a different message — it must be measured against **215/68 with
+identical names**, not "no worse"; and if the failing callee is a plain binding with neither
+operation nor value, both answer `None` and the fix is inert. **It covers only the
+`jit_cross_kernel_*` family**: `an_output_position_that_is_not_a_buffer_is_refused` and
+`the_product_is_warp_uniform_not_wider` read the value/class sites, so making compute robust under
+the merged topology is a second, A2/A3-sized slice (~20 `class_root`/`node_class` reads in
+`body.rs:566..2524`).
+
+**The decision record.** No `wontfix:D` covers this. The refusal is a recorded, deliberately
+deferred v1 limitation ([loop-conversion](loop-conversion.md) §99-102 and §1481-1487,
+[transcendentals-as-operators](transcendentals-as-operators.md) §70-74,
+[wall-claims-audit](wall-claims-audit.md) §83/§306). The message is correct for a genuinely inline
+callee; the defect is the **misclassification**, not the refusal's existence.
+`compile_order_class` is already recorded as swinging for an unrelated reason (process-global
+state, [open-issues](open-issues.md) §359-360, fix at §382), so it must be re-run **alone** before
+it is counted.
+
+**The perf cost is the ruling's own.** 2.24× is **data growth**, not recompute cost: merged classes
+make every O(members) walk bigger — `propagate_class_value`, `fill_class_holes`,
+`evaluate_class_first` (`evaluation.rs:105-140`, which also *runs* more members, §Merge:106's own
+rule), `refresh_class_summary`, `class_inside_scope`, the polymorphic fixpoint's class edge.
+[upgrade-perf](upgrade-perf.md)'s landed optimization does not help: different amplifier. Perf-only
+on the available evidence, but a changed run order is a correctness surface too.
+
+**Consequence for the plan.** The bind cannot change before the two walks unify, because the
+value/class-site robustness work *is* A2/A3. The unify therefore lands inside A3, together with
+the reference-in-place exit, the tagged operand encoding, compute's classification-by-fact, and a
+ruling on whether the O(members) walks must be bounded first. Retracting the ruling to the
+reporting paths only would contradict `language-spec.md:291` (the SPEC's apply has no
+reporting/non-reporting distinction) and contract rule 2, and would have to be recorded as a
+deliberate SPEC deviation.
+
+**Open, each needing a run**: which value mechanism fires (write-once vs §Merge); whether the
+failing callee is a `Jit` operation or a binding; `compile_order_class` alone; whether the slowdown
+also changes run order; whether a debug build's `equality.rs:357-365` assertion catches a U1 class
+state (the suite runs the test profile).
