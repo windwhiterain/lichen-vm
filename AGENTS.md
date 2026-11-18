@@ -174,7 +174,11 @@ A branch lands **in the checkout that owns the branch**: `git -C <checkout> merg
 
 ## Verify
 
-- `cargo check` for compilation pass.
+- **`cargo check --workspace --tests` for compilation pass** — a per-crate check is
+  not it: the suite of one crate can stay green while the build of another is red.
+  Measured: `c02b8b46` added `ast::Binding.primed` and left the two `RecordBlock`
+  binding syntheses in `lichen-language-server` without it, so the workspace check
+  was red on dev from that commit until `3b683e6d` while every per-crate suite passed.
 - `cargo tests` for behaviour correctness.
 - `cargo fix --allow-dirty`, `cargo fmt` for final commit, no tests need after them.
 - A filtered run can read as a pass: `--exact` needs the **full** path
