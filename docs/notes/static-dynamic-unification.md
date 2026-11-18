@@ -607,3 +607,41 @@ combination that could address the second face is **the selection exit (A3 step 
 unify bind**: the three are class-merging consequences, and the frozen walk's over-broad remap
 (§11) is what decides which clones share a class — so narrowing it is directly relevant to them,
 even though it is orthogonal to the ordering cause. That is the architectural goal anyway.
+
+## 19. Q2 closed by falsification, and the parked test it rested on cannot run
+
+Q2 (the duplicate codomain diagnostic) was briefed as a pre-existing dev defect whose fix
+suppresses the runtime apply's join. **Both halves are wrong, measured** (impl,
+`.scratch-core/Q2-premise-falsified.md`, logs `q2-*.txt`, probe kept):
+
+- **No duplicate on dev.** `an_output_position_that_is_not_a_buffer_is_refused` has `count=1` on
+  dev — one diary-owned check-time error, **no orphan**. Under U1 it is `count=2`, and the two are
+  **two check-time diary recordings** (owners `Some(0)` + `Some(1)`), not a diary + runtime-orphan
+  pair. Valid-syntax variants and a decided `Int` input are 1 on dev too.
+- **The named parked test cannot run.** `compute.rs:1291`
+  `a_program_value_where_a_buffer_belongs_is_refused` carries `#[ignore]` but **no `#[test]`** —
+  dead code with a "never used" warning, so `--ignored` matches nothing — and its program uses
+  **rotted array syntax**: the language parses `[template, length]` as a template and
+  `Template[e1..en]` as an instance (`parser ast.rs:264-273`), so a bare eight-element array is a
+  parse error. Its own doc comment says "the run-time join never sees it".
+  `graph_structure.rs:319` is a real `#[test] #[ignore]`, but it fails on a **cfg-structure**
+  assertion, not a diagnostic count.
+
+So the prose I briefed from ("the apply's join is not yet suppressed") describes a prescription with
+no observable dev target. **Q2 is U1-only**, and its real mechanism is a second check-time diary
+recording induced by the unify bind. A lesson for the record: a parked test's prose is not a
+measurement, and a test that cannot run is worse than none — it claims a guard it does not hold.
+
+**This closes the last dev-landable face.** All four — the jit compile timing, Q1 (the lowering reads
+the class's current value instead of the declaration's class), Q2 (the second check-time diary
+recording), Q3 (the warp-uniform demand not firing) — are **unify-only**: unobservable on dev, and
+only observable on `u1-parked` / `stage2-parked`. The unification ruling therefore cannot proceed as
+independent dev slices: it needs **one integration branch** carrying the unify plus the four faces
+plus the O(members) walk bounding, each slice gated by the compute surface shrinking from 80 toward
+the accepted 68, with the final gate A2's parity **and** the ~2× clawed back. That, or the ruling is
+shelved with everything parked and recorded.
+
+**A separate, permission-gated hygiene fix is proposed**: give `compute.rs:1291` a `#[test]` and
+valid array syntax so "one disagreement, one report" has a runnable guard. That is a test edit and
+needs the maintainer, but until it lands the defect has no guard at all — the prescription lives in
+a sentence that is never executed.
