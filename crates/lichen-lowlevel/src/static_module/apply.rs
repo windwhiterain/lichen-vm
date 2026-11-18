@@ -708,7 +708,8 @@ impl<P: Program> Module<P> {
                     let AnyNodeId::Static(sref) = operand else {
                         unreachable!("a frozen operand ref is static by construction")
                     };
-                    self.static_node_apply_ref(sref.index, ctx, proof.subtree())
+                    // The operand mints: a Static operand cannot freeze to a LocalNodeId until format 34 names it.
+                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx, proof))
                 }),
             });
             // The carry rule: the deep pass makes an answer a fact every call shares.
