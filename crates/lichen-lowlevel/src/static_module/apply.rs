@@ -47,16 +47,17 @@ impl<P: Program> Module<P> {
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
+                parameter: Some(parameter),
             };
             // The parameter image comes first, so return fields share its instance.
-            let parameter_image = self.static_node_apply(parameter, &mut ctx);
-            let applied = self.static_node_apply(r#return, &mut ctx);
+            let parameter_image = self.static_node_apply(parameter, &mut ctx, MintProof::PARAMETER);
+            let applied = self.static_node_apply(r#return, &mut ctx, MintProof::ORDINARY);
             // Each assert instantiates through the shared remap; a baked
             // condition is not re-registered.
             for index in 0..assert_count {
                 let condition = ctx.module.functions[function.index.0].asserts[index];
                 let baked = !ctx.module.nodes[condition.index].undecided();
-                let instantiated = self.static_node_apply(condition, &mut ctx);
+                let instantiated = self.static_node_apply(condition, &mut ctx, MintProof::ORDINARY);
                 if !baked {
                     self.asserts.push(PendingAssert {
                         condition: instantiated,
@@ -150,6 +151,7 @@ impl<P: Program> Module<P> {
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
                 minted: HashMap::new(),
+                parameter: None,
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.record_applied_expr(node, applied);
@@ -189,10 +191,10 @@ impl<P: Program> Module<P> {
         ctx: &mut StaticApplyCtx<P>,
     ) -> NodeId {
         let Some(value) = ctx.module.read(r#return) else {
-            return self.static_node_apply(r#return, ctx);
+            return self.static_node_apply(r#return, ctx, MintProof::ORDINARY);
         };
         let Some(LowValue::Array(array)) = value.as_enum() else {
-            return self.static_node_apply(r#return, ctx);
+            return self.static_node_apply(r#return, ctx, MintProof::ORDINARY);
         };
         // SAFETY: the payload lives in the frozen module, pinned by the Arc.
         let source = unsafe { array.items() };
@@ -206,7 +208,7 @@ impl<P: Program> Module<P> {
             }
             let node = match item.node {
                 AnyNodeId::Static(sref) if sref.module == ctx.module.key => {
-                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
+                    self.static_node_apply_ref(sref.index, ctx, MintProof::ORDINARY)
                 }
                 other => other,
             };
@@ -264,6 +266,7 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted: HashMap::new(),
+            parameter: None,
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -367,11 +370,12 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
             minted,
+            parameter: None,
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
             let baked = !ctx.module.nodes[condition.index].undecided();
-            let instantiated = self.static_node_apply(condition, &mut ctx);
+            let instantiated = self.static_node_apply(condition, &mut ctx, MintProof::ORDINARY);
             if !baked {
                 self.asserts.push(PendingAssert {
                     condition: instantiated,
@@ -557,6 +561,57 @@ impl<P: Program> Module<P> {
         clone
     }
 
+    /// The value/operand walk: a decided cell the decision does not claim stays a ref.
+    ///
+    /// # Invariant
+    /// A decided cell the per-call decision does not claim is referenced in place, never
+    /// copied; an undecided cell always mints, because a frozen ref is immutable and an
+    /// open cell must clone to be fillable. The proof is a parameter, never ctx state: a
+    /// re-homed closure's structural cells force-mint while its value/operand subtrees may exit.
+    fn static_node_apply_ref(
+        &mut self,
+        local: LocalNodeId,
+        ctx: &mut StaticApplyCtx<P>,
+        proof: MintProof,
+    ) -> AnyNodeId {
+        // A cell this pass already imaged keeps that one image: a diamond, one name.
+        if let Some(&clone) = ctx.remap.get(&local) {
+            return AnyNodeId::Dynamic(clone);
+        }
+        if !proof.force {
+            let read = self.clone_read(
+                AnyNodeId::Static(StaticNodeId {
+                    module: ctx.module.key,
+                    index: local,
+                }),
+                Some(ctx.module.as_ref()),
+            );
+            // An open requirement is per call however the flag reads (SPEC §Clone).
+            if !read.undecided && !read.wildcard_fill {
+                let inside = ctx.rule.inside(&ctx.module, local, ctx.source)
+                    || ctx
+                        .enclosing_source
+                        .is_some_and(|source| ctx.rule.inside(&ctx.module, local, source));
+                let per_call = crate::apply::clone_per_call(
+                    proof.in_parameter || Some(local) == ctx.parameter,
+                    // The frozen flag is the erased bool: a superset of the dynamic
+                    // mark test, which the artifact format does not yet carry.
+                    read.polymorphic == Some(true),
+                    inside,
+                    false,
+                    false,
+                );
+                if !per_call {
+                    return AnyNodeId::Static(StaticNodeId {
+                        module: ctx.module.key,
+                        index: local,
+                    });
+                }
+            }
+        }
+        AnyNodeId::Dynamic(self.static_node_apply(local, ctx, proof))
+    }
+
     /// Clone one static node into the dynamic world; `#[stacksafe]` because
     /// static recursion runs through here.
     #[stacksafe]
@@ -564,7 +619,12 @@ impl<P: Program> Module<P> {
     /// The frozen flag is `Some` on every node this walk reads: the freeze propagates it
     /// over the frozen set, and a materialized clone inherits it (ruling 1,
     /// `docs/notes/polymorphic-flag.md`).
-    fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
+    fn static_node_apply(
+        &mut self,
+        local: LocalNodeId,
+        ctx: &mut StaticApplyCtx<P>,
+        proof: MintProof,
+    ) -> NodeId {
         // The shared read view of the frozen node's facts, through the Arc the walk holds as source.
         let read = self.clone_read(
             AnyNodeId::Static(StaticNodeId {
@@ -648,7 +708,7 @@ impl<P: Program> Module<P> {
                     let AnyNodeId::Static(sref) = operand else {
                         unreachable!("a frozen operand ref is static by construction")
                     };
-                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
+                    self.static_node_apply_ref(sref.index, ctx, proof.subtree())
                 }),
             });
             // The carry rule: the deep pass makes an answer a fact every call shares.
@@ -657,7 +717,7 @@ impl<P: Program> Module<P> {
             // must not clone a closure into the target block.
             let value = ctx.module.read(local);
             let mapped = if carried {
-                value.map(|value| self.static_remap_value(value, ctx))
+                value.map(|value| self.static_remap_value(value, ctx, proof.subtree()))
             } else {
                 None
             };
@@ -677,7 +737,7 @@ impl<P: Program> Module<P> {
             let mapped = ctx
                 .module
                 .read(local)
-                .map(|value| self.static_remap_value(value, ctx));
+                .map(|value| self.static_remap_value(value, ctx, proof.subtree()));
             self.write_node_value(clone, mapped);
             let claimed = crate::apply::answer_claims_run::<P>(evaluated_deep, mapped, |value| {
                 crate::apply::answer_elements_are_undecided::<P>(value, |node| {
@@ -696,11 +756,11 @@ impl<P: Program> Module<P> {
             self.apply_result_owners.insert(value, clone);
         }
         if let Some(owner) = ctx.module.apply_result_owners.get(&local).copied() {
-            let owner = self.static_node_apply(owner, ctx);
+            let owner = self.static_node_apply(owner, ctx, MintProof::ORDINARY);
             self.apply_result_owners.insert(clone, owner);
         }
         if let Some(source) = ctx.module.field_sources.get(&local).copied() {
-            let source = self.static_node_apply(source, ctx);
+            let source = self.static_node_apply(source, ctx, MintProof::ORDINARY);
             self.field_sources.insert(clone, source);
             if let Some(operation) = template_operation
                 && matches!(
@@ -718,7 +778,7 @@ impl<P: Program> Module<P> {
                     && let AnyNodeId::Static(target) = operands[0].node
                     && target.module == ctx.module.key
                 {
-                    let target = self.static_node_apply(target.index, ctx);
+                    let target = self.static_node_apply(target.index, ctx, MintProof::ORDINARY);
                     self.field_sources.insert(target, source);
                 }
             }
@@ -735,7 +795,12 @@ impl<P: Program> Module<P> {
     /// inline absolute refs. Only a ref keyed by `ctx.module` may be cloned: local indices
     /// are per-module, so a dependency's ref — concrete by construction — stays in place,
     /// resolved through the registry.
-    fn static_remap_value(&mut self, value: P::Value, ctx: &mut StaticApplyCtx<P>) -> P::Value {
+    fn static_remap_value(
+        &mut self,
+        value: P::Value,
+        ctx: &mut StaticApplyCtx<P>,
+        proof: MintProof,
+    ) -> P::Value {
         // A same-module closure with open captures is re-homed: only this call's
         // clones rebind its captured cells.
         if let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum() {
@@ -765,7 +830,7 @@ impl<P: Program> Module<P> {
                             || ctx.module.nodes[sref.index.index].wildcard_fill) =>
                 {
                     changed = true;
-                    Dyn(self.static_node_apply(sref.index, ctx))
+                    self.static_node_apply_ref(sref.index, ctx, proof)
                 }
                 // A baked closure with open captures: a decided leaf the arm above
                 // skips. Re-home it so its cells re-open here.
@@ -774,7 +839,7 @@ impl<P: Program> Module<P> {
                         && static_node_holds_open_closure(&ctx.module, sref.index) =>
                 {
                     changed = true;
-                    Dyn(self.static_node_apply(sref.index, ctx))
+                    self.static_node_apply_ref(sref.index, ctx, proof)
                 }
                 node => node,
             };
@@ -855,13 +920,13 @@ impl<P: Program> Module<P> {
         let outer_enclosing_source =
             std::mem::replace(&mut ctx.enclosing_source, Some(outer_source));
         let outer_enclosing_tag = std::mem::replace(&mut ctx.enclosing_tag, outer_tag);
-        let ret_clone = self.static_node_apply(r#return, ctx);
-        let param_clone = self.static_node_apply(parameter, ctx);
-        let return_type_clone = self.static_node_apply(return_type, ctx);
+        let ret_clone = self.static_node_apply(r#return, ctx, MintProof::FORCED);
+        let param_clone = self.static_node_apply(parameter, ctx, MintProof::FORCED);
+        let return_type_clone = self.static_node_apply(return_type, ctx, MintProof::FORCED);
         let mut assert_clones = Vec::with_capacity(asserts.len());
         for &condition in &asserts {
             let baked = !ctx.module.nodes[condition.index].undecided();
-            let instantiated = self.static_node_apply(condition, ctx);
+            let instantiated = self.static_node_apply(condition, ctx, MintProof::FORCED);
             if !baked {
                 self.asserts.push(PendingAssert {
                     condition: instantiated,
@@ -873,7 +938,7 @@ impl<P: Program> Module<P> {
         // Re-stamped after the walk: the expr and parameter belong to this closure.
         let mut own = Vec::with_capacity(scope.len());
         for &node in &scope {
-            let clone = self.static_node_apply(node, ctx);
+            let clone = self.static_node_apply(node, ctx, MintProof::FORCED);
             // A class outside this closure's scope is shared, so its cell
             // keeps its owner: the retag must not make it internal.
             if ctx.rule.inside(&ctx.module, node, ctx.source) {
@@ -971,6 +1036,38 @@ fn static_node_holds_open_closure<P: Program>(module: &StaticModule<P>, node: Lo
     }
 }
 
+/// The per-call proof a position carries: a parameter, never ctx state, so no return leaks it.
+#[derive(Clone, Copy)]
+struct MintProof {
+    /// This position must be a fresh dynamic cell (a re-homed closure's structural cells).
+    force: bool,
+    /// The dynamic `in_parameter`: the parameter image and its subtree are per call.
+    in_parameter: bool,
+}
+
+impl MintProof {
+    const ORDINARY: Self = Self {
+        force: false,
+        in_parameter: false,
+    };
+    const PARAMETER: Self = Self {
+        force: false,
+        in_parameter: true,
+    };
+    const FORCED: Self = Self {
+        force: true,
+        in_parameter: false,
+    };
+    /// A value/operand subtree keeps the parameter term but may exit: only the
+    /// structural position itself is forced.
+    fn subtree(self) -> Self {
+        Self {
+            force: false,
+            in_parameter: self.in_parameter,
+        }
+    }
+}
+
 /// The fixed context of one static materialize pass: target block, module, remap,
 /// applied function, owner tag.
 struct StaticApplyCtx<P: Program> {
@@ -1031,4 +1128,6 @@ struct StaticApplyCtx<P: Program> {
     /// one of the two closures only — the other would read its own shell in place and
     /// run no parameter check.
     minted: HashMap<StaticFunctionRef, FunctionId>,
+    /// The frozen parameter this pass images; `None` on the type side (no parameter image).
+    parameter: Option<LocalNodeId>,
 }
