@@ -515,3 +515,42 @@ symmetry in the frozen tail repairs it.
 **Route**: (i) — dependency-ordered kernel compilation, the jit lowering forcing the kernel
 production it reads before classifying — or (iii) a SPEC proposal fixing the observability stage.
 (ii) is closed. A read-only change-map for (i) is being prepared while the maintainer rules.
+
+## 16. F1: (i)-A works but is partial and costs 2.1×; (v) is the smaller candidate
+
+impl built the dependency pre-pass as an uncommitted edit on the U1 bind over A2, measured, and
+restored the tree (`6200c92c`, residue 0, workspace check exit 0). Record:
+`.worktrees/unified-interface/.scratch-core/F1-force-efficacy.md`, logs `f1-*.txt`, `fail-f1.txt`.
+
+**Efficacy is real, not inert.** The force runs the Jit arm **at check**: the sibling lambda's
+domain TYPE value is a decided `Array layout 1`, so `function_materialized` (`compute.rs:3163`,
+gate `:1271`) passes, the Kernel is interned, `kernel_id_of(callee)` becomes `Some`, the `:5893`
+peel fires and the refusal stops — `jit_cross_kernel_call` `ok. 1 passed`. **No double run**:
+`evaluate_node_deep_ref` stamps `runned`, so the wire-writes-without-stamping risk did not bite.
+Zero added eval/unify errors; lowlevel laziness canaries `167/0/1`.
+
+**But partial and expensive.** Compute sweep `208 passed; 75 failed` in **1167.09s** against A2's
+`215/68` in ~550s: **5 of the 12 U1 regressions fixed, 7 remain, 0 baseline regressions** (the 68
+untouched), 0 improvements, and a **~2.1× wall-time regression** — a stop condition under the gate.
+Two measured reasons: (1) the pre-pass's callee shape is **too narrow** — in
+`jit_cross_kernel_wrapper` (`compute.launch k0 x`) the Apply's callee is `compute.launch` and k0 is
+nested as an **argument**, so forcing the callee's fallback target yields no kernel; reaching the
+other four ordering shapes needs `Lower::apply`'s full routing (routed operator / frozen residual /
+launch-wrapper / subexpr / multi-value). (2) **read-first-then-force cannot bound the cost**:
+`kernel_id_of` is None for most callees at check, so the pre-pass forces inline lichen calls and
+routed operators too, running many sibling applies eagerly across all 284 tests. The three
+non-ordering failures are unmoved (`compile_order_class` alone still 1 kernel,
+`an_output_position` still two diagnostics, `the_product` still not 64-lane uniform). Cyclic kernel
+dependency stays OPEN (no new test permitted); termination is code-reasoned from the runned stamp,
+`visiting`/`VisitGuard`, the deep cycle cut and the depth limits.
+
+**(v), assessed read-only**: make jit compilation a **definition-pass activity by design** — the
+Jit arm returns None at check and compiles at def, turning A1's accidental laziness into a rule.
+A phase signal plus a return, **no new graph walk**; it aligns better with contract rule 5 (no eager
+check forcing; the jit runs through the normal language apply at def, so writes stay in the language
+layer), and it may repair **more** than (i)-A because A1's timing had `an_output_position` passing.
+Its cost is that it is a **design ruling** — "jit is a definition-pass operation" — changing when jit
+runs program-wide, with a check-None / def-Kernel double evaluation that must be shown benign
+(`ran_undecided` stamps on None, value-None keeps `has_no_result_yet` true). The suite is the
+evidence that check does not need kernel identities: A1 passed every `jit_cross_kernel_*` with the
+jit lowering at def. A measure-first run of (v) is authorized; the permanent fix awaits the ruling.
