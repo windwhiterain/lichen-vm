@@ -294,9 +294,11 @@ the same tolopogy"* (`language-spec.md:311-319`). A per-call clone must be **det
 class with the same topology** before the argument unifies with it; the frozen walk's image is over-broad: the detach/regroup machinery is SHARED
 (`regroup_clones`/`unify_clone_groups`, `apply.rs:473-505`, both walks call it), but the frozen
 walk inserts EVERY walked node into the remap while the dynamic walk inserts only per-call clones
-(after `!per_call -> return node`), so under unify the template's expr structure and the argument's value collide
-in one class and write-once keeps only one. The fix is therefore the unified walk's per-call
-freshening and detachment — A3 — not a change to §Function or §Merge.
+(after `!per_call -> return node`), so under unify the remap is over-broad. **The causal claim that
+followed here — a write-once collision between the template expr structure and the argument
+value — was REFUTED by measurement (§12): no Array write is skipped, and the Array IS written,
+just after the lowering reads it.** The fix surface is OPEN pending the ordering investigation in §12; the route (fix rather than a
+silent SPEC deviation) stands, but step 2 is held because its premise was the refuted collision.
 
 **Perf is secondary.** Bounding the O(members) walks is necessary for the unify to be affordable
 but **not sufficient** to make it work: even with perfectly bounded walks the classification stays
@@ -335,3 +337,42 @@ the same time, not the view).
 (`function.rs:843-849`, fresh per encounter) while the frozen one DOES (`apply.rs:569-578`, one
 cell per template per apply, a diamond shares it). The two sides differ on diamond sharing of a
 fill; measure before changing either.
+
+## 12. A3 step 1 REFUTED the collision mechanism — it is a read-before-write ordering
+
+impl measured the question M1 left open, with env-gated instruments by value kind (never
+committed; tree restored to `6200c92c`, residue 0, workspace check exit 0). Record:
+`.worktrees/unified-interface/.scratch-core/A3-step1-finding.md`, logs `a3-step1-run.txt` /
+`a3-step1-run2.txt`.
+
+**By-kind counts on the U1 repro**: Array writes **2512**, Array write-once skips **0**; Kernel
+writes **1**, Kernel skips **0**; all **31** write-once skips are `kind=other` — scalar type-cells
+(prelude positions), not the jit result expr. So the expr Array write is **not** among the skips.
+
+**Event order** (`a3-step1-run2.txt` line numbers): BIND at 3966 (node 368, param 369 / arg 365 /
+applied 403; `param_val` and `applied_val` both Array layout 1, unchanged before/after) → the
+check-stage lowering reads `value_of_node(index 405, target 368)` with `has_array=FALSE`,
+`has_op=true` at **4141** → `kernel_id_of=None`, `pending_kernel=false` → the inline-callee refusal
+fires → the concrete expr Array is written to node 368 at **4325** (`A3-SET kind=Array`, no skip)
+→ later reads see `has_array=TRUE` (4328+) → the Kernel is written to node 1057 at 4435.
+
+**Verdict**: §10's causal claim is refuted on **both** clauses — no Array write is write-once
+skipped, and the Index target does not *lose* its Array; it is written to node 368 **after** the
+lowering reads it empty. The mechanism is a **check-stage read-before-write ordering**: the unify
+bind defers the result expr Array's materialization past the lowering's classification read, where
+A1's copy bind had it present. This is consistent with M1 Q2 (neither write-once-skip nor §Merge
+propagation of the Kernel) and now the by-kind delta is measured.
+
+**What stands**: the remap-membership code fact (dynamic inserts after `!per_call -> return node`,
+frozen inserts every walked node) — a verified fact about the code, not refuted. **What falls**: the
+causal link from it to the Array displacement via a write-once collision. A3 step 2 (narrowing the
+remap) was premised on repairing that collision, so it is **held**; narrowing the remap may still
+change the target's identity or timing, but it must not be sold as the regression fix.
+
+**Replan in flight**: recon is mapping the ordering read-only — who writes the result expr Array
+and in which pass, why the copy bind is eager (`propagate_class_value`) while unify is not
+(`evaluate_pattern_argument` to pattern depth, then `unify_ref`), what the dynamic path does to have
+the value present in time, the target-identity delta (954 vs 368), **what the SPEC says about when
+an apply's result is available** (§Operation/§Merge/§Function/§Clone — if it is silent, that is the
+SPEC-proposal candidate), the checker/compute stage boundary under contract rule 5, and the honest
+fix surfaces with sizes. The route remains "fix or SPEC proposal", never a silent deviation.
