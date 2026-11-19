@@ -1265,6 +1265,14 @@ where
                     else {
                         return None;
                     };
+                    // The lowering reads the body as values, so it must have run first.
+                    if let AnyFunctionId::Dynamic(fid) = function {
+                        let body = module.functions[fid].r#return;
+                        module.evaluate_node_deep(body, None);
+                        for node in module.functions[fid].nodes.clone() {
+                            module.evaluate_node_deep(node, None);
+                        }
+                    }
                     if !function_materialized(module, function) {
                         return None;
                     }
