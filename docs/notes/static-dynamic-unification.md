@@ -689,3 +689,44 @@ either (a) the bind not displacing that element's value half (the bind's own cor
 (b) `loop_state` lowering the element's computation when the peel lands on an open cell (which
 touches `loop_state`'s quoted invariant, "the entering call's own element list" — the maintainer's
 call).
+
+## 21. The compile_order write is named, and the repair is over-determined (so only the merge can fix it)
+
+Two further rounds close §20's open question and re-aim the repair.
+
+**The write is `fill_class_holes` (`equality.rs:168`, `node.value = Some(value)`), reached from
+`add_equality`'s `(Some(value), None)` arm (`:127`), driven by the bind's own per-position parameter
+check** (`apply.rs:77` `unify_ref` inside `for slot in 0..width`). Deciding pair: `ADD a=24754
+b=20693 a_val=true b_val=false a_vh=Some(24755)` → `FILL node=20693 rep=20693 Array(layout 1)`.
+`b=20693` is the `@loop` idx-2 element and `24755` is the bare cell; `rep == node` proves a **hole
+fill**, not an overwrite. Dev's counterpart pair is `a_val=TRUE b_val=TRUE` → `_ => {}`, no fill.
+
+**A trap that cost a run**: `set_node_value`'s `# Invariant` calls itself "the one writer of the
+slot", but `fill_class_holes:168` and `propagate_class_value:519` write member slots **directly**.
+Watching only `set_node_value` + `unify` gives a **false negative**. That invariant sentence is
+false as written and should be corrected at its site (an Invariant change, so the maintainer's).
+
+**Repair (a)-as-normalize is refuted.** `evaluate_node_deep_ref(argument)` before the bind is
+**inert** on the unify tree (len stays 1; the bare-fill census 338 → 338) because all 644 deciding
+empty cells have **no operation**, are their own class root, and are nobody's operand — there is
+**nothing to run**, so normalizing cannot fill them. And on the **dev copy bind** the same one-liner
+**regresses dev**: `213 passed; 70 failed`, exactly two new names — `compile_order_class` and
+`an_output_position` — with the exact unify symptoms.
+
+**The inverse (force less) is refuted too.** Skipping the check-time force on the unify tree leaves
+**both** symptoms (len 1 / len 2) while materially changing the graph (fills 1144 → 818, bare
+338 → 320). Its dev-side form (skipping the type-side force) is parity-identical by name,
+`215/68` in 527.08s, all suites green — a keeper fact that buys nothing for this defect.
+
+**The key new fact: the symptom is OVER-DETERMINED.** Early forcing **alone suffices** (proved on
+the copy bind, no unify and no merge) **and the class merge alone suffices** (proved with the force
+removed). So neither "force more" nor "force less" can repair it — **only the merge side can**.
+What remains: (1) the state element must not be empty when the merge runs, or (2) **the merge must
+not fill a state-element slot with a value whose value half is an open requirement cell** — (2)
+touches `fill_class_holes`' invariant and `add_equality`'s caller contract, so it is the maintainer's
+call. **Q3 (`the_product`) moved under none of these** and stays a separate cause.
+
+One device worth keeping: the forcing one-liner **reproduces Q1 and Q2 on dev without the unify**
+(two new names, same symptoms), so those two faces now have a dev-side fixture that needs no parked
+bind — useful for any fix's regression check, and it is the measurement that proved forcing is
+sufficient.
