@@ -911,3 +911,30 @@ Two measurement rules earned here: **a slotmap key is index + version** — mask
 index conflated `5v1` with `5v2` and manufactured 1148 fake dangling reads; and libtest writes
 status to stdout and counts to stderr, which interleave mid-line in one file, so `[0-9]+` and
 separate streams are required (§25).
+
+## 27. Narrowing §26: what the P0 does and does not invalidate
+
+§26 consequence (1) over-stated the blast radius. Measured from the sweeps already on disk, with
+no new runs:
+
+- **The parked tree's FAILING-NAME SET is stable.** Four full unify sweeps across **three different
+  instrument builds** all printed `213 passed; 70 failed; 1 ignored` (848.31 / 831.61 / 831.74 /
+  829.72 s), and all **six pairwise diffs of the four 70-name sets are empty** — one identical set,
+  4/4. Dev likewise: four sweeps, `215/68/1` every time, names identical to `fail-a2`.
+- **`zz_gc_panic_probe::gc_variants` is in none of the four failing sets.** It asserts nothing, so it
+  can only fail by dying, and it **passed in every full sweep**; the ~41% rate was measured running
+  it **alone** in a light build. The rate depends on the build *and* the execution history, which is
+  exactly the heisenbug shape.
+- **No landing gate ever used parked-tree parity.** N2, rule C and the ref-tolerant read were each
+  gated on **dev** — identical names, every suite green — and dev showed **0 crashes in 39 runs with
+  a stable 1616 dangling reads per run**. Those gates stand.
+- **What is genuinely unstable on the parked tree**: the *dangling-read count* (630-680), the
+  *crash rate of the assert-free GC probe run alone in a light build*, and that probe's report count
+  (9 vs 6). Nothing else measured.
+- **The one claim still resting on a single sweep**: start-at-2's unify-side "fixes Q2"
+  (one ON sweep, `214/69`). Its dev-side parity is solid (two sweeps plus a same-build OFF); a repeat
+  ON sweep is the bounded follow-up, not a wholesale re-run.
+
+The policy from §26 consequence (3) still stands on its own merits: the defect is real and a future
+run could differ, so **unify landability should not be judged on parked-tree parity until the
+arena-lifetime violation is fixed**.
