@@ -842,3 +842,33 @@ so it is **not obviously free** and is under census; (b) reader B reading the **
 argument instead of indexing the result's type slot; (c) the bind leaving the result array in the
 term's slot at check time — the forcing family already measured out. **Which reader is authoritative
 for a call argument's type is a checker rule and the maintainer's call.**
+
+## 25. (a) start-at-2 is semantically safe; the open risk is only the diagnostic count
+
+Census in one build, both binds from one binary: starting the term loop at 2 instead of 1 drops
+**3544** `pos=1` checks (compute external 3539, language external 5; lowlevel, highlevel,
+compute-gpu, language lib and compute lib **never enter the branch** — measured zeros under
+`--nocapture`, not missing-line inferences). **Not one of them catches anything reader A did not**:
+`new_a_ok = 0` and `new_a_absent = 0` on every suite, and reader A ran for **every** dropped check
+(`a_failed` was `Some` in all 3544). Of the 3544, **99 fail and all 99 are duplicates** of a failure
+A already recorded for the same argument; the other 3445 pass, and A passed them too. Extra
+texture: 1221 of the 3539 compare the **literal same class pair** as A; among the 99 failures
+`same_pair` is **0** — every failing `pos=1` check compares a *different* pair (the result's type
+slot, §24) and still reaches A's verdict, across 10 distinct argument ExprIds. The census read dev
+and did not change it: compute still `215/68`, `comm` both ways empty, every suite at baseline.
+
+On the unify tree the same test shows `pos1 = 7` against dev's 6, and the extra one is **exactly the
+`.y i` call argument** (`arg=ExprId(76) actual=4503 expected=4502 failed=true a_failed=Some(true)
+same=(false,false)`), so **start-at-2 drops precisely the duplicate that gives that test two
+messages**.
+
+**What the census cannot answer**: the 99 dropped failures are *redundant `unify_errors` entries*, so
+removing them **changes the error count** in those tests, and a test asserting a message count could
+move. Only running start-at-2 can answer that — which is what a gated candidate does. For Q2 itself
+the count change **is** the fix.
+
+**Correction to §22's rule.** §22 said suite totals need the thread-exit Drop printer. In this build
+that printer produced **zero lines on every suite** — the rule did **not** hold here. The numbers
+above come from per-check verbose lines under `--nocapture`, which are capture-independent, and
+that is the reliable route. One more: those counters are process-global and monotonic, so exit lines
+must be **MAXed, not summed**.
