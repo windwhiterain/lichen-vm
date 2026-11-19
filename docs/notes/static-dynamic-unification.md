@@ -730,3 +730,46 @@ One device worth keeping: the forcing one-liner **reproduces Q1 and Q2 on dev wi
 (two new names, same symptoms), so those two faces now have a dev-side fixture that needs no parked
 bind — useful for any fix's regression check, and it is the measurement that proved forcing is
 sufficient.
+
+## 22. Q3 closed: the bind's discard is incomplete, not the certificate's order
+
+The ref-tolerant read landed as `c0e3a26f` (one file, +7/−1) — the dynamic arm still
+`class_value`, a frozen ref answers through `node_value`, and the site's invariant keeps its
+sentence verbatim while gaining the rule the new arm implements. Gate on dev: every suite green,
+compute `215/68` **identical by name**, wall neutral. Its census is the reason it was worth
+landing on its own merit: **656 of 656** static hops on dev and **654 of 654** on the unify tree
+were **abandoning a decided value that `node_value` answers** — a read losing an answer every
+single time, inert on dev only because no dev test reaches those slots.
+
+**Q3 is then closed, and not by an operand order.** The losing comparison carries the same values
+in the same order in both trees (`va=USize(32) vb=USize(64)`); what differs is the **kind** of
+diagnostic. `render.rs` renders `Attribute` as expected=value_b/found=value_a (correct) and
+`Runtime` as expected=value_a/found=value_b (inverted), and `Diagnostic::mismatch` decides the kind
+by checking `index.apply[i]` **before** the diary owner. Under the bind the apply path wins, and
+the apply error that claims that index is a **different** error — a structural Buffer mismatch —
+because the bind rolls back only `unify_errors`:
+
+```
+let recorded = self.unify_errors.len(); apply_parameter_check(...); self.unify_errors.truncate(recorded);
+```
+
+`apply_parameter_check` also pushes an `ApplyError{error_index: pre_unify_errors}` into
+`module.apply_errors` (and `apply_error_nodes`), and **that survives the truncate**, still pointing
+at index 0 — which after the rollback is a *later, unrelated* clash. Gated intervention
+(truncating `apply_errors` and dropping the nodes) makes `apply=None`, restores the diary path,
+renders `Attribute` with the correct order, and turns `the_product_is_warp_uniform_not_wider`
+**green** while `an_output_position` and `compile_order_class` stay where they were.
+
+**So the last Q3 gap is the bind's INCOMPLETE DISCARD** — `unify_errors` rolled back, `apply_errors`
+and `apply_error_nodes` not — the **same family as Q2's duplicate report, one field over**. The
+repair lives in the bind, so it is a no-op on dev by construction (dev's bind records no apply
+error) and belongs to the unify slice, under the usual full parity by name. Open: whether Q2's
+second report is the same field or a neighbour (it did not move under this rollback), and whether
+`assert_errors` / extension records need the same treatment.
+
+**A measurement rule earned the hard way**: **libtest captures a passing test's stderr and
+discards it**, so an `eprintln!` instrument reads as "never fires" on a passing test — four rounds
+were spent chasing producers that did not exist until `--nocapture` made the lines appear. Per-test
+traces need `--nocapture`; suite totals need the thread-exit Drop printer. Every earlier census in
+this note used the Drop printer and is unaffected, but any future "it never fires" claim drawn from
+a passing test must be re-read with `--nocapture`.
