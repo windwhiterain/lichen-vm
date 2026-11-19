@@ -872,3 +872,42 @@ that printer produced **zero lines on every suite** — the rule did **not** hol
 above come from per-check verbose lines under `--nocapture`, which are capture-independent, and
 that is the reliable route. One more: those counters are process-global and monotonic, so exit lines
 must be **MAXed, not summed**.
+
+## 26. The GC segfault is a PRE-EXISTING violation of D7's arena obligation
+
+`zz_gc_panic_probe::gc_variants` segfaults on the parked unify tree (41% of runs in light
+builds) and never on dev. The characterisation shows **the bind did not create the unsoundness**:
+
+- **The read is of a released arena, and dev does MORE of them.** Full-slotmap-key census of
+dangling reads per run: **dev 1616, stable**; unify 630-680, varying. Same sites on both.
+**Dev reads freed payloads inside `apply_parameter_check` 218 times per run**, and dev performs the
+same collects (10 triggers, all `deep>0`; 40 drops; 30 with recorded slices into the released
+block, the collect's own root among them 5 times). Dev survives by **heap-layout luck**. The rate is
+a property of the *build*, not of the bind: light builds crash 11/27, builds carrying an
+allocation-provenance map (a HashMap insert per `alloc_array`) crash **0/22**.
+
+- **It is a use-after-free, not a borrow spanning the free.** An RAII guard marking blocks whose
+slices `apply_parameter_check` holds fired **zero** times, so no release happened under a live
+borrow: **a node's payload handle outlives its arena** and is read later. Death is a
+`STATUS_ACCESS_VIOLATION` (0xC0000005), not a stack overflow.
+
+- **Keeping the arena alive makes the fault vanish and restores dev's five outcomes exactly**
+(15 runs, 0 crashes) — which confirms the diagnosis and is explicitly **not** a repair.
+
+**The contract being violated is written down and decided.** `array_items`' `# Safety`
+(`utils.rs:11-18`) requires the caller to keep the node reachable for as long as the slice is read;
+`equality.rs:688` asserts "nothing here drops a block", which the read-path collect can break; and
+**`code-audit` `D7` decided exactly this shape**: accessors stay unbounded but `unsafe` behind **one
+written contract**, with *"inside the crate the one-clause invariant is enforced by discipline and
+review rather than by the type system"*. So this is **not a `wontfix` — it is a D7-contract
+violation**, and the measurement shows the discipline is being broken routinely on dev.
+
+**Consequences for this work.** (1) The parked tree's compute numbers were **never fully trustworthy
+run to run** — the observed spread in dangling counts and the 41% crash rate sit under every parked
+reading. (2) A UAF is P0-class and deserves its own decision-record entry, separate from the unify
+work. (3) The unify integration should not be judged on parked-tree parity until it is fixed.
+
+Two measurement rules earned here: **a slotmap key is index + version** — masking `as_ffi()` to the
+index conflated `5v1` with `5v2` and manufactured 1148 fake dangling reads; and libtest writes
+status to stdout and counts to stderr, which interleave mid-line in one file, so `[0-9]+` and
+separate streams are required (§25).
