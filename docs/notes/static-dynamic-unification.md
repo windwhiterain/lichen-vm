@@ -773,3 +773,35 @@ were spent chasing producers that did not exist until `--nocapture` made the lin
 traces need `--nocapture`; suite totals need the thread-exit Drop printer. Every earlier census in
 this note used the Drop printer and is unaffected, but any future "it never fires" claim drawn from
 a passing test must be re-read with `--nocapture`.
+
+## 23. Q2 is not a stale record: it is one slot checked twice, both failing
+
+The incomplete-discard lens that closed Q3 does **not** apply to Q2, measured three ways in one
+build: `apply_errors` at report time is **0 in both trees** (the Q3 mechanism is absent here), the
+diary overlap census is **0 in both** (the truncate created no stale range — that hypothesis was
+the diary's own "disjoint slices" invariant suggesting it, and it is refuted), and diary pushes with
+`in_bind=true` are **0 in both**. The two entries share the expression and the slot
+(`Loc{expr: ExprId(76), path: One(Type)}`, kind `Annotation`, ranges `0..1` and `1..2`, both
+Int-vs-Struct) — but they are **two check sites**:
+
+- `checker/structs.rs:1131` — the argument's **type cell** (`state[argument_expr].ty`) against
+  `value_item(field, 1)`, deep-evaluated first;
+- `checker/structs.rs:1177` — the argument's **compiled term position 1**, inside
+  `for position in 1..width`, which **starts at 1 = the Type slot** and therefore re-checks the
+  same slot through a different reader.
+
+Dev fires **only** `:1131`, and the loop **is** reached on dev with its `pos=1` arm **succeeding**
+(`actual=4831 expected=7458 ok=true`); under the bind the same arm fails
+(`actual=4503 expected=4502 ok=false`). So the second check is not newly reached — **its answer
+changed**, because the bind changed what the argument's term holds. The two arms read **different
+cells** and on dev they disagree about which one fails, so they are not literally redundant.
+
+**A complete discard does not close both**: restoring `unify_errors` + `apply_errors` +
+`apply_error_nodes` turns `the_product` **green** and leaves `an_output_position` **byte-identical**.
+So Q3 is a surviving record and Q2 is a second check that genuinely fails — different fields.
+
+Q2's repair has two surfaces, both dev-visible and both needing their own measurement:
+(1) **the double check** — skip `position 1` in the loop or drop the explicit `:1131`; but the arms
+read different cells and disagree on dev, so **which reader is authoritative is a checker rule and
+the maintainer's call**; (2) **why the argument's term position 1 holds Int under the bind** while
+its type cell says otherwise — the value-half family again, one position over.
