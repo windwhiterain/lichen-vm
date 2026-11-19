@@ -938,3 +938,47 @@ no new runs:
 The policy from §26 consequence (3) still stands on its own merits: the defect is real and a future
 run could differ, so **unify landability should not be judged on parked-tree parity until the
 arena-lifetime violation is fixed**.
+
+## 28. What start-at-2 withholds: 2218 unions of throwaway copies, not facts
+
+The tautology hypothesis ("the withheld merges are already no-ops") is **refuted as stated** — but the
+split names the shape exactly. All 3539 `pos=1` checks on dev compute, zero exceptions:
+
+| count | already one class | outcome | field ref |
+|---|---|---|---|
+| 2218 | no | passes | **Static** |
+| 1222 | yes | passes | Dynamic |
+| 99 | no | fails | Static |
+
+**Perfect biconditional: `already=false` <=> `field_ref_static=true`.** On the **language surface all
+five checks are `already=true`, so start-at-2 withholds nothing at all there.**
+
+**Why**, code read then measured: `Module::as_dynamic` (`static_module.rs:557`) returns a Dynamic node
+as-is but for a Static ref calls `materialize_leaf` (`:550`), which **mints a fresh leaf**. Both
+readers call the same pure `shape::value_item(field,1)` and then `as_dynamic`, so a **Dynamic** ref
+gives both readers the **same** node (reader A already merged it — a tautology), while a **Static** ref
+gives each reader its **own copy**, and reader B's copy is a different singleton — a real union.
+
+**So what is withheld is a merge of a throwaway copy** of the frozen field type into a class that
+**already holds the same fact** from reader A's merge with its own value-identical copy. The minted
+leaf is bound to a local, passed to `check_unify`, then dropped; nothing stores it, so afterwards it
+is reachable only through the class membership the merge itself created (read from code, not
+instrumented). **Also: `same_cell=true` in all 3539** — reader B's actual side is *always* already in
+reader B's type-cell class, so it never carries independent information.
+
+Withholding therefore removes **redundant class members, not facts** — which also explains the
+measured wall times (unify ON 820-822s vs OFF 829.72s; dev ON 539.52s vs OFF 541.77s: fewer members
+in the O(members) walks). The 2218 are carried by 463 distinct argument ExprIds;
+`.scratch-core/q2m-real.txt` names every check.
+
+**Inertness**: the instrument changed nothing — compute `215/68` in both rounds, zero new and zero
+gone, langext `289/0`, line integrity `raw = strict = 3539`.
+
+**So decision #1 is not "withholds no merge" but "every withheld union merges a throwaway copy of a
+fact already recorded, and the actual side is always already in the cell's class"** — a narrower
+claim, still a checker-rule call rather than a proof of equivalence.
+
+**A withdrawn draft worth the record**: an intermediate pass counted "776 distinct expected ids across
+the 2218" and reasoned from it. Invalid — **node ids are per-module and repeat across the 284
+ tests**, so cross-test id identity means nothing. Withdrawn; every identity claim here is within a
+check.
