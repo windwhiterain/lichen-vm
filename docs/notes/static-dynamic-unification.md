@@ -805,3 +805,40 @@ Q2's repair has two surfaces, both dev-visible and both needing their own measur
 read different cells and disagree on dev, so **which reader is authoritative is a checker rule and
 the maintainer's call**; (2) **why the argument's term position 1 holds Int under the bind** while
 its type cell says otherwise — the value-half family again, one position over.
+
+## 24. Q2 confirmed: reader B judges the RESULT of a call, and the bind is what exposes it
+
+**This corrects §23's sentence** "the loop is reached on dev and its `pos-1` arm succeeds". That reading
+group belonged to a **different argument** (`ExprId(131)`); the instrument did not print `arg_expr`.
+With `arg_expr` printed, **dev runs no `pos=1` check at all for the failing argument**. The accurate
+statement: for a non-call argument the `pos=1` check runs and passes **by identity** (after reader A's
+merge); for the call argument it does not run on dev.
+
+**The term of a call argument is the apply node and its array value IS the apply's result expr.**
+Measured in both trees: `term=578 op=Some(Apply) tlen=Some(5) applied=Some(3758) cell=Some(576)`, and
+`item 0 of the term's array = 3759` while `expr_value_half(applied_exprs[578]) = 3759` — **the same
+node**. So reader B's `position 1` on a call argument judges the **result's type slot**
+(`actual=4503 Int`, `expected=4502 Struct`, `cell=576` -> `same_actual_cell=FALSE`), not the
+argument's type slot that reader A already compared from the cell. A **non-call** argument measured
+for contrast has `item 1 == the cell`. **Nothing holds a wrong value**: `Int` is the correct type of
+`i` and of its result.
+
+**Why dev never reports twice** — measured at the guards: the same term is visited three times per
+run; on dev **all three** visits have `tlen=None`, so `value_item(term,1)=None` and the loop
+continues; under the bind the first two are identical to dev and the **third** visits with
+`tlen=Some(5)`, so the loop proceeds and re-judges. The difference is **whether the apply's result
+array is in the term's value slot when the loop reads it** — the bind materialises it during check;
+dev never does.
+
+**A second reason the double check is normally invisible**: reader A's `check_unify` **merges the two
+classes when it succeeds**, so reader B then compares a class **with itself** and passes trivially.
+Only when reader A **fails** (no merge) can reader B re-judge the same disagreement — and then only
+if the term exposes an array.
+
+**Three repair surfaces, none chosen**: (a) the loop's start index — it starts at `1`, the TYPE slot
+reader A owns, while attributes begin at `EXPR_ATTR_BASE = 2`; starting at `2` removes the
+re-judgement, but on dev some `pos=1` checks pass with `same_expected_cell=FALSE` (655/684, 45/1316),
+so it is **not obviously free** and is under census; (b) reader B reading the **cell** for a call
+argument instead of indexing the result's type slot; (c) the bind leaving the result array in the
+term's slot at check time — the forcing family already measured out. **Which reader is authoritative
+for a call argument's type is a checker rule and the maintainer's call.**
