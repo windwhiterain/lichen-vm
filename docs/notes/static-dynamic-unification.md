@@ -645,3 +645,47 @@ shelved with everything parked and recorded.
 valid array syntax so "one disagreement, one report" has a runnable guard. That is a test edit and
 needs the maintainer, but until it lands the defect has no guard at all — the prescription lives in
 a sentence that is never executed.
+
+## 20. compile_order decomposed: the loop's entering-state element, not the membership rule
+
+Three measurement rounds took Q1 from recon's verdict to the exact site. Each round falsified the
+round before it, and the sequence is worth keeping because it shows how far a plausible reading can
+be from the mechanism.
+
+- **The verdict was wrong.** recon's "the lowering reads the class's current value instead of the
+declaration's class" was drawn from the test file's own `//!` header — which describes the defect
+the file was **written against**, not the U1 failure. What fails under U1 is a **count**
+(`left: 1, right: 2`) because `attend`'s compile **refuses**: "a kernel body reached a node with
+neither a value nor an operation". Neither test in that file carries `#[ignore]`. The same trap had
+already cost Q2, where a parked test's prose described a prescription whose target does not exist.
+**Rule: a test header or a parked comment describes history; read the assertion text of the actual
+run.**
+- **Not filledness.** Dev carries **more** bare placeholders than U1 (scores 21/500 vs 17/500,
+attend 29/638 vs 24/638) and compiles both kernels, so the defect is not an empty cell — it is
+**which cell the walk enters**.
+- **Not the operand edge, not the membership answer** (item 8, one process, an env-gated bind
+toggle). The apply's four operand items match position by position in op/val/value-half/class-root;
+`parameter_path` refuses **both** the dev cell (an Apply, own class root) and the U1 cell (a bare
+cell merged into a projection class). So the rule is not what flipped — it is **handed a different
+kind of cell**. A declaration-anchored `parameter_path`, a class snapshot, or a provenance
+membership rule would all miss it.
+- **The exact edge.** `Lower::loop_state`'s entry-value map — `body.rs:2192`, whose value comes from
+`Module::element_value_node` (`resolve.rs:504-517`), a reader that **peels an element's Array to its
+position-0 value half**. The deciding element is the `@loop` call's **third state slot**: dev's
+element **is the Apply** (holds no value, so the reader takes its identity branch) and the
+computation is lowered; under the bind the element **holds an Array** (layout != 0), the peel
+returns the bare requirement cell `24755`, and the compile refuses. Slots 0/1 behave identically in
+both modes — both peel to bare domain leaves that `parameter_path` resolves — so **"bare" is not
+the defect; peeling to a bare cell instead of the computation is.**
+- **Ruled out by the same runs**: `resolve_entry` (the fatal backtrace never passes through it),
+`loop_owner`'s class clause (never a sole decider), `parameter_path` membership, the operand edge,
+`apply_argument`.
+
+**It is the value-half wiring family again** — as in [any-removal-migration](any-removal-migration.md)
+rework 7 and in M1 (§9) — now with an exact site. The reader does not choose wrongly; it faithfully
+reports position 0 of what the element holds. **What changed is what the element holds.** The open
+question is **which write puts that expr Array on the slot-2 element**, and then the repair is
+either (a) the bind not displacing that element's value half (the bind's own correctness face) or
+(b) `loop_state` lowering the element's computation when the peel lands on an open cell (which
+touches `loop_state`'s quoted invariant, "the entering call's own element list" — the maintainer's
+call).
