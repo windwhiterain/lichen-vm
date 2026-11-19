@@ -501,6 +501,11 @@ impl<P: Program> Module<P> {
     }
 
     /// The value an element slot states: its first position, or the node itself.
+    ///
+    /// # Invariant
+    /// An element carrying a computation states itself while its first position is
+    /// bare: an open requirement written into that position is not the computation's
+    /// answer, so peeling to it would read the requirement as the answer.
     pub fn element_value_node(&self, node: AnyNodeId) -> Option<AnyNodeId> {
         let Some(value) = self.node_value(node) else {
             return Some(node);
@@ -510,7 +515,21 @@ impl<P: Program> Module<P> {
                 // SAFETY: `array` is the payload of a value of this module, whose
                 // block has not been dropped.
                 let items = unsafe { array.items() };
-                items.first().map(|item| item.node)
+                let first = items.first().map(|item| item.node);
+                let has_operation = |cell: AnyNodeId| match cell {
+                    AnyNodeId::Dynamic(node) => self.nodes[node].operation.is_some(),
+                    AnyNodeId::Static(sref) => self
+                        .static_module(sref.module)
+                        .static_operation(sref.index)
+                        .is_some(),
+                };
+                if has_operation(node)
+                    && first
+                        .is_some_and(|half| self.node_value(half).is_none() && !has_operation(half))
+                {
+                    return Some(node);
+                }
+                first
             }
             _ => Some(node),
         }
