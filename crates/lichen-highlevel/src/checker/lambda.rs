@@ -339,13 +339,19 @@ where
     /// # Invariant
     /// A slot is `[value, type]` and a call holds the applied return expr, so the chain
     /// is followed until a value that is not an expr; an undecided position is a hole.
+    /// Each position is read where it lives: a frozen ref answers from its own module,
+    /// so a decided frozen value is never read as a hole.
     fn attribute_value(&mut self, slot: NodeId) -> Option<P::Value> {
         let mut node = AnyNodeId::Dynamic(slot);
         for _ in 0..8 {
             // The walk reads each position where it lives; a frozen one is not copied.
             self.module.evaluate_node_deep_ref(node, None);
             // A class member may hold no slot value of its own: the class answers for it.
-            let value = self.module.class_value(node.dynamic()?)?;
+            let value = match node {
+                AnyNodeId::Dynamic(dynamic) => self.module.class_value(dynamic),
+                // A frozen ref belongs to no class here: it answers from its own module.
+                AnyNodeId::Static(_) => self.module.node_value(node),
+            }?;
             if let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
                 && array.layout() != 0
             {
