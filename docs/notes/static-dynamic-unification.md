@@ -1140,3 +1140,32 @@ comments, and the diff's non-comment lines are exactly the five code lines of th
 **Scope, unchanged**: the completeness argument covers **class-mediated copies**.
 `loop_run.rs:72` — the non-class route through the loop runner — **stays open**, with the nested-`@gc`
 base-arm shape named and expressible, and its deciding test still needing permission.
+
+## 33. start-at-2 landed: eleven of the twelve regressions are fixed on dev
+
+`structs.rs`' `for position in 1..width` became `for position in shape::EXPR_ATTR_BASE..width`
+with one rule line at the site (dev **`15573b16`**, one file `+2/−1`, ff-merged). The loop started at
+`1`, which is the TYPE slot reader A has already compared from the cell; attributes begin at
+`EXPR_ATTR_BASE = 2`.
+
+**Why it is safe was measured before it landed**: of the 3539 dropped `pos=1` checks on dev compute,
+**none catches anything reader A did not** (`new_a_ok = 0`, `new_a_absent = 0`, reader A ran for
+**every** dropped check), and the only failures among them are duplicates of A's. On the unify tree it
+removes exactly the second diary entry `an_output_position` reported — confirmed with the candidate
+permanent, not toggled: `an_output_position` now reads `counts 0,0,1` under **both** binds (it was 2).
+
+**What it withholds, stated rather than hidden**: 2218 unions of **throwaway copies**, not zero —
+`same_cell=true` in all 3539 rows so reader B's actual side is always already in the type cell's
+class, and the withheld merges unite a per-check `materialize_leaf` copy of a fact reader A already
+recorded. Twelve message counts move by exactly the −99 duplicates. **Landed as a checker rule on
+the maintainer's approval, not as a proof of equivalence.**
+
+Gates on the merged tip: compute `215/68` with 0 new and 0 gone, every suite green (language external
+`293/0`, which now includes the four `loop_gc_exit` tests), comments-check and fmt clean, wall
+514.23 s against the 554.47 s baseline — slightly faster, consistent with fewer class members in the
+O(members) walks.
+
+**The account**: of the twelve regressions, **eleven are fixed and merged** — nine jit-timing (N2's
+normalize), `compile_order_class` (rule C), and `an_output_position` (start-at-2). **`the_product` is
+the last one**, and its repair (the complete discard: `unify_errors` + `apply_errors` +
+`apply_error_nodes`) is measured sufficient and belongs to the unify slice.
