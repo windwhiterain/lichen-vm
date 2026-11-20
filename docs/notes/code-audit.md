@@ -44,7 +44,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s -> if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 | P0-8 | critical | lowlevel | A re-homed node keeps a payload handle into the block it was moved out of: a node that ENTERS its own class is excluded from the repair loop, so an outside node can hold a payload allocated inside a vacated subtree, and the polymorphic walk reads it | fixed on the measured family - `D22` |
-| P0-9 | high | lowlevel | A marked `` whose return has no type item takes the bare arm, where the loop runner writes the apply node value itself and nothing unifies it with the exit value, so a handle can be copied without being a class member | open - expressible shape named, deciding test not authorized |
+| P0-9 | high | lowlevel | A marked `` whose return has no type item takes the bare arm, where the loop runner writes the apply node value itself and nothing unifies it with the exit value, so a handle can be copied without being a class member | open - no surface program selects the bare arm; reachable from TestKit-built IR only |
 
 ## P1 — correctness
 
@@ -944,3 +944,16 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   Any-removal migration, so "they used to run" is true but is not evidence about a tree near this
   one. Whether they now diverge for a semantic reason or because the host-only sentinel was never
   satisfiable here is **unmeasured** — a question about those examples' inputs, not about this entry.
+
+  *Narrowed by measurement, 2026-11-19*: the deciding test was authorized and written
+  (`crates/lichen-language/tests/language/loop_gc_exit.rs`, four tests, the surface `@loop` path's
+  first coverage). The shape is expressible and runs — `@loop f := 's -> @gc { if s(0) == 0 then
+  @gc (s(1), s(1)) else f (s(0) - 1, s(1)) }` applied to `(2, 5)` answers `(raw 5, raw 5): Tuple` —
+  and it takes the **TYPED** arm in every surface form tried (nine forms; eight typed, the ninth never
+  reaches the exit arm, **zero bare selections**), so the typed arm's `slot_expr(value, type, block)`
+  allocates the exit payload into the apply node's own block and **nothing strands** (`dangling=0`,
+  `into_source=0`, 151-324 handles examined per collect). The code expectation that a surface `@loop`
+  return has no type half is **refuted**. The bare write at `loop_run.rs:72` remains reachable from
+  **TestKit-built IR** (8/8 there, all `value_home == apply_home`) but **no surface program has been
+  found that selects it**; closing `P0-9` needs a TestKit IR test with a compound exit whose value
+  node lives in a different block.
