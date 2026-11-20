@@ -136,7 +136,6 @@ impl<P: Program> Module<P> {
             let seed_scopes = self.nodes[poly_root].polymorphic_scope.clone();
             if seed_scopes.is_empty() {
                 self.polymorphic_dirty = true;
-                self.propagate_polymorphic();
             } else {
                 self.upgrade_polymorphic_class(representative, seed_scopes);
             }
