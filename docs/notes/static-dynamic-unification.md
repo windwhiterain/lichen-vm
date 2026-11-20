@@ -982,3 +982,46 @@ claim, still a checker-rule call rather than a proof of equivalence.
 the 2218" and reasoned from it. Invalid — **node ids are per-module and repeat across the 284
  tests**, so cross-test id identity means nothing. Withdrawn; every identity claim here is within a
 check.
+
+## 29. WITHDRAWING §26-§27's framing: the dangling reads are the BIND's, and the holder is the root list
+
+Two corrections, both from measurement, and the P0 draft must be rewritten to match.
+
+**The holder is the polymorphic walk's own root list** — `propagate_polymorphic`'s
+`let roots: Vec<NodeId> = self.nodes.keys().collect()` (`polymorphic.rs:87`, also `:193`).
+`HELD_BY=root` in **4 of 4** attributed reads in every parked run; every other push site in
+`polymorphic_referrers` (operand, array item, table key/value, function parameter/return/
+return_type/assert/nodes, class root, class member) contributed **zero**. No structure holds an id
+*into* a released block: every dangling id names a **live** node (`home_live=true`), and
+**`home != alloc_block`** — **the node was re-homed to a surviving block while its PAYLOAD HANDLE
+still points into the released one.** The dangling thing is the **handle inside a live node**, not
+the id, and there is no side table (§26 said there might be; there is not).
+
+**Withdrawing §26/§27.** "Dev performs MORE dangling reads (1616/run) and survives by heap luck; the
+bind only changes the layout" is **wrong, and it was a measurement artefact of the parent probe**:
+**`BlockId` keys are per-module** and the provenance maps were **thread-global**, so a block released
+in one module condemned another module's *live* block with the same key (the probe builds five
+variants and nine module constructions per run). The tell was a read with `home == alloc_block` and
+`home_live=true` while the released set held that key — **impossible inside one module**, since
+`drop_block` removes the key permanently. Re-measured with provenance keyed to a module construction
+epoch: **dev 5 runs = 0, 0, 0, 0, 0; parked unify 5 runs = 460, 305, 18, 18, 314.** **The bind
+introduces these reads; dev performs none on this repro.** The `# Safety` obligation is real and the
+fault is real, but it is **the bind's face**, not a pre-existing dev violation.
+
+**One reader path**: all 22 backtraces are
+`apply -> instantiate -> instantiate_stamped -> propagate_polymorphic -> compute_polymorphic ->
+polymorphic_referrers -> AnyHandle::items`, all `kind=array`, epochs 2 and 4. That walk's own
+comment — "this walk releases no block" — is true; the hazard is a payload released **earlier** whose
+handle a surviving node still holds. The earlier detector sat in `Module::array_items` and this path
+**bypasses that helper** (it calls `array.items()` directly), which is why it read as zero: a false
+negative. The detector now sits at `AnyHandle<[ArrayItem]>::items` / `<[TableItem]>::items`
+(`lib.rs:263`/`:281`), the one choke point every payload read passes through.
+
+**The mechanism, located by code read and not yet instrumented**: `gc.rs:165` re-homes
+`node.block = target`; `gc.rs:288-291` relocates the payload only `if inside && let Some(value) =
+value` — so **a node with no value at collect time is re-homed but its payload is not relocated**,
+and a later class write hands it a shared payload handle into the released arena.
+**`relocate_class_value`'s own `# Invariant` already names exactly this hazard**: "a class write gives
+every member the same payload, so a member outside the vacated subtree can hold a payload the collect
+is about to release." So the engine has a latent relocation gap that **the bind's class merging
+reaches on this repro** — still a P0, but as the bind's face rather than a dev regression.
