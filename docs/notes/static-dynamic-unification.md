@@ -1066,3 +1066,43 @@ its `# Invariant` claims "the collect visits every class member itself".
 
 The whole-table walk is what the clone walks' invariant already assumes, so **(b) is the shorter
 path**; (a) needs a root the module does not have.
+
+## 31. The origin: the node that ENTERS its own class is the one nobody repairs
+
+§29-§30's timing story is refuted on both clauses. At the end of `garbage_collect`, the live nodes
+still holding a payload into the just-released arena are **outside** the vacated subtree
+(`rehomed=false`, `had_value_at_entry=true`) — not valueless, not re-homed.
+
+**The measured biconditional, 24 of 24 rows across three parked runs**:
+
+- a node reached as a **returned member** of a class walk -> `relocate_class_value` runs -> it does
+  **not** dangle;
+- a node that **enters its own class** -> `repair_times=0` -> it **dangles**.
+
+`class_walk` shows it directly (`GCXW-CW node=…388 rep=…388 fresh=true members=2
+self_excluded=true`): it hands back one or two **other** members, which do get repaired, and **excludes
+the node that asked**. Three measured facts make that fatal for an outside node: `class_walk` builds
+its list with `if member != node`; the repair branch runs **only over that list**; and the node's own
+value arm ends `if inside { … } else { value }` with the final rewrite `if inside && …` — and an
+outside node fails both guards. **So the first node walked in a class, when it lives outside the
+vacated subtree, keeps a payload allocated inside it.** Not the member loop (it is excluded), not its
+own arm (it is outside). The `gc_classes` dedupe candidate is **refuted as the cause**: that path is
+busy but its nodes are repaired members.
+
+**Dev contrast, with a denominator**: ten collects, **zero dangling**, while the self-excluding entry
+is exercised **hundreds of times per collect** (`cw_calls 407/876`, `fresh 308/501`, repair_nodes
+90/101, scanned 1474-1852, handles 479-593). So the exclusion strands nothing on dev; what differs is
+the **trigger** — an outside member holding a payload **allocated inside** the vacated subtree, which
+is the sharing the bind's class merging creates. The reconciling statement: **the code hole is
+pre-existing in GC; the condition that reaches it is introduced by the bind.**
+
+**Repair face, decided by the maintainer**: the entering node needs what a returned member gets —
+when `!inside`, re-allocate its payload into its own block. Either `class_walk` includes the entering
+node, or `garbage_collect_node` calls `relocate_class_value(node)` for itself when `!inside`. One
+line shaped, but it changes what `class_walk`'s member-list contract and `relocate_class_value`'s
+coverage promise. `class_walk`'s "the list is headed by the representative, so the walk starts there"
+invariant is about **traversal order** and is satisfied — the gap is **repair coverage**, which no
+invariant currently claims for the entering node.
+
+Also measured: the fault **persists across collects**. A later collect releasing a different block
+still reports the same two handles (`into_source=false`), so they are not re-created each time.
