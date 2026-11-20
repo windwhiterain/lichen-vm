@@ -1169,3 +1169,35 @@ O(members) walks.
 normalize), `compile_order_class` (rule C), and `an_output_position` (start-at-2). **`the_product` is
 the last one**, and its repair (the complete discard: `unify_errors` + `apply_errors` +
 `apply_error_nodes`) is measured sufficient and belongs to the unify slice.
+
+## 34. Slice 2 measured: the non-empty antichain defers too, and the wall moves 676.42 s → 614.22 s
+
+`equality.rs`'s `add_equality` now states `self.polymorphic_dirty = true` on **both** arms: the arm
+that had a non-empty `seed_scopes` no longer calls `upgrade_polymorphic_class` inline, but defers the
+fixpoint to the clone walk that reads it, exactly as slice 1 did for the empty arm. One line, branch
+commit **`c7235946`**, on top of `e06b7607`.
+
+**The name gate, measured by name and not by count**: 68 failing tests before, 68 after, and an
+exact-name comparison of the two `failures:` blocks reports **zero regressions and zero fixes**.
+Counts alone would not have been enough — an equal count can hide a swap.
+
+**The wall, with its confound stated**: compute finished in **614.22 s** against slice 1's **676.42 s**
+on the same branch, same worktree, same machine — a 9% drop from the one line. Against dev the
+residual is **not a single ratio**: dev itself has been measured at **511.42 s, 514.23 s and 554.47 s**
+(§32, §33, baseline), a spread of 8%, and no dev run was taken in this session to pair with this one.
+The honest statement is *614.22 s against a dev population of 511–554 s* — somewhere between 1.11x and
+1.20x — and the earlier "1.22x" was computed against the slowest dev reading.
+
+**Every other gate on the same commit**: workspace `cargo check --tests` clean, `cargo fmt --all
+-- --check` clean, `comments-check --max-violations 0` reports no violations, and ll 167, hl 136,
+lang 69+293, gpu 94 all pass with zero failures.
+
+**What it costs, stated rather than hidden**: `upgrade_polymorphic_class` now has **no caller**
+(`warning: method ... is never used`), so the accumulating path is unreachable and the recompute path
+is the only one. The method is **kept, not deleted**, because the batching fallback would build on it.
+
+**The uncertainty that remains**: deferral discards the antichain `upgrade_polymorphic_class`
+accumulated and re-derives scope from current flags. The named loss route — a scope held in an
+antichain by a seed whose flag is later cleared (`write_polymorphic(..., Some(false))`), or by a
+released block or a vanished edge — **is not exercised by any suite run here**. Identical names across
+these suites is evidence, not proof, that the two paths agree on every program.
