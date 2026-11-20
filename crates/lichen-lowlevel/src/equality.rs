@@ -137,7 +137,7 @@ impl<P: Program> Module<P> {
             if seed_scopes.is_empty() {
                 self.polymorphic_dirty = true;
             } else {
-                self.upgrade_polymorphic_class(representative, seed_scopes);
+                self.polymorphic_dirty = true;
             }
         }
         // The merged class's scope summary is the nearest common ancestor of the
