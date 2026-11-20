@@ -43,6 +43,8 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s -> if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
+| P0-8 | critical | lowlevel | A re-homed node keeps a payload handle into the block it was moved out of: a node that ENTERS its own class is excluded from the repair loop, so an outside node can hold a payload allocated inside a vacated subtree, and the polymorphic walk reads it | fixed on the measured family - `D22` |
+| P0-9 | high | lowlevel | A marked `` whose return has no type item takes the bare arm, where the loop runner writes the apply node value itself and nothing unifies it with the exit value, so a handle can be copied without being a class member | open - expressible shape named, deciding test not authorized |
 
 ## P1 — correctness
 
@@ -878,3 +880,33 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   declared root as the value handle:* a block scope's value is its tail, not its root. The
   engine stays unvalidated by decision, so a hand-built module may still break the boundary —
   the ignored repro in `basic::gc_safety` records that contract.
+- **D22 — May an outside class member keep a payload handle in the block it left? — DECIDED and
+  landed: no; the node that ENTERS its own class gets the member repair too.**
+  `garbage_collect_node` repaired a class member's payload only for members `class_walk`
+  **returned**, and `class_walk` excludes the node that asked (`if member != node`). So a node that
+  entered its own class, lived **outside** the vacated subtree, and held a payload allocated
+  **inside** it kept a dangling handle: it was visited (`gc_visited=true`) and relocated **zero**
+  times, which made `relocate_node_value`'s own sentence — *"the collect visits every class member
+  itself, so each is relocated"* — false for exactly that node. Measured 24 of 24 rows, and the
+  reads surfaced in `propagate_polymorphic`'s whole-table root list reading an array payload whose
+  arena had been released.
+
+  **The repair**: count the members inside `source` **before** the walk (the walk re-homes them, so
+  the verdict is unreadable afterwards), then after the member loop
+  `if !inside && members_inside > 0 { self.relocate_class_value(node) }`, before
+  `let current = self.nodes[node].value;`. The guard is the hazard's own precondition — a class write
+  can only hand this node a payload that came from a class member, so with no member inside `source`
+  nothing in this class can have been allocated there. Landing it **unconditional** would re-allocate
+  every outside reachable node's payload every collect (measured 2491 parked / 1848 dev against 88 /
+  48 with the guard); guarded, it adds about 6% of the calls the collect already makes, and 15 of its
+  16 real moves on dev are same-block copies. Gate: five runs `dangling=0, into_source=0` with a
+  denominator (`scanned=1822, handles=577` per collect), cross-collect persistence gone (off reported
+  `into_source=8`, two of them from an earlier release), one off run died `exit 132` (SIGILL), and dev
+  parity identical by name (`215/68`, 0 new, 0 gone). `relocate_node_value`'s sentence lost its
+  `once`, which was not literally true either.
+
+  **Scope**: the completeness argument covers **class-mediated** copies. One non-class route stays
+  open and is `P0-9`: the loop runner writes an apply node's value itself for a marked loop
+  (`loop_run.rs:72`), so the handle can be copied without being a class member; the shape that would
+  reach it is a `@gc` nested in another `@gc` as the bare-return loop's base arm with a compound
+  exit, which is **expressible on the traced path but not shown reachable**.
