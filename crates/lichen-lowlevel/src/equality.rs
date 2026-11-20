@@ -420,7 +420,7 @@ impl<P: Program> Module<P> {
     /// Not a licence to change the value: compaction re-allocates the payload into the
     /// surviving block **from the same items**, so the value is *moved*, not replaced —
     /// a fact of the walk that got here, not one re-proved here. No propagation: the
-    /// collect visits every class member itself, so each is relocated once.
+    /// collect visits every class member itself, so each is relocated.
     pub(crate) fn relocate_node_value(&mut self, node: NodeId, value: P::Value) {
         self.set_node_value(node, Some(value));
     }

@@ -165,14 +165,21 @@ impl<P: Program> Module<P> {
             self.nodes[node].block = target;
             self.blocks[target].nodes.push(node);
         }
+        // Counted before the walk: it re-homes a member, so its `inside` verdict is gone after.
+        let mut members_inside = 0usize;
         for member in members {
             let member_inside = self.descends_from(self.nodes[member].block, source);
+            members_inside += usize::from(member_inside);
             self.garbage_collect_node(member, source, target);
             if !member_inside {
                 // The class's value may live in the arena this collect releases: a class
                 // write hands every member the same payload.
                 self.relocate_class_value(member);
             }
+        }
+        // `class_walk` omits this node; an outside node fails both `if inside` guards. A member inside is the precondition.
+        if !inside && members_inside > 0 {
+            self.relocate_class_value(node);
         }
         let current = self.nodes[node].value;
         let operation = self.nodes[node].operation;
