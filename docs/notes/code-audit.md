@@ -910,3 +910,37 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   (`loop_run.rs:72`), so the handle can be copied without being a class member; the shape that would
   reach it is a `@gc` nested in another `@gc` as the bare-return loop's base arm with a compound
   exit, which is **expressible on the traced path but not shown reachable**.
+- **D23 — Is an endless `@loop` a diagnostic or a hang? — DECIDED (superior, `061db7de`): a hang,
+  accepted. The cumulative apply budget is removed; the depth guard is what remains.**
+  Recorded here because the decision lived **only in that commit's message**, so an agent following
+  the rule "check the decision record before calling a behaviour a defect" could not find it — and
+  one session duly escalated a decided cost as a new hang of unknown severity. The decision's own
+  words:
+
+  > the removed counter was the only guard against a divergence that does not nest… *a marked loop
+  > that never reaches its base is refused by the work budget* (turns an endless loop into a
+  > diagnostic instead of a hang) and *flattened recursion records the total apply budget* (stays at
+  > depth 1, invisible to the depth guard)… **An endless `@loop` now hangs the compiler and the
+  > language server's worker.** The same heavy shape costs 80 s in a debug build, and nothing bounds
+  > it.
+
+  The two tests removed with the budget are `a_marked_loop_that_never_reaches_its_base_is_refused_by_the_work_budget`
+  and `flattened_recursion_records_the_total_apply_budget`; restoring the budget is a new decision,
+  and those are the tests to restore with it.
+
+  **How to read a hang**: the remaining depth guard sees only **nesting**. A divergence that does not
+  nest — a sentinel that never matches — is invisible to it, so such a program **hangs by decision**,
+  not by defect. **Check this entry before escalating a non-terminating loop.**
+
+  *Measured instance, 2026-11-19*: the three sampler examples (`generate.lichen`, `sample.lichen`,
+  `topk.lichen`) do not complete under the harness the compute notes name
+  (`operators_on_device --one <path>`, `--features device`): `generate` exit 124 at 200 s, `sample`
+  and `topk` exit 124 at 90 s, while **`gemv` exits 0 with its full output and "verdict: agrees, 4 of
+  4 element(s)"**. So the harness and the tree run compute examples; the non-termination is specific
+  to those three, whose stop condition is **host-only**
+  ([device-leg-of-the-ladder](device-leg-of-the-ladder.md) §49) — a sentinel that never matches
+  diverges without nesting, exactly the shape this entry decides. A prior reading of "agrees, 10 of
+  10" for them was taken at `dev@602480ed`, **2051 commits behind** this tree and across the whole
+  Any-removal migration, so "they used to run" is true but is not evidence about a tree near this
+  one. Whether they now diverge for a semantic reason or because the host-only sentinel was never
+  satisfiable here is **unmeasured** — a question about those examples' inputs, not about this entry.
