@@ -1106,3 +1106,37 @@ invariant currently claims for the entering node.
 
 Also measured: the fault **persists across collects**. A later collect releasing a different block
 still reports the same two handles (`into_source=false`), so they are not re-created each time.
+
+## 32. The origin is fixed: the entering node gets the member repair (dev `bc8aed2d`)
+
+The guarded self-repair landed and was ff-merged. Two changes, `+8/−1` in two files:
+
+- `garbage_collect_node` counts the class members **inside** `source` **before** the walk (the walk
+  re-homes them, so the verdict is unreadable afterwards), and after the member loop
+  `if !inside && members_inside > 0 { self.relocate_class_value(node); }`, placed before
+  `let current = self.nodes[node].value;` — so the entering outside node gets what a returned member
+  already got.
+- `relocate_node_value`'s sentence: *"so each is relocated **once**"* -> *"so each is relocated"*,
+  because the entering node was not relocated at all and "once" was not literally true either (a
+  node listed as a member by several parents is relocated once per listing).
+
+**Both halves of the gate closed**, same build, repair toggled:
+
+- **No dangling handle at collect end**: five ON runs, every collect reporting
+  `dangling=0, into_source=0, node rows=0, read-time events=0` — and **the zero has a denominator**
+  (`scanned=1822`, `handles=577` per collect).
+- **Cross-collect persistence is gone**: OFF reported `into_source=8`, of which **2 rows were handles
+  from an earlier release**; ON reports 0.
+- **The fault is real in this build**: one OFF run died `exit 132` (SIGILL) — the repair, not the
+  instrument's layout, is what removes it.
+- **Dev parity identical by name**: compute `215/68` with 0 new and 0 gone, wall neutral (511.42 s vs
+  the 554.47 s baseline), every other suite green, comments-check and fmt clean.
+
+**A tooling fact worth keeping**: `comments-check`'s budget counts a **BLOCK, not a line** —
+consecutive `//` lines form one section, so a wording that is fine per line can still trip
+`section-too-long` (153 and 232 characters against 120). The landed comments are two single-line
+comments, and the diff's non-comment lines are exactly the five code lines of the repair.
+
+**Scope, unchanged**: the completeness argument covers **class-mediated copies**.
+`loop_run.rs:72` — the non-class route through the loop runner — **stays open**, with the nested-`@gc`
+base-arm shape named and expressible, and its deciding test still needing permission.
