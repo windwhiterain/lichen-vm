@@ -1143,7 +1143,8 @@ where
                         ))
                         .max()
                         .unwrap_or(0);
-                    for position in 1..width {
+                    // Position 1 is the type slot the cell check above owns; this loop judges attributes only.
+                    for position in shape::EXPR_ATTR_BASE..width {
                         let Some(expected) =
                             shape::value_item(&self.module, AnyNodeId::Dynamic(field), position)
                         else {
