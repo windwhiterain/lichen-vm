@@ -285,9 +285,9 @@ impl<P: Program> Module<P> {
             self.applied_claims.insert(node, (index, slot));
         }
         self.applied_parameters.insert(node, parameter);
-        // The definition pass binds with the shared unify but does not report;
-        // discard the errors this check records.
+        // A discarded check leaves no apply record: a stale one claims a later error and inverts its sides.
         let recorded = self.unify_errors.len();
+        let applies_recorded = self.apply_errors.len();
         self.apply_parameter_check(
             parameter,
             argument,
@@ -297,6 +297,10 @@ impl<P: Program> Module<P> {
             parameter,
         );
         self.unify_errors.truncate(recorded);
+        for dropped in self.apply_errors[applies_recorded..].iter() {
+            self.apply_error_nodes.remove(&dropped.apply_node);
+        }
+        self.apply_errors.truncate(applies_recorded);
         self.applied_exprs.insert(node, applied);
     }
 
