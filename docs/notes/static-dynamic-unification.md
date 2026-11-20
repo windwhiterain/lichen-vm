@@ -1201,3 +1201,36 @@ accumulated and re-derives scope from current flags. The named loss route — a 
 antichain by a seed whose flag is later cleared (`write_polymorphic(..., Some(false))`), or by a
 released block or a vanished edge — **is not exercised by any suite run here**. Identical names across
 these suites is evidence, not proof, that the two paths agree on every program.
+
+## 35. The unify gate, complete: every red face on this branch is red on dev too
+
+The branch at **`04965de3`** was gated across the whole workspace, and each red reading was then
+A/B'd against dev **`71e901a5`** rather than assumed to be pre-existing.
+
+**Green**: `cargo check --workspace --tests` exit 0; `cargo fmt --all -- --check` exit 0;
+`comments-check --max-violations 0` no violations; `test-layout-check` 30 packages, 0 violations.
+
+**Suites**: lowlevel 167/0/1, highlevel 136/0, language 69/0 + 293/0, compute-gpu 94/0, compute lib
+14/0, graph-ir 2/0 + 10/0 + 17/0 + 46/0, lex 22/0, parser 62/0, package 1/0, utils 22/0 + 1 doc,
+registry 8/0, serve 11/0, line_model 13/0, directive_span 1/0, basic 167/0/1.
+
+**Red, and identical on dev**:
+
+- `lichen-compute` external: `215 passed; 68 failed; 1 ignored`, 68 failing names identical to the
+  dev baseline, zero new and zero gone, in 614.22 s and again in 624.66 s.
+- `lichen-language-server`: lib `31/1`, external `19/3`. At dev `71e901a5` — detached in the same
+  worktree, warm target — the same crate reads `31/1` and `19/3` with the **same four names**:
+  `analysis::tests::a_prelude_name_use_jumps_into_the_builtins_own_file`,
+  `language_server::lsp_incremental::a_burst_of_edits_runs_the_frontend_once`,
+  `language_server::lsp_incremental::a_prelude_name_jumps_into_the_materialized_builtin_file`,
+  `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout`.
+- `lichen-tools`: its external binary **does not finish** — 180 s bound, exit 124, on the branch and
+  on dev after a forced rebuild that printed `Compiling lichen-lowlevel` and `Compiling
+  lichen-tools`. Its output ends in the example probes (`convolution2d.lichen: PANICKED … expected
+  ?, found ?`, `decode.lichen: DRIFT …`), so it hangs in a test that walks `examples/`.
+
+**Two traps met while gating, both worth keeping**: a `cargo test --workspace` sweep cut off by an
+SSH reset left its test binary running, and the next build died with `LNK1104: cannot open
+…tools-….exe` — a link error that reads like a code failure; and a test binary's filename hash does
+**not** change when its sources change, so "the same exe name in both runs" is not evidence that
+nothing was rebuilt. Only a `Compiling` line shows that.
