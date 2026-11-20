@@ -14,6 +14,7 @@ mod frozen_function_type;
 mod gc_block;
 mod link_arity;
 mod link_probe;
+mod loop_gc_exit;
 mod membership;
 mod merge_carry;
 mod one_value;
