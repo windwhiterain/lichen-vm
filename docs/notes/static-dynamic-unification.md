@@ -1025,3 +1025,44 @@ and a later class write hands it a shared payload handle into the released arena
 every member the same payload, so a member outside the vacated subtree can hold a payload the collect
 is about to release." So the engine has a latent relocation gap that **the bind's class merging
 reaches on this repro** — still a P0, but as the bind's face rather than a dev regression.
+
+## 30. The ruled scoping is refuted: GC's roots are per-collect, not a module-wide live set
+
+The maintainer ruled that no walk may root at the whole node table. Implemented faithfully — roots
+mirroring `garbage_collect`'s three (every live block's `scope_root`, every `asserts[].condition`,
+and every node in a live block's list whose function owner is live), applied to both
+`propagate_polymorphic` (`:87`) and `upgrade_polymorphic_class` (`:182`) — it fails all three
+measurements.
+
+- **Dev parity fails: 10 regressions** (highlevel `134/2`, langlib `68/1`, langext `282/7`). The
+  control on the **same build** with whole-table roots reproduces the baseline exactly, walls
+  included, so the instrument is inert and **the scoping is the cause**.
+- **The flag does not stay `Some`**: the counts of nodes left unflagged equal the failure counts
+  exactly (2/1/7) and every one is `site=dynamic` — the dynamic clone walk's `debug_assert`
+  (`function.rs:827`). Unflagged after the walk: 13 / 4832 / 141 / 449 / 338 by suite, versus **0
+  everywhere** with whole-table roots. **The scoped root set is 5 nodes over a 40006-node table.**
+- **The parked fault is not removed, and the walk is 40x slower**: `gc_variants` on the parked bind,
+  five runs each — scoped roots crash **2/5** at ~115 s per run; whole-table roots crash 1/5 at
+  2-3 s.
+
+**Why, from the code.** GC's three roots are **per-collect roots for ONE vacated subtree** — they
+decide what to move out of `source`; they are not a claim that everything else is dead. Read
+module-wide they select almost nothing, because **most nodes in the table are unowned caller
+cells**: `add_node` sets `function: None` and the owner is written later by `set_node_owner`, so root
+3 picks only tagged clones; only `mark_scope_root`ed blocks have a `scope_root`; asserts are few.
+Separately, `propagate_polymorphic` early-returns only while `polymorphic_unflagged == 0 &&
+!polymorphic_dirty`; nodes permanently outside the roots' reach leave that counter **never
+draining**, so the walk re-runs at every clone-walk entry — 40x on the probe, **92x** on langext
+(326.01 s vs 3.55 s).
+
+**What this settles**: the root set the ruling names cannot substitute for the whole table — it
+breaks the clone walks' own invariant **on dev**, with an inert control, and does not remove the
+fault. **What it does not settle**: whether the direction can be realised at all. Two shapes remain:
+(a) a root notion that is both GC-guaranteed and covers every node a clone walk reads — the clone
+walks read **unowned caller cells**, which the module does not record as rooted today; (b) keep the
+whole-table walk and make its guarantee **true** by repairing the relocation — `relocate_class_value`
+repairs one member's slot, while `relocate_node_value` is `set_node_value` with no propagation and
+its `# Invariant` claims "the collect visits every class member itself".
+
+The whole-table walk is what the clone walks' invariant already assumes, so **(b) is the shorter
+path**; (a) needs a root the module does not have.
