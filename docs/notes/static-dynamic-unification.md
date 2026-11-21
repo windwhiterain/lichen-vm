@@ -1285,3 +1285,9 @@ checkout, whose target was cleaned: `cargo fmt --all -- --check` 0, `comments-ch
 --max-violations 0` no violations, `cargo check --workspace --tests` 0 (58.62 s), compute
 `215 passed; 68 failed; 1 ignored` in 612.97 s, and the rest of the workspace green except the same
 four `lichen-language-server` reds of §35 that dev already carries.
+
+**A confounder, recorded rather than buried**: free space was falling during the tip run — 15 GB at
+`04:13Z`, 13 GB at `04:19Z`, 12 GB at `04:20Z`, 9.8 GB at `04:24Z` — from work outside these two runs
+that was never identified. The first of those readings already follows dev's run, so whether dev ran
+under the same pressure is unknown. **76.59 s is therefore best read as an upper bound** on the gap:
+the direction of the effect is understood, its size is not.
