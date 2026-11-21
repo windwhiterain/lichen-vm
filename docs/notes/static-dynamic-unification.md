@@ -1493,3 +1493,28 @@ position, attempts would fall **17.5x / 26.5x**. The candidate that attacks it i
 worklist**: admitting an ancestor before its descendants makes a descendant **reject on arrival**
 instead of being admitted and later retained. That is an ordering change on a monotone fixpoint, so the
 least fixpoint is unchanged, but it has **not been measured** and is not done here.
+
+## 43. Shallow-first worklist: refuted by measurement
+
+§42's census argued that 94–96% of admissions are transient, so admitting an ancestor before its
+descendants would make a descendant **reject on arrival** instead of being admitted, forwarded along
+every out-edge, then retained away — an estimated 17.5x/26.5x fewer attempts. It was implemented as a
+depth-bucketed worklist and **measured twice as slow**: 18.52 s → **35.03 s**, with the failing names
+unchanged at 68 (zero new, zero gone). **Reverted.**
+
+So the idea is semantically sound and **perf-negative**. Two reasons, both mechanical rather than
+conceptual:
+
+- the per-push bucket bookkeeping (`resize`, `min`, the scan to the next non-empty bucket) is paid on
+  every admission, and there are millions;
+- hopping between depth buckets destroys the locality the flat `Vec` stack had.
+
+And a structural caution for anyone who tries this again: **`Scope::depth()` is the function-nesting
+depth, not a node's position in the graph.** Ordering the *worklist* therefore does not guarantee that
+an ancestor scope enters a given node's chain before its descendants do. The ordering that would
+matter is **per chain**, not global — which is a different design from the one measured here.
+
+**Where the 10-second target stands after this**: 18.52 s against 19.1 s of ideal packing at 12 cores
+is **within 6% of ideal**, so the contention term is essentially gone and the remaining **1.85x is pure
+work**. The one measured candidate for that work has now been refuted, so reaching 10 s needs a new
+idea rather than the next step of this one.
