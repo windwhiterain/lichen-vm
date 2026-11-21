@@ -1538,7 +1538,21 @@ ordering premise was sound. It does **not** bound the borrow in either direction
 is borrow **plus** the ordering: if the ordering cut comparisons, its solo total can sit *below* the
 borrow's.
 
-**So the borrow's uncontended total is still unmeasured, and both bound directions are open** — work may
-have fallen by more than the 207.6 T=12 sum suggests, and the residual contention may be smaller than
-2.0x. The trap is the one this task keeps charging for: **`ls -t` is not a selector, and a revert
-without a rebuild leaves the old binary looking current.**
+**The uncontended total is unmeasured, but it is now bounded from a correct binary.** The sweep was
+re-run on a build of the committed source (`641567a1a3c24ffd`, built from the clean tree):
+
+| threads | pre-borrow | post-borrow |
+| --- | --- | --- |
+| 2 | 111.22 s | **57.30 s** |
+| 4 | 63.70 s | **30.54 s** |
+| 8 | 39.41 s | **20.11 s** |
+| 12 | 34.84 s | **18.09 s** |
+
+`wall(T) >= solo/T` gives **solo <= 2 x 57.30 = 114.60 s**, against a pre-borrow solo of 209.41 s, so
+**the borrow cut uncontended work by at least 1.83x**. That refutes "work unchanged" in both directions
+of this note — mine and impl's. It also re-anchors the target: ideal packing is `<= 114.60/12`, i.e.
+**<= 9.55 s, already below 10 s**, so **the distance to 10 s is contention at >= 1.89x** (18.09 / 9.55),
+not work. Every figure here is a **bound**, not a reading; the exact solo total needs the T=1 run.
+
+The trap is the one this task keeps charging for: **`ls -t` is not a selector, and a revert without a
+rebuild leaves the old binary looking current.**
