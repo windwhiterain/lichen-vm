@@ -32,40 +32,34 @@ impl<P: Program> Module<P> {
             .collect();
         let mut chains: HashMap<NodeId, Vec<Arc<Scope<FunctionId>>>> =
             seen.iter().map(|&node| (node, Vec::new())).collect();
-        let mut work: Vec<NodeId> = Vec::new();
+        let mut work: Vec<(NodeId, Arc<Scope<FunctionId>>)> = Vec::new();
         for &node in &seen {
             let seed = self.nodes[node].polymorphic == Some(true) || parameters.contains(&node);
-            if seed && let Some(scope) = self.owner_scope(node) {
-                antichain_insert(chains.get_mut(&node).expect("a seen node"), scope);
-                work.push(node);
+            if seed
+                && let Some(scope) = self.owner_scope(node)
+                && antichain_insert(chains.get_mut(&node).expect("a seen node"), scope.clone())
+            {
+                work.push((node, scope));
             }
             // A nested function value is a per-call closure over its defining (parent) function.
             if let Some(LowValue::Function(AnyFunctionId::Dynamic(function))) =
                 self.nodes[node].value.and_then(|value| value.as_enum())
                 && let Some(parent) = self.functions.get(function).and_then(|f| f.parent)
                 && let Some(scope) = self.function_scope(parent)
+                && antichain_insert(chains.get_mut(&node).expect("a seen node"), scope.clone())
             {
-                antichain_insert(chains.get_mut(&node).expect("a seen node"), scope);
-                work.push(node);
+                work.push((node, scope));
             }
         }
-        // A node's antichain unions the marks it reaches, flowing to referrers; the set only grows.
-        while let Some(node) = work.pop() {
-            let incoming = chains[&node].clone();
-            if incoming.is_empty() {
-                continue;
-            }
+        // Each admitted scope crosses an edge once; a rejected one's ancestor already went.
+        while let Some((node, scope)) = work.pop() {
             if let Some(referrers) = referrers.get(&node) {
                 for &referrer in referrers {
                     let Some(chain) = chains.get_mut(&referrer) else {
                         continue;
                     };
-                    let mut changed = false;
-                    for scope in &incoming {
-                        changed |= antichain_insert(chain, scope.clone());
-                    }
-                    if changed {
-                        work.push(referrer);
+                    if antichain_insert(chain, scope.clone()) {
+                        work.push((referrer, scope.clone()));
                     }
                 }
             }
