@@ -1371,7 +1371,7 @@ not an option: `test-layout-check` allows one `test` target per package, so a pr
 the layout gate. `#[ignore]` keeps them compiled — they cannot rot — and `cargo test … -- --ignored`
 still runs them.
 
-**Label this honestly.** The suite now runs **213 of 284 tests** and finishes in **63.60 s**, against
+**Label this honestly.** The suite now runs **212 of 284 tests** and finishes in **63.60 s**, against
 169.83 s for all 283 before. That is **less work, not faster work**: 71 tests were moved out. The one
 legitimate *speedup* claim remains §39's **536.38 s → 169.83 s on the same 283 tests (3.16x)**. A
 number quoted from this section without saying how many tests were excluded is the filtered-run trap.
@@ -1392,3 +1392,13 @@ the total work has to fall by roughly another six times. Those tests are real ve
 `pack_placement`, `fuse_licence`, `tiled_reduction`, `graph_jit`, `recompute_reads`, `fused_region` —
 so they cannot be excluded the way probes were. The next slice is therefore another shared-cost
 reduction inside the checker, not a test-selection change.
+
+**Two ignores in the compute area were already there and are stale — recorded, not changed.** Both
+carry the reason "one disagreement, two reports: the apply's join is not yet suppressed", and that
+mechanism was measured wrong (two check-time diary entries, `apply_errors` was 0 in both trees) while
+the defect itself was fixed by start-at-2, after which `an_output_position` reports once on both binds.
+`graph_structure.rs:319` is a real test whose stated blocker no longer exists; reviving it is a test
+edit and needs the maintainer, and its assertion is a cfg-structure count, so it may fail for an
+unrelated reason. `compute.rs:1290` carries `#[ignore]` with **no `#[test]`**: it is not a test, libtest
+never sees it, it is the source of the `never used` warning, and it cannot be reached by `--ignored`
+either — it should gain `#[test]` or be deleted rather than sit in the tree looking like coverage.
