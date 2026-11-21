@@ -1323,3 +1323,43 @@ That refutation does **not** cover a walk made incremental from the changed clas
 `upgrade_polymorphic_class` and the parked `b5-batching.pl` took. Any such design must still satisfy
 both constraints above: every node a clone walk reads ends with a verdict, and `polymorphic_unflagged`
 still reaches 0.
+
+## 39. The fixpoint forwarded each node's whole chain on every pop; it now forwards each admitted scope once
+
+`compute_polymorphic` re-sent a node's **entire** antichain to every referrer on every pop. A census of
+the merged tip (77 runs, one target test) measured the waste exactly: **22,825,172 fixpoint sends for
+1,345,906 genuine admissions — 94.1% of inserts changed nothing**, 745,522 pops for 179,234 distinct
+nodes, and 58.8% of pops added no scope anywhere. Redundancy rose with table size (6.76x under 1k
+nodes, 17.71x above 8k), which is the O(k²) signature: a chain that grows one scope at a time was
+re-sent k times.
+
+**A cheaper antichain was ruled out by the same census**: chains are small — mean **10.8** at pop, max
+**25**, nothing above 50 — so the count came from re-sending, not from chain length.
+
+**The change** (`polymorphic.rs`, commit **`06f4ad6f`**): the work item carries the scope that was just
+admitted rather than the node, so each admission crosses an edge once and only an admission re-queues a
+referent. **Why the chains are unchanged, not merely equivalent**: a rejected scope always has an
+ancestor already in the referrer's chain, and that ancestor was itself admitted earlier and therefore
+already forwarded along every out-edge — by induction every subsuming scope has crossed the edge. And
+the chain is the set of **maximal** scopes of the covered set, which is unique, so the result is
+identical element for element whatever the insertion order.
+
+**Measured** (same machine, same day, same invocation):
+
+| | wall | failing names |
+| --- | --- | --- |
+| dev `71e901a5` | 536.38 s | 68 |
+| merged tip `09f3b422` | 612.97 s | 68 |
+| **delta `06f4ad6f`** | **169.83 s** | **68, zero new, zero gone** |
+
+That is **3.16x faster than dev** and **3.61x faster than the tip the 1.143x regression was measured
+against** — the unify regression is not cancelled, it is reversed. The census test itself went from
+**7.67 s to 1.03 s**. Every other suite is unchanged: ll 167/0/1, hl 136/0, lang 69/0 + 293/0, and
+`cargo fmt --check` and `comments-check --max-violations 0` are clean.
+
+**What the new distribution says about a 10-second target**: 284 tests in 1435 core-seconds against
+12 cores is 119.6 s of ideal packing, and the slowest single test is **112.49 s**
+(`zz_dynamic_contract_probe::probe_a_function_local_contract`), so the suite is now **floor-dominated**
+— one test is 66% of the wall, and 58 tests are still ≥10 s. Reaching 10 s therefore needs both ~14x
+less total work and the top test under 10 s. The top three are all `zz_dynamic_contract_probe`, which
+are probe tests that assert nothing and exist only while their investigation is open.
