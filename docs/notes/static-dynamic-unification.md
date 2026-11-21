@@ -1363,3 +1363,32 @@ against** — the unify regression is not cancelled, it is reversed. The census 
 — one test is 66% of the wall, and 58 tests are still ≥10 s. Reaching 10 s therefore needs both ~14x
 less total work and the top test under 10 s. The top three are all `zz_dynamic_contract_probe`, which
 are probe tests that assert nothing and exist only while their investigation is open.
+
+## 40. Probes leave the default run — this is a scope reduction, not a speedup
+
+74 probe tests are now `#[ignore]`d across 26 files, commit **`9514fbb7`**. A second test binary was
+not an option: `test-layout-check` allows one `test` target per package, so a probe binary would fail
+the layout gate. `#[ignore]` keeps them compiled — they cannot rot — and `cargo test … -- --ignored`
+still runs them.
+
+**Label this honestly.** The suite now runs **213 of 284 tests** and finishes in **63.60 s**, against
+169.83 s for all 283 before. That is **less work, not faster work**: 71 tests were moved out. The one
+legitimate *speedup* claim remains §39's **536.38 s → 169.83 s on the same 283 tests (3.16x)**. A
+number quoted from this section without saying how many tests were excluded is the filtered-run trap.
+
+**The canary stays.** `zz_gc_panic_probe::gc_variants` asserts nothing, so it can only fail by dying —
+it is the only default-run detector for the **open** P0-9 arena route, and it produced the SIGILL and
+SIGSEGV readings that located P0-8. Ignoring it would have removed a crash detector from the gate while
+the investigation is unresolved, so it remains in the default run. AGENTS.md says a probe stays in the
+tree while its investigation is open; it must also stay *runnable* then.
+
+No probe is among the 68 baseline failures (`0` of 68), so the failing-name gate is unchanged by the
+move — verified, not assumed.
+
+**What reaching 10 s still needs.** 213 tests at ~63.6 s wall on 12 cores, with a slowest single test of
+**17.02 s** (`pack_placement::the_landed_fragment_reads_the_class_the_pack_states`) and the next few at
+16.8 / 16.0 / 14.6 / 14.5 s. Two things must both happen: the per-test floor has to fall below 10 s, and
+the total work has to fall by roughly another six times. Those tests are real verification —
+`pack_placement`, `fuse_licence`, `tiled_reduction`, `graph_jit`, `recompute_reads`, `fused_region` —
+so they cannot be excluded the way probes were. The next slice is therefore another shared-cost
+reduction inside the checker, not a test-selection change.
