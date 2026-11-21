@@ -1494,6 +1494,14 @@ worklist**: admitting an ancestor before its descendants makes a descendant **re
 instead of being admitted and later retained. That is an ordering change on a monotone fixpoint, so the
 least fixpoint is unchanged, but it has **not been measured** and is not done here.
 
+**What the 1.88x bought was contention, not work — measured by difference.** The per-test sum at
+T=12 fell **390.1 s → 207.6 s** while the uncontended single-thread total is **209.4 s**: the post-fix
+sum lands on the uncontended figure, so the ~182 s that disappeared was **waiting**. That is exactly
+what a borrowing change removes — `Arc` clone-drop pairs on `Scope` objects **shared across threads**
+are cache-line ping-pong, and 52.7M/203.7M of them were buying precisely that. It also **closes §41's
+open question**: the residual 2.0x contention it could not attribute was this traffic, and the work
+itself never moved.
+
 ## 43. Shallow-first worklist: refuted by measurement
 
 §42's census argued that 94–96% of admissions are transient, so admitting an ancestor before its
@@ -1509,12 +1517,16 @@ conceptual:
   every admission, and there are millions;
 - hopping between depth buckets destroys the locality the flat `Vec` stack had.
 
-And a structural caution for anyone who tries this again: **`Scope::depth()` is the function-nesting
-depth, not a node's position in the graph.** Ordering the *worklist* therefore does not guarantee that
-an ancestor scope enters a given node's chain before its descendants do. The ordering that would
-matter is **per chain**, not global — which is a different design from the one measured here.
+On the ordering question itself the measurement is weaker than it looks, and should not be read as
+"the idea is wrong". `Scope::depth()` is function-nesting depth, not a node's position in the graph,
+but if the shallowest non-empty bucket is drained to exhaustion then a forwarded item carries the same
+scope and therefore the same depth, so bucket `d` only ever feeds bucket `d` — and an ancestor, at
+strictly smaller depth, reaches **every** node before any deeper scope does. On that reading
+ancestor-first *was* achieved, and the 2x is the mechanism cost named above rather than a broken
+premise. What remains untested is an ordering applied **per chain** instead of per worklist.
 
-**Where the 10-second target stands after this**: 18.52 s against 19.1 s of ideal packing at 12 cores
-is **within 6% of ideal**, so the contention term is essentially gone and the remaining **1.85x is pure
-work**. The one measured candidate for that work has now been refuted, so reaching 10 s needs a new
-idea rather than the next step of this one.
+**Where the 10-second target stands after this**: the same run's own figures give `sum=207.6,
+max=4.236`, so ideal packing is `max(207.6/12, 4.236)` = **17.30 s**, and 18.52 s is **1.07x** of it —
+contention is essentially gone. The remaining **1.73x** (207.6 -> <=120 core-s) is **pure work**, and
+the one measured candidate for it has now been refuted, so reaching 10 s needs a new idea rather than
+the next step of this one.
