@@ -1569,7 +1569,8 @@ pinned by path rather than picked by mtime:
 | --- | --- | --- |
 | suite at 12 threads | **18.09 s / 18.44 s** | two runs of the same exe — run-to-run variance |
 | suite at 1 thread | **95.93 s** wall, **94.77 s** CPU | 98.8% of one core, so work ≈ CPU here |
-| ideal packing | **7.90 s** (= 94.77/12) | **already below 10 s** |
+| hardware | **6 physical cores, 12 logical** | i5-12400F, SMT 2:1 |
+| zero-contention floor | **12.29 s** | 6 physical x measured SMT gain 1.285x |
 | slowest single test, solo | **2.210 s** | the per-test floor does not bind |
 | failing names | **68** | zero new, zero gone — at every thread count, after every slice |
 
@@ -1584,16 +1585,28 @@ pinned by path rather than picked by mtime:
 | §42 ancestor test borrows instead of cloning | ~18.5 s | contention: `Arc` refcount ping-pong between threads |
 | **operating point now** | **18.1–18.5 s** | **29x against the 536.38 s dev baseline** |
 
-**What the remaining gap is, measured.** At 12 threads the same work costs **2.105x** the CPU it costs
-alone (94.77 → 199.52 CPU-s) and packing adds **1.109x**, for **2.335x** against the 7.90 s ideal. So
-~90% of what is left is **concurrency-induced CPU inflation** and ~11% is scheduling. **Memory is
-excluded**: peak commit **18.05 GB** against a **47.82 GB** limit (29.8 GB headroom), **5 hard faults
-in and zero out** over 18.44 s — the suite pages *less than an idle machine*, which reads 4–10 pages/s —
-and the whole 12-way run peaks at **268 MB** of working set.
+**The ten-second target is below the hardware floor — this section's first version was wrong about
+that.** It divided 94.77 CPU-s by **12 logical** cores; the machine has **6 physical** ones, and SMT does
+not double throughput. Measured: T=6 wall 23.69 s against T=12 wall 18.44 s is a **1.285x** SMT gain, so
+the zero-contention floor is **12.29 s**, not 7.90 s. **10 s would therefore need at least 1.23x less
+work even if every source of contention vanished** — 1.84x at today's contention. "The work term is
+done" is withdrawn; the work term is still the binding one.
 
-**What is not done**: attributing that 2.105x. The candidate is allocator or cache-line traffic in a hot
-predicate. The one proposal that attacked it (shallow-first worklist, §43) measured **1.89x slower** and
-is reverted. That work is unbounded and was deliberately left out of this line.
+**Where the remaining CPU goes, measured.** At 12 threads the same work costs **2.105x** the CPU it
+costs alone (94.77 → 199.52 CPU-s). Of that **104.75 CPU-s of overhead**, **45.31 (43%) accrues before a
+single SMT pair is busy** (T=1 → T=6) and **59.44 (57%) is SMT-associated** (T=6 → T=12). So there is a
+genuine pre-SMT concurrency cost of ~45 CPU-s — allocator, bandwidth or shared data, not yet separated —
+but removing all of it would only reach **~14.4 s**, which is still above 10 s.
+
+**Memory is excluded**: peak commit **18.05 GB** against a **47.82 GB** limit (29.8 GB headroom),
+`pages_out = 0`, and the 12-way run peaks at **268 MB** of working set. Hard page-ins are *variable* —
+5 over one 18.44 s run, **44,793 (1,891/s) on a clean T=6 point** — but with zero pages out they are
+file-backed reads, not swapping, and they are worth a few percent of wall at most.
+
+**What is not done**: both halves. The work cut has a measured home — `propagate_polymorphic`, 87–93% of
+the work — and the ~45 CPU-s of pre-SMT overhead has a candidate (allocator / cache-line) that has not
+been attributed. The one proposal that attacked the latter (shallow-first worklist, §43) measured
+**1.89x slower** and is reverted.
 
 **Superseded in this note, so that they are not quoted again**: §36's "1.15x, paired in one session" —
 it was cross-day, and §37 carries the corrected pairing; and §43's **91.60 s** figure, which timed the
