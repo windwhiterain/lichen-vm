@@ -22,6 +22,7 @@ fn mark(what: &str) {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn a_store_registration_and_a_module_drop_repeat_where_the_peel_breaks_them() {
     let source = r#"
 ---

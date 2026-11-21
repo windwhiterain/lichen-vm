@@ -302,6 +302,7 @@ built := compute.graph step
 built
 "#;
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_graph_argument_buffer() {
     for (name, source) in [
         ("graph_of_a_constant", GRAPH_OF_A_CONSTANT),

@@ -70,6 +70,7 @@ compute.collect (march (2, seed)).y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_struct_annotation() {
     for (label, body) in [
         ("unannotated", UNANNOTATED),

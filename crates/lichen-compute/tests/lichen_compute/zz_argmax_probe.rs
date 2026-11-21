@@ -131,6 +131,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_argmax_folds() {
     let (_stub, _guard) = common::stub();
     println!("[stage1_max] {}", rendered(STAGE_ONE));

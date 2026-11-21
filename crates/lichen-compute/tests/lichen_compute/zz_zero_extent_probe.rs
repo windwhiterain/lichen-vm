@@ -278,6 +278,7 @@ fn rendered(body: Body) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_zero_extent() {
     let (_stub, _guard) = common::stub();
     println!("[plain] {}", rendered(Body::Plain));

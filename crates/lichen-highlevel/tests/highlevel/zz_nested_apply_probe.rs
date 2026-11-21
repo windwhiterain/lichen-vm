@@ -79,6 +79,7 @@ fn report(label: &str, mut probe: Probe<ProgramImpl>) {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn nested_apply_readings() {
     report("top-level callee", top_level_callee());
     report("function-binding callee", function_binding_callee());

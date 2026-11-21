@@ -38,6 +38,7 @@ compute.collect out.z : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_nested_loop_result() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(PROGRAM, None, &mut store) {

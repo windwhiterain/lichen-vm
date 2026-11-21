@@ -504,6 +504,7 @@ compute.collect c.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_contract_kernel_in_function() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(CONTRACT_KERNEL_IN_FUNCTION, None, &mut store) {
@@ -530,6 +531,7 @@ f 7
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_local_struct_read() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(LOCAL_STRUCT_READ, None, &mut store) {
@@ -612,6 +614,7 @@ compute.collect r.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_chain_no_meta() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(CHAIN_NO_META, None, &mut store) {
@@ -627,6 +630,7 @@ fn probe_a_chain_no_meta() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_user_struct_argument() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_USER_STRUCT_ARGUMENT, None, &mut store) {
@@ -665,6 +669,7 @@ run 4
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_direct_collect() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_DIRECT_COLLECT, None, &mut store) {
@@ -696,6 +701,7 @@ h 7
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_nested_typed_field() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(NESTED_TYPED_FIELD, None, &mut store) {
@@ -727,6 +733,7 @@ h 7
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_decided_field_value() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(DECIDED_FIELD_VALUE, None, &mut store) {
@@ -758,6 +765,7 @@ compute.collect r : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_local_type() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_LOCAL_TYPE, None, &mut store) {
@@ -1089,6 +1097,7 @@ compute.collect r.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_named_contraction_whole_arg() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(NAMED_CONTRACT_WHOLE_ARG, None, &mut store) {
@@ -1104,6 +1113,7 @@ fn probe_a_named_contraction_whole_arg() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_named_contraction_host_arg() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     let program = NAMED_CONTRACT_HOST_ARG
@@ -1122,6 +1132,7 @@ fn probe_a_named_contraction_host_arg() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_local_contract() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_LOCAL_CONTRACT, None, &mut store) {
@@ -1137,6 +1148,7 @@ fn probe_a_function_local_contract() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_local_chain() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_LOCAL_CHAIN, None, &mut store) {
@@ -1182,6 +1194,7 @@ compute.collect r.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_chain_minimal() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_CHAIN_MINIMAL, None, &mut store) {
@@ -1197,6 +1210,7 @@ fn probe_a_function_chain_minimal() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_buffer_parameter() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(BUFFER_PARAMETER, None, &mut store) {
@@ -1212,6 +1226,7 @@ fn probe_a_buffer_parameter() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_two_runs() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(TWO_RUNS, None, &mut store) {
@@ -1260,6 +1275,7 @@ compute.collect r.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_parameter_buffers() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(PARAMETER_BUFFERS, None, &mut store) {
@@ -1275,6 +1291,7 @@ fn probe_a_parameter_buffers() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_plan_in_literal() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(PLAN_IN_LITERAL, None, &mut store) {
@@ -1290,6 +1307,7 @@ fn probe_a_plan_in_literal() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_plan_in_function() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(PLAN_IN_FUNCTION, None, &mut store) {
@@ -1305,6 +1323,7 @@ fn probe_a_plan_in_function() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_function_run() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(FUNCTION_RUN, None, &mut store) {
@@ -1320,6 +1339,7 @@ fn probe_a_function_run() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_named_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(NAMED_CONTRACT, None, &mut store) {
@@ -1353,6 +1373,7 @@ r.x
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_curried_call() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(CURRIED_CALL, None, &mut store) {
@@ -1379,6 +1400,7 @@ r
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_struct_kind_unify() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(STRUCT_KIND_UNIFY, None, &mut store) {
@@ -1480,6 +1502,7 @@ compute.collect out.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_named_inline() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(NAMED_INLINE, None, &mut store) {
@@ -1495,6 +1518,7 @@ fn probe_a_named_inline() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_named_shape_table() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(NAMED_TABLE, None, &mut store) {
@@ -1510,6 +1534,7 @@ fn probe_a_named_shape_table() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_dynamic_rank_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(&program(2, 2), None, &mut store) {
@@ -1526,6 +1551,7 @@ fn probe_a_dynamic_rank_contraction() {
 
 /// Rank 3, one contraction; reference `[330, 1554, 360, 1728, 390, 1902, 420, 2076, 450, 2250]`.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_three_dimensional_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(&program(3, 1), None, &mut store) {
@@ -1546,6 +1572,7 @@ fn probe_a_three_dimensional_contraction() {
 /// Print-only, asserts nothing: each program prints what the spec-conforming
 /// implementation answers, so the smallest failing shape is named by a reading.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_spec_struct_and_clone() {
     let cases: [(&str, &str); 6] = [
         (
@@ -1644,6 +1671,7 @@ f 7
 /// Print-only: `T{.a 2}` against a declared `.a` of `1` is the shortest shape the
 /// struct rewrite's `v[k] = e1` unify can refuse.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_spec_struct_minimal_error() {
     let cases: [(&str, &str); 3] = [
         (
@@ -1694,6 +1722,7 @@ f 7
 /// Print-only: an `@any` field takes the supplied value (`@any` is undecided and always
 /// unifies), so only a decided declared value can refuse.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_spec_any_field() {
     let cases: [(&str, &str); 3] = [
         (
@@ -1743,6 +1772,7 @@ f 2
 /// Print-only: the literal alone, the literal under a struct-typed field, and the same
 /// read moved out of the function.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_spec_nested_literal() {
     let cases: [(&str, &str); 4] = [
         (

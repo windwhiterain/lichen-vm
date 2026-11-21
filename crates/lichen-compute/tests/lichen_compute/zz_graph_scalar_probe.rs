@@ -83,6 +83,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_graph_scalar() {
     let (_stub, _guard) = common::stub();
     println!("[recorded] {}", rendered(RECORDED));

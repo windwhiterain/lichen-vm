@@ -59,6 +59,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_buffer_read_trip_count() {
     let (_stub, _guard) = common::stub();
     println!("[lim_three] {}", rendered(THREE));

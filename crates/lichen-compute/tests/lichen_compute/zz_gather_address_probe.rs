@@ -78,6 +78,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_gather_address() {
     println!("[plain] {}", rendered(PLAIN));
     println!("[past_the_end] {}", rendered(PAST_THE_END));

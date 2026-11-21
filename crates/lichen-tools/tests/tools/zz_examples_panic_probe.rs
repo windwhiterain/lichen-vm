@@ -10,6 +10,7 @@ use lichen_tools::readme;
 const WORK_IN_PROGRESS: &[&str] = &["compute_jit.lichen"];
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn per_example_survey() {
     let examples: Vec<(String, PathBuf)> = readme::example_files()
         .unwrap_or_else(|e| panic!("{e}"))

@@ -5,6 +5,7 @@ use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn matmul_kernel_body() {
     let name = std::env::var("PROBE_EXAMPLE").unwrap_or_else(|_| "matmul.lichen".into());
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

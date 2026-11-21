@@ -666,6 +666,7 @@ fn dump_body(source: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_body_an_if_in_a_fold_lowers_to() {
     let _slot = common::slot();
     for (label, condition, then, otherwise) in [

@@ -24,6 +24,7 @@ sel := 'i -> (x.shape.row, x.shape.column)
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_selector_closure() {
     let mut store = new_store(None).expect("the store opens");
     match lichen_language::run::evaluate_raw(SELECTOR, None, &mut store) {
@@ -63,6 +64,7 @@ sel 0
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_shape_table() {
     for (label, program) in [
         ("[table hit]", SHAPE_TABLE),
@@ -106,6 +108,7 @@ t.shape <== "r0"
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_contract_shape() {
     for (label, program) in [
         ("[shape value]", CONTRACT_SHAPE),
@@ -139,6 +142,7 @@ dimsOf x
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_typed_selector() {
     let mut store = new_store(None).expect("the store opens");
     match lichen_language::run::evaluate_raw(GENERIC_SELECTOR, None, &mut store) {
@@ -401,6 +405,7 @@ t.Tensor
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_tensor_type_read() {
     let mut store = new_store(None).expect("the store opens");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
@@ -455,6 +460,7 @@ compute.collect out.o : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_minimal_nested_read() {
     let mut store = new_store(None).expect("the store opens");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
@@ -475,6 +481,7 @@ fn probe_the_minimal_nested_read() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_frozen_bundle() {
     let mut store = new_store(None).expect("the store opens");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
@@ -538,6 +545,7 @@ fn probe_the_frozen_bundle() {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_tensor_library() {
     let mut store = new_store(None).expect("the store opens");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tensor.lichen");
@@ -655,6 +663,7 @@ show TOpen{.buffer data.b, .shape Pair{.row 2, .column 3}, .stride Pair{.row 3, 
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_parametric_field_type() {
     for (label, program) in [
         ("plain", PLAIN_WRAP),

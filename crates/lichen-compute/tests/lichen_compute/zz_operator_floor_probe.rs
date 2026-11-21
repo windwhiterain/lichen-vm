@@ -324,6 +324,7 @@ fn measure(label: &str, source: &str) {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_floor_on_a_real_operator() {
     measure("gemv", GEMV);
     measure("decode_direct", &decode_expr(8, 1, true));

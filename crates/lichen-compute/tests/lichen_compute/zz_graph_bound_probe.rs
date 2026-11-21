@@ -99,6 +99,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_bound_a_producer_wrote() {
     let (_stub, _guard) = common::stub();
     println!("[chained] {}", rendered(CHAINED));

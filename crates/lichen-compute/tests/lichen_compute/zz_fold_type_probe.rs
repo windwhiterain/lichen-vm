@@ -77,6 +77,7 @@ fn rendered(body: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_fold_type() {
     let _slot = common::slot();
     for (label, body) in [

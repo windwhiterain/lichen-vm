@@ -59,6 +59,7 @@ fn run(body: &str, backend: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_loop_that_writes() {
     let _slot = common::slot();
     println!("[control] {}", run(CONTROL, "cpu"));
@@ -127,6 +128,7 @@ fn dump_body(body: &str) -> String {
 /// The same fold with the state's second slot holding something else: the place the
 /// walk stops at is the slot's contents.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_state_slot_the_walk_stops_at() {
     let _slot = common::slot();
     for (label, body) in [
@@ -158,6 +160,7 @@ fn probe_the_state_slot_the_walk_stops_at() {
 /// The graph the refusal is about: the kernel body's return node, what it holds, and
 /// the chain a walk follows from it.
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_graph_a_loop_body_leaves() {
     let _slot = common::slot();
     let source = TEMPLATE.replace("@BODY@", LOOP).replace("@B@", "cpu");

@@ -103,6 +103,7 @@ compute.collect (compute.graphrun built (3, data)) : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_graph_step_shape() {
     for (name, body) in [
         ("same_one", SAME_ONE),

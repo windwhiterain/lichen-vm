@@ -38,6 +38,7 @@ compute.collect out.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_kernel_that_declares_its_output() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -74,6 +75,7 @@ compute.collect data.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_declared_length_is_the_allocation() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -111,6 +113,7 @@ compute.collect data.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_codomain_may_hold_a_loops_result() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -147,6 +150,7 @@ compute.collect data.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_literal_selected_by_the_index() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -182,6 +186,7 @@ compute.collect data.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_nested_chain_in_the_body() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -218,6 +223,7 @@ compute.collect out.c : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_two_outputs() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -251,6 +257,7 @@ e
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_settled_spelling() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -297,6 +304,7 @@ compute.collect out.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_let_alias_of_a_read() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -342,6 +350,7 @@ compute.collect out.y : Array
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_conditional_whose_then_arm_reads() {
     let _slot = common::slot();
     let mut store = new_store(None).expect("the embedded compute package registers");

@@ -43,6 +43,7 @@ out := (compute.plrun kernel ((Arg){.meta Meta{.n ((c_shape <== "r0") * (c_shape
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_two_dimensional_contraction() {
     let mut store = new_store(None).expect("the embedded compute package registers");
     match lichen_language::run::evaluate_raw(PROGRAM, None, &mut store) {
@@ -73,6 +74,7 @@ x := (In){.a a, .b b}
 "#;
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_plain_buf_field() {
     let report = common::check(PLAIN_BUF);
     println!(

@@ -96,6 +96,7 @@ fn recorded(source: &str) -> String {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_the_replicate_addresses() {
     println!("[sums] {}", recorded(&program()));
     for (label, expression) in [

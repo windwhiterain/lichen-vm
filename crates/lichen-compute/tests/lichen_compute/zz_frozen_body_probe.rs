@@ -196,6 +196,7 @@ macro_rules! reading {
 }
 
 #[test]
+#[ignore = "probe: prints and asserts nothing; run with --ignored"]
 fn probe_a_kernel_body_from_a_frozen_package() {
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("frozen_body_probe");
     std::fs::create_dir_all(&directory).expect("the probe's directory is writable");
