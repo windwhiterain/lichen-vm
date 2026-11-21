@@ -1556,3 +1556,45 @@ not work. Every figure here is a **bound**, not a reading; the exact solo total 
 
 The trap is the one this task keeps charging for: **`ls -t` is not a selector, and a revert without a
 rebuild leaves the old binary looking current.**
+
+## 44. Where this line ended: 18.1–18.5 s, and the work term is done
+
+The maintainer called it here. **Start from this section**; §34–§43 are the record of how it was
+reached, including its corrections, and several of their figures are superseded (listed at the end).
+
+**The numbers that stand**, on dev at `a46614c1`, from a binary built from the committed source and
+pinned by path rather than picked by mtime:
+
+| | value | what it is |
+| --- | --- | --- |
+| suite at 12 threads | **18.09 s / 18.44 s** | two runs of the same exe — run-to-run variance |
+| suite at 1 thread | **95.93 s** wall, **94.77 s** CPU | 98.8% of one core, so work ≈ CPU here |
+| ideal packing | **7.90 s** (= 94.77/12) | **already below 10 s** |
+| slowest single test, solo | **2.210 s** | the per-test floor does not bind |
+| failing names | **68** | zero new, zero gone — at every thread count, after every slice |
+
+**What each slice bought, and which kind of thing it was** — the distinction is the point:
+
+| slice | wall | kind |
+| --- | --- | --- |
+| merged tip before this work | 612.97 s | — (283 tests) |
+| §39 fixpoint forwards each admitted scope once | 169.83 s | **true speedup: 3.16x on the same 283 tests** |
+| §40 probes leave the default run | 63.60 s | **scope reduction to 212 tests — not a speedup** |
+| §41 backend installs per thread | 34.84 s | removed a serial chain (a mutex) |
+| §42 ancestor test borrows instead of cloning | ~18.5 s | contention: `Arc` refcount ping-pong between threads |
+| **operating point now** | **18.1–18.5 s** | **29x against the 536.38 s dev baseline** |
+
+**What the remaining gap is, measured.** At 12 threads the same work costs **2.105x** the CPU it costs
+alone (94.77 → 199.52 CPU-s) and packing adds **1.109x**, for **2.335x** against the 7.90 s ideal. So
+~90% of what is left is **concurrency-induced CPU inflation** and ~11% is scheduling. **Memory is
+excluded**: peak commit **18.05 GB** against a **47.82 GB** limit (29.8 GB headroom), **5 hard faults
+in and zero out** over 18.44 s — the suite pages *less than an idle machine*, which reads 4–10 pages/s —
+and the whole 12-way run peaks at **268 MB** of working set.
+
+**What is not done**: attributing that 2.105x. The candidate is allocator or cache-line traffic in a hot
+predicate. The one proposal that attacked it (shallow-first worklist, §43) measured **1.89x slower** and
+is reverted. That work is unbounded and was deliberately left out of this line.
+
+**Superseded in this note, so that they are not quoted again**: §36's "1.15x, paired in one session" —
+it was cross-day, and §37 carries the corrected pairing; and §43's **91.60 s** figure, which timed the
+shallow-first binary rather than the borrow, as the withdrawal paragraph inside §43 explains.
