@@ -1286,8 +1286,11 @@ checkout, whose target was cleaned: `cargo fmt --all -- --check` 0, `comments-ch
 `215 passed; 68 failed; 1 ignored` in 612.97 s, and the rest of the workspace green except the same
 four `lichen-language-server` reds of §35 that dev already carries.
 
-**A confounder, recorded rather than buried**: free space was falling during the tip run — 15 GB at
-`04:13Z`, 13 GB at `04:19Z`, 12 GB at `04:20Z`, 9.8 GB at `04:24Z` — from work outside these two runs
-that was never identified. The first of those readings already follows dev's run, so whether dev ran
-under the same pressure is unknown. **76.59 s is therefore best read as an upper bound** on the gap:
-the direction of the effect is understood, its size is not.
+**A confounder, checked rather than assumed**: free space did fall around this run — 15 GB at `04:11Z`
+and `04:13Z`, then 13 GB at `04:19Z`, 12 GB at `04:20Z`, 9.8 GB at `04:24Z`. But the compute
+measurement is pinned to **~04:07:04Z–04:17:17Z** from both ends — start plus fmt, comments, the
+58.62 s check and a 1m52s build; end minus the rest phase's 5m01s build and 36.76 s of test
+execution — and the two derivations agree to 9 s. Only the 15 GB readings fall inside that window;
+the steep part is the **rest phase's own build**, which ran after the compute window closed, and
+dev's window had 17 GB inside it at `04:01:55Z`. So the slide is not the mechanism. **76.59 s stays
+an upper bound for the one reason left standing: one run each, ambient load unmeasured.**
