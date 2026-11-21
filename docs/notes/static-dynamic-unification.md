@@ -1525,8 +1525,13 @@ strictly smaller depth, reaches **every** node before any deeper scope does. On 
 ancestor-first *was* achieved, and the 2x is the mechanism cost named above rather than a broken
 premise. What remains untested is an ordering applied **per chain** instead of per worklist.
 
-**Where the 10-second target stands after this**: the same run's own figures give `sum=207.6,
-max=4.236`, so ideal packing is `max(207.6/12, 4.236)` = **17.30 s**, and 18.52 s is **1.07x** of it —
-contention is essentially gone. The remaining **1.73x** (207.6 -> <=120 core-s) is **pure work**, and
-the one measured candidate for it has now been refuted, so reaching 10 s needs a new idea rather than
-the next step of this one.
+**Where the 10-second target stands after this**: a T=12 per-test sum is a *contended* sum. The
+same tree measured uncontended reads **91.60 s** at T=1, so the borrow cut **work** by **2.29x**
+(209.4 -> 91.60) as well as contention, and its 207.6 T=12 sum overstates solo time by 2.27x. Ideal
+packing is therefore `max(91.60/12, 4.236)` = **7.63 s — already below 10 s**, with scaling improved
+from 3.29x to 4.95x.
+
+So the distance to 10 s is **contention at 2.43x** (18.52 / 7.63), **not work**. Any reading that the
+work term must shrink further came from treating a contended sum as work, and is withdrawn: the two
+candidates aimed at work (the map cache, §42; the shallow-first worklist, this section) were both
+second-order or worse, which is exactly what one would expect of a term that is no longer binding.
