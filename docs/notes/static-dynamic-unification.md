@@ -1234,3 +1234,19 @@ SSH reset left its test binary running, and the next build died with `LNK1104: c
 …tools-….exe` — a link error that reads like a code failure; and a test binary's filename hash does
 **not** change when its sources change, so "the same exe name in both runs" is not evidence that
 nothing was rebuilt. Only a `Compiling` line shows that.
+
+## 36. The wall, paired in one session: 1.15x, not 1.22x
+
+Dev's recorded walls (511.42 / 514.23 / 554.47 s) came from other sessions on other days, so §34
+could only state a range. Measured back to back in this session — same worktree, same machine, same
+suite — dev `71e901a5` reads **536.38 s** and the branch at `8af89b30` reads **614.22 s** and
+**624.66 s**. That is **1.145x and 1.164x**: about **1.15x**, or +78 to +88 s on a 284-test suite.
+
+The failing names were compared against **today's** dev run with the same exact-name pattern, not
+only against the older baseline file: **zero regressions** — every name dev fails today is in the
+branch's set, and both sets hold 68.
+
+Slice 1 measured 676.42 s, so the two bounding slices together moved the branch from 1.26x to
+1.15x. What remains is `propagate_polymorphic` itself: it still seeds every run from
+`self.nodes.keys()` — the whole node table — no matter how few classes changed. That is the next
+defect if the remaining 1.15x is to be removed, and it is **not** addressed here.
