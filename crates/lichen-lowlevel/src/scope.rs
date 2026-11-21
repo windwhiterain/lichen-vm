@@ -87,13 +87,13 @@ impl<F: Copy + Eq + std::fmt::Debug> Scope<F> {
         if self.depth > other.depth {
             return false;
         }
-        let mut current = other.clone();
+        let mut current: &Arc<Scope<F>> = other;
         let mut difference = other.depth - self.depth;
         let mut level = 0;
         while difference > 0 {
             if difference & 1 == 1 {
                 current = current.up[level]
-                    .clone()
+                    .as_ref()
                     .expect("the lifting table covers the scope's depth");
             }
             difference >>= 1;
