@@ -1294,3 +1294,32 @@ execution — and the two derivations agree to 9 s. Only the 15 GB readings fall
 the steep part is the **rest phase's own build**, which ran after the compute window closed, and
 dev's window had 17 GB inside it at `04:01:55Z`. So the slide is not the mechanism. **76.59 s stays
 an upper bound for the one reason left standing: one run each, ambient load unmeasured.**
+
+## 38. The accumulate path is gone, and narrowing the walk's roots is a refuted alternative
+
+Slice 2 left `upgrade_polymorphic_class` with no caller, so it was deleted: `polymorphic.rs`, 77
+lines, commit **`5dfa5a59`**. Measured unchanged where it counts cheapest — ll 167/0/1, hl 136/0,
+lang 69/0 + 293/0 — and the `never used` warning is gone. Dead code by construction, so the same
+verdicts are the only acceptable reading.
+
+**Do not re-propose shrinking `propagate_polymorphic`'s root set.** That was tried and measured, and
+it fails on three counts at once:
+
+- **10 regressions**: highlevel 134/2, langlib 68/1, langext 282/7 — against a whole-table control on
+  the *same build* that reproduced the baseline exactly, so the scoping was the cause and not the
+  instrument.
+- **the flag invariant breaks**: 4832 / 141 / 449 nodes left with no verdict, against **0** for the
+  whole table, every failure at the same `debug_assert!(read.polymorphic.is_some())` — with a root
+  set of 5 over a 40006-node table.
+- **it is far slower, not faster**: 111–115 s against 1.8–3.0 s, and 326.01 s against 3.55 s.
+
+The mechanism is the part worth keeping: the O(1) skip is `if polymorphic_unflagged == 0 &&
+!polymorphic_dirty`. Nodes left permanently outside the roots' reach mean that counter **never
+drains**, so the early return is lost and the walk re-runs at every clone-walk entry. And a root set
+cannot stand in for a liveness set here: `add_node` sets `function: None`, so most table nodes are
+unowned caller cells that the clone walks do read.
+
+That refutation does **not** cover a walk made incremental from the changed classes — the direction
+`upgrade_polymorphic_class` and the parked `b5-batching.pl` took. Any such design must still satisfy
+both constraints above: every node a clone walk reads ends with a verdict, and `polymorphic_unflagged`
+still reaches 0.
