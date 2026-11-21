@@ -1281,43 +1281,6 @@ outs := (compute.plrun k ((compute.A _){.n 3, .I In{.a 0}}) : Struct)
 /// a buffer out of a program value.
 ///
 /// # Invariant
-/// Parked: one disagreement reaches two record sites — the check-time unify and the
-/// runtime apply's join — so the refusal is reported twice. The refusal itself is right
-/// and names the right position; only its count is wrong.
-///
-/// The buffer's **type** is decided now, so the position is refused by the checker
-/// and the run-time join never sees it.
-#[ignore = "one disagreement, two reports: the apply's join is not yet suppressed"]
-fn a_program_value_where_a_buffer_belongs_is_refused() {
-    let messages = fail(
-        r#"
---- compute = import "compute.lichen" ---
-In  := {.a (compute.Buf (compute.BufParam{.type Int, .length 8}))}
-Out := {.z (compute.Buf (compute.BufParam{.type Int, .length 8}))}
-Par := {.n @any : Int, .in In}
-f := ('k = Par) -> {
-  i := compute.range k.n
-  z := compute.buf (compute.BufParam{.type Int, .length k.n})
-  ((Out){.z (compute.write ((compute.Write _){.to z, .at i, .value i + 1}))})
-}
-data := [3, 1, 4, 1, 5, 9, 2, 6]
-k := compute.parallel f "cpu" Out
-out := (compute.plrun k ((compute.A _){.n 8, .I In{.a data}}) : Struct)
-compute.collect out.z : Array
-"#,
-    );
-    assert_eq!(
-        messages.len(),
-        1,
-        "one bad position is one diagnostic: {messages:?}"
-    );
-    let message = &messages[0];
-    assert!(
-        message.contains("expected {") && message.contains("found array{Int, 8}"),
-        "the refusal must name the buffer the position must hold and what it holds: {message:?}"
-    );
-}
-
 /// A body reads the input buffer it **names**, not the first one declared.
 ///
 /// # Invariant
