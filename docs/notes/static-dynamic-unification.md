@@ -1402,3 +1402,57 @@ edit and needs the maintainer, and its assertion is a cfg-structure count, so it
 unrelated reason. `compute.rs:1290` carries `#[ignore]` with **no `#[test]`**: it is not a test, libtest
 never sees it, it is the source of the `never used` warning, and it cannot be reached by `--ignored`
 either — it should gain `#[test]` or be deleted rather than sit in the tree looking like coverage.
+
+## 41. The suite's wall was half a mutex: the backend now installs per thread
+
+86.5% of the wall was a serial chain, not work. `tests/common.rs` held `BACKEND_SLOT`, a
+**process-wide** `Mutex<()>` taken by every test that installs a backend, because
+`lichen-kernel-ir`'s `BACKEND` is process-global by stated invariant. Forty-one tests were serialized
+behind it, and the suite's 12-core speedup was 3.29x against an ideal of 12x.
+
+**The change is additive, so no existing invariant was reworded** (commit **`d54554be`**, plus
+`47d50f27` for the two text sites):
+
+- `kernel-ir` gains `install_thread_backend` / `clear_thread_backend`, and `parallel_backend` prefers
+  this thread's override before falling back to the process slot. `BACKEND`,
+  `install_parallel_backend` and `clear_parallel_backend` are untouched, and the `None`-versus-
+  *declines* sentence is kept verbatim — the precedence rule was **prepended**, so this is an
+  addition, not a reword. Production hosts never install an override and take today's path.
+- The harness installs on the installing thread and `SlotGuard` **clears the override when it drops**.
+  That drop is load-bearing: libtest reuses worker threads, so 212 tests over 12 threads means ~18
+  tests per thread, and without it one test's stub would serve the next test on that thread — a leak
+  the failing-name gate cannot see, because a test can fail for a new reason under the same name.
+- `graph_jit` mints a fresh stub per call instead of a `thread_local!` one, and the doc blocks that
+  described the removed lock now state what holds.
+
+**Measured, one guarded sweep, every point clean** (68 names, zero new, zero gone, at each):
+
+| threads | before | after |
+| --- | --- | --- |
+| 2 | 119.10 s | 111.22 s |
+| 4 | 79.43 s | 63.70 s |
+| 8 | 66.32 s | 39.41 s |
+| 12 | 63.57 s | **34.84 s** |
+
+The improvement grows with thread count, which is the signature of removing a serial section. The
+**T=8 flake is gone at every count**: `identity_from_body::a_seed_that_is_no_literal…` no longer
+appears as FAILED anywhere. Its mechanism is closed rather than papered over — no test installs into
+the process slot now, so a test that dispatches without installing reads `None` and gets the built-in
+backend instead of a neighbour's stub.
+
+**What did NOT improve: the work.** This slice removes a mutex and deletes no checking work. The
+uncontended total was 209.41 s before and is unmeasured after (T=1 was not re-run); the T=2 per-test
+sum fell 238.0 → 222.2, which is *lock wait* leaving the `--report-time` figures, not work leaving the
+suite. **The ~1.75x work cut is still required**: even perfect packing of today's work is 209.5/12 =
+17.46 s, which is above 10 s on its own.
+
+**Where the 10-second target stands**: 34.84 s at T=12 against 17.46 s of ideal packing is still
+**2.0x of residual contention**, plus the ≥1.75x work term that is 87–93% `propagate_polymorphic`.
+Both are needed; neither is sufficient. The one thing that stopped being an obstacle is the per-test
+floor: the slowest single test fell from **17.268 s to 6.631 s**, so no test must be split or excluded
+to fit under 10 s.
+
+**Not claimed**: that a host outside this repository does not rely on the backend slot being
+process-global across threads; and four `#[test]`s in `crates/lichen-compute/src/compute.rs` still
+install into the process slot with no clear — pre-existing, green (14/0), and left named rather than
+fixed here, since converting them without a guard would just move the leak to the thread slot.
