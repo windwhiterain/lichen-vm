@@ -4,12 +4,12 @@
 #![allow(dead_code, unused_imports)]
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use lichen_compute::language::{LangProgram, LangValue, new_store};
 use lichen_kernel_ir::{
     BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarClass, ScalarData,
-    install_parallel_backend,
+    clear_thread_backend, install_thread_backend,
 };
 use lichen_language::package::PackageStore;
 use lichen_lowlevel::{AnyNodeId, Module, NodeId};
@@ -270,43 +270,43 @@ impl ParallelBackend for Stub {
     }
 }
 
-/// The slot the installed backend lives in, which is the process's.
+/// What [`slot`] hands back, kept so call sites need no edit.
 ///
 /// # Invariant
-/// The lock is taken before the caller installs a backend and released only when the guard
-/// is dropped, so a second test that installs one while another runs cannot leave the
-/// first's residents on a backend that is no longer installed.
-static BACKEND_SLOT: Mutex<()> = Mutex::new(());
+/// Nothing is serialized: a backend is installed on the installing thread alone, so two
+/// tests that install one run in parallel and never see each other's.
+pub struct SlotGuard;
 
-/// The slot alone, for a test that installs a backend of its own.
+/// A guard for a test that installs a backend of its own.
 ///
 /// # Invariant
-/// The lock is taken before the caller installs a backend and released only when the guard
-/// is dropped, so the slot it guards is the process's and not the caller's.
-pub fn slot() -> MutexGuard<'static, ()> {
-    BACKEND_SLOT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// Dropping it clears this thread's override, which libtest would otherwise hand to the
+/// next test it runs on the same worker thread.
+pub fn slot() -> SlotGuard {
+    SlotGuard
 }
 
-/// The stub, installed as this process's backend, with the slot held.
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        clear_thread_backend();
+    }
+}
+
+/// The stub, installed on this thread for as long as the guard is held.
 ///
 /// # Invariant
-/// The guard travels back with the stub, so a caller that keeps both keeps the slot for as
-/// long as it runs.
-pub fn stub() -> (Arc<Stub>, MutexGuard<'static, ()>) {
-    let guard = BACKEND_SLOT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+/// The guard travels back with the stub and clears the override when it drops, so a test
+/// never inherits the previous test's backend on a reused worker thread.
+pub fn stub() -> (Arc<Stub>, SlotGuard) {
     let stub = Arc::new(Stub {
         calls: Mutex::new(Vec::new()),
         residents: Mutex::new(std::collections::HashMap::new()),
         next: Mutex::new(1),
     });
-    install_parallel_backend(stub.clone());
+    install_thread_backend(stub.clone());
     // The pass table is the process's, so a stub starts from none installed.
     lichen_compute::compute::graph_pass::clear_graph_pass();
-    (stub, guard)
+    (stub, SlotGuard)
 }
 
 /// The calls the stub was handed, in the order they came.

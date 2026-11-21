@@ -7,6 +7,7 @@
 //! structured control flow, because a loop needs a backedge and a value that survives it.
 //! The crate depends on nothing, so a backend inherits no other's runtime.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -662,12 +663,36 @@ pub fn clear_parallel_backend() {
     *slot().lock().unwrap() = None;
 }
 
+thread_local! {
+    /// A backend this thread installed on its own; it outranks the process slot.
+    static THREAD_BACKEND: RefCell<Option<Arc<dyn ParallelBackend>>> = const { RefCell::new(None) };
+}
+
+/// Install a backend for **this thread only**, leaving the process slot untouched.
+///
+/// # Invariant
+/// The override is per thread and is never written to the process slot, so tests may run in
+/// parallel without one test's backend serving another.
+pub fn install_thread_backend(backend: Arc<dyn ParallelBackend>) {
+    THREAD_BACKEND.with(|slot| drop(slot.borrow_mut().replace(backend)));
+}
+
+/// Remove this thread's own backend, if it installed one.
+pub fn clear_thread_backend() {
+    THREAD_BACKEND.with(|slot| drop(slot.borrow_mut().take()));
+}
+
 /// The installed backend, or `None` when the host installed none.
 ///
 /// # Invariant
-/// `None` is not a refusal: no backend was ever in the picture, so a caller falls back
-/// without a diagnostic; a backend that *declines* is the case worth recording.
+/// This thread's own backend wins; a thread without one reads the process slot, and a thread
+/// spawned by an installer does not inherit the override. `None` is not a refusal: no backend
+/// was ever in the picture, so a caller falls back without a diagnostic; a backend that
+/// *declines* is the case worth recording.
 pub fn parallel_backend() -> Option<Arc<dyn ParallelBackend>> {
+    if let Some(backend) = THREAD_BACKEND.with(|slot| slot.borrow().clone()) {
+        return Some(backend);
+    }
     slot().lock().unwrap().clone()
 }
 

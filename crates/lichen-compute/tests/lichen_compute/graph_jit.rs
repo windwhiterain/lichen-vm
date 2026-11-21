@@ -1,13 +1,12 @@
 //! A dispatching function recorded into a graph and run against a stub backend.
 //! See compute-graph-jit.md.
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use lichen_compute::language::new_store;
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_kernel_ir::{
-    BufferSlot, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarData,
-    install_parallel_backend,
+    BufferSlot, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarData, install_thread_backend,
 };
 use lichen_lowlevel::{Module, NodeId};
 
@@ -109,15 +108,13 @@ impl Pending for StubPending {
     }
 }
 
-/// The process's backend slot, the one the device tests hold: the stub is
-/// installed under it, held for the whole test.
-fn stub() -> (MutexGuard<'static, ()>, Stub) {
-    static STUB: OnceLock<Stub> = OnceLock::new();
+/// This thread's backend, minted fresh per call: the guard clears it on drop.
+fn stub() -> (common::SlotGuard, Stub) {
     let guard = common::slot();
-    let stub = STUB.get_or_init(Stub::default);
+    let stub = Stub::default();
     // A device test that ran earlier replaced the installed backend, so this
     // installs every call rather than once.
-    install_parallel_backend(Arc::new(stub.clone()));
+    install_thread_backend(Arc::new(stub.clone()));
     stub.forget();
     (guard, stub.clone())
 }
