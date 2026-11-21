@@ -304,7 +304,7 @@ pub fn stub() -> (Arc<Stub>, SlotGuard) {
         next: Mutex::new(1),
     });
     install_thread_backend(stub.clone());
-    // The pass table is the process's, so a stub starts from none installed.
+    // The pass table is this thread's, so a reused thread must not carry the last test's.
     lichen_compute::compute::graph_pass::clear_graph_pass();
     (stub, SlotGuard)
 }

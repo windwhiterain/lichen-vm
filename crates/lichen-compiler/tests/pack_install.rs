@@ -107,13 +107,6 @@ fn pack_text(schema: &str) -> String {
     )
 }
 
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while the
-/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
-/// tests here run one at a time.
-
 /// What the CLI itself does with a program's packs: install the floor, compile, and run it.
 ///
 /// # Invariant
