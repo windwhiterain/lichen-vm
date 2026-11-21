@@ -1250,3 +1250,38 @@ Slice 1 measured 676.42 s, so the two bounding slices together moved the branch 
 1.15x. What remains is `propagate_polymorphic` itself: it still seeds every run from
 `self.nodes.keys()` — the whole node table — no matter how few classes changed. That is the next
 defect if the remaining 1.15x is to be removed, and it is **not** addressed here.
+
+## 37. Correction: §36's wall was cross-day, and the paired number is 1.143x
+
+§36 says the wall was "measured back to back in this session". It was not, and the error is mine:
+`s4-ab.sh` ran cargo **once**, on dev's commit, then checked out the branch without running it. The
+614.22 s §36 compared against is the reading from `2026-11-20T17:16:35Z`–`17:27:44Z` — a session that
+ended **ten hours** before dev's run began at `2026-11-21T03:53:09Z`. A script's comment promised both
+sides; its body delivered one.
+
+The trap that made it read as same-session is worth keeping: a run's session comes from the `date -u`
+markers inside its own log, never from a file's mtime — `ls --time-style=+%FT%TZ` appends a literal
+`Z` to **local** time, and on a UTC+8 machine that renders yesterday evening as today's small hours.
+
+**The genuine pair — both today, same machine, same suite, same invocation**: dev `71e901a5`
+**536.38 s** (`03:53:09Z`–`04:02:31Z`) and the merged tip `09f3b422` **612.97 s** (script start
+`04:04:09Z`, 98 s after dev's run ended). That is **1.143x**, a gap of **76.59 s**.
+
+The name result survives and now holds on the merged tip too: `215 passed; 68 failed; 1 ignored`,
+the same 68 names as dev's, zero new and zero gone.
+
+**Limits, stated**: one run per side, not a median. The two used different `CARGO_TARGET_DIR`s, which
+does not enter libtest's `finished in Ns`; both use the identical invocation and
+`CARGO_BUILD_JOBS=4`, and neither passes `--test-threads`.
+
+**The ladder, so superseded figures are not requoted**: 1.22x (slice 1 vs A2), 1.108x (slice 2 vs A2)
+and 1.145x (yesterday's branch vs today's dev) are all cross-day. **1.143x is the number.** That the
+cross-day 1.145 and the paired 1.143 differ by 0.002 is worth recording: the conclusion was right
+while the evidence for it was not.
+
+**Landed and verified on the merged tip**: the branch fast-forwarded into dev in the main checkout —
+`dev` and `feature/unify-integration` are both `09f3b422`, seven commits on from `71e901a5`. In that
+checkout, whose target was cleaned: `cargo fmt --all -- --check` 0, `comments-check
+--max-violations 0` no violations, `cargo check --workspace --tests` 0 (58.62 s), compute
+`215 passed; 68 failed; 1 ignored` in 612.97 s, and the rest of the workspace green except the same
+four `lichen-language-server` reds of §35 that dev already carries.
