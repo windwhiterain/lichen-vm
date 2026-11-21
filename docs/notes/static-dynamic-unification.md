@@ -1460,3 +1460,36 @@ to fit under 10 s.
 process-global across threads; and four `#[test]`s in `crates/lichen-compute/src/compute.rs` still
 install into the process slot with no clear — pre-existing, green (14/0), and left named rather than
 fixed here, since converting them without a guard would just move the leak to the thread slot.
+
+## 42. The ancestor test cloned the Arc it was only reading: 34.84 s to 18.52 s
+
+The post-delta census inside the fixpoint found the cost was **not** the number of sends, the HashMap,
+or the worklist. It was the **antichain scan**, and the scan's cost was **atomic refcount traffic
+inside `is_ancestor_or_self`** — `current = other.clone()` at entry and one more `clone()` per set bit
+of the depth difference. On the two measured bodies that came to **52.7M / 203.7M internal Arc
+clone-drop pairs against 6.3M / 25.7M at the call sites: 8x more inside the predicate than around it.**
+
+The function only reads. It now holds `&Arc<Scope<F>>` through the lifting walk and clones nothing
+(`scope.rs`, commit **`ae3ffb10`**, two lines changed). **No decision, ordering or invariant moved.**
+
+| | wall | slowest test |
+| --- | --- | --- |
+| before | 34.84 s | 6.781 s |
+| **after** | **18.52 s** | **4.236 s** |
+
+1.88x from one predicate, with the failing names unchanged at 68 (zero new, zero gone), and ll 167/0/1,
+hl 135/0/1, lang 69/0 + 293/0, gpu 94/0, compute lib 14/0, `fmt`, `comments-check` and
+`check --workspace --tests` all clean.
+
+**Counted from the start of this work, the suite has gone 612.97 s → 18.52 s.** That figure spans
+several different scopes and must be read with §39–§41: the delta slice was 3.16x on the same 283
+tests; the probe move **removed work rather than speeding it** (§40); the harness change removed a
+mutex (§41); this one is the only other true speedup.
+
+**The larger finding, measured but not acted on**: admissions per distinct node were 151 and 218 while
+the chain stays at ~8.6, so **94–96% of admissions are transient** — admitted, forwarded along every
+out-edge, then deleted by a later `retain`. If the fixpoint admitted each scope once in its final
+position, attempts would fall **17.5x / 26.5x**. The candidate that attacks it is a **shallow-first
+worklist**: admitting an ancestor before its descendants makes a descendant **reject on arrival**
+instead of being admitted and later retained. That is an ordering change on a monotone fixpoint, so the
+least fixpoint is unchanged, but it has **not been measured** and is not done here.
