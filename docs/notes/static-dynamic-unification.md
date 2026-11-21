@@ -1434,6 +1434,10 @@ behind it, and the suite's 12-core speedup was 3.29x against an ideal of 12x.
 | 8 | 66.32 s | 39.41 s |
 | 12 | 63.57 s | **34.84 s** |
 
+The T=8 before-row is the **flake run** (`143 passed; 69 failed`), not a clean baseline like the other
+three: its extra failure panicked early, so the clean before-wall is **≥66.32 s** and the improvement
+there is understated, not overstated. The after-rows are all `144 passed; 68 failed; 72 ignored`.
+
 The improvement grows with thread count, which is the signature of removing a serial section. The
 **T=8 flake is gone at every count**: `identity_from_body::a_seed_that_is_no_literal…` no longer
 appears as FAILED anywhere. Its mechanism is closed rather than papered over — no test installs into
@@ -1449,7 +1453,7 @@ suite. **The ~1.75x work cut is still required**: even perfect packing of today'
 **Where the 10-second target stands**: 34.84 s at T=12 against 17.46 s of ideal packing is still
 **2.0x of residual contention**, plus the ≥1.75x work term that is 87–93% `propagate_polymorphic`.
 Both are needed; neither is sufficient. The one thing that stopped being an obstacle is the per-test
-floor: the slowest single test fell from **17.268 s to 6.631 s**, so no test must be split or excluded
+floor: the slowest single test fell from **17.268 s to 6.781 s** in the same sweep, so no test must be split or excluded
 to fit under 10 s.
 
 **Not claimed**: that a host outside this repository does not rely on the backend slot being
